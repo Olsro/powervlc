@@ -552,6 +552,9 @@ struct subs_format_t
     } cc;
 
     text_style_t *p_style; /* Default styles to use */
+
+    /* track marked as forced */
+    bool b_forced;
 };
 
 #define SPU_PALETTE_DEFINED  0xbeefbeef
