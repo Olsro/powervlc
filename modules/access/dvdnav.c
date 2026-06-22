@@ -1757,9 +1757,10 @@ static void ESNew( demux_t *p_demux, int i_id )
                 16 * sizeof( uint32_t ) );
 
         /* We select only when we are not in the menu */
-        dvdnav_current_title_info( p_sys->dvdnav, &i_title, &i_part );
-        if( i_title > 0 &&
-            dvdnav_get_active_spu_stream( p_sys->dvdnav ) == (i_id&0x1f) )
+        int i_active_spu = dvdnav_get_active_spu_stream( p_sys->dvdnav );
+        if( dvdnav_current_title_info( p_sys->dvdnav, &i_title, &i_part ) == DVDNAV_STATUS_OK &&
+            i_title > 0 && i_active_spu != -1 &&
+            (i_active_spu & 0x1f) == (i_id&0x1f) )
         {
             b_select = true;
         }
