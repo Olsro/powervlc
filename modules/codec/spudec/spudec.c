@@ -90,6 +90,8 @@ static int DecoderOpen( vlc_object_t *p_this )
 
     p_sys->b_packetizer = false;
     p_sys->b_disabletrans = var_InheritBool( p_dec, "dvdsub-transparency" );
+    /* a track marked forced shows only its forced captions */
+    p_sys->b_forcedonly = p_dec->fmt_in.subs.b_forced;
     p_sys->i_spu_size = 0;
     p_sys->buffer     = NULL;
     p_sys->buffer_size = 0;
