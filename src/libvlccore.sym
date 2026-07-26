@@ -720,6 +720,7 @@ vout_OSDText
 vout_Request
 vout_window_New
 vout_window_Delete
+vout_display_CacheExtraPictures
 vout_display_GetDefaultDisplaySize
 vout_display_PlacePicture
 vout_display_SendMouseMovedDisplayCoordinates

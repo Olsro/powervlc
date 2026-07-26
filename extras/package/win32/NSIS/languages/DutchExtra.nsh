@@ -20,31 +20,31 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Pictogram aan bureaublad toevoegen voor eenvoudige toegang"
 ${LangFileString} Desc_Section03 \
-    "De VLC Mozilla- en Mozilla-Firefox-plugin"
+    "De ${PRODUCT_NAME} Mozilla- en Mozilla-Firefox-plugin"
 ${LangFileString} Desc_Section04 \
-    "De VLC ActiveX-plugin"
+    "De ${PRODUCT_NAME} ActiveX-plugin"
 ${LangFileString} Desc_Section05 \
     "Dvd- en cd-afspeelregistratie"
 ${LangFileString} Desc_Section06 \
-    "Stelt VLC Media Player in als standaardtoepassing voor het opgegeven bestandstype"
+    "Stelt ${PRODUCT_NAME} Media Player in als standaardtoepassing voor het opgegeven bestandstype"
 ${LangFileString} Desc_Section07 \
-    "Contextmenu-items toevoegen ('Afspelen met VLC Media Player',...)"
+    "Contextmenu-items toevoegen ('Afspelen met ${PRODUCT_NAME} Media Player',...)"
 ${LangFileString} Desc_Section08 \
-    "Verwijdert voorkeuren en bufferbestanden die van vorige installaties van VLC Media Player zijn overgebleven"
+    "Verwijdert voorkeuren en bufferbestanden die van vorige installaties van ${PRODUCT_NAME} Media Player zijn overgebleven"
 
 ${LangFileString} Name_Section91 "Verwijderen"
 ${LangFileString} Name_Section92 "Voorkeuren en buffer wissen"
 
 ${LangFileString} Desc_Section91 \
-"VLC Media Player en al zijn onderdelen verwijderen"
+"${PRODUCT_NAME} Media Player en al zijn onderdelen verwijderen"
 ${LangFileString} Desc_Section92 \
-"Verwijdert de voorkeuren en bufferbestanden van VLC Media Player"
+"Verwijdert de voorkeuren en bufferbestanden van ${PRODUCT_NAME} Media Player"
 
 ${LangFileString} ShellAssociation_Play "Afspelen"
-${LangFileString} ContextMenuEntry_PlayWith "VLC Media Player - Afspelen"
-${LangFileString} ContextMenuEntry_AddToPlaylist "VLC Media Player - Aan afspeellijst toevoegen"
+${LangFileString} ContextMenuEntry_PlayWith "${PRODUCT_NAME} Media Player - Afspelen"
+${LangFileString} ContextMenuEntry_AddToPlaylist "${PRODUCT_NAME} Media Player - Aan afspeellijst toevoegen"
 
-${LangFileString} Link_VisitWebsite "Bezoek de website van Videolan VLC Media Player"
+${LangFileString} Link_VisitWebsite "Bezoek de website van Videolan ${PRODUCT_NAME} Media Player"
 
 ${LangFileString} Name_InstTypeRecommended "Aanbevolen"
 ${LangFileString} Name_InstTypeMinimum "Minimaal"
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Blu-ray afspelen"
 ${LangFileString} License_NextText "U bent zich nu bewust van uw rechten. Klik op Volgende om door te gaan."
 
 ${LangFileString} Detail_CheckProcesses "Processen controleren..."
-${LangFileString} MessageBox_VLCRunning "VLC lijkt actief te zijn en zal nu worden afgesloten."
-${LangFileString} MessageBox_VLCUnableToClose "Deze installer kon VLC niet afsluiten. Gelieve dit manueel te doen."
+${LangFileString} MessageBox_VLCRunning "${PRODUCT_NAME} lijkt actief te zijn en zal nu worden afgesloten."
+${LangFileString} MessageBox_VLCUnableToClose "Deze installer kon ${PRODUCT_NAME} niet afsluiten. Gelieve dit manueel te doen."
 ${LangFileString} MessageBox_InstallAborted "Installatie afgebroken!"
 
 ${LangFileString} Reinstall_Headline "Reeds geïnstalleerd"
-${LangFileString} Reinstall_HeadlineInstall "Kies hoe u VLC wilt installeren."
+${LangFileString} Reinstall_HeadlineInstall "Kies hoe u ${PRODUCT_NAME} wilt installeren."
 ${LangFileString} Reinstall_HeadlineMaintenance "Kies de uit te voeren onderhoudsoptie."
-${LangFileString} Reinstall_MessageOlder "Er is een oudere versie van VLC op uw systeem geïnstalleerd. Selecteer de bewerking die u wilt uitvoeren en klik op Volgende om verder te gaan."
-${LangFileString} Reinstall_MessageNewer "Er is al een nieuwere versie van VLC geïnstalleerd! Het is niet aanbevolen om te downgraden naar een oudere versie. Selecteer de bewerking die u wilt uitvoeren en klik op Volgende om verder te gaan."
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} is al geïnstalleerd. Selecteer de bewerking die u wilt uitvoeren en klik op Volgende om verder te gaan."
-${LangFileString} Reinstall_OptionUpgrade "VLC bijwerken en vorige instellingen behouden (aanbevolen)"
-${LangFileString} Reinstall_OptionDowngrade "VLC downgraden en vorige instellingen behouden (aanbevolen)"
+${LangFileString} Reinstall_MessageOlder "Er is een oudere versie van ${PRODUCT_NAME} op uw systeem geïnstalleerd. Selecteer de bewerking die u wilt uitvoeren en klik op Volgende om verder te gaan."
+${LangFileString} Reinstall_MessageNewer "Er is al een nieuwere versie van ${PRODUCT_NAME} geïnstalleerd! Het is niet aanbevolen om te downgraden naar een oudere versie. Selecteer de bewerking die u wilt uitvoeren en klik op Volgende om verder te gaan."
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} is al geïnstalleerd. Selecteer de bewerking die u wilt uitvoeren en klik op Volgende om verder te gaan."
+${LangFileString} Reinstall_OptionUpgrade "${PRODUCT_NAME} bijwerken en vorige instellingen behouden (aanbevolen)"
+${LangFileString} Reinstall_OptionDowngrade "${PRODUCT_NAME} downgraden en vorige instellingen behouden (aanbevolen)"
 ${LangFileString} Reinstall_OptionComponents "Onderdelen toevoegen, verwijderen of opnieuw installeren"
 ${LangFileString} Reinstall_OptionAdvanced "Instellingen wijzigen (geavanceerd)"
-${LangFileString} Reinstall_OptionUninstall "VLC verwijderen"
+${LangFileString} Reinstall_OptionUninstall "${PRODUCT_NAME} verwijderen"

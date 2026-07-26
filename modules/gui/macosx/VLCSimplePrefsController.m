@@ -144,6 +144,13 @@ static NSString* VLCHotkeysSettingToolbarIdentifier = @"Hotkeys Settings Item Id
     BOOL _inputSettingChanged;
     BOOL _hotkeyChanged;
 
+    /* look-ahead decode cache box, built in code (PowerVLC option set,
+     * mirrors the legacy interface's Video pane) */
+    NSBox *_video_cacheBox;
+    NSTextField *_video_cacheMbTextField;
+    NSTextField *_video_cacheFillTextField;
+    NSTextField *_video_cacheSecondsTextField;
+
     NSOpenPanel *_selectFolderPanel;
     NSArray *_hotkeyDescriptions;
     NSArray *_hotkeyNames;
@@ -169,9 +176,127 @@ static NSString* VLCHotkeysSettingToolbarIdentifier = @"Hotkeys Settings Item Id
     return self;
 }
 
+/* one label + int field row of the look-ahead cache box */
+- (NSTextField *)addCacheRowWithLabel:(NSString *)labelText
+                              tooltip:(NSString *)tooltip
+                                    y:(CGFloat)y
+                                   in:(NSView *)parent
+{
+    NSTextField *label = [[NSTextField alloc]
+        initWithFrame:NSMakeRect(0., y, 340., 17.)];
+    [label setEditable:NO];
+    [label setBordered:NO];
+    [label setDrawsBackground:NO];
+    [label setAlignment:NSTextAlignmentRight];
+    [label setStringValue:labelText];
+    [label setFont:[NSFont systemFontOfSize:[NSFont systemFontSize]]];
+    [parent addSubview:label];
+
+    NSTextField *field = [[NSTextField alloc]
+        initWithFrame:NSMakeRect(348., y - 3., 70., 22.)];
+    [field setToolTip:tooltip];
+    [field setTarget:self];
+    [field setAction:@selector(videoSettingChanged:)];
+    /* mark the pane dirty when focus leaves the field, like the
+     * xib-defined text fields */
+    [[field cell] setSendsActionOnEndEditing:YES];
+    [parent addSubview:field];
+    return field;
+}
+
+/* the look-ahead decode cache options only exist in this fork, so the
+ * stock SimplePreferences.xib knows nothing about them. The video pane
+ * is fully Auto Layout driven (frame surgery gets overridden and the
+ * box ended up over the snapshot group): unpin whatever box hugged the
+ * pane's bottom edge, then constrain the new box below all of them. */
+- (void)setupVideoCacheBox
+{
+    const CGFloat boxHeight = 112.;
+
+    NSMutableArray *bottomHuggers = [NSMutableArray array];
+    for (NSLayoutConstraint *c in [[_videoView constraints] copy]) {
+        NSView *other = nil;
+        if (c.firstItem == _videoView
+         && c.firstAttribute == NSLayoutAttributeBottom
+         && [c.secondItem isKindOfClass:[NSView class]]
+         && c.secondAttribute == NSLayoutAttributeBottom)
+            other = c.secondItem;
+        else if (c.secondItem == _videoView
+         && c.secondAttribute == NSLayoutAttributeBottom
+         && [c.firstItem isKindOfClass:[NSView class]]
+         && c.firstAttribute == NSLayoutAttributeBottom)
+            other = c.firstItem;
+        if (other) {
+            [bottomHuggers addObject:other];
+            [_videoView removeConstraint:c];
+        }
+    }
+
+    _video_cacheBox = [[NSBox alloc] initWithFrame:NSZeroRect];
+    [_video_cacheBox setTranslatesAutoresizingMaskIntoConstraints:NO];
+    [_video_cacheBox setTitle:_NS("Look-ahead decode cache")];
+    NSView *content = [_video_cacheBox contentView];
+
+    _video_cacheMbTextField = [self addCacheRowWithLabel:
+            _NS("Cache size (MB, 0 = off)")
+        tooltip:_NS("Maximum memory VLC may use to decode video "
+            "pictures ahead of the display clock, to absorb transient "
+            "slowdowns without dropping frames. 0 disables the feature.")
+              y:62. in:content];
+    _video_cacheFillTextField = [self addCacheRowWithLabel:
+            _NS("Fill threshold before playback (%)")
+        tooltip:_NS("Playback (and any seek) waits until the "
+            "cache reaches this percentage full, or end of stream. The "
+            "Play/Pause key skips the wait at any time.")
+              y:35. in:content];
+    _video_cacheSecondsTextField = [self addCacheRowWithLabel:
+            _NS("Cache limit (seconds, 0 = none)")
+        tooltip:_NS("Caps the cache to this many seconds of "
+            "video regardless of the memory budget above, so light content "
+            "does not needlessly inflate memory use or the fill-in wait.")
+              y:8. in:content];
+
+    [_videoView addSubview:_video_cacheBox];
+
+    /* pin below every former bottom-hugging box and become the pane's
+     * new bottom edge, which grows the pane by the box height */
+    [_videoView addConstraint:
+        [NSLayoutConstraint constraintWithItem:_video_cacheBox
+            attribute:NSLayoutAttributeLeading
+            relatedBy:NSLayoutRelationEqual
+            toItem:_videoView attribute:NSLayoutAttributeLeading
+            multiplier:1. constant:20.]];
+    [_videoView addConstraint:
+        [NSLayoutConstraint constraintWithItem:_videoView
+            attribute:NSLayoutAttributeTrailing
+            relatedBy:NSLayoutRelationEqual
+            toItem:_video_cacheBox attribute:NSLayoutAttributeTrailing
+            multiplier:1. constant:20.]];
+    [_videoView addConstraint:
+        [NSLayoutConstraint constraintWithItem:_videoView
+            attribute:NSLayoutAttributeBottom
+            relatedBy:NSLayoutRelationEqual
+            toItem:_video_cacheBox attribute:NSLayoutAttributeBottom
+            multiplier:1. constant:12.]];
+    [_video_cacheBox addConstraint:
+        [NSLayoutConstraint constraintWithItem:_video_cacheBox
+            attribute:NSLayoutAttributeHeight
+            relatedBy:NSLayoutRelationEqual
+            toItem:nil attribute:NSLayoutAttributeNotAnAttribute
+            multiplier:1. constant:boxHeight]];
+    for (NSView *hugger in bottomHuggers)
+        [_videoView addConstraint:
+            [NSLayoutConstraint constraintWithItem:_video_cacheBox
+                attribute:NSLayoutAttributeTop
+                relatedBy:NSLayoutRelationGreaterThanOrEqual
+                toItem:hugger attribute:NSLayoutAttributeBottom
+                multiplier:1. constant:10.]];
+}
+
 - (void)windowDidLoad
 {
     [self initStrings];
+    [self setupVideoCacheBox];
 
 #ifdef HAVE_SPARKLE
     [_intf_updateCheckbox bind:@"value"
@@ -686,6 +811,13 @@ static inline const char * __config_GetLabel(vlc_object_t *p_this, const char *p
     [self setupButton:_video_deinterlacePopup forIntList: "deinterlace"];
     [self setupButton:_video_deinterlace_modePopup forStringList: "deinterlace-mode"];
 
+    [_video_cacheMbTextField setIntValue:
+        (int)config_GetInt(p_intf, "video-cache-mb")];
+    [_video_cacheFillTextField setIntValue:
+        (int)config_GetInt(p_intf, "video-cache-fill-percent")];
+    [_video_cacheSecondsTextField setIntValue:
+        (int)config_GetInt(p_intf, "video-cache-max-seconds")];
+
     // set lion fullscreen mode restrictions
     [self enableLionFullscreenMode: [_video_nativeFullscreenCheckbox state]];
 
@@ -835,8 +967,8 @@ static inline const char * __config_GetLabel(vlc_object_t *p_this, const char *p
     NSBeginInformationalAlertSheet(_NS("Reset Preferences"), _NS("Cancel"),
                                    _NS("Continue"), nil, [sender window], self,
                                    @selector(sheetDidEnd: returnCode: contextInfo:), NULL, nil, @"%@",
-                                   _NS("This will reset VLC media player's preferences.\n\n"
-                                       "Note that VLC will restart during the process, so your current "
+                                   _NS("This will reset PowerVLC media player's preferences.\n\n"
+                                       "Note that PowerVLC will restart during the process, so your current "
                                        "playlist will be emptied and eventual playback, streaming or "
                                        "transcoding activities will stop immediately.\n\n"
                                        "The Media Library will not be affected.\n\n"
@@ -1003,6 +1135,13 @@ static inline void save_string_list(intf_thread_t * p_intf, id object, const cha
         SaveStringList(_video_snap_formatPopup, "snapshot-format");
         SaveIntList(_video_deinterlacePopup, "deinterlace");
         SaveStringList(_video_deinterlace_modePopup, "deinterlace-mode");
+
+        config_PutInt(p_intf, "video-cache-mb",
+                      [_video_cacheMbTextField intValue]);
+        config_PutInt(p_intf, "video-cache-fill-percent",
+                      [_video_cacheFillTextField intValue]);
+        config_PutInt(p_intf, "video-cache-max-seconds",
+                      [_video_cacheSecondsTextField intValue]);
         _videoSettingChanged = NO;
     }
 
@@ -1013,6 +1152,11 @@ static inline void save_string_list(intf_thread_t * p_intf, id object, const cha
         config_PutPsz(p_intf, "input-record-path", [[_input_recordTextField stringValue] UTF8String]);
 
         config_PutInt(p_intf, "videotoolbox", [_input_hardwareAccelerationCheckbox state]);
+        /* Cohérence inter-interfaces : la case « Hardware decoding » pilote aussi
+         * le décodage MPEG-2 matériel ATI (mpeg2-hwaccel), qui n'a d'effet que sur
+         * les vieux Mac PPC ATI mais dont l'état doit rester cohérent. */
+        if (config_GetType("mpeg2-hwaccel"))
+            config_PutInt(p_intf, "mpeg2-hwaccel", [_input_hardwareAccelerationCheckbox state]);
         config_PutInt(p_intf, "postproc-q", [_input_postprocTextField intValue]);
         config_PutInt(p_intf, "skip-frames", [_input_skipFramesCheckbox state]);
 

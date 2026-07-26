@@ -217,6 +217,7 @@
 - (void)updateSidebarMenuItem:(BOOL)show;
 
 - (IBAction)openAddonManager:(id)sender;
+- (IBAction)switchToLegacyInterface:(id)sender;
 
 - (IBAction)intfOpenFile:(id)sender;
 - (IBAction)intfOpenFileGeneric:(id)sender;

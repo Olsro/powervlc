@@ -193,6 +193,29 @@ static picture_pool_t *Pool (vout_display_t *vd, unsigned count)
 {
     vout_display_sys_t *sys = vd->sys;
 
+    /* Look-ahead decode cache (video-cache-mb): this pool is handed to the
+     * decoder (direct rendering), so the cache lives in whatever headroom it
+     * has beyond the DPB -- and the core asks for a fixed count, so only this
+     * module can make room for it. These pictures come from
+     * picture_NewFromFormat(), i.e. plain system memory, and
+     * vout_display_opengl_GetPool() caps the total at VLCGL_PICTURE_MAX
+     * anyway; clamp here so the figure logged is the one really requested. */
+    unsigned extra = vout_display_CacheExtraPictures (vd, 0);
+    if (extra > 0)
+    {
+        if (count + extra > VLCGL_PICTURE_MAX)
+            extra = count < VLCGL_PICTURE_MAX ? VLCGL_PICTURE_MAX - count : 0;
+        /* Under the floor decoder.c switches the cache off, so the extra
+         * pictures would be paid for and never used. */
+        if (extra < 26)
+            extra = 0;
+        else
+        {
+            msg_Dbg (vd, "look-ahead cache: %u extra pool pictures", extra);
+            count += extra;
+        }
+    }
+
     if (!sys->pool && vlc_gl_MakeCurrent (sys->gl) == VLC_SUCCESS)
     {
         sys->pool = vout_display_opengl_GetPool (sys->vgl, count);

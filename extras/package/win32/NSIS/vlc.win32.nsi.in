@@ -3,16 +3,21 @@
 ; (http://nsis.sourceforge.net) ;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-!define PRODUCT_NAME "VLC media player"
-!define VERSION @VERSION@
-!define PRODUCT_VERSION @VERSION@
-!define PRODUCT_GROUP "VideoLAN"
-!define PRODUCT_PUBLISHER "VideoLAN"
+!define PRODUCT_NAME "PowerVLC"
+; PowerVLC: the installer/product version is PowerVLC's own (1.0.0), not the
+; underlying VLC base version. The About dialog shows "Forked from VLC @VERSION@".
+!define VERSION @POWERVLC_VERSION@
+!define PRODUCT_VERSION @POWERVLC_VERSION@
+!define PRODUCT_GROUP "PowerVLC"
+!define PRODUCT_PUBLISHER "Olsro (PowerVLC)"
+; PowerVLC is an unofficial, community fork of VideoLAN's VLC media player.
+; The website below is VideoLAN's upstream project site (attribution / docs).
 !define PRODUCT_WEB_SITE "https://www.videolan.org/"
-!define PRODUCT_DIR_REGKEY "Software\VideoLAN\VLC"
+; PowerVLC-specific registry root so a real VLC install is never touched.
+!define PRODUCT_DIR_REGKEY "Software\Olsro\PowerVLC"
 !define PRODUCT_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 !define PRODUCT_UNINST_ROOT_KEY "HKLM"
-!define PRODUCT_ID "{ea92ef52-afe4-4212-bacb-dfe9fca94cd6}"
+!define PRODUCT_ID "{9cc15c61-2891-4fdb-99ee-3c0529e81665}"
 
 !define MUI_LANGDLL_REGISTRY_ROOT "HKLM"
 !define MUI_LANGDLL_REGISTRY_KEY "${PRODUCT_DIR_REGKEY}"
@@ -26,8 +31,11 @@
 ManifestDPIAware true
 Unicode true
 
-!define INSTALL_ACTIVEX
-!define INSTALL_MOZILLA
+; PowerVLC: the NPAPI (Mozilla) and ActiveX browser plugins are obsolete —
+; unsupported by every modern browser and dropped upstream in VLC 4.0 — so
+; PowerVLC does not ship them. Re-enable these defines to include them.
+;!define INSTALL_ACTIVEX
+;!define INSTALL_MOZILLA
 
 Var ReinstallType
 Var ReinstallUninstallBtn
@@ -45,10 +53,10 @@ Var 32bitPath
 ;;;;;;;;;;;;;;;;;;;;;;;;;
 
 Name "${PRODUCT_NAME}"
-@HAVE_WIN64_FALSE@                   OutFile ..\vlc-${VERSION}-win32.exe
-@HAVE_WIN64_TRUE@@HAVE_ARM64_FALSE@  OutFile ..\vlc-${VERSION}-win64.exe
-@HAVE_WIN64_TRUE@@HAVE_ARM64_TRUE@   OutFile ..\vlc-${VERSION}-winarm64.exe
-InstallDir "$@PROGRAMFILES@\VideoLAN\VLC"
+@HAVE_WIN64_FALSE@                   OutFile ..\PowerVLC-${VERSION}-win32.exe
+@HAVE_WIN64_TRUE@@HAVE_ARM64_FALSE@  OutFile ..\PowerVLC-${VERSION}-win64.exe
+@HAVE_WIN64_TRUE@@HAVE_ARM64_TRUE@   OutFile ..\PowerVLC-${VERSION}-winarm64.exe
+InstallDir "$@PROGRAMFILES@\PowerVLC"
 !ifdef NSIS_LZMA_COMPRESS_WHOLE
 SetCompressor lzma
 !else
@@ -57,7 +65,7 @@ SetCompressor /SOLID lzma
 
 SetOverwrite ifdiff
 CRCCheck on
-BrandingText "${PRODUCT_GROUP} ${PRODUCT_NAME}"
+BrandingText "${PRODUCT_PUBLISHER}"
 
 InstType "$(Name_InstTypeRecommended)"
 InstType "$(Name_InstTypeMinimum)"
@@ -306,9 +314,9 @@ skip_uninstall32_cleanup:
 
   !insertmacro OpenUninstallLog
 
-  ; VLC.exe, libvlc.dll
-  !insertmacro InstallFile vlc.exe
-  !insertmacro InstallFile vlc-cache-gen.exe
+  ; VLC.exe, libpowervlc.dll
+  !insertmacro InstallFile powervlc.exe
+  !insertmacro InstallFile powervlc-cache-gen.exe
 
   ; All dlls
   !insertmacro InstallFile *.dll
@@ -324,7 +332,7 @@ skip_uninstall32_cleanup:
 @BUILD_LUA_TRUE@     !insertmacro InstallFolder lua
 
   ; Generate the cache and add it to uninstall.log
-  nsExec::ExecToStack '"$INSTDIR\vlc-cache-gen.exe" $INSTDIR\plugins'
+  nsExec::ExecToStack '"$INSTDIR\powervlc-cache-gen.exe" $INSTDIR\plugins'
   FindFirst $0 $1 "$INSTDIR\plugins\*.dat"
   FileWrite $UninstallLog "plugins\$1$\r$\n"
   FindClose $0
@@ -340,53 +348,53 @@ skip_uninstall32_cleanup:
 
   !insertmacro CloseUninstallLog
 
-  ; Add VLC to "recommended programs" for the following extensions
-  WriteRegStr HKCR Applications\vlc.exe "" ""
-  WriteRegStr HKCR Applications\vlc.exe "FriendlyAppName" "VLC media player"
-  WriteRegStr HKCR Applications\vlc.exe\shell\Open "" "$(ContextMenuEntry_PlayWith)"
-  WriteRegStr HKCR Applications\vlc.exe\shell\Open\command "" '"$INSTDIR\vlc.exe" --started-from-file "%1"'
+  ; Add PowerVLC to "recommended programs" for the following extensions
+  WriteRegStr HKCR Applications\powervlc.exe "" ""
+  WriteRegStr HKCR Applications\powervlc.exe "FriendlyAppName" "PowerVLC"
+  WriteRegStr HKCR Applications\powervlc.exe\shell\Open "" "$(ContextMenuEntry_PlayWith)"
+  WriteRegStr HKCR Applications\powervlc.exe\shell\Open\command "" '"$INSTDIR\powervlc.exe" --started-from-file "%1"'
   !insertmacro MacroAllExtensions RegisterExtensionMacro
   !insertmacro MacroSkinExtensions RegisterSkinExtensionMacro
 
-  ; Add VLC to "App Paths" to run VLC from ShellExecute/ShellExecuteEx/run dialog without giving a full path
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\App Paths\vlc.exe" "" "$INSTDIR\vlc.exe"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\App Paths\vlc.exe" "Path" "$INSTDIR"
+  ; Add PowerVLC to "App Paths" to run PowerVLC from ShellExecute/ShellExecuteEx/run dialog without giving a full path
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\App Paths\powervlc.exe" "" "$INSTDIR\powervlc.exe"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\App Paths\powervlc.exe" "Path" "$INSTDIR"
 
   ; Windows default programs Registration
   ; Vista and above detection
   ${If} ${AtLeastWinVista}
-    WriteRegStr HKLM "Software\RegisteredApplications" "VLC" "Software\Clients\Media\VLC\Capabilities"
-    WriteRegStr HKLM "Software\Clients\Media\VLC\Capabilities" "ApplicationName" "VLC media player"
-    WriteRegStr HKLM "Software\Clients\Media\VLC\Capabilities" "ApplicationDescription" "VLC - The video swiss knife"
-    WriteRegStr HKLM "Software\Clients\Media\VLC" "" "VLC media player"
-    WriteRegStr HKLM "Software\Clients\Media\VLC\InstallInfo" "HideIconsCommand" "$\"$INSTDIR\spad-setup.exe$\" /HideIcons /S"
-    WriteRegStr HKLM "Software\Clients\Media\VLC\InstallInfo" "ShowIconsCommand" "$\"$INSTDIR\spad-setup.exe$\" /ShowIcons /S"
-    WriteRegStr HKLM "Software\Clients\Media\VLC\InstallInfo" "ReinstallCommand" "$\"$INSTDIR\spad-setup.exe$\" /Reinstall /S"
-    WriteRegDWORD HKLM "Software\Clients\Media\VLC\InstallInfo" "IconsVisible" 0x001
+    WriteRegStr HKLM "Software\RegisteredApplications" "PowerVLC" "Software\Clients\Media\PowerVLC\Capabilities"
+    WriteRegStr HKLM "Software\Clients\Media\PowerVLC\Capabilities" "ApplicationName" "PowerVLC"
+    WriteRegStr HKLM "Software\Clients\Media\PowerVLC\Capabilities" "ApplicationDescription" "PowerVLC - The video swiss knife"
+    WriteRegStr HKLM "Software\Clients\Media\PowerVLC" "" "PowerVLC"
+    WriteRegStr HKLM "Software\Clients\Media\PowerVLC\InstallInfo" "HideIconsCommand" "$\"$INSTDIR\spad-setup.exe$\" /HideIcons /S"
+    WriteRegStr HKLM "Software\Clients\Media\PowerVLC\InstallInfo" "ShowIconsCommand" "$\"$INSTDIR\spad-setup.exe$\" /ShowIcons /S"
+    WriteRegStr HKLM "Software\Clients\Media\PowerVLC\InstallInfo" "ReinstallCommand" "$\"$INSTDIR\spad-setup.exe$\" /Reinstall /S"
+    WriteRegDWORD HKLM "Software\Clients\Media\PowerVLC\InstallInfo" "IconsVisible" 0x001
   ${EndIf}
 ${MementoSectionEnd}
 
 ${MementoSection} "$(Name_Section02a)" SEC02a
   SectionIn 1 2 3
-  CreateDirectory "$SMPROGRAMS\VideoLAN"
-  CreateShortCut "$SMPROGRAMS\VideoLAN\VLC media player.lnk" \
-    "$INSTDIR\vlc.exe" ""
-  CreateShortCut "$SMPROGRAMS\VideoLAN\VLC media player skinned.lnk" \
-    "$INSTDIR\vlc.exe" "-Iskins"
-  CreateShortCut "$SMPROGRAMS\VideoLAN\Documentation.lnk" \
+  CreateDirectory "$SMPROGRAMS\PowerVLC"
+  CreateShortCut "$SMPROGRAMS\PowerVLC\PowerVLC.lnk" \
+    "$INSTDIR\powervlc.exe" ""
+  CreateShortCut "$SMPROGRAMS\PowerVLC\PowerVLC skinned.lnk" \
+    "$INSTDIR\powervlc.exe" "-Iskins"
+  CreateShortCut "$SMPROGRAMS\PowerVLC\Documentation.lnk" \
     "$INSTDIR\Documentation.url"
-  CreateShortCut "$SMPROGRAMS\VideoLAN\Release Notes.lnk" \
+  CreateShortCut "$SMPROGRAMS\PowerVLC\Release Notes.lnk" \
     "$INSTDIR\NEWS.txt" ""
-  CreateShortCut "$SMPROGRAMS\VideoLAN\${PRODUCT_GROUP} Website.lnk" \
+  CreateShortCut "$SMPROGRAMS\PowerVLC\${PRODUCT_GROUP} Website.lnk" \
     "$INSTDIR\${PRODUCT_GROUP} Website.url"
-  CreateShortCut "$SMPROGRAMS\VideoLAN\VLC media player - reset preferences and cache files.lnk" \
-    "$INSTDIR\vlc.exe" "--reset-config --reset-plugins-cache vlc://quit"
+  CreateShortCut "$SMPROGRAMS\PowerVLC\PowerVLC - reset preferences and cache files.lnk" \
+    "$INSTDIR\powervlc.exe" "--reset-config --reset-plugins-cache vlc://quit"
 ${MementoSectionEnd}
 
 ${MementoSection} "$(Name_Section02b)" SEC02b
   SectionIn 1 2 3
-  CreateShortCut "$DESKTOP\VLC media player.lnk" \
-    "$INSTDIR\vlc.exe" ""
+  CreateShortCut "$DESKTOP\PowerVLC.lnk" \
+    "$INSTDIR\powervlc.exe" ""
 ${MementoSectionEnd}
 
 SectionGroup /e "!$(Name_Section34)"
@@ -399,11 +407,11 @@ ${MementoSection} "$(Name_Section03)" SEC03
   !insertmacro InstallFile npvlc.dll
   !insertmacro CloseUninstallLog
 
-  !define Moz "SOFTWARE\MozillaPlugins\@videolan.org/vlc,version=${VERSION}"
-  WriteRegStr HKLM ${Moz} "Description" "VLC Multimedia Plugin"
+  !define Moz "SOFTWARE\MozillaPlugins\@olsro/powervlc,version=${VERSION}"
+  WriteRegStr HKLM ${Moz} "Description" "PowerVLC Multimedia Plugin"
   WriteRegStr HKLM ${Moz} "Path" "$INSTDIR\npvlc.dll"
-  WriteRegStr HKLM ${Moz} "Product" "VLC media player"
-  WriteRegStr HKLM ${Moz} "Vendor" "VideoLAN"
+  WriteRegStr HKLM ${Moz} "Product" "PowerVLC"
+  WriteRegStr HKLM ${Moz} "Vendor" "Olsro (PowerVLC)"
   WriteRegStr HKLM ${Moz} "Version" "${VERSION}"
 ${MementoSectionEnd}
 !endif
@@ -425,104 +433,104 @@ SectionGroupEnd
 
 ${MementoSection} "$(Name_Section05)" SEC05
   SectionIn 1 2 3
-  WriteRegStr HKCR "AudioCD\shell\PlayWithVLC" "" "$(ContextMenuEntry_PlayWith)"
-  WriteRegStr HKCR "AudioCD\shell\PlayWithVLC\command" "" \
-    '"$INSTDIR\vlc.exe" --started-from-file cdda:///%1'
-  WriteRegStr HKCR "DVD\shell\PlayWithVLC" "" "$(ContextMenuEntry_PlayWith)"
-  WriteRegStr HKCR "DVD\shell\PlayWithVLC\command" "" \
-    '"$INSTDIR\vlc.exe" --started-from-file dvd:///%1'
+  WriteRegStr HKCR "AudioCD\shell\PlayWithPowerVLC" "" "$(ContextMenuEntry_PlayWith)"
+  WriteRegStr HKCR "AudioCD\shell\PlayWithPowerVLC\command" "" \
+    '"$INSTDIR\powervlc.exe" --started-from-file cdda:///%1'
+  WriteRegStr HKCR "DVD\shell\PlayWithPowerVLC" "" "$(ContextMenuEntry_PlayWith)"
+  WriteRegStr HKCR "DVD\shell\PlayWithPowerVLC\command" "" \
+    '"$INSTDIR\powervlc.exe" --started-from-file dvd:///%1'
 
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayDVDMovieOnArrival" "VLCPlayDVDMovieOnArrival" ""
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayDVDMovieOnArrival" "Action" "$(Action_OnArrivalDVD)"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayDVDMovieOnArrival" "DefaultIcon" '"$INSTDIR\vlc.exe",0'
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayDVDMovieOnArrival" "InvokeProgID" "VLC.DVDMovie"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayDVDMovieOnArrival" "InvokeVerb" "Open"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayDVDMovieOnArrival" "Provider" "VideoLAN VLC media player"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayDVDMovieOnArrival" "PowerVLCPlayDVDMovieOnArrival" ""
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayDVDMovieOnArrival" "Action" "$(Action_OnArrivalDVD)"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayDVDMovieOnArrival" "DefaultIcon" '"$INSTDIR\powervlc.exe",0'
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayDVDMovieOnArrival" "InvokeProgID" "PowerVLC.DVDMovie"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayDVDMovieOnArrival" "InvokeVerb" "Open"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayDVDMovieOnArrival" "Provider" "PowerVLC"
 
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayCDAudioOnArrival" "VLCPlayCDAudioOnArrival" ""
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayCDAudioOnArrival" "Action" "$(Action_OnArrivalAudioCD)"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayCDAudioOnArrival" "DefaultIcon" '"$INSTDIR\vlc.exe",0'
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayCDAudioOnArrival" "InvokeProgID" "VLC.CDAudio"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayCDAudioOnArrival" "InvokeVerb" "Open"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayCDAudioOnArrival" "Provider" "VideoLAN VLC media player"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayCDAudioOnArrival" "PowerVLCPlayCDAudioOnArrival" ""
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayCDAudioOnArrival" "Action" "$(Action_OnArrivalAudioCD)"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayCDAudioOnArrival" "DefaultIcon" '"$INSTDIR\powervlc.exe",0'
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayCDAudioOnArrival" "InvokeProgID" "PowerVLC.CDAudio"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayCDAudioOnArrival" "InvokeVerb" "Open"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayCDAudioOnArrival" "Provider" "PowerVLC"
 
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayVideoCDMovieOnArrival" "VLCPlayVCDMovieOnArrival" ""
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayVCDMovieOnArrival" "Action" "$(Action_OnArrivalVCDMovie)"
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayVCDMovieOnArrival" "DefaultIcon" '"$INSTDIR\vlc.exe",0'
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayVCDMovieOnArrival" "InvokeProgID" "VLC.VCDMovie"
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayVCDMovieOnArrival" "InvokeVerb" "Open"
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayVCDMovieOnArrival" "Provider" "VideoLAN VLC media player"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayVideoCDMovieOnArrival" "PowerVLCPlayVCDMovieOnArrival" ""
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayVCDMovieOnArrival" "Action" "$(Action_OnArrivalVCDMovie)"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayVCDMovieOnArrival" "DefaultIcon" '"$INSTDIR\powervlc.exe",0'
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayVCDMovieOnArrival" "InvokeProgID" "PowerVLC.VCDMovie"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayVCDMovieOnArrival" "InvokeVerb" "Open"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayVCDMovieOnArrival" "Provider" "PowerVLC"
 
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlaySuperVideoCDMovieOnArrival" "VLCPlaySVCDMovieOnArrival" ""
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlaySVCDMovieOnArrival" "Action" "$(Action_OnArrivalSVCDMovie)"
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlaySVCDMovieOnArrival" "DefaultIcon" '"$INSTDIR\vlc.exe",0'
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlaySVCDMovieOnArrival" "InvokeProgID" "VLC.SVCDMovie"
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlaySVCDMovieOnArrival" "InvokeVerb" "Open"
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlaySVCDMovieOnArrival" "Provider" "VideoLAN VLC media player"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlaySuperVideoCDMovieOnArrival" "PowerVLCPlaySVCDMovieOnArrival" ""
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlaySVCDMovieOnArrival" "Action" "$(Action_OnArrivalSVCDMovie)"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlaySVCDMovieOnArrival" "DefaultIcon" '"$INSTDIR\powervlc.exe",0'
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlaySVCDMovieOnArrival" "InvokeProgID" "PowerVLC.SVCDMovie"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlaySVCDMovieOnArrival" "InvokeVerb" "Open"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlaySVCDMovieOnArrival" "Provider" "PowerVLC"
 
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayDVDAudioOnArrival" "VLCPlayDVDAudioOnArrival" ""
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayDVDAudioOnArrival" "Action" "$(Action_OnArrivalDVDAudio)"
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayDVDAudioOnArrival" "DefaultIcon" '"$INSTDIR\vlc.exe",0'
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayDVDAudioOnArrival" "InvokeProgID" "VLC.OPENFolder"
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayDVDAudioOnArrival" "InvokeVerb" "Open"
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayDVDAudioOnArrival" "Provider" "VideoLAN VLC media player"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayDVDAudioOnArrival" "PowerVLCPlayDVDAudioOnArrival" ""
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayDVDAudioOnArrival" "Action" "$(Action_OnArrivalDVDAudio)"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayDVDAudioOnArrival" "DefaultIcon" '"$INSTDIR\powervlc.exe",0'
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayDVDAudioOnArrival" "InvokeProgID" "PowerVLC.OPENFolder"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayDVDAudioOnArrival" "InvokeVerb" "Open"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayDVDAudioOnArrival" "Provider" "PowerVLC"
 
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayVideoFilesOnArrival" "VLCPlayVideoFilesOnArrival" ""
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayVideoFilesOnArrival" "Action" "$(Action_OnArrivalVideoFiles)"
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayVideoFilesOnArrival" "DefaultIcon" '"$INSTDIR\vlc.exe",0'
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayVideoFilesOnArrival" "InvokeProgID" "VLC.OPENFolder"
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayVideoFilesOnArrival" "InvokeVerb" "Open"
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayVideoFilesOnArrival" "Provider" "VideoLAN VLC media player"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayVideoFilesOnArrival" "PowerVLCPlayVideoFilesOnArrival" ""
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayVideoFilesOnArrival" "Action" "$(Action_OnArrivalVideoFiles)"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayVideoFilesOnArrival" "DefaultIcon" '"$INSTDIR\powervlc.exe",0'
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayVideoFilesOnArrival" "InvokeProgID" "PowerVLC.OPENFolder"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayVideoFilesOnArrival" "InvokeVerb" "Open"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayVideoFilesOnArrival" "Provider" "PowerVLC"
 
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayMusicFilesOnArrival" "VLCPlayMusicFilesOnArrival" ""
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayMusicFilesOnArrival" "Action" "$(Action_OnArrivalMusicFiles)"
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayMusicFilesOnArrival" "DefaultIcon" '"$INSTDIR\vlc.exe",0'
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayMusicFilesOnArrival" "InvokeProgID" "VLC.OPENFolder"
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayMusicFilesOnArrival" "InvokeVerb" "Open"
-  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayMusicFilesOnArrival" "Provider" "VideoLAN VLC media player"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayMusicFilesOnArrival" "PowerVLCPlayMusicFilesOnArrival" ""
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayMusicFilesOnArrival" "Action" "$(Action_OnArrivalMusicFiles)"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayMusicFilesOnArrival" "DefaultIcon" '"$INSTDIR\powervlc.exe",0'
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayMusicFilesOnArrival" "InvokeProgID" "PowerVLC.OPENFolder"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayMusicFilesOnArrival" "InvokeVerb" "Open"
+  WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayMusicFilesOnArrival" "Provider" "PowerVLC"
 
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayBlurayOnArrival" "VLCPlayBlurayOnArrival" ""
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayBlurayOnArrival" "Action" "$(Action_OnArrivalBluray)"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayBlurayOnArrival" "DefaultIcon" '"$INSTDIR\vlc.exe",0'
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayBlurayOnArrival" "InvokeProgID" "VLC.Bluray"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayBlurayOnArrival" "InvokeVerb" "Open"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayBlurayOnArrival" "Provider" "VideoLAN VLC media player"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayBlurayOnArrival" "PowerVLCPlayBlurayOnArrival" ""
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayBlurayOnArrival" "Action" "$(Action_OnArrivalBluray)"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayBlurayOnArrival" "DefaultIcon" '"$INSTDIR\powervlc.exe",0'
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayBlurayOnArrival" "InvokeProgID" "PowerVLC.Bluray"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayBlurayOnArrival" "InvokeVerb" "Open"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayBlurayOnArrival" "Provider" "PowerVLC"
 
-  WriteRegStr HKCR "VLC.DVDMovie" "" "VLC DVD Movie"
-  WriteRegStr HKCR "VLC.DVDMovie\shell" "" "Open"
-  WriteRegStr HKCR "VLC.DVDMovie\shell\Open\command" "" \
-    '"$INSTDIR\vlc.exe" --started-from-file dvd:///%1'
-  WriteRegStr HKCR "VLC.DVDMovie\DefaultIcon" "" '"$INSTDIR\vlc.exe",0'
+  WriteRegStr HKCR "PowerVLC.DVDMovie" "" "PowerVLC DVD Movie"
+  WriteRegStr HKCR "PowerVLC.DVDMovie\shell" "" "Open"
+  WriteRegStr HKCR "PowerVLC.DVDMovie\shell\Open\command" "" \
+    '"$INSTDIR\powervlc.exe" --started-from-file dvd:///%1'
+  WriteRegStr HKCR "PowerVLC.DVDMovie\DefaultIcon" "" '"$INSTDIR\powervlc.exe",0'
 
-  WriteRegStr HKCR "VLC.CDAudio" "" "VLC CD Audio"
-  WriteRegStr HKCR "VLC.CDAudio\shell" "" "Open"
-  WriteRegStr HKCR "VLC.CDAudio\shell\Open\command" "" \
-    '"$INSTDIR\vlc.exe" --started-from-file cdda:///%1'
-  WriteRegStr HKCR "VLC.CDAudio\DefaultIcon" "" '"$INSTDIR\vlc.exe",0'
+  WriteRegStr HKCR "PowerVLC.CDAudio" "" "PowerVLC CD Audio"
+  WriteRegStr HKCR "PowerVLC.CDAudio\shell" "" "Open"
+  WriteRegStr HKCR "PowerVLC.CDAudio\shell\Open\command" "" \
+    '"$INSTDIR\powervlc.exe" --started-from-file cdda:///%1'
+  WriteRegStr HKCR "PowerVLC.CDAudio\DefaultIcon" "" '"$INSTDIR\powervlc.exe",0'
 
-  WriteRegStr HKCR "VLC.VCDMovie" "" "VLC VCD Movie"
-  WriteRegStr HKCR "VLC.VCDMovie\shell" "" "Open"
-  WriteRegStr HKCR "VLC.VCDMovie\shell\Open\command" "" \
-     '"$INSTDIR\vlc.exe" --started-from-file vcd:///%1'
-  WriteRegStr HKCR "VLC.VCDMovie\DefaultIcon" "" '"$INSTDIR\vlc.exe",0'
+  WriteRegStr HKCR "PowerVLC.VCDMovie" "" "PowerVLC VCD Movie"
+  WriteRegStr HKCR "PowerVLC.VCDMovie\shell" "" "Open"
+  WriteRegStr HKCR "PowerVLC.VCDMovie\shell\Open\command" "" \
+     '"$INSTDIR\powervlc.exe" --started-from-file vcd:///%1'
+  WriteRegStr HKCR "PowerVLC.VCDMovie\DefaultIcon" "" '"$INSTDIR\powervlc.exe",0'
 
-  WriteRegStr HKCR "VLC.SVCDMovie" "" "VLC SVCD Movie"
-  WriteRegStr HKCR "VLC.SVCDMovie\shell" "" "Open"
-  WriteRegStr HKCR "VLC.SVCDMovie\shell\Open\command" "" \
-     '"$INSTDIR\vlc.exe" --started-from-file vcd:///%1'
-  WriteRegStr HKCR "VLC.SVCDMovie\DefaultIcon" "" '"$INSTDIR\vlc.exe",0'
+  WriteRegStr HKCR "PowerVLC.SVCDMovie" "" "PowerVLC SVCD Movie"
+  WriteRegStr HKCR "PowerVLC.SVCDMovie\shell" "" "Open"
+  WriteRegStr HKCR "PowerVLC.SVCDMovie\shell\Open\command" "" \
+     '"$INSTDIR\powervlc.exe" --started-from-file vcd:///%1'
+  WriteRegStr HKCR "PowerVLC.SVCDMovie\DefaultIcon" "" '"$INSTDIR\powervlc.exe",0'
 
-  WriteRegStr HKCR "VLC.OPENFolder" "" "VLC Play content"
-  WriteRegStr HKCR "VLC.OPENFolder\shell" "" "Open"
-  WriteRegStr HKCR "VLC.OPENFolder\shell\Open\command" "" \
-     '"$INSTDIR\vlc.exe" %1'
-  WriteRegStr HKCR "VLC.OPENFolder\DefaultIcon" "" '"$INSTDIR\vlc.exe",0'
+  WriteRegStr HKCR "PowerVLC.OPENFolder" "" "PowerVLC Play content"
+  WriteRegStr HKCR "PowerVLC.OPENFolder\shell" "" "Open"
+  WriteRegStr HKCR "PowerVLC.OPENFolder\shell\Open\command" "" \
+     '"$INSTDIR\powervlc.exe" %1'
+  WriteRegStr HKCR "PowerVLC.OPENFolder\DefaultIcon" "" '"$INSTDIR\powervlc.exe",0'
 
-  WriteRegStr HKCR "VLC.Bluray" "" "VLC Bluray"
-  WriteRegStr HKCR "VLC.Bluray\shell" "" "Open"
-  WriteRegStr HKCR "VLC.Bluray\shell\Open\command" "" \
-    '"$INSTDIR\vlc.exe" --started-from-file bluray:///%1'
-  WriteRegStr HKCR "VLC.Bluray\DefaultIcon" "" '"$INSTDIR\vlc.exe",0'
+  WriteRegStr HKCR "PowerVLC.Bluray" "" "PowerVLC Bluray"
+  WriteRegStr HKCR "PowerVLC.Bluray\shell" "" "Open"
+  WriteRegStr HKCR "PowerVLC.Bluray\shell\Open\command" "" \
+    '"$INSTDIR\powervlc.exe" --started-from-file bluray:///%1'
+  WriteRegStr HKCR "PowerVLC.Bluray\DefaultIcon" "" '"$INSTDIR\powervlc.exe",0'
 
 ${MementoSectionEnd}
 
@@ -579,7 +587,7 @@ ${MementoSectionRestore}
 
 @HAVE_WIN64_TRUE@ !include "x64.nsh"
 @HAVE_WIN64_TRUE@ ${Unless} ${RunningX64}
-@HAVE_WIN64_TRUE@    MessageBox MB_OK|MB_ICONSTOP "This version of VLC only runs on 64-bit operating systems.$\nPlease get the 32-bit version and try again."
+@HAVE_WIN64_TRUE@    MessageBox MB_OK|MB_ICONSTOP "This version of PowerVLC only runs on 64-bit operating systems.$\nPlease get the 32-bit version and try again."
 @HAVE_WIN64_TRUE@    Quit
 @HAVE_WIN64_TRUE@ ${EndUnless}
 ${If} ${AtLeastWinXP}
@@ -593,18 +601,18 @@ ${Endif}
 
 ReadRegStr $INSTDIR HKLM "${PRODUCT_DIR_REGKEY}" "InstallDir"
 StrCmp $INSTDIR "" 0 WinOk
-StrCpy $INSTDIR "$@PROGRAMFILES@\VideoLAN\VLC"
+StrCpy $INSTDIR "$@PROGRAMFILES@\PowerVLC"
 Goto WinOk
 
 WinTooOld:
-    MessageBox MB_OK|MB_ICONSTOP "This version of VLC only runs on Windows XP SP2 and newer."
+    MessageBox MB_OK|MB_ICONSTOP "This version of PowerVLC only runs on Windows XP SP2 and newer."
     Quit
 
 WinOk:
   ; /update argument
   Call ParseCommandline
 
-  ; See if a other bitness VLC version exists
+  ; See if a other bitness PowerVLC version exists
   !ifdef VLC_64BIT_INSTALLER
     SetRegView 32
 
@@ -800,7 +808,7 @@ Section -Post
   WriteUninstaller "$INSTDIR\uninstall.exe"
   WriteRegStr HKLM "${PRODUCT_DIR_REGKEY}" "InstallDir" $INSTDIR
   WriteRegStr HKLM "${PRODUCT_DIR_REGKEY}" "Version" "${VERSION}"
-  WriteRegStr HKLM "${PRODUCT_DIR_REGKEY}" "" "$INSTDIR\vlc.exe"
+  WriteRegStr HKLM "${PRODUCT_DIR_REGKEY}" "" "$INSTDIR\powervlc.exe"
 
   WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" \
     "DisplayName" "$(^Name)"
@@ -809,7 +817,7 @@ Section -Post
   WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" \
     "InstallLocation" "$INSTDIR"
   WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" \
-    "DisplayIcon" "$INSTDIR\vlc.exe"
+    "DisplayIcon" "$INSTDIR\powervlc.exe"
   WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" \
     "DisplayVersion" "${PRODUCT_VERSION}"
   WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" \
@@ -859,7 +867,7 @@ Section "un.$(Name_Section91)" SEC91
 
     ; old files (0.8.5 and before) that may be lying around
     Delete /REBOOTOK "$R2\npvlc.dll"
-    Delete /REBOOTOK "$R2\libvlc.dll"
+    Delete /REBOOTOK "$R2\libpowervlc.dll"
     Delete /REBOOTOK "$R2\vlcintf.xpt"
     Goto "${Index}-Loop"
 
@@ -867,8 +875,8 @@ Section "un.$(Name_Section91)" SEC91
   !undef Index
   Delete /REBOOTOK "$INSTDIR\npvlc.dll"
 
-  RMDir "$SMPROGRAMS\VideoLAN"
-  RMDir /r $SMPROGRAMS\VideoLAN
+  RMDir "$SMPROGRAMS\PowerVLC"
+  RMDir /r $SMPROGRAMS\PowerVLC
 
   FileOpen $UninstallLog "$INSTDIR\uninstall.log" r
   UninstallLoop:
@@ -888,45 +896,45 @@ Section "un.$(Name_Section91)" SEC91
   Call un.RemoveEmptyDirs
   RMDir "$INSTDIR"
 
-  DeleteRegKey HKLM Software\VideoLAN
+  DeleteRegKey HKLM Software\Olsro
 
-  DeleteRegKey HKCR Applications\vlc.exe
-  DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\App Paths\vlc.exe"
-  DeleteRegKey HKCR AudioCD\shell\PlayWithVLC
-  DeleteRegKey HKCR DVD\shell\PlayWithVLC
-  DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayDVDMovieOnArrival" "VLCPlayDVDMovieOnArrival"
-  DeleteRegKey HKLM Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayDVDMovieOnArrival
-  DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayCDAudioOnArrival" "VLCPlayCDAudioOnArrival"
-  DeleteRegKey HKLM Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayCDAudioOnArrival
-  DeleteRegValue HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayVideoCDMovieOnArrival" "VLCPlayVCDMovieOnArrival"
-  DeleteRegKey HKLM SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayVCDMovieOnArrival
-  DeleteRegValue HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlaySuperVideoCDMovieOnArrival" "VLCPlaySVCDMovieOnArrival"
-  DeleteRegKey HKLM SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlaySVCDMovieOnArrival
-  DeleteRegValue HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayDVDAudioOnArrival" "VLCPlayDVDAudioOnArrival"
-  DeleteRegKey HKLM SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayDVDAudioOnArrival
-  DeleteRegValue HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayVideoFilesOnArrival" "VLCPlayVideoFilesOnArrival"
-  DeleteRegKey HKLM SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayVideoFilesOnArrival
-  DeleteRegValue HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayMusicFilesOnArrival" "VLCPlayMusicFilesOnArrival"
-  DeleteRegKey HKLM SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\VLCPlayMusicFilesOnArrival
+  DeleteRegKey HKCR Applications\powervlc.exe
+  DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\App Paths\powervlc.exe"
+  DeleteRegKey HKCR AudioCD\shell\PlayWithPowerVLC
+  DeleteRegKey HKCR DVD\shell\PlayWithPowerVLC
+  DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayDVDMovieOnArrival" "PowerVLCPlayDVDMovieOnArrival"
+  DeleteRegKey HKLM Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayDVDMovieOnArrival
+  DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayCDAudioOnArrival" "PowerVLCPlayCDAudioOnArrival"
+  DeleteRegKey HKLM Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayCDAudioOnArrival
+  DeleteRegValue HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayVideoCDMovieOnArrival" "PowerVLCPlayVCDMovieOnArrival"
+  DeleteRegKey HKLM SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayVCDMovieOnArrival
+  DeleteRegValue HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlaySuperVideoCDMovieOnArrival" "PowerVLCPlaySVCDMovieOnArrival"
+  DeleteRegKey HKLM SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlaySVCDMovieOnArrival
+  DeleteRegValue HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayDVDAudioOnArrival" "PowerVLCPlayDVDAudioOnArrival"
+  DeleteRegKey HKLM SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayDVDAudioOnArrival
+  DeleteRegValue HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayVideoFilesOnArrival" "PowerVLCPlayVideoFilesOnArrival"
+  DeleteRegKey HKLM SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayVideoFilesOnArrival
+  DeleteRegValue HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\EventHandlers\PlayMusicFilesOnArrival" "PowerVLCPlayMusicFilesOnArrival"
+  DeleteRegKey HKLM SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers\Handlers\PowerVLCPlayMusicFilesOnArrival
 
-  DeleteRegKey HKLM Software\Clients\Media\VLC
-  DeleteRegValue HKLM "Software\RegisteredApplications" "VLC"
-  DeleteRegKey HKCR "VLC.MediaFile"
-  DeleteRegKey HKCR "VLC.DVDMovie"
-  DeleteRegKey HKCR "VLC.CDAudio"
-  DeleteRegKey HKCR "VLC.VCDMovie"
-  DeleteRegKey HKCR "VLC.SVCDMovie"
-  DeleteRegKey HKCR "VLC.OPENFolder"
-  DeleteRegKey HKCR "VLC.Bluray"
+  DeleteRegKey HKLM Software\Clients\Media\PowerVLC
+  DeleteRegValue HKLM "Software\RegisteredApplications" "PowerVLC"
+  DeleteRegKey HKCR "PowerVLC.MediaFile"
+  DeleteRegKey HKCR "PowerVLC.DVDMovie"
+  DeleteRegKey HKCR "PowerVLC.CDAudio"
+  DeleteRegKey HKCR "PowerVLC.VCDMovie"
+  DeleteRegKey HKCR "PowerVLC.SVCDMovie"
+  DeleteRegKey HKCR "PowerVLC.OPENFolder"
+  DeleteRegKey HKCR "PowerVLC.Bluray"
 
 
   DeleteRegKey HKLM \
-    "SOFTWARE\MozillaPlugins\@videolan.org/vlc,version=${VERSION}"
+    "SOFTWARE\MozillaPlugins\@olsro/powervlc,version=${VERSION}"
 
   DeleteRegKey HKLM \
     "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 
-  Delete "$DESKTOP\VLC media player.lnk"
+  Delete "$DESKTOP\PowerVLC.lnk"
 
   DeleteRegKey ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}"
   DeleteRegKey HKLM "${PRODUCT_DIR_REGKEY}"

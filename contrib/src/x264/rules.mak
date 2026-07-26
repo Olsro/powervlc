@@ -28,6 +28,18 @@ X264CONF = \
 	--disable-opencl
 ifndef HAVE_WIN32
 X264CONF += --enable-pic
+ifeq ($(ARCH),ppc)
+# G3 target: no AltiVec, and x264's Mac ppc path hardcodes Apple-gcc-only
+# flags (-faltivec -fastf -mcpu=G4) that FSF GCC rejects
+X264CONF += --disable-asm
+endif
+ifeq ($(ARCH),i386)
+ifdef HAVE_MACOSX
+# The i386 nasm objects carry text relocations that ld64 rejects inside
+# plugin dylibs (encoder only: C is fine)
+X264CONF += --disable-asm
+endif
+endif
 else
 ifdef HAVE_WINSTORE
 X264CONF += --enable-win32thread

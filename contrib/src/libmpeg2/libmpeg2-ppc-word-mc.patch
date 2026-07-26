@@ -1,0 +1,125 @@
+--- libmpeg2.orig/libmpeg2/motion_comp.c	2026-07-16 04:02:13
++++ libmpeg2/libmpeg2/motion_comp.c	2026-07-16 04:04:26
+@@ -77,6 +77,113 @@
+ #define put(predictor,i) dest[i] = predictor (i)
+ #define avg(predictor,i) dest[i] = avg2 (predictor (i), dest[i])
+ 
++/* On 32-bit SIMD-less PowerPC (G3, early G4 without AltiVec in use) the
++ * byte-at-a-time template below is the single hottest spot of DVD playback.
++ * Process 4 pixels per 32-bit register instead, with the classical packed
++ * byte-lane formulas (identical to the ones used by ffmpeg's C hpeldsp and
++ * the libmpeg2 Alpha port).  All results are bit-exact with the reference
++ * template.  MPEG2_MC_WORD can be defined to force this path on any
++ * architecture (used by the host-side unit test). */
++#if defined(MPEG2_MC_WORD) || \
++    (defined(__GNUC__) && !defined(__ppc64__) && \
++     (defined(__ppc__) || defined(__powerpc__) || defined(__POWERPC__)))
++#define MC_WORD 1
++#endif
++
++#ifdef MC_WORD
++
++#include <string.h>	/* memcpy, for safely typed unaligned accesses */
++
++#define MCW_FE 0xfefefefeU
++#define MCW_03 0x03030303U
++#define MCW_3F 0x3f3f3f3fU
++
++static inline uint32_t mcw_ld (const uint8_t * p)
++{
++    uint32_t v;
++    memcpy (&v, p, sizeof (v));
++    return v;
++}
++
++static inline void mcw_st (uint8_t * p, uint32_t v)
++{
++    memcpy (p, &v, sizeof (v));
++}
++
++/* per-byte-lane (a+b+1)>>1, exact: no carry can cross a lane because
++ * ((a^b) & 0xfe) >> 1 <= (a|b) holds lane-wise */
++static inline uint32_t mcw_avg2 (uint32_t a, uint32_t b)
++{
++    return (a | b) - (((a ^ b) & MCW_FE) >> 1);
++}
++
++/* per-byte-lane (a+b+c+d+2)>>2, exact: split every lane into its high 6
++ * and low 2 bits; the partial sums (max 4*63=252 and 4*3+2=14) never
++ * overflow an 8-bit lane */
++static inline uint32_t mcw_avg4 (uint32_t a, uint32_t b, uint32_t c,
++				 uint32_t d)
++{
++    uint32_t l = (a & MCW_03) + (b & MCW_03) + (c & MCW_03) + (d & MCW_03)
++	       + 0x02020202U;
++    uint32_t h = ((a >> 2) & MCW_3F) + ((b >> 2) & MCW_3F)
++	       + ((c >> 2) & MCW_3F) + ((d >> 2) & MCW_3F);
++    return h + ((l >> 2) & MCW_03);
++}
++
++#if defined(__GNUC__) && \
++    (defined(__ppc__) || defined(__powerpc__) || defined(__POWERPC__))
++/* dcbt never faults, so prefetching past the end of the reference frame is
++ * safe.  The 750 has essentially no hardware prefetch and reference frames
++ * never fit in L2: touching the lines two rows ahead hides the read
++ * latency of these bandwidth-bound loops. */
++#define MCW_PREFETCH(p) __asm__ ("dcbt 0,%0" :: "r" (p))
++#else
++#define MCW_PREFETCH(p) do { } while (0)
++#endif
++
++/* predictors returning 4 pixels packed in a word */
++#define wpredict_o(i)  mcw_ld (ref + (i))
++#define wpredict_x(i)  mcw_avg2 (mcw_ld (ref + (i)), mcw_ld (ref + (i) + 1))
++#define wpredict_y(i)  mcw_avg2 (mcw_ld (ref + (i)), \
++				 mcw_ld (ref + stride + (i)))
++#define wpredict_xy(i) mcw_avg4 (mcw_ld (ref + (i)), \
++				 mcw_ld (ref + (i) + 1), \
++				 mcw_ld (ref + stride + (i)), \
++				 mcw_ld (ref + stride + (i) + 1))
++
++#define wput(predictor,i) mcw_st (dest + (i), predictor (i))
++#define wavg(predictor,i) \
++    mcw_st (dest + (i), mcw_avg2 (predictor (i), mcw_ld (dest + (i))))
++
++#define MC_FUNC(op,xy)							\
++static void MC_##op##_##xy##_16_c (uint8_t * dest, const uint8_t * ref,	\
++				   const int stride, int height)	\
++{									\
++    do {								\
++	MCW_PREFETCH (ref + (stride << 1));				\
++	MCW_PREFETCH (ref + (stride << 1) + 16);			\
++	w##op (wpredict_##xy, 0);					\
++	w##op (wpredict_##xy, 4);					\
++	w##op (wpredict_##xy, 8);					\
++	w##op (wpredict_##xy, 12);					\
++	ref += stride;							\
++	dest += stride;							\
++    } while (--height);							\
++}									\
++static void MC_##op##_##xy##_8_c (uint8_t * dest, const uint8_t * ref,	\
++				  const int stride, int height)		\
++{									\
++    do {								\
++	MCW_PREFETCH (ref + (stride << 1));				\
++	w##op (wpredict_##xy, 0);					\
++	w##op (wpredict_##xy, 4);					\
++	ref += stride;							\
++	dest += stride;							\
++    } while (--height);							\
++}
++
++#else /* !MC_WORD */
++
+ /* mc function template */
+ 
+ #define MC_FUNC(op,xy)							\
+@@ -121,6 +228,8 @@
+     } while (--height);							\
+ }
+ 
++#endif /* MC_WORD */
++
+ /* definitions of the actual mc functions */
+ 
+ MC_FUNC (put,o)

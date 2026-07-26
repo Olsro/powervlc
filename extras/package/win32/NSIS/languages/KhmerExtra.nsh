@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "បន្ថែម​រូបតំណាង​ទៅ​ផ្ទៃ​តុ​របស់​អ្នក​សម្រាប់​ការ​ចូល​ដំណើរការ​ងាយស្រួល"
 ${LangFileString} Desc_Section03 \
-    "VLC Mozilla និង​កម្មវិធី​ជំនួយ Mozilla Firefox"
+    "${PRODUCT_NAME} Mozilla និង​កម្មវិធី​ជំនួយ Mozilla Firefox"
 ${LangFileString} Desc_Section04 \
-    "កម្មវិធី​ជំនួយ VLC ActiveX"
+    "កម្មវិធី​ជំនួយ ${PRODUCT_NAME} ActiveX"
 ${LangFileString} Desc_Section05 \
     "ការ​ចុះ​ឈ្មោះ​ការ​ចាក់​ឡើង​វិញ​ឌីវីឌី និង​ស៊ីឌី"
 ${LangFileString} Desc_Section06 \
-    "កំណត់​កម្មវិធី​ចាក់​មេឌៀ VLC ជា​កម្មវិធី​លំនាំដើម​សម្រាប់​ប្រភេទ​ឯកសារ​ដែល​បាន​បញ្ជាក់"
+    "កំណត់​កម្មវិធី​ចាក់​មេឌៀ ${PRODUCT_NAME} ជា​កម្មវិធី​លំនាំដើម​សម្រាប់​ប្រភេទ​ឯកសារ​ដែល​បាន​បញ្ជាក់"
 ${LangFileString} Desc_Section07 \
-    "បន្ថែម​ធាតុ​ម៉ឺនុយ​​បរិបទ ('ចាក់​ជាមួយ VLC' និង 'បន្ថែម​ទៅ​បញ្ជី​ចាក់​របស់ VLC')"
+    "បន្ថែម​ធាតុ​ម៉ឺនុយ​​បរិបទ ('ចាក់​ជាមួយ ${PRODUCT_NAME}' និង 'បន្ថែម​ទៅ​បញ្ជី​ចាក់​របស់ ${PRODUCT_NAME}')"
 ${LangFileString} Desc_Section08 \
-    "លុប​ចំណូលចិត្ត​កម្មវិធី​ចាក់​មេឌៀ VLC និង​ឯកសារ​ឃ្លាំង​​ពី​ការ​ដំឡើង​មុន"
+    "លុប​ចំណូលចិត្ត​កម្មវិធី​ចាក់​មេឌៀ ${PRODUCT_NAME} និង​ឯកសារ​ឃ្លាំង​​ពី​ការ​ដំឡើង​មុន"
 
 ${LangFileString} Name_Section91 "លុប"
 ${LangFileString} Name_Section92 "លុប​ចំណូល​ចិត្ត និង​ឃ្លាំង"
 
 ${LangFileString} Desc_Section91 \
-"លុប​កម្មវិធី​ចាក់​មេឌៀ VLC និង​សមាសភាគ​របស់​វា​ទាំងអស់"
+"លុប​កម្មវិធី​ចាក់​មេឌៀ ${PRODUCT_NAME} និង​សមាសភាគ​របស់​វា​ទាំងអស់"
 ${LangFileString} Desc_Section92 \
-"លុប​ចំណូល​ចិត្ត​កម្មវិធី​ចាក់​មេឌៀ VLC និង​ឯកសារ​ឃ្លាំង"
+"លុប​ចំណូល​ចិត្ត​កម្មវិធី​ចាក់​មេឌៀ ${PRODUCT_NAME} និង​ឯកសារ​ឃ្លាំង"
 
 ${LangFileString} ShellAssociation_Play "ចាក់"
-${LangFileString} ContextMenuEntry_PlayWith "ចាក់​ជាមួយ​កម្មវិធី​ចាក់​មេឌៀ VLC"
-${LangFileString} ContextMenuEntry_AddToPlaylist "បន្ថែម​ទៅ​បញ្ជី​ចាក់​កម្មវិធី​ចាក់​មេឌៀ​ VLC"
+${LangFileString} ContextMenuEntry_PlayWith "ចាក់​ជាមួយ​កម្មវិធី​ចាក់​មេឌៀ ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "បន្ថែម​ទៅ​បញ្ជី​ចាក់​កម្មវិធី​ចាក់​មេឌៀ​ ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "ទស្សនា​តំបន់​បណ្ដាញ​កម្មវិធី​ចាក់​មេឌៀ VideoLAN VLC"
 
@@ -60,18 +60,18 @@ ${LangFileString} Action_OnArrivalDVDAudio "ចាក់​ឌីវីឌី​
 ${LangFileString} License_NextText "ឥឡូវ​អ្នក​ស្គាល់​សិទ្ធិ​របស់​អ្នក​។ ចុច​បន្ទាប់​ដើម្បី​បន្ត។"
 
 ${LangFileString} Detail_CheckProcesses "កំពុង​ពិនិត្យមើល​ការ​ចូល​ដំណើរការ..."
-${LangFileString} MessageBox_VLCRunning "ការ​លេច​ឡើង VLC កំពុង​ដំណើរការ ហើយ​នឹង​ត្រូវ​បាន​បិទ​ឥឡូវ​នេះ។"
-${LangFileString} MessageBox_VLCUnableToClose "កម្មវិធី​​ដំឡើង​នេះ​មិន​អាច​បិទ VLC បាន​ទេ, សូម​ធ្វើ​វា​ដោយ​ដៃ។"
+${LangFileString} MessageBox_VLCRunning "ការ​លេច​ឡើង ${PRODUCT_NAME} កំពុង​ដំណើរការ ហើយ​នឹង​ត្រូវ​បាន​បិទ​ឥឡូវ​នេះ។"
+${LangFileString} MessageBox_VLCUnableToClose "កម្មវិធី​​ដំឡើង​នេះ​មិន​អាច​បិទ ${PRODUCT_NAME} បាន​ទេ, សូម​ធ្វើ​វា​ដោយ​ដៃ។"
 ${LangFileString} MessageBox_InstallAborted "បោះបង់​ការ​ដំឡើង!"
 
 ${LangFileString} Reinstall_Headline "បាន​ដំឡើង​រួច​ហើយ"
-${LangFileString} Reinstall_HeadlineInstall "ជ្រើស​របៀប​ដែល​អ្នក​ចង់​ដំឡើង​ VLC ។"
+${LangFileString} Reinstall_HeadlineInstall "ជ្រើស​របៀប​ដែល​អ្នក​ចង់​ដំឡើង​ ${PRODUCT_NAME} ។"
 ${LangFileString} Reinstall_HeadlineMaintenance "ជ្រើស​ជម្រើស​ថែទាំ​ដើម្បី​ប្រតិបត្តិ។"
-${LangFileString} Reinstall_MessageOlder "កំណែ VLC ចាស់​ត្រូវ​បាន​ដំឡើង​នៅ​លើ​ប្រព័ន្ធ​របស់​អ្នក។ ជ្រើស​ប្រតិបត្តិ​ការ​ដែល​អ្នក​ចង់​ប្រតិបត្តិ ហើយ​ចុច​បន្ទាប់​ដើម្បី​បន្ត។"
-${LangFileString} Reinstall_MessageNewer "កំណែ VLC ថ្មី​ជាង​ត្រូវ​បាន​ដំឡើង​រួច​ហើយ! វា​មិន​ត្រូវ​បាន​ផ្ដល់​អនុសាសន៍​ដែល​អ្នក​​បន្ទាប​មក​កំណែ​ចាស់​ជាង។ ជ្រើស​ប្រតិបត្តិការ​ដែល​អ្នក​ចង់​ប្រតិបត្តិ ហើយ​ចុច​បន្ទាប់​ដើម្បី​បន្ត។"
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} ត្រូវ​បាន​ដំឡើង​រួច​ហើយ។ ជ្រើស​ប្រតិបត្តិការ​ដែល​អ្នក​ចង់​ប្រតិបត្តិ ហើយ​ចុច​បន្ទាប់​ដើម្បី​បន្ត។"
-${LangFileString} Reinstall_OptionUpgrade "ធ្វើ​ឲ្យ VLC របស់​អ្នក​ប្រសើរ​ដោយ​ប្រើ​ការ​កំណត់​មុនៗ (បាន​ផ្ដល់​អនុសាសន៍)"
-${LangFileString} Reinstall_OptionDowngrade "បន្ទាប​កំណែ VLC ដោយ​ប្រើ​ការ​កំណត់​មុនៗ (បាន​ផ្ដល់​អនុសាសន៍)"
+${LangFileString} Reinstall_MessageOlder "កំណែ ${PRODUCT_NAME} ចាស់​ត្រូវ​បាន​ដំឡើង​នៅ​លើ​ប្រព័ន្ធ​របស់​អ្នក។ ជ្រើស​ប្រតិបត្តិ​ការ​ដែល​អ្នក​ចង់​ប្រតិបត្តិ ហើយ​ចុច​បន្ទាប់​ដើម្បី​បន្ត។"
+${LangFileString} Reinstall_MessageNewer "កំណែ ${PRODUCT_NAME} ថ្មី​ជាង​ត្រូវ​បាន​ដំឡើង​រួច​ហើយ! វា​មិន​ត្រូវ​បាន​ផ្ដល់​អនុសាសន៍​ដែល​អ្នក​​បន្ទាប​មក​កំណែ​ចាស់​ជាង។ ជ្រើស​ប្រតិបត្តិការ​ដែល​អ្នក​ចង់​ប្រតិបត្តិ ហើយ​ចុច​បន្ទាប់​ដើម្បី​បន្ត។"
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} ត្រូវ​បាន​ដំឡើង​រួច​ហើយ។ ជ្រើស​ប្រតិបត្តិការ​ដែល​អ្នក​ចង់​ប្រតិបត្តិ ហើយ​ចុច​បន្ទាប់​ដើម្បី​បន្ត។"
+${LangFileString} Reinstall_OptionUpgrade "ធ្វើ​ឲ្យ ${PRODUCT_NAME} របស់​អ្នក​ប្រសើរ​ដោយ​ប្រើ​ការ​កំណត់​មុនៗ (បាន​ផ្ដល់​អនុសាសន៍)"
+${LangFileString} Reinstall_OptionDowngrade "បន្ទាប​កំណែ ${PRODUCT_NAME} ដោយ​ប្រើ​ការ​កំណត់​មុនៗ (បាន​ផ្ដល់​អនុសាសន៍)"
 ${LangFileString} Reinstall_OptionComponents "បន្ថែម/លុប​ចេញ/ដំឡើង​​សមាសធាតុ​ម្ដង​ទៀត"
 ${LangFileString} Reinstall_OptionAdvanced "ប្ដូរ​ការ​កំណត់​ (កម្រិត​ខ្ពស់)"
-${LangFileString} Reinstall_OptionUninstall "លុប VLC"
+${LangFileString} Reinstall_OptionUninstall "លុប ${PRODUCT_NAME}"

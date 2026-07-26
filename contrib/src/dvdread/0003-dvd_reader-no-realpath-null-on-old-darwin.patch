@@ -1,0 +1,37 @@
+dvd_reader: do not rely on realpath(path, NULL)
+
+realpath(path, NULL) is POSIX 2008, first supported on Mac OS X 10.6:
+Tiger writes through the (NULL) second argument, so probing any
+directory through DVDOpenCommon crashes with a write to address 0
+(seen live: mediadirs scanning a folder -> dvdnav probe -> crash).
+
+--- a/src/dvd_reader.c
++++ b/src/dvd_reader.c
+@@ -554,6 +554,19 @@
+ 
+     /* Resolve any symlinks and get the absolute dir name. */
+     {
++#ifdef __APPLE__
++        /* realpath(path, NULL) is POSIX 2008, only supported since
++         * Mac OS X 10.6: Tiger writes through the (NULL) second
++         * argument and crashes. Use a caller-provided buffer. */
++        char resolved_buf[PATH_MAX];
++        if( realpath( path_copy, resolved_buf ) == NULL ) {
++          goto DVDOpen_error;
++        }
++        free(path_copy);
++        path_copy = strdup(resolved_buf);
++        if( path_copy == NULL )
++          goto DVDOpen_error;
++#else
+         new_path = realpath( path_copy, NULL );
+         if( new_path == NULL ) {
+           goto DVDOpen_error;
+@@ -561,6 +574,7 @@
+         free(path_copy);
+         path_copy = new_path;
+         new_path = NULL;
++#endif
+     }
+ #endif
+ 

@@ -1,9 +1,21 @@
 # protobuf
-PROTOBUF_VERSION := 3.4.1
+PROTOBUF_VERSION := 3.1.0
 PROTOBUF_URL := $(GITHUB)/google/protobuf/releases/download/v$(PROTOBUF_VERSION)/protobuf-cpp-$(PROTOBUF_VERSION).tar.gz
 
+ifdef HAVE_MACOSX
+# protobuf requires __thread thread-local storage, only available since
+# macOS 10.7 (it is only needed by the chromecast module anyway)
+ifeq ($(call darwin_min_os_at_least, 10.7), true)
+CAN_BUILD_PROTOBUF := 1
+endif
+else
+CAN_BUILD_PROTOBUF := 1
+endif
+
+ifdef CAN_BUILD_PROTOBUF
 PKGS += protobuf
-ifeq ($(call need_pkg, "protobuf-lite = $(PROTOBUF_VERSION)"),)
+endif
+ifeq ($(call need_pkg, "protobuf-lite >= 3.1.0 protobuf-lite < 3.2.0"),)
 PKGS_FOUND += protobuf
 endif
 
@@ -13,27 +25,21 @@ $(TARBALLS)/protobuf-$(PROTOBUF_VERSION)-cpp.tar.gz:
 .sum-protobuf: protobuf-$(PROTOBUF_VERSION)-cpp.tar.gz
 
 DEPS_protobuf = zlib $(DEPS_zlib)
+ifdef HAVE_WIN32
+DEPS_protobuf += pthreads $(DEPS_pthreads)
+endif
 
-PROTOBUF_COMMON_CONF := -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_DEBUG_POSTFIX:STRING= -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-PROTOBUF_CONF := $(PROTOBUF_COMMON_CONF)
+PROTOBUFVARS := DIST_LANG="cpp"
 
 protobuf: protobuf-$(PROTOBUF_VERSION)-cpp.tar.gz .sum-protobuf
 	$(UNPACK)
-	$(RM) -Rf $(UNPACK_DIR)
 	mv protobuf-$(PROTOBUF_VERSION) protobuf-$(PROTOBUF_VERSION)-cpp
-	$(APPLY) $(SRC)/protobuf/0001-don-t-build-and-install-protoc-libprotoc.patch
-	$(APPLY) $(SRC)/protobuf/missing-includes.patch
-	# don't build libprotoc
-	sed -i.orig -e 's,include(libprotoc,#include(libprotoc,' $(UNPACK_DIR)/cmake/CMakeLists.txt
-	# don't build protoc
-	sed -i.orig -e 's,include(protoc,#include(protoc,' $(UNPACK_DIR)/cmake/CMakeLists.txt
-	# force include <algorithm>
-	sed -i.orig 's,#ifdef _MSC_VER,#if 1,' "$(UNPACK_DIR)/src/google/protobuf/repeated_field.h"
+	$(APPLY) $(SRC)/protobuf/dont-build-protoc.patch
+	$(APPLY) $(SRC)/protobuf/include-algorithm.patch
 	$(MOVE)
 
-.protobuf: protobuf toolchain.cmake
-	$(CMAKECLEAN)
-	$(HOSTVARS_CMAKE) $(CMAKE) -S $</cmake $(PROTOBUF_CONF)
-	+$(CMAKEBUILD)
-	$(CMAKEINSTALL)
+.protobuf: protobuf
+	$(RECONF)
+	cd $< && $(HOSTVARS) $(PROTOBUFVARS) ./configure $(HOSTCONF) --with-protoc="$(PROTOC)"
+	$(MAKE) -C $< && $(MAKE) -C $< install
 	touch $@

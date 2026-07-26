@@ -1722,7 +1722,21 @@ static int Statistics ( vlc_object_t *p_this, char const *psz_cmd,
     if( !p_input )
         return VLC_ENOOBJ;
 
+    /* Recompute right now: the input's own stats tick pauses with the
+     * input, which is precisely when the cache visibly pre-fills. */
+    input_Control( p_input, INPUT_UPDATE_STATS );
     updateStatistics( p_intf, input_GetItem(p_input) );
+    /* Live look-ahead cache state: queried through the input (not the
+     * stats struct) so it moves even while paused, which is when the
+     * cache fills up. */
+    size_t i_cache_count = 0, i_cache_target = 0, i_cache_bytes = 0;
+    input_Control( p_input, INPUT_GET_VIDEO_CACHE_STATE,
+                   &i_cache_count, &i_cache_target, &i_cache_bytes );
+    if( i_cache_target > 0 )
+        msg_rc(_("| pictures cached  :    %5zu / %zu (%d%%, %.1f MiB)"),
+               i_cache_count, i_cache_target,
+               (int)(100 * i_cache_count / i_cache_target),
+               (double)i_cache_bytes / (1024 * 1024));
     vlc_object_release( p_input );
     return VLC_SUCCESS;
 }

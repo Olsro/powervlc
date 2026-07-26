@@ -22,7 +22,7 @@ ncurses: ncurses-$(NCURSES_VERSION).tar.gz .sum-ncurses
 	$(MOVE)
 
 .ncurses: ncurses
-	cd $< && mkdir -p "$(PREFIX)/lib/pkgconfig" && $(HOSTVARS) PKG_CONFIG_LIBDIR="$(PREFIX)/lib/pkgconfig" ./configure $(patsubst --datarootdir=%,,$(HOSTCONF)) --without-debug --enable-widec --without-develop --without-shared --with-terminfo-dirs=/usr/share/terminfo --with-pkg-config=yes --enable-pc-files
+	cd $< && mkdir -p "$(PREFIX)/lib/pkgconfig" && $(HOSTVARS) PKG_CONFIG_LIBDIR="$(PREFIX)/lib/pkgconfig" ./configure $(patsubst --datarootdir=%,,$(HOSTCONF)) --without-debug --enable-widec --without-develop --without-shared --with-terminfo-dirs=/usr/share/terminfo --with-pkg-config=yes --enable-pc-files --with-build-cc="$${CC_FOR_BUILD:-cc}" --with-build-cflags= --with-build-cppflags= --with-build-ldflags=
 	cd $< && make -C ncurses -j1 && make -C ncurses install
 	cd $< && make -C include -j1 && make -C include install
 	cd $< && make -C misc pc-files && cp misc/ncursesw.pc "$(PREFIX)/lib/pkgconfig"

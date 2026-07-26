@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Bætir táknmyndum á skjáborðið til að auðvelda aðgengi"
 ${LangFileString} Desc_Section03 \
-    "VLC Mozilla og Mozilla Firefox íforrit"
+    "${PRODUCT_NAME} Mozilla og Mozilla Firefox íforrit"
 ${LangFileString} Desc_Section04 \
-    "VLC ActiveX íforrit"
+    "${PRODUCT_NAME} ActiveX íforrit"
 ${LangFileString} Desc_Section05 \
     "Skráning á  afspilun DVD og CD"
 ${LangFileString} Desc_Section06 \
-    "Stillir VLC-margmiðlunarspilarann sem sjálfgefið forrit fyrir tilgreindar skráategundir"
+    "Stillir ${PRODUCT_NAME}-margmiðlunarspilarann sem sjálfgefið forrit fyrir tilgreindar skráategundir"
 ${LangFileString} Desc_Section07 \
-    "Bæta við línum í samhengisvalmynd ('Spila með VLC' og 'Setja á spilunarlista VLC')"
+    "Bæta við línum í samhengisvalmynd ('Spila með ${PRODUCT_NAME}' og 'Setja á spilunarlista ${PRODUCT_NAME}')"
 ${LangFileString} Desc_Section08 \
-    "Eyðir kjörstillingum VLC og skrám í skyndiminni sem gætu verið afgangs eftir fyrri uppsetningar"
+    "Eyðir kjörstillingum ${PRODUCT_NAME} og skrám í skyndiminni sem gætu verið afgangs eftir fyrri uppsetningar"
 
 ${LangFileString} Name_Section91 "Henda út"
 ${LangFileString} Name_Section92 "Eyða kjörstillingum og skyndiminni"
 
 ${LangFileString} Desc_Section91 \
-"Henda út VLC-margmiðlunarspilaranum og öllum tengdum einingum"
+"Henda út ${PRODUCT_NAME}-margmiðlunarspilaranum og öllum tengdum einingum"
 ${LangFileString} Desc_Section92 \
-"Eyðir kjörstillingum VLC og skrám í skyndiminni"
+"Eyðir kjörstillingum ${PRODUCT_NAME} og skrám í skyndiminni"
 
 ${LangFileString} ShellAssociation_Play "Spila"
-${LangFileString} ContextMenuEntry_PlayWith "Spila með VLC spilaranum"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Bæta á spilunarlista VLC"
+${LangFileString} ContextMenuEntry_PlayWith "Spila með ${PRODUCT_NAME} spilaranum"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Bæta á spilunarlista ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "Heimsækja vef VideoLAN VLC margmiðlunarspilarans"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Spila Blu-ray"
 ${LangFileString} License_NextText "Núna veistu hvar þú stendur. Smelltu á Næsta til að halda áfram."
 
 ${LangFileString} Detail_CheckProcesses "Athuga ferli..."
-${LangFileString} MessageBox_VLCRunning "VLC virðist vera í gangi og verður núna lokað."
-${LangFileString} MessageBox_VLCUnableToClose "Uppsetningarforritið gat ekki lokað VLC, þú verður að gera það handvirkt."
+${LangFileString} MessageBox_VLCRunning "${PRODUCT_NAME} virðist vera í gangi og verður núna lokað."
+${LangFileString} MessageBox_VLCUnableToClose "Uppsetningarforritið gat ekki lokað ${PRODUCT_NAME}, þú verður að gera það handvirkt."
 ${LangFileString} MessageBox_InstallAborted "Hætt við uppsetningu!"
 
 ${LangFileString} Reinstall_Headline "Þegar uppsett"
-${LangFileString} Reinstall_HeadlineInstall "Veldu hvernig þú vilt setja upp VLC ."
+${LangFileString} Reinstall_HeadlineInstall "Veldu hvernig þú vilt setja upp ${PRODUCT_NAME} ."
 ${LangFileString} Reinstall_HeadlineMaintenance "Veldu þá viðhaldsaðgerð sem þú vilt framkvæma."
-${LangFileString} Reinstall_MessageOlder "Eldri útgáfa VLC er uppsett á kerfinu þínu. Veldu þá aðgerð sem þú vilt framkvæma og smelltu á Næsta til að halda áfram."
-${LangFileString} Reinstall_MessageNewer "Nýrri útgáfa VLC er þegar uppsett! Ekki er mælt með því að niðurfæra í eldri útgáfu. Veldu þá aðgerð sem þú vilt framkvæma og smelltu á Næsta til að halda áfram."
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} er þegar uppsett. Veldu þá aðgerð sem þú vilt framkvæma og smelltu á Næsta til að halda áfram."
-${LangFileString} Reinstall_OptionUpgrade "Uppfæra VLC með fyrri stillingum (mælt með þessu)"
-${LangFileString} Reinstall_OptionDowngrade "Niðurfæra VLC með fyrri stillingum (mælt með þessu)"
+${LangFileString} Reinstall_MessageOlder "Eldri útgáfa ${PRODUCT_NAME} er uppsett á kerfinu þínu. Veldu þá aðgerð sem þú vilt framkvæma og smelltu á Næsta til að halda áfram."
+${LangFileString} Reinstall_MessageNewer "Nýrri útgáfa ${PRODUCT_NAME} er þegar uppsett! Ekki er mælt með því að niðurfæra í eldri útgáfu. Veldu þá aðgerð sem þú vilt framkvæma og smelltu á Næsta til að halda áfram."
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} er þegar uppsett. Veldu þá aðgerð sem þú vilt framkvæma og smelltu á Næsta til að halda áfram."
+${LangFileString} Reinstall_OptionUpgrade "Uppfæra ${PRODUCT_NAME} með fyrri stillingum (mælt með þessu)"
+${LangFileString} Reinstall_OptionDowngrade "Niðurfæra ${PRODUCT_NAME} með fyrri stillingum (mælt með þessu)"
 ${LangFileString} Reinstall_OptionComponents "Bæta við/Fjarlægja/Enduruppsetja forritseiningar"
 ${LangFileString} Reinstall_OptionAdvanced "Breyta stillingum (ítarlegt)"
-${LangFileString} Reinstall_OptionUninstall "Henda VLC út"
+${LangFileString} Reinstall_OptionUninstall "Henda ${PRODUCT_NAME} út"

@@ -152,6 +152,28 @@ VLC_API void vout_ChangeAspectRatio( vout_thread_t *p_vout,
 VLC_API picture_t * vout_GetPicture( vout_thread_t * );
 VLC_API void vout_PutPicture( vout_thread_t *, picture_t * );
 
+/**
+ * Returns the number of decoded pictures currently queued for display
+ * (not yet shown). Used to size a look-ahead decode cache against the
+ * actual backlog rather than a target duration alone.
+ */
+VLC_API size_t vout_GetDecoderFifoCount( vout_thread_t * );
+
+/**
+ * Returns the byte size (sum of plane pitch*lines) of one picture
+ * currently queued in the decoder fifo, or 0 if the fifo is empty.
+ * Used to translate a memory budget into a picture count without
+ * assuming a chroma/resolution ahead of time.
+ */
+VLC_API size_t vout_GetDecoderFifoPictureBytes( vout_thread_t * );
+
+/**
+ * Returns the display date of the oldest picture queued in the decoder
+ * fifo, or VLC_TICK_INVALID if the fifo is empty. Used to re-anchor the
+ * dates of a refilled look-ahead cache on release.
+ */
+VLC_API vlc_tick_t vout_GetDecoderFifoFirstDate( vout_thread_t * );
+
 /* Subpictures channels ID */
 #define VOUT_SPU_CHANNEL_INVALID      (-1) /* Always fails in comparison */
 #define VOUT_SPU_CHANNEL_OSD            1 /* OSD channel is automatically cleared */

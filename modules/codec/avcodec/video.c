@@ -84,6 +84,11 @@ struct decoder_sys_t
     /* Hack to force display of still pictures */
     bool b_first_frame;
 
+    /* Content hopelessly beyond this machine (5s+ late): decode and force
+     * the display of keyframes only — a slideshow beats a black screen on
+     * the old Macs this port targets. */
+    bool b_slideshow;
+
     bool b_draining;
 
     /* */
@@ -906,10 +911,17 @@ static bool check_block_being_late( decoder_sys_t *p_sys, block_t *block, vlc_ti
 
     if( current_time - p_sys->i_late_frames_start > (5*CLOCK_FREQ))
     {
+#if defined (__powerpc__) || defined (__POWERPC__)
+        /* Keep the block: DecodeBlock turns this into a keyframe slideshow
+         * (skip_frame saturated at NONKEY) instead of trashing the blocks
+         * unparsed, which leaves sound over a black screen. */
+        return true;
+#else
         date_Set( &p_sys->pts, VLC_TICK_INVALID ); /* To make sure we recover properly */
         block_Release( block );
         p_sys->i_late_frames--;
         return true;
+#endif
     }
     return false;
 }
@@ -918,6 +930,14 @@ static bool check_frame_should_be_dropped( decoder_sys_t *p_sys, AVCodecContext 
 {
     if( p_sys->i_late_frames <= 4)
         return false;
+
+#if defined (__powerpc__) || defined (__POWERPC__)
+    /* In slideshow mode the decoder already skips everything but keyframes
+     * (NONKEY), and those must reach the display: never drop the block nor
+     * clear the output request here. */
+    if( p_sys->b_slideshow )
+        return false;
+#endif
 
     *b_need_output_picture = false;
     if( p_sys->i_late_frames < 12 )
@@ -1142,9 +1162,31 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block, bool *error
     current_time = mdate();
     if( p_dec->b_frame_drop_allowed &&  check_block_being_late( p_sys, p_block, current_time) )
     {
+#if defined (__powerpc__) || defined (__POWERPC__)
+        /* "A good idea could be to decode all I pictures" (below): on the
+         * PowerPC Macs this port targets, content way past the CPU budget
+         * (1080p h264...) otherwise plays as sound over a black screen.
+         * The block was NOT released: fall through and feed it with
+         * skip_frame saturated at NONKEY, so the decoder itself skips
+         * everything but keyframes — the demux need not flag TYPE_I
+         * (mp4 never does) — and force-display what comes out. */
+        if( !p_sys->b_slideshow )
+        {
+            msg_Warn( p_dec, "hopelessly late video: "
+                      "switching to keyframe slideshow" );
+            p_sys->b_slideshow = true;
+        }
+#else
         msg_Err( p_dec, "more than 5 seconds of late video -> "
                  "dropping frame (computer too slow ?)" );
         return NULL;
+#endif
+    }
+    else if( p_sys->b_slideshow && p_sys->i_late_frames <= 0 )
+    {
+        msg_Warn( p_dec, "video caught up: leaving keyframe slideshow" );
+        p_sys->b_slideshow = false;
+        p_context->skip_frame = p_sys->i_skip_frame;
     }
 
 
@@ -1178,6 +1220,15 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block, bool *error
         p_context->skip_frame = __MAX( p_context->skip_frame,
                                               AVDISCARD_NONREF );
     }
+
+#if defined (__powerpc__) || defined (__POWERPC__)
+    /* Keyframe slideshow (see check_block_being_late): let the decoder
+     * do the skipping, it knows the frame types even when the demux
+     * does not flag them. */
+    if( p_sys->b_slideshow )
+        p_context->skip_frame = __MAX( p_context->skip_frame,
+                                       AVDISCARD_NONKEY );
+#endif
 
     /*
      * Do the actual decoding now */
@@ -1426,7 +1477,7 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block, bool *error
 
         p_pic->date = i_pts;
         /* Hack to force display of still pictures */
-        p_pic->b_force = p_sys->b_first_frame;
+        p_pic->b_force = p_sys->b_first_frame || p_sys->b_slideshow;
         p_pic->i_nb_fields = 2 + frame->repeat_pict;
 #if LIBAVUTIL_VERSION_CHECK( 58, 7, 100 )
         p_pic->b_progressive = !(frame->flags & AV_FRAME_FLAG_INTERLACED);

@@ -30,6 +30,9 @@
 #import "misc.h"
 
 #import <Cocoa/Cocoa.h>
+/* SetSystemUIMode(): menu bar/Dock hiding available since Mac OS X 10.2,
+ * unlike -[NSApplication setPresentationOptions:] which needs 10.6. */
+#import <Carbon/Carbon.h>
 
 @implementation VLCMinimalVoutWindow
 - (id)initWithContentRect:(NSRect)contentRect
@@ -48,6 +51,16 @@
     return self;
 }
 
+/* Main-thread trampoline for VOUT_WINDOW_SET_SIZE (see intf.m) */
+- (void)setSizeFromValue:(NSValue *)value
+{
+    NSSize size = [value sizeValue];
+    NSRect theFrame = [self frame];
+    theFrame.size.width = size.width;
+    theFrame.size.height = size.height;
+    [self setFrame:theFrame display:YES animate:YES];
+}
+
 - (void)enterFullscreen
 {
     NSScreen *screen = [self screen];
@@ -55,17 +68,13 @@
     initialFrame = [self frame];
     [self setFrame:[[self screen] frame] display:YES animate:YES];
 
-    NSApplicationPresentationOptions presentationOpts = [NSApp presentationOptions];
-    if ([screen hasMenuBar])
-        presentationOpts |= NSApplicationPresentationAutoHideMenuBar;
     if ([screen hasMenuBar] || [screen hasDock])
-        presentationOpts |= NSApplicationPresentationAutoHideDock;
-    [NSApp setPresentationOptions:presentationOpts];
+        SetSystemUIMode(kUIModeAllHidden, kUIOptionAutoShowMenuBar);
 }
 
 - (void)leaveFullscreen
 {
-    [NSApp setPresentationOptions: NSApplicationPresentationDefault];
+    SetSystemUIMode(kUIModeNormal, 0);
     [self setFrame:initialFrame display:YES animate:YES];
 }
 

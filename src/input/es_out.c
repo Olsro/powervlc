@@ -37,6 +37,8 @@
 #include <vlc_es_out.h>
 #include <vlc_block.h>
 #include <vlc_aout.h>
+#include <vlc_vout.h>
+#include <vlc_vout_osd.h>
 #include <vlc_fourcc.h>
 #include <vlc_meta.h>
 
@@ -49,6 +51,7 @@
 #include "item.h"
 
 #include "../stream_output/stream_output.h"
+#include "../video_output/vout_control.h"
 
 #include <vlc_iso_lang.h>
 /* FIXME we should find a better way than including that */
@@ -175,11 +178,74 @@ struct es_out_sys_t
     vlc_tick_t  i_buffering_extra_stream;
     vlc_tick_t  i_buffering_extra_system;
 
+    /* Look-ahead decoded-picture cache (video-cache-* options); see
+     * EsOutVideoCacheFillRatio(). 0 MB disables the whole feature.
+     * (The seconds cap is enforced decoder-side, in
+     * DecoderVideoCacheTarget; es_out only needs the byte budget.) */
+    size_t      i_video_cache_bytes;
+    unsigned    i_video_cache_fill_percent;
+
     /* Record */
     sout_instance_t *p_sout_record;
 
     /* Used only to limit debugging output */
     int         i_prev_stream_level;
+
+    /* Throttles the buffering OSD (see EsOutVideoCacheFillRatio) */
+    vlc_tick_t  i_video_cache_osd_last;
+
+    /* Watchdog against a wedged fill (decoder stuck before its first
+     * picture, pool famine...): if the fifo count makes no progress for
+     * VIDEO_CACHE_STALL_TIMEOUT, give the wait up (as if skipped). */
+    size_t      i_video_cache_last_count;
+    vlc_tick_t  i_video_cache_progress_date;
+    /* Wall-clock start of the current fill episode: a fill that IS
+     * progressing but too slowly (DVD stills produce ~1 picture/s, so
+     * the no-progress watchdog never fires) must not gate playback for
+     * minutes either. */
+    vlc_tick_t  i_video_cache_episode_start;
+
+    /* Set by the Play/Pause hotkey while buffering to skip the wait
+     * (see input_EsOutSkipVideoCacheFill) */
+    bool        b_video_cache_skip;
+    /* Demux-driven: menu-capable disc demuxers inhibit the cache in
+     * menu domains (see ES_OUT_SET_VIDEO_CACHE_INHIBIT). */
+    bool        b_video_cache_inhibit;
+    /* A user pause that BEGAN during a cache fill episode is kept
+     * virtual (b_paused/i_pause_date only, nothing propagated to the
+     * clock, the decoders or the vout) and materialized in one go when
+     * the gate opens. Propagating it live is what corrupted the held
+     * pictures: the clock reference shifts on the input thread at
+     * resume, but the vout's matching fifo shift is applied by the
+     * decoder thread only after it finishes its current decode run --
+     * every picture decoded in that lag converts against the shifted
+     * clock AND THEN gets the vout shift again (dated one pause-span in
+     * the future), so on release the display freezes a span on the
+     * first doubled picture then drops a span's worth of correct ones
+     * as "late" (observed: 99-152 drops per pause cycle). During the
+     * episode a pause has nothing real to do anyway: the vout is held,
+     * the clock origin frozen, the audio parked. */
+    bool        b_video_cache_pause_virtual;
+
+    /* Mid-play refill (see EsOutVideoCacheMaybeRefill): a buffering
+     * episode opened because the cache drained to zero during playback.
+     * Released with a plain clock shift of the episode's duration -- the
+     * absolute re-anchoring of EsOutDecodersStopBuffering assumes a
+     * freshly referenced clock (start/seek) and would otherwise park
+     * playback as far in the future as the reference is in the past. */
+    bool        b_video_cache_refill;
+    vlc_tick_t  i_video_cache_refill_start;
+    vlc_tick_t  i_video_cache_refill_last_end;
+    /* Consecutive refill episodes that ended nearly empty (source too
+     * slow, decoder wedged...): each one doubles the refill cooldown, so
+     * a stream that cannot actually be cached degrades to rare, long
+     * pauses instead of a permanent 2-3 s freeze/buffering loop. Reset
+     * by any effective episode and by seeks. */
+    unsigned    i_video_cache_bad_refills;
+    /* When the decoder was first seen starved in the current fill
+     * episode (see the grace period in EsOutVideoCacheFillRatio).
+     * VLC_TICK_INVALID whenever it is feeding normally. */
+    vlc_tick_t  i_video_cache_starved_since;
 };
 
 static es_out_id_t *EsOutAdd    ( es_out_t *, const es_format_t * );
@@ -200,9 +266,12 @@ static void EsUnselect( es_out_t *out, es_out_id_t *es, bool b_update );
 static void EsOutDecoderChangeDelay( es_out_t *out, es_out_id_t *p_es );
 static void EsOutDecodersChangePause( es_out_t *out, bool b_paused, vlc_tick_t i_date );
 static void EsOutChangePosition( es_out_t *out );
+static bool EsOutIsExtraBufferingAllowed( es_out_t *out );
 static void EsOutProgramChangePause( es_out_t *out, bool b_paused, vlc_tick_t i_date );
 static void EsOutProgramsChangeRate( es_out_t *out );
 static void EsOutDecodersStopBuffering( es_out_t *out, bool b_forced );
+static void EsOutVideoCacheMaybeRefill( es_out_t *out );
+static bool EsOutVideoCacheHasCushion( es_out_t *out );
 static void EsOutGlobalMeta( es_out_t *p_out, const vlc_meta_t *p_meta );
 static void EsOutMeta( es_out_t *p_out, const vlc_meta_t *p_meta, const vlc_meta_t *p_progmeta );
 
@@ -332,9 +401,32 @@ es_out_t *input_EsOutNew( input_thread_t *p_input, int i_rate )
 
     p_sys->i_group_id = var_GetInteger( p_input, "program" );
 
+    /* Gapless (PowerVLC): audio-only inputs may park/adopt the audio output
+     * stream across tracks. Cleared for good as soon as a video ES shows up. */
+    var_Create( p_input, "gapless-eligible", VLC_VAR_BOOL );
+    var_SetBool( p_input, "gapless-eligible", true );
+
     p_sys->i_pause_date = -1;
 
     p_sys->i_rate = i_rate;
+
+    int64_t i_cache_mb = var_InheritInteger( p_input, "video-cache-mb" );
+    p_sys->i_video_cache_bytes =
+        i_cache_mb > 0 ? (size_t)i_cache_mb * 1024 * 1024 : 0;
+    int i_fill = var_InheritInteger( p_input, "video-cache-fill-percent" );
+    p_sys->i_video_cache_fill_percent =
+        i_fill < 0 ? 0 : (i_fill > 100 ? 100 : (unsigned)i_fill);
+    p_sys->i_video_cache_last_count = 0;
+    p_sys->i_video_cache_progress_date = VLC_TICK_INVALID;
+    p_sys->i_video_cache_episode_start = VLC_TICK_INVALID;
+    p_sys->b_video_cache_refill = false;
+    p_sys->i_video_cache_refill_start = VLC_TICK_INVALID;
+    p_sys->i_video_cache_refill_last_end = VLC_TICK_INVALID;
+    p_sys->i_video_cache_bad_refills = 0;
+    p_sys->i_video_cache_osd_last = VLC_TICK_INVALID;
+    p_sys->i_video_cache_starved_since = VLC_TICK_INVALID;
+    p_sys->b_video_cache_inhibit = false;
+    p_sys->b_video_cache_pause_virtual = false;
 
     p_sys->b_buffering = true;
     p_sys->i_preroll_end = -1;
@@ -415,7 +507,109 @@ static vlc_tick_t EsOutGetWakeup( es_out_t *out )
         input_priv(p_input)->b_out_pace_control ||
         p_sys->b_buffering ||
         p_sys->p_next_frame_es != NULL )
+    {
+        /* Video-cache fill episode with a healthy compressed backlog
+         * already queued: nap instead of spinning the demux flat-out.
+         * On the single-core PPC targets the input thread runs at
+         * SCHED_RR (round 63) and a zero wakeup lets it starve the
+         * plain-priority DECODER outright -- observed on DVD title
+         * fills as 2-3 decoded pictures per 5 s (the too-slow valve
+         * then fired, so video-cache-fill-percent was never honoured)
+         * while the demux pulled the disc into RAM at 16x realtime.
+         * With 40 ms naps past the extra-buffering cap (~10 MB) the
+         * decoder owns the core and a DVD fill completes at full
+         * decode speed; the demux keeps topping the backlog up in
+         * bursts between naps. */
+        if( p_sys->b_buffering && p_sys->i_video_cache_bytes > 0
+         && !p_sys->b_video_cache_inhibit
+         && !EsOutIsExtraBufferingAllowed( out ) )
+            return mdate() + 40000;
         return 0;
+    }
+
+    /* STEADY PLAYBACK with the look-ahead cache under its target: stock
+     * pace control feeds the demux at 1x (pts-delay of backlog), which
+     * can never REBUILD a cushion -- on sources that are not fully
+     * demuxed up front (DVD: 60+ min of stream, unlike a local file
+     * swallowed whole during the initial episode) the reservoir could
+     * only ever drain: every hiccup walked it monotonically to zero,
+     * then a refill episode re-bought it, in a loop (user report). Run
+     * the demux AHEAD while the cushion is short -- but NEVER by spinning
+     * the input flat-out (the round-86 correction below).
+     *
+     * The input thread is SCHED_RR (VLC_THREAD_PRIORITY_INPUT=22 ->
+     * sched_get_priority_min+RR, round 63) and the video decoder is
+     * plain SCHED_OTHER. On the single-core PPC targets a zero wakeup
+     * here (the old "fifo demonstrably fat -> return 0" fast-burst) does
+     * not help the cushion: it PREEMPTS the decoder, which then can
+     * neither drain this compressed fifo nor produce the decoded
+     * pictures the cushion is made of. Measured on the Chihiro DVD title
+     * (round 86): the demux delivers ~10x realtime while BUFFERING (the
+     * display is off, only demux+decoder contend) but collapses to
+     * ~0.25x during PLAYBACK (demux+decoder+vout contend and the RT
+     * input wins the core), so the cushion drained to a re-buffer every
+     * ~28 s no matter how deep the cache. The disc I/O is NOT the
+     * bottleneck; the decoder starving for the core is.
+     *
+     * Fix (round 87b, superseding the first r87 attempt): burst-and-nap
+     * around a HIGH-WATER mark. The first attempt napped 40 ms as soon
+     * as the video fifo held 512 KiB; with the demux pulling ONE 2 KiB
+     * disc block per wakeup that caps delivery at ~1 MB/s -- the AVERAGE
+     * DVD mux rate with zero margin -- so every bitrate peak
+     * under-delivered BOTH elementary streams (they are interleaved in
+     * the same program stream) and the ~0.5 s audio backlog behind a
+     * 512 KiB video fifo drained first: "buffer too late: dropped" ->
+     * aout flush -> clock hiccup -> the very re-buffer we fight, every
+     * ~27 s. Burst-and-nap instead: below the high-water mark the input
+     * runs unthrottled (the disc feeds at 10x, so topping the backlog up
+     * costs short RT bursts the decoded-picture cushion absorbs; the
+     * adaptive refill pacing in decoder.c re-buys the few pictures
+     * lost); above it the input naps 40 ms and the core belongs to the
+     * decoder. 4 MiB of program stream is ~4 s of BOTH audio and video
+     * backlog -- peaks are ridden out without any stream running late.
+     * The 2 ms probe under 1 MiB is the round-75 live-stream guard: a
+     * source slower than its consumer must not let the RT input spin on
+     * empty reads. */
+    if( p_sys->i_video_cache_bytes > 0 && !p_sys->b_video_cache_inhibit )
+    {
+        for( int i = 0; i < p_sys->i_es; i++ )
+        {
+            es_out_id_t *p_es = p_sys->es[i];
+            if( p_es->fmt.i_cat != VIDEO_ES || !p_es->p_dec )
+                continue;
+            size_t i_count, i_target;
+            if( input_DecoderGetCacheState( p_es->p_dec, &i_count,
+                                            &i_target, NULL, NULL )
+             && i_target > 0 )
+            {
+                if( i_count < i_target )
+                {
+                    const size_t i_fifo =
+                        input_DecoderGetFifoSize( p_es->p_dec );
+                    if( !EsOutIsExtraBufferingAllowed( out )
+                     || i_fifo > 4 * 1024 * 1024 )
+                        return mdate() + 40000;
+                    if( i_fifo > 1 * 1024 * 1024 )
+                        return 0;
+                    return mdate() + 2000;
+                }
+                /* Cushion FULL: re-check at frame cadence. NEVER fall
+                 * through to the stock clock wakeup here -- the demux
+                 * runs cushion-depth AHEAD of the master clock, so the
+                 * stock deadline is ~cushion-depth in the future: the
+                 * input slept the whole 21 s, the compressed fifo ran
+                 * dry, the decoder idled, and the cushion drained END TO
+                 * END into a re-buffer, in a loop. THIS single faraway
+                 * sleep -- not decoder CPU, not disc delivery -- was the
+                 * root cause of the periodic mid-play refill (rounds
+                 * 84-87 chased it in the wrong layers). 40 ms matches
+                 * the display drain rate: the vout frees a slot, the
+                 * next wakeup sees count < target and tops it up. */
+                return mdate() + 40000;
+            }
+            break;
+        }
+    }
 
     return input_clock_GetWakeup( p_sys->p_pgrm->p_clock );
 }
@@ -442,11 +636,48 @@ static bool EsOutDecodersIsEmpty( es_out_t *out )
 {
     es_out_sys_t      *p_sys = out->p_sys;
 
+    /* For a fully demuxed local file no PCR will ever fire again; the
+     * input's EOF wait polling us is then the only recurring hook where
+     * a drained look-ahead cache can start a refill episode. */
+    if( !p_sys->b_buffering )
+        EsOutVideoCacheMaybeRefill( out );
+
     if( p_sys->b_buffering && p_sys->p_pgrm )
     {
-        EsOutDecodersStopBuffering( out, true );
+        /* Demux EOF normally force-ends buffering (no more data will
+         * ever complete the stream-time criterion). But the look-ahead
+         * cache criterion completes from data already sitting in the
+         * decoder fifo -- a small local file is fully demuxed within
+         * milliseconds, long before the cache fills. Keep the gate as
+         * long as the video decoder can still make progress; force once
+         * it is starved (everything decoded, target simply unreachable). */
+        bool b_forced = true;
+        if( p_sys->i_video_cache_bytes > 0 && !p_sys->b_video_cache_skip )
+        {
+            for( int i = 0; i < p_sys->i_es; i++ )
+            {
+                es_out_id_t *es = p_sys->es[i];
+                if( es->fmt.i_cat != VIDEO_ES || !es->p_dec )
+                    continue;
+                size_t i_count, i_target;
+                bool b_starved;
+                if( input_DecoderGetCacheState( es->p_dec, &i_count,
+                                                &i_target, NULL, &b_starved )
+                 && !b_starved )
+                    b_forced = false;
+                break;
+            }
+        }
+        EsOutDecodersStopBuffering( out, b_forced );
         if( p_sys->b_buffering )
-            return true;
+            /* Still buffering after a FORCED stop = pathological, claim
+             * emptiness so the input bails out instead of hanging (stock
+             * behavior). Still buffering after a non-forced stop = the
+             * cache fill is deliberately holding the gate while the
+             * decoder chews its queued data: NOT empty, the input must
+             * keep waiting (it re-polls us every INPUT_IDLE_SLEEP, which
+             * conveniently doubles as the fill's EOF-side recheck). */
+            return b_forced;
     }
 
     for( int i = 0; i < p_sys->i_es; i++ )
@@ -566,13 +797,71 @@ static void EsOutStopNextFrame( es_out_t *out )
     p_sys->p_next_frame_es = NULL;
 }
 
+/* Pushes the pause state to the video decoder's vout synchronously from
+ * this (the input) thread, so it lands in the vout control queue BEFORE
+ * anything else this pause transition triggers. The decoder thread
+ * re-applies the same state a beat later when it notices the toggle and
+ * the vout de-dups it. Without this, every picture decoded between the
+ * input-thread clock shift and the decoder-thread vout shift at RESUME
+ * converts against the already-shifted clock and then gets the vout's
+ * fifo shift on top -- dated one pause-span ahead, a span-long freeze
+ * then a span of "too late" drops with a deep look-ahead fifo. */
+static void EsOutVideoVoutChangePause( es_out_t *out, bool b_paused,
+                                       vlc_tick_t i_date )
+{
+    es_out_sys_t *p_sys = out->p_sys;
+
+    for( int i = 0; i < p_sys->i_es; i++ )
+    {
+        es_out_id_t *p_es = p_sys->es[i];
+        if( p_es->fmt.i_cat != VIDEO_ES || !p_es->p_dec )
+            continue;
+        vout_thread_t *p_vout = NULL;
+        input_DecoderGetObjects( p_es->p_dec, &p_vout, NULL );
+        if( p_vout )
+        {
+            vout_ChangePause( p_vout, b_paused, i_date );
+            vlc_object_release( p_vout );
+        }
+        break;
+    }
+}
+
 static void EsOutChangePause( es_out_t *out, bool b_paused, vlc_tick_t i_date )
 {
     es_out_sys_t *p_sys = out->p_sys;
 
+    /* See b_video_cache_pause_virtual: pauses born inside a cache fill
+     * episode stay virtual until the gate opens. A pause that PRE-dates
+     * the episode keeps the stock symmetric propagation (clock and vout
+     * shift by the same span at resume: homogeneous, the release offset
+     * absorbs it). */
+    if( p_sys->i_video_cache_bytes > 0 && p_sys->b_buffering )
+    {
+        if( b_paused && !p_sys->b_paused )
+        {
+            msg_Dbg( p_sys->p_input, "video cache: pause kept virtual "
+                     "during the fill episode" );
+            p_sys->b_video_cache_pause_virtual = true;
+            p_sys->b_paused = true;
+            p_sys->i_pause_date = i_date;
+            return;
+        }
+        if( !b_paused && p_sys->b_video_cache_pause_virtual )
+        {
+            msg_Dbg( p_sys->p_input, "video cache: virtual pause "
+                     "cancelled during the fill episode" );
+            p_sys->b_video_cache_pause_virtual = false;
+            p_sys->b_paused = false;
+            p_sys->i_pause_date = i_date;
+            return;
+        }
+    }
+
     /* XXX the order is important */
     if( b_paused )
     {
+        EsOutVideoVoutChangePause( out, true, i_date );
         EsOutDecodersChangePause( out, true, i_date );
         EsOutProgramChangePause( out, true, i_date );
     }
@@ -602,6 +891,7 @@ static void EsOutChangePause( es_out_t *out, bool b_paused, vlc_tick_t i_date )
             p_sys->i_buffering_extra_system = 0;
         }
         EsOutProgramChangePause( out, false, i_date );
+        EsOutVideoVoutChangePause( out, false, i_date );
         EsOutDecodersChangePause( out, false, i_date );
 
         EsOutProgramsChangeRate( out );
@@ -621,6 +911,7 @@ static void EsOutChangeRate( es_out_t *out, int i_rate )
 static void EsOutChangePosition( es_out_t *out )
 {
     es_out_sys_t      *p_sys = out->p_sys;
+
 
     input_SendEventCache( p_sys->p_input, 0.0 );
 
@@ -652,9 +943,494 @@ static void EsOutChangePosition( es_out_t *out )
     p_sys->i_buffering_extra_system = 0;
     p_sys->i_preroll_end = -1;
     p_sys->i_prev_stream_level = -1;
+    /* Every seek re-buffers the video cache too: a fluid resume is worth
+     * more than shaving a few seconds off the wait. A user-initiated
+     * skip of the wait only ever applies to the buffering episode it was
+     * pressed during. */
+    p_sys->b_video_cache_skip = false;
+    p_sys->i_video_cache_last_count = 0;
+    p_sys->i_video_cache_progress_date = VLC_TICK_INVALID;
+    p_sys->i_video_cache_episode_start = VLC_TICK_INVALID;
+    p_sys->i_video_cache_starved_since = VLC_TICK_INVALID;
+    /* A refill episode in flight is superseded by the seek's own one */
+    p_sys->b_video_cache_refill = false;
+    p_sys->i_video_cache_refill_last_end = VLC_TICK_INVALID;
+    p_sys->i_video_cache_osd_last = VLC_TICK_INVALID;
+    /* i_video_cache_bad_refills deliberately survives: this runs for
+     * PCR discontinuities too (every underrun of a stalling stream),
+     * which would defeat the backoff exactly where it matters. The
+     * counter is cleared by any effective fill episode instead. */
 }
 
 
+
+/**
+ * Computes how full the look-ahead decode cache is, as a 0.0-1.0 ratio
+ * against the effective target (see DecoderVideoCacheTarget in decoder.c,
+ * the single source of truth: the smaller of the MB budget, the seconds
+ * cap and the vout pool headroom). Returns 1.0 (never blocks) when the
+ * feature is disabled, no video decoder exists to buffer against, or the
+ * user skipped the wait via the Play/Pause hotkey.
+ */
+/* Last-resort valve when the fill produced NO picture at all: bail as
+ * if skipped. 6 s (was 15 s, from the round-60 wedge era): every known
+ * wedge now has a root fix, and the remaining zero-picture waits are
+ * slow STARTS -- a Jellyfin transcode spinning up its ffmpeg held the
+ * first picture ~15 s and the gate turned that into 15 s of black
+ * (observed on the mp4-over-https test); a DVD title entry can idle a
+ * few seconds in the reset churn too. 6 s keeps the safety margin over
+ * codec init while making a dead start bearable. */
+#define VIDEO_CACHE_STALL_TIMEOUT (6 * CLOCK_FREQ)
+
+/* Wall-clock bound on one fill episode, but ONLY for sources producing
+ * pictures slower than VIDEO_CACHE_FILL_MIN_RATE: it catches stills and
+ * near-stills that the no-progress watchdog can never see (DVD logo
+ * stills at ~1 pic/s were observed gating a title start for minutes). A
+ * fill that produces at a healthy rate is allowed to run to its target
+ * however long that takes -- that is the point of the feature: a 50%
+ * fill of a deep (hundreds of pictures) cache legitimately needs more
+ * than any fixed timeout, and cutting it there was observed starting
+ * playback at ~30% whatever video-cache-fill-percent said. */
+#define VIDEO_CACHE_FILL_WALL_TIMEOUT (5 * CLOCK_FREQ)
+#define VIDEO_CACHE_FILL_MIN_RATE 2 /* pictures per second */
+
+/* How long a fill episode keeps waiting through an apparently starved
+ * decoder before believing it (see the starvation guard below). Long
+ * enough to ride out a disc seek or a slow drive's inter-burst gap,
+ * short enough that a true EOF costs half a second. */
+#define VIDEO_CACHE_STARVE_GRACE (CLOCK_FREQ / 2)
+
+static double EsOutVideoCacheFillRatio( es_out_t *out )
+{
+    es_out_sys_t *p_sys = out->p_sys;
+
+    if( p_sys->i_video_cache_bytes == 0 || p_sys->b_video_cache_skip
+     || p_sys->b_video_cache_inhibit )
+        return 1.0;
+
+    /* Distinguishes "no video ES at all" (nothing to ever buffer against,
+     * return 1.0/never blocks -- e.g. an audio-only file) from "the video
+     * ES exists but hasn't got a vout yet" (the decoder hasn't produced
+     * its first frame/negotiated a picture format yet: still keep
+     * waiting, return 0.0, not 1.0 -- this was the bug that made the
+     * whole feature a no-op: SET_PCR fires before the first frame is
+     * decoded far more often than not, so the pre-vout window is where
+     * EsOutDecodersStopBuffering usually makes its first check). */
+    bool b_found_video = false;
+
+    for( int i = 0; i < p_sys->i_es; i++ )
+    {
+        es_out_id_t *p_es = p_sys->es[i];
+        if( p_es->fmt.i_cat != VIDEO_ES || !p_es->p_dec )
+            continue;
+        b_found_video = true;
+
+        /* Both the fill count and the target come from the decoder
+         * itself (see DecoderVideoCacheTarget): the decoder is what
+         * stops decoding ahead once the target is reached, so the gate
+         * must wait on the exact same number or it would never see
+         * 100% and only ever end at EOF. */
+        size_t i_pic_count, i_target_count;
+        bool b_starved;
+        if( !input_DecoderGetCacheState( p_es->p_dec, &i_pic_count,
+                                         &i_target_count, NULL,
+                                         &b_starved ) )
+            return 1.0; /* not a caching decoder (should not happen) */
+
+        /* Watchdog: a fill that makes no progress (decoder wedged before
+         * its first picture, pool famine...) must not hold playback
+         * hostage forever -- give up as if the user skipped. Progress is
+         * measured on the fifo count, not on time spent: a slow fill
+         * that IS progressing may legitimately take longer than any
+         * fixed timeout (that is the point of the feature). */
+        /* A starved decoder (ES fifo empty, decoder idle) will not
+         * produce anything more however long the gate stays shut:
+         * stills hit this permanently (one picture per cell), plain
+         * EOF does too. Start with whatever there is. Two guards:
+         * target > 0 (a picture was measured once -- an idle decoder
+         * before the first data arrives is just a young stream), AND
+         * at least one picture produced IN THIS EPISODE. The second
+         * one is the dvdnav seek fix: a seek flushes the decoder NOW
+         * but dvdnav only fires its HOP/RESET_PCR a beat later on the
+         * demux thread -- in that interregnum the decoder is starved
+         * (flushed empty) while the target survives from before the
+         * seek, and this bail-out was opening the gate at ~1% against
+         * a stale clock (stream_duration in the hundreds of seconds):
+         * ~120-220 pictures dropped "too late" after every DVD seek.
+         * With the guard the gate simply keeps waiting the few ms
+         * until the real reset re-arms everything. */
+        /* Third guard, added on Blu-ray: starvation must PERSIST. A disc
+         * that jumps to a playlist (title picked from a menu) leaves the
+         * decoder momentarily dry while libbluray seeks, and an optical
+         * drive delivering barely above 1x runs the ES fifo empty between
+         * bursts -- both looked "starved" for a few tens of ms and cut
+         * fills that were climbing steadily (measured: an episode killed
+         * at 13 pictures after 402 ms, having gone 1% -> 12% without
+         * stalling). Real starvation -- EOF, a still, a source that has
+         * genuinely stopped -- lasts, so it still opens the gate one
+         * grace period later. Progress in the meantime rearms it. */
+        if( b_starved && i_target_count > 0 && i_pic_count > 0 )
+        {
+            vlc_tick_t i_starve_now = mdate();
+            if( p_sys->i_video_cache_starved_since == VLC_TICK_INVALID )
+                p_sys->i_video_cache_starved_since = i_starve_now;
+            else if( i_starve_now - p_sys->i_video_cache_starved_since
+                     >= VIDEO_CACHE_STARVE_GRACE )
+            {
+                msg_Dbg( p_sys->p_input, "video cache fill: decoder starved "
+                         "(%zu pictures), starting", i_pic_count );
+                return 1.0;
+            }
+        }
+        else
+            p_sys->i_video_cache_starved_since = VLC_TICK_INVALID;
+
+        /* A decoder whose picture size cannot be measured (opaque
+         * hardware pictures: no planes to sum) never gets a target; once
+         * it has produced a picture it parks on the buffering gate like
+         * a stock decoder, holding the next one in hand -- the fifo
+         * count will never move. Waiting for it is waiting for nothing:
+         * start right away (the look-ahead cache effectively cannot
+         * apply to such decoders). */
+        if( i_target_count == 0 && i_pic_count == 0
+         && input_DecoderIsReadyWaiting( p_es->p_dec ) )
+        {
+            msg_Dbg( p_sys->p_input, "video cache fill: picture size "
+                     "unmeasurable and decoder ready, starting" );
+            return 1.0;
+        }
+
+        vlc_tick_t now = mdate();
+        if( p_sys->i_video_cache_episode_start == VLC_TICK_INVALID )
+            p_sys->i_video_cache_episode_start = now;
+        else if( i_pic_count > 0
+              && now - p_sys->i_video_cache_episode_start
+                 > VIDEO_CACHE_FILL_WALL_TIMEOUT
+                 /* The healthy-rate exemption needs a sizeable target:
+                  * pictures piling up with target still 0 means their
+                  * size cannot be measured (opaque hardware pictures) --
+                  * the gate would never complete, keep the hard wall. */
+              && ( i_target_count == 0
+                || (int64_t)i_pic_count * CLOCK_FREQ
+                   < (int64_t)VIDEO_CACHE_FILL_MIN_RATE
+                     * ( now - p_sys->i_video_cache_episode_start ) ) )
+        {
+            msg_Dbg( p_sys->p_input, "video cache fill too slow (%zu "
+                     "pictures after %d ms), starting with what there is",
+                     i_pic_count,
+                     (int)(( now - p_sys->i_video_cache_episode_start )
+                           / 1000) );
+            return 1.0;
+        }
+        if( p_sys->i_video_cache_progress_date == VLC_TICK_INVALID
+         || i_pic_count != p_sys->i_video_cache_last_count )
+        {
+            p_sys->i_video_cache_last_count = i_pic_count;
+            p_sys->i_video_cache_progress_date = now;
+        }
+        else if( i_pic_count > 0
+              && now - p_sys->i_video_cache_progress_date > CLOCK_FREQ )
+        {
+            /* Pictures accumulated but the count stopped growing for a
+             * whole second while the vout is on hold (nothing consumes
+             * them): the decoder is blocked on pool exhaustion (its
+             * in-flight/reference pictures eat into the headroom in
+             * codec-specific ways) or starved by a slow input. Either
+             * way the cache is as full as it will ever get: start. */
+            msg_Dbg( p_sys->p_input, "video cache fill topped out at %zu "
+                     "pictures (target %zu), starting", i_pic_count,
+                     i_target_count );
+            return 1.0;
+        }
+        else if( now - p_sys->i_video_cache_progress_date
+                 > ( p_sys->b_video_cache_refill
+                     ? 3 * CLOCK_FREQ / 2 : VIDEO_CACHE_STALL_TIMEOUT ) )
+        {
+            /* Refill episodes get a much shorter zero-picture patience
+             * (1.5 s vs the initial fill's codec-init margin): the
+             * decoder was producing an instant ago, so nothing showing
+             * up means the DRAIN was source-bound (live HLS, starved
+             * transcoder) and holding longer buys nothing. The
+             * ineffective-episode strike then backs the next attempt
+             * off exponentially, so a persistently source-bound stream
+             * degrades to a rare short hiccup -- empirically measured,
+             * no fragile liveness heuristics (b_can_pace_control is
+             * true even for live adaptive streams). */
+            msg_Warn( p_sys->p_input, "video cache fill stalled with no "
+                      "picture at all, giving the wait up" );
+            p_sys->b_video_cache_skip = true;
+            return 1.0;
+        }
+
+        double f_ratio;
+        if( i_target_count == 0 )
+        {
+            /* Nothing decoded into the vout yet: no picture size to
+             * size a target against, keep waiting (EOF is handled by
+             * the starved check in EsOutDecodersIsEmpty, wedges by the
+             * watchdog above). */
+            f_ratio = 0.0;
+        }
+        else
+        {
+            f_ratio = (double)i_pic_count / (double)i_target_count;
+            if( f_ratio > 1.0 )
+                f_ratio = 1.0;
+        }
+
+        if( f_ratio < 1.0 && p_sys->i_video_cache_fill_percent > 0 )
+        {
+            /* Throttled OSD: rechecks fire on every decoded picture,
+             * far more often than a human needs a percentage refresh. */
+            if( now - p_sys->i_video_cache_osd_last >= CLOCK_FREQ / 4 )
+            {
+                vout_thread_t *p_vout = NULL;
+                input_DecoderGetObjects( p_es->p_dec, &p_vout, NULL );
+                if( p_vout )
+                {
+                    p_sys->i_video_cache_osd_last = now;
+                    /* Scale the displayed percentage to the resume
+                     * threshold (fill-percent), not to the full target:
+                     * "Buffering... 100%" is then exactly the moment
+                     * playback resumes, whatever the threshold. */
+                    int i_pct = (int)( 100.0 * f_ratio * 100.0
+                                       / p_sys->i_video_cache_fill_percent );
+                    if( i_pct > 100 )
+                        i_pct = 100;
+                    vout_OSDMessage( p_vout, VOUT_SPU_CHANNEL_OSD,
+                        _("Buffering... %d%%"), i_pct );
+                    vlc_object_release( p_vout );
+                }
+            }
+        }
+
+        return f_ratio;
+    }
+
+    /* A video ES with no vout yet still means "keep waiting"; only the
+     * true absence of any video ES means there is nothing to buffer
+     * against. */
+    return b_found_video ? 0.0 : 1.0;
+}
+
+/**
+ * Ends a look-ahead cache fill episode: re-bases the dates of the held
+ * pictures by i_offset then releases the vout hold. The pictures were
+ * dated while the clock still had its pre-episode origin; i_offset is
+ * whatever shift the caller just applied to that origin (the conversion
+ * is otherwise stable during buffering: with pace control the drift term
+ * is never updated and the reference point only moves on discontinuities,
+ * which reset the whole episode anyway). Must be called AFTER the clock
+ * origin change and BEFORE input_DecoderStopWait, so the parked decoder
+ * only resumes against an unheld, re-based vout.
+ */
+static void EsOutVideoCacheRelease( es_out_t *out, vlc_tick_t i_offset )
+{
+    es_out_sys_t *p_sys = out->p_sys;
+
+    for( int i = 0; i < p_sys->i_es; i++ )
+    {
+        es_out_id_t *p_es = p_sys->es[i];
+        if( p_es->fmt.i_cat != VIDEO_ES || !p_es->p_dec )
+            continue;
+
+        vout_thread_t *p_vout = NULL;
+        input_DecoderGetObjects( p_es->p_dec, &p_vout, NULL );
+        if( p_vout )
+        {
+            if( i_offset != 0 )
+                vout_OffsetCacheDates( p_vout, i_offset );
+            /* Drop the "Buffering %" OSD right away: a still-fading OSD
+             * forces the vout into the picture_Copy+blend path on every
+             * frame of the resumed playback -- measured at ~15% of the
+             * core on the Mini G4, enough to re-drain the fresh cache
+             * and loop the refill forever.
+             * The display unhold itself is NOT queued here anymore: it
+             * moved into input_DecoderStopWait (which every caller of
+             * this function runs right after), where the decoder owner
+             * lock orders it after any in-flight fill picture's
+             * hold(true) -- queuing it from here could be overtaken by
+             * such a straggler and wedge the vout held. */
+            vout_FlushSubpictureChannel( p_vout, VOUT_SPU_CHANNEL_OSD );
+            /* A virtual pause about to be materialized (see
+             * EsOutDecodersStopBuffering) must reach the vout BEFORE
+             * the unhold that input_DecoderStopWait queues right after
+             * this function: both traverse the vout control queue, so
+             * pushing the pause here guarantees the vout wakes up
+             * unheld-but-paused and leaves the (pause-date-anchored)
+             * pictures alone. The decoder-side application that follows
+             * de-dups on the vout side. */
+            if( p_sys->b_video_cache_pause_virtual )
+                vout_ChangePause( p_vout, true, p_sys->i_pause_date );
+            vlc_object_release( p_vout );
+        }
+        break;
+    }
+
+    p_sys->i_video_cache_last_count = 0;
+    p_sys->i_video_cache_progress_date = VLC_TICK_INVALID;
+    p_sys->i_video_cache_episode_start = VLC_TICK_INVALID;
+    p_sys->i_video_cache_starved_since = VLC_TICK_INVALID;
+}
+
+/* Cool-down between two mid-play refill episodes -- only a backstop
+ * against degenerate re-trigger loops: the fill itself already spaces
+ * episodes naturally, and on over-budget content an immediate refill
+ * (hold, then fluid stretch) beats dribbling late pictures, which is the
+ * whole point of the option. */
+#define VIDEO_CACHE_REFILL_COOLDOWN (1 * CLOCK_FREQ)
+
+/**
+ * True when the look-ahead cache is active, not inhibited, and currently
+ * holds a cushion of decoded pictures ahead of the display. Side-effect
+ * free (unlike EsOutVideoCacheFillRatio, which is the startup gate).
+ *
+ * In that state a "late" PCR from the demuxer is expected and benign: the
+ * demuxer is throttled by the cache's back-pressure (its fifo fills once
+ * the cache reaches target), not by a genuine clock problem, and the
+ * display keeps drawing from the cushion. Resetting the clock / inflating
+ * pts_delay there (see ES_OUT_SET_PCR) just throws the buffered data away
+ * and forces a needless re-buffer episode -- observed on DVD as one stall
+ * every ~cache-depth seconds with video-cache-mb enabled. A true drain
+ * (fifo hits 0) is NOT masked here: it still reaches
+ * EsOutVideoCacheMaybeRefill, which refills properly.
+ */
+static bool EsOutVideoCacheHasCushion( es_out_t *out )
+{
+    es_out_sys_t *p_sys = out->p_sys;
+
+    if( p_sys->i_video_cache_bytes == 0 || p_sys->b_video_cache_inhibit
+     || p_sys->b_video_cache_skip )
+        return false;
+
+    for( int i = 0; i < p_sys->i_es; i++ )
+    {
+        es_out_id_t *p_es = p_sys->es[i];
+        if( p_es->fmt.i_cat != VIDEO_ES || !p_es->p_dec )
+            continue;
+
+        size_t i_count, i_target;
+        bool b_starved;
+        if( !input_DecoderGetCacheState( p_es->p_dec, &i_count, &i_target,
+                                         NULL, &b_starved ) )
+            return false;
+        /* A measured target (a picture was sized) and ANY picture decoded
+         * ahead: the display has something to draw while the demuxer
+         * catches up, so absorb the late PCR. The threshold is deliberately
+         * just >0, not a comfortable margin: a full drain to 0 is caught
+         * one step earlier by EsOutVideoCacheMaybeRefill (a proper refill),
+         * so the 1-2 picture window between "comfortable" and "empty" must
+         * be absorbed here too -- otherwise a late PCR landing in that
+         * window still triggers the disruptive clock reset (throwing away
+         * ~20 s of cache), which is exactly the stall we are removing. */
+        if( i_target > 0 && i_count > 0 )
+            return true;
+    }
+    return false;
+}
+
+/**
+ * Mid-play counterpart of the startup/seek fill gate: when the look-ahead
+ * cache has fully drained during playback (the decoder fell behind the
+ * display), open a fresh buffering episode to refill it -- blocking a few
+ * seconds buys a fluid stretch, instead of a long dribble of late
+ * pictures. Called from ES_OUT_SET_PCR (demux still active) and from
+ * EsOutDecodersIsEmpty (fully demuxed local file: the input's EOF wait
+ * polls it every INPUT_IDLE_SLEEP, and no PCR will ever come again).
+ */
+static void EsOutVideoCacheMaybeRefill( es_out_t *out )
+{
+    es_out_sys_t *p_sys = out->p_sys;
+
+    if( p_sys->i_video_cache_bytes == 0 || p_sys->b_buffering
+     || p_sys->b_video_cache_inhibit
+     || p_sys->b_paused || p_sys->p_pgrm == NULL
+     || p_sys->p_next_frame_es != NULL )
+        return;
+
+    /* Ineffective episodes double the cooldown (up to 32x): see the
+     * accounting in EsOutDecodersStopBuffering. */
+    const vlc_tick_t i_cooldown = VIDEO_CACHE_REFILL_COOLDOWN
+                                << p_sys->i_video_cache_bad_refills;
+    const vlc_tick_t now = mdate();
+    if( p_sys->i_video_cache_refill_last_end > VLC_TICK_INVALID
+     && now - p_sys->i_video_cache_refill_last_end < i_cooldown )
+        return;
+
+    for( int i = 0; i < p_sys->i_es; i++ )
+    {
+        es_out_id_t *p_es = p_sys->es[i];
+        if( p_es->fmt.i_cat != VIDEO_ES || !p_es->p_dec )
+            continue;
+
+        size_t i_count, i_target;
+        bool b_starved;
+        if( !input_DecoderGetCacheState( p_es->p_dec, &i_count, &i_target,
+                                         NULL, &b_starved ) )
+            return;
+        /* Only a true mid-play drain qualifies: the decoder has shown
+         * everything it produced (fifo empty) but still has compressed
+         * data queued (not starved/EOF). i_target == 0 means no picture
+         * was ever measured -- the startup gate's business, not ours. */
+        if( i_target == 0 || i_count > 0 || b_starved )
+            return;
+
+        msg_Dbg( p_sys->p_input, "video cache drained mid-play, "
+                 "re-buffering to refill it" );
+
+        /* Post the "Buffering" OSD right at the trigger: on over-budget
+         * content the first fresh picture (hence the first FillRatio
+         * recheck, which owns the periodic OSD refresh) can take a
+         * second or more -- the picture must not just freeze mutely. */
+        {
+            vout_thread_t *p_vout = NULL;
+            input_DecoderGetObjects( p_es->p_dec, &p_vout, NULL );
+            if( p_vout )
+            {
+                p_sys->i_video_cache_osd_last = now;
+                vout_OSDMessage( p_vout, VOUT_SPU_CHANNEL_OSD,
+                                 _("Buffering... %d%%"), 0 );
+                vlc_object_release( p_vout );
+            }
+        }
+
+        for( int j = 0; j < p_sys->i_es; j++ )
+        {
+            es_out_id_t *p_wait = p_sys->es[j];
+            if( !p_wait->p_dec )
+                continue;
+            /* Pause the audio path outright: the aout typically holds
+             * 0.5-1 s of already-decoded samples which would keep
+             * playing over the frozen picture -- A/V desync for the
+             * whole episode. Paused, they resume shifted by the same
+             * offset as everything else when the gate opens. (A user
+             * pause during the episode is absorbed by the decoder's
+             * pause state being level-triggered; the pause-then-resume-
+             * during-episode corner case merely lets the audio restart
+             * a second early.) */
+            if( p_wait->fmt.i_cat == AUDIO_ES )
+                input_DecoderChangePause( p_wait->p_dec, true, now );
+            input_DecoderStartWait( p_wait->p_dec );
+            if( p_wait->p_dec_record )
+                input_DecoderStartWait( p_wait->p_dec_record );
+        }
+
+        p_sys->b_buffering = true;
+        p_sys->i_buffering_extra_initial = 0;
+        p_sys->i_buffering_extra_stream = 0;
+        p_sys->i_buffering_extra_system = 0;
+        p_sys->i_preroll_end = -1;
+        p_sys->i_prev_stream_level = -1;
+        p_sys->b_video_cache_skip = false;
+        p_sys->i_video_cache_last_count = 0;
+        p_sys->i_video_cache_progress_date = VLC_TICK_INVALID;
+        p_sys->i_video_cache_episode_start = VLC_TICK_INVALID;
+        p_sys->i_video_cache_starved_since = VLC_TICK_INVALID;
+        p_sys->b_video_cache_refill = true;
+        p_sys->i_video_cache_refill_start = now;
+        return;
+    }
+}
 
 static void EsOutDecodersStopBuffering( es_out_t *out, bool b_forced )
 {
@@ -695,6 +1471,30 @@ static void EsOutDecodersStopBuffering( es_out_t *out, bool b_forced )
 
         return;
     }
+
+    if( !b_forced )
+    {
+        double f_cache_ratio = EsOutVideoCacheFillRatio( out );
+        if( f_cache_ratio < (double)p_sys->i_video_cache_fill_percent / 100.0 )
+        {
+            /* Report whichever of the two buffering criteria (the
+             * existing compressed-stream-time one above, or our
+             * decoded-picture-cache one) is furthest from done. */
+            double f_stream_level = i_buffering_duration > 0
+                ? __MAX( (double)i_stream_duration / i_buffering_duration, 0 )
+                : 1.0;
+            double f_level = __MIN( f_stream_level, f_cache_ratio );
+            input_SendEventCache( p_sys->p_input, f_level );
+
+            int i_level = (int)(100 * f_level);
+            if( p_sys->i_prev_stream_level != i_level )
+            {
+                msg_Dbg( p_sys->p_input, "Buffering %d%%", i_level );
+                p_sys->i_prev_stream_level = i_level;
+            }
+            return;
+        }
+    }
     input_SendEventCache( p_sys->p_input, 1.0 );
 
     msg_Dbg( p_sys->p_input, "Stream buffering done (%d ms in %d ms)",
@@ -731,8 +1531,124 @@ static void EsOutDecodersStopBuffering( es_out_t *out, bool b_forced )
     const vlc_tick_t i_wakeup_delay = 10*1000; /* FIXME CLEANUP thread wake up time*/
     const vlc_tick_t i_current_date = p_sys->b_paused ? p_sys->i_pause_date : mdate();
 
-    input_clock_ChangeSystemOrigin( p_sys->p_pgrm->p_clock, true,
-                                    i_current_date + i_wakeup_delay - i_buffering_duration );
+    if( p_sys->b_video_cache_refill )
+    {
+        /* Mid-play refill episode: the clock reference dates back to the
+         * last start/seek, far behind the play position (and for a fully
+         * demuxed local file it will never move again), so the absolute
+         * re-anchoring below would park playback that far in the future.
+         * What the episode really was is a pause of its own duration:
+         * shift the origin (and the held pictures) by exactly that. */
+        vlc_tick_t i_offset = i_current_date + i_wakeup_delay
+                            - p_sys->i_video_cache_refill_start;
+        /* The drain that opened the episode means the decoder was
+         * already running LATE: the held pictures carry that lateness
+         * on top of the episode's duration. When the oldest held
+         * picture is visible, anchor IT at "now" instead, so the
+         * refilled cushion is a full look-ahead, not late from birth. */
+        for( int i = 0; i < p_sys->i_es; i++ )
+        {
+            es_out_id_t *p_es = p_sys->es[i];
+            if( p_es->fmt.i_cat != VIDEO_ES || !p_es->p_dec )
+                continue;
+            vout_thread_t *p_vout = NULL;
+            input_DecoderGetObjects( p_es->p_dec, &p_vout, NULL );
+            if( p_vout )
+            {
+                vlc_tick_t i_first = vout_GetDecoderFifoFirstDate( p_vout );
+                if( i_first > VLC_TICK_INVALID
+                 && i_current_date + i_wakeup_delay - i_first > i_offset )
+                    i_offset = i_current_date + i_wakeup_delay - i_first;
+                vlc_object_release( p_vout );
+            }
+
+            /* Effectiveness accounting: an episode that ends nearly
+             * empty (a starved decoder released it right away, the
+             * source cannot feed the cache) bought no fluid stretch at
+             * all -- each one doubles the refill cooldown so a stream
+             * that cannot actually be cached degrades to rare pauses
+             * instead of a permanent freeze/0%-buffering loop. Any
+             * effective episode resets the penalty. */
+            size_t i_count, i_target;
+            if( input_DecoderGetCacheState( p_es->p_dec, &i_count,
+                                            &i_target, NULL, NULL ) )
+            {
+                if( i_target > 0 && i_count * 10 < i_target )
+                {
+                    if( p_sys->i_video_cache_bad_refills < 5 )
+                        p_sys->i_video_cache_bad_refills++;
+                    msg_Dbg( p_sys->p_input, "video cache refill "
+                             "ineffective (%zu/%zu pictures, strike %u), "
+                             "backing off", i_count, i_target,
+                             p_sys->i_video_cache_bad_refills );
+                }
+                else
+                    p_sys->i_video_cache_bad_refills = 0;
+            }
+            break;
+        }
+        input_clock_OffsetSystemOrigin( p_sys->p_pgrm->p_clock, i_offset );
+        EsOutVideoCacheRelease( out, i_offset );
+        /* Resume the audio path paused at the trigger, shifted by the
+         * exact same offset as the clock and the held pictures so A/V
+         * stays in sync (unless the user paused meanwhile: their resume
+         * will unpause it). */
+        if( !p_sys->b_paused )
+            for( int i = 0; i < p_sys->i_es; i++ )
+            {
+                es_out_id_t *p_es = p_sys->es[i];
+                if( p_es->fmt.i_cat == AUDIO_ES && p_es->p_dec )
+                    input_DecoderChangePause( p_es->p_dec, false,
+                        p_sys->i_video_cache_refill_start + i_offset );
+            }
+        p_sys->b_video_cache_refill = false;
+        p_sys->i_video_cache_refill_last_end = i_current_date;
+    }
+    else
+    {
+        input_clock_ChangeSystemOrigin( p_sys->p_pgrm->p_clock, true,
+                                        i_current_date + i_wakeup_delay - i_buffering_duration );
+
+        /* Look-ahead cache: re-base the held pictures onto the fresh
+         * origin and let the vout consume them. The shift is measured as
+         * the reference's system-side move across the origin change
+         * (i_system_start still holds the pre-change reference from the
+         * input_clock_GetState call at the top of this function; nothing
+         * in between touches the clock, the es_out lock is held
+         * throughout). The release itself is unconditional: even if the
+         * clock state could not be re-read (it cannot fail right after
+         * ChangeSystemOrigin, but never leave that unchecked), the vout
+         * hold and the buffering OSD must not stay stuck forever. */
+        if( p_sys->i_video_cache_bytes > 0 )
+        {
+            vlc_tick_t i_offset = 0;
+            vlc_tick_t i_stream_start2, i_system_after;
+            vlc_tick_t i_stream_duration2, i_system_duration2;
+            if( !input_clock_GetState( p_sys->p_pgrm->p_clock,
+                                       &i_stream_start2, &i_system_after,
+                                       &i_stream_duration2,
+                                       &i_system_duration2 ) )
+                i_offset = i_system_after - i_system_start;
+
+            /* An effective start/seek fill clears the refill-backoff
+             * strikes: whatever starved the earlier refills (a slow
+             * stretch of the source) is over. */
+            for( int i = 0; i < p_sys->i_es; i++ )
+            {
+                es_out_id_t *p_es = p_sys->es[i];
+                if( p_es->fmt.i_cat != VIDEO_ES || !p_es->p_dec )
+                    continue;
+                size_t i_count, i_target;
+                if( input_DecoderGetCacheState( p_es->p_dec, &i_count,
+                                                &i_target, NULL, NULL )
+                 && i_target > 0 && i_count * 2 >= i_target )
+                    p_sys->i_video_cache_bad_refills = 0;
+                break;
+            }
+
+            EsOutVideoCacheRelease( out, i_offset );
+        }
+    }
 
     for( int i = 0; i < p_sys->i_es; i++ )
     {
@@ -744,6 +1660,21 @@ static void EsOutDecodersStopBuffering( es_out_t *out, bool b_forced )
         input_DecoderStopWait( p_es->p_dec );
         if( p_es->p_dec_record )
             input_DecoderStopWait( p_es->p_dec_record );
+    }
+
+    /* A user pause kept virtual during the episode materializes now, in
+     * one clean transition dated at the ORIGINAL pause instant (the
+     * clock origin above was anchored at that same date, so playback
+     * freezes exactly where the user left it). From here on the stock
+     * pause bookkeeping applies: the eventual resume shifts the clock
+     * and the vout by the same span, symmetrically. */
+    if( p_sys->b_video_cache_pause_virtual )
+    {
+        p_sys->b_video_cache_pause_virtual = false;
+        msg_Dbg( p_sys->p_input, "video cache: materializing the virtual "
+                 "pause at the gate release" );
+        EsOutProgramChangePause( out, true, p_sys->i_pause_date );
+        EsOutDecodersChangePause( out, true, p_sys->i_pause_date );
     }
 }
 static void EsOutDecodersChangePause( es_out_t *out, bool b_paused, vlc_tick_t i_date )
@@ -1532,6 +2463,11 @@ static es_out_id_t *EsOutAddSlave( es_out_t *out, const es_format_t *fmt, es_out
         return NULL;
     }
 
+    /* Gapless (PowerVLC): as soon as this input carries video, it may neither
+     * park nor adopt an audio output stream (2 s of A/V desync otherwise). */
+    if( fmt->i_cat == VIDEO_ES )
+        var_SetBool( p_input, "gapless-eligible", false );
+
     es_out_id_t   *es = malloc( sizeof( *es ) );
     es_out_pgrm_t *p_pgrm;
     int i;
@@ -2183,7 +3119,7 @@ static void EsOutDel( es_out_t *out, es_out_id_t *es )
     {   /* FIXME: This might hold the ES output caller (i.e. the demux), and
          * the corresponding thread (typically the input thread), for a little
          * bit too long if the ES is deleted in the middle of a stream. */
-        input_DecoderDrain( es->p_dec );
+        input_DecoderDrain( es->p_dec, false );
         while( !input_Stopped(p_sys->p_input) && !p_sys->b_buffering )
         {
             if( input_DecoderIsEmpty( es->p_dec ) &&
@@ -2533,6 +3469,23 @@ static int EsOutControlLocked( es_out_t *out, int i_query, va_list args )
             if( p_sys->p_next_frame_es != NULL )
                 return VLC_SUCCESS;
 
+            EsOutVideoCacheMaybeRefill( out );
+            if( p_sys->b_buffering )
+                /* A refill episode just opened: the late/jitter handling
+                 * below is startup-time logic, skip it for this PCR. */
+                return VLC_SUCCESS;
+
+            if( b_late && EsOutVideoCacheHasCushion( out ) )
+            {
+                /* The demuxer is only "late" because the look-ahead cache
+                 * throttled it; the display rides its cushion. Absorbing
+                 * this here avoids the re-buffer storm (~1 stall / cache
+                 * depth) seen on DVD with video-cache-mb on. */
+                msg_Dbg( p_sys->p_input, "late PCR absorbed by look-ahead "
+                         "cache cushion (no re-buffer)" );
+                b_late = false;
+            }
+
             if( b_late && ( !input_priv(p_sys->p_input)->p_sout ||
                             !input_priv(p_sys->p_input)->b_out_pace_control ) )
             {
@@ -2575,6 +3528,68 @@ static int EsOutControlLocked( es_out_t *out, int i_query, va_list args )
         msg_Dbg( p_sys->p_input, "ES_OUT_RESET_PCR called" );
         EsOutChangePosition( out );
         return VLC_SUCCESS;
+
+    case ES_OUT_SET_VIDEO_CACHE_SKIP:
+        /* The fill wait is deliberately NOT user-skippable: playback
+         * must never start before the look-ahead cache reached its
+         * threshold (it used to be skippable from the Play/Pause key).
+         * The control is kept (and refused) so any stale caller keeps
+         * falling through to its normal handling; the internal
+         * b_video_cache_skip flag remains as the stall-timeout safety
+         * valve only (see VIDEO_CACHE_STALL_TIMEOUT). */
+        return VLC_EGENERIC;
+
+    case ES_OUT_RECHECK_VIDEO_CACHE:
+        /* No caller left inside the tree: the decoder-side per-picture
+         * recheck this served was removed (it deadlocked against
+         * EsUnselect's decoder join, see DecoderPlayVideo). Kept for
+         * ABI; harmless if something external still fires it, since it
+         * runs under the es_out lock on the caller's thread. */
+        if( p_sys->b_buffering && p_sys->p_pgrm )
+            EsOutDecodersStopBuffering( out, false );
+        return VLC_SUCCESS;
+
+    case ES_OUT_SET_VIDEO_CACHE_INHIBIT:
+    {
+        bool b = va_arg( args, int );
+        if( b != p_sys->b_video_cache_inhibit )
+        {
+            msg_Dbg( p_sys->p_input, "video cache %s by the demuxer",
+                     b ? "inhibited" : "re-allowed" );
+            p_sys->b_video_cache_inhibit = b;
+            /* Turning the inhibition ON while a fill episode is holding
+             * playback (e.g. a title->menu hop whose RESET_PCR opened an
+             * episode just before the demuxer could tell us): re-evaluate
+             * right away so the gate opens on the spot instead of at the
+             * next PCR/decoded picture. */
+            if( b && p_sys->b_buffering && p_sys->p_pgrm )
+                EsOutDecodersStopBuffering( out, false );
+        }
+        return VLC_SUCCESS;
+    }
+
+    case ES_OUT_GET_VIDEO_CACHE_STATE:
+    {
+        size_t *pi_count = va_arg( args, size_t * );
+        size_t *pi_target = va_arg( args, size_t * );
+        size_t *pi_bytes = va_arg( args, size_t * );
+        *pi_count = *pi_target = 0;
+        if( pi_bytes != NULL )
+            *pi_bytes = 0;
+        if( p_sys->i_video_cache_bytes > 0 )
+            for( int i = 0; i < p_sys->i_es; i++ )
+            {
+                es_out_id_t *p_es = p_sys->es[i];
+                if( p_es->fmt.i_cat != VIDEO_ES || !p_es->p_dec )
+                    continue;
+                bool b_starved;
+                input_DecoderGetCacheState( p_es->p_dec, pi_count,
+                                            pi_target, pi_bytes,
+                                            &b_starved );
+                break;
+            }
+        return VLC_SUCCESS;
+    }
 
     case ES_OUT_SET_GROUP:
     {
@@ -2910,10 +3925,21 @@ static int EsOutControlLocked( es_out_t *out, int i_query, va_list args )
     }
     case ES_OUT_SET_EOS:
     {
+        /* Gapless (PowerVLC): the audio output stream may only be parked
+         * if this input carries no video at all. */
+        bool b_gapless = var_GetBool( p_sys->p_input, "gapless-eligible" );
+        for (int i = 0; i < p_sys->i_es && b_gapless; i++) {
+            es_out_id_t *id = p_sys->es[i];
+            if (id->p_dec != NULL && id->fmt.i_cat == VIDEO_ES)
+            {
+                b_gapless = false;
+                break;
+            }
+        }
         for (int i = 0; i < p_sys->i_es; i++) {
             es_out_id_t *id = p_sys->es[i];
             if (id->p_dec != NULL)
-                input_DecoderDrain(id->p_dec);
+                input_DecoderDrain(id->p_dec, b_gapless);
         }
         return VLC_SUCCESS;
     }

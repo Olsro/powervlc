@@ -14,28 +14,27 @@ $(TARBALLS)/libgcrypt-$(GCRYPT_VERSION).tar.bz2:
 
 gcrypt: libgcrypt-$(GCRYPT_VERSION).tar.bz2 .sum-gcrypt
 	$(UNPACK)
-	$(call pkg_static,"src/libgcrypt.pc.in")
+	$(UPDATE_AUTOCONFIG) && cd $(UNPACK_DIR) && mv config.guess config.sub build-aux
 	$(APPLY) $(SRC)/gcrypt/disable-tests-compilation.patch
+	$(APPLY) $(SRC)/gcrypt/fix-pthread-detection.patch
+	$(APPLY) $(SRC)/gcrypt/0001-compat-provide-a-getpid-replacement-that-works-on-Wi.patch
 	$(APPLY) $(SRC)/gcrypt/0007-random-don-t-use-API-s-that-are-forbidden-in-UWP-app.patch
 	$(APPLY) $(SRC)/gcrypt/0008-random-only-use-wincrypt-in-UWP-builds-if-WINSTORECO.patch
-	$(APPLY) $(SRC)/gcrypt/0001-hwfeatures-call-SHGetFolderPathA-directly.patch
 
 	# don't use getpid in UWP as it's not actually available
 	$(APPLY) $(SRC)/gcrypt/gcrypt-uwp-getpid.patch
-
-ifdef HAVE_ANDROID
-	# disable ARM code that doesn't compile on Android
-	sed -i.orig -e 's, sha1-armv7-neon.lo,,' -e 's, sha1-armv8-aarch32-ce.lo,,' $(UNPACK_DIR)/configure.ac
-	sed -i.orig -e 's,#ifdef USE_NEON,#if 0 //def USE_NEON,g' $(UNPACK_DIR)/cipher/sha1.c
+ifdef HAVE_CROSS_COMPILE
+	# disable cross-compiled command line tools that can't be run
+	sed -i.orig -e 's,^bin_PROGRAMS ,bin_PROGRAMS_disabled ,g' $(UNPACK_DIR)/src/Makefile.am
 endif
 
 	$(MOVE)
 
-DEPS_gcrypt = gpg-error $(DEPS_gpg-error)
+DEPS_gcrypt = gpg-error
 
 GCRYPT_CONF = \
 	--enable-ciphers=aes,des,rfc2268,arcfour,chacha20 \
-	--enable-digests=sha1,md5,rmd160,sha256,sha512,blake2,sha3 \
+	--enable-digests=sha1,md5,rmd160,sha256,sha512,blake2 \
 	--enable-pubkey-ciphers=dsa,rsa,ecc \
 	--disable-docs
 
@@ -48,8 +47,31 @@ ifeq ($(ARCH),x86_64)
 GCRYPT_CONF += --disable-asm --disable-padlock-support
 endif
 endif
-ifdef HAVE_DARWIN_OS
+ifdef HAVE_IOS
+GCRYPT_EXTRA_CFLAGS = -fheinous-gnu-extensions
+else
+GCRYPT_EXTRA_CFLAGS =
+endif
+ifdef HAVE_MACOSX
+GCRYPT_CONF += --disable-aesni-support
+ifeq ($(ARCH),aarch64)
+GCRYPT_CONF += --disable-asm --disable-arm-crypto-support
+endif
+ifeq ($(ARCH),i386)
+# The i386 mpi assembler modules (mpih-*.S) do not build with the legacy
+# cctools as / Mach-O PIC combo targeting Tiger, leaving unresolved
+# _gcry_mpih_* symbols at link time. Generic C is plenty for a Core Duo.
+GCRYPT_CONF += --disable-asm
+endif
+ifeq ($(ARCH), x86_64)
 GCRYPT_CONF += ac_cv_sys_symbol_underscore=yes
+# getentropy() only exists since macOS 10.12; the weak-linked symbol is NULL
+# on older releases and crashes the RNG initialization. Fall back to
+# /dev/urandom.
+ifneq ($(call darwin_min_os_at_least, 10.12), true)
+GCRYPT_CONF += ac_cv_func_getentropy=no
+endif
+endif
 else
 ifdef HAVE_BSD
 GCRYPT_CONF += --disable-asm --disable-aesni-support
@@ -62,7 +84,7 @@ endif
 ifeq ($(ANDROID_ABI), x86_64)
 GCRYPT_CONF += ac_cv_sys_symbol_underscore=no
 endif
-ifeq ($(ARCH),$(filter $(ARCH), arm aarch64))
+ifeq ($(ARCH),aarch64)
 GCRYPT_CONF += --disable-arm-crypto-support
 endif
 endif
@@ -74,8 +96,6 @@ endif
 
 .gcrypt: gcrypt
 	$(RECONF)
-	$(MAKEBUILDDIR)
-	$(MAKECONFIGURE) $(GCRYPT_CONF)
-	+$(MAKEBUILD) bin_PROGRAMS=
-	+$(MAKEBUILD) bin_PROGRAMS= install
+	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) CFLAGS="$(CFLAGS) $(GCRYPT_EXTRA_CFLAGS)" $(GCRYPT_CONF)
+	$(MAKE) -C $< install
 	touch $@

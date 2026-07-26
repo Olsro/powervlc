@@ -288,7 +288,7 @@ static int Open(vout_window_t *wnd, const vout_window_cfg_t *cfg)
 
     char *title = var_InheritString(wnd, "video-title");
     xdg_surface_set_title(xdg_surface,
-                          (title != NULL) ? title : _("VLC media player"));
+                          (title != NULL) ? title : _("PowerVLC media player"));
     free(title);
 
     char *app_id = var_InheritString(wnd, "app-id");

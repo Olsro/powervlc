@@ -1,0 +1,267 @@
+ppc: hpeldsp: add missing AltiVec half-pel motion compensation functions
+
+DVD MPEG-2 playback on G4 (7447A) profiles showed the scalar C
+fallbacks put_pixels16_x2/y2, put_pixels8_x2 and the avg_* halfpel
+variants burning CPU while only the [0][0]/[1][0]/xy2 positions had
+AltiVec implementations.  Add AltiVec versions of:
+
+  put_pixels16_x2, put_pixels16_y2
+  put_pixels8_x2 (vec_ste store, no dst RMW)
+  avg_pixels16_x2, avg_pixels16_y2, avg_pixels16_xy2
+  avg_pixels8_x2, avg_pixels8_y2
+
+put_pixels8 (full-pel copy) and put_pixels8_y2 intentionally stay on
+the scalar C fallback: measured faster in C on a 7447A (Mac Mini G4
+1.42 GHz, PowerVLC hpel harness, 55872 randomized bit-exactness tests
+all passing, byte-identical output to the C reference).
+
+--- a/libavcodec/ppc/hpeldsp_altivec.c
++++ b/libavcodec/ppc/hpeldsp_altivec.c
+@@ -110,7 +110,160 @@
+    }
+ }
+ 
++/* next one assumes that ((line_size % 8) == 0);
++ * dst is written with two 32-bit vec_ste (no read-modify-write of the
++ * neighbouring 8 bytes, no dst load): measured faster than both the
++ * scalar C code and a vec_ld/vec_perm/vec_st RMW version on a 7447A.
++ * Note: plain put_pixels8 (full-pel copy) and put_pixels8_y2 stay on the
++ * scalar C fallback on purpose: they were measured faster in C on 7447A. */
++static void put_pixels8_x2_altivec(uint8_t *block, const uint8_t *pixels, ptrdiff_t line_size, int h)
++{
++    register int i;
++
++    for (i = 0; i < h; i++) {
++        register vector unsigned char pixelsv1  = unaligned_load(0, pixels);
++        register vector unsigned char pixelsavg = vec_avg(pixelsv1, vec_sld(pixelsv1, pixelsv1, 1));
++        /* rotate the 8 result bytes to the 8- or 16-byte alignment of
++         * block, then store them as two word elements */
++        register vector unsigned char blockv   = vec_perm(pixelsavg, pixelsavg, vec_lvsr(0, block));
++
++        vec_ste((vector unsigned int)blockv, 0, (unsigned int *)block);
++        vec_ste((vector unsigned int)blockv, 4, (unsigned int *)block);
++
++        pixels += line_size;
++        block  += line_size;
++    }
++}
++
+ /* next one assumes that ((line_size % 8) == 0) */
++static void avg_pixels8_x2_altivec(uint8_t *block, const uint8_t *pixels, ptrdiff_t line_size, int h)
++{
++    register int i;
++
++    for (i = 0; i < h; i++) {
++        int rightside = ((unsigned long)block & 0x0000000F);
++        register vector unsigned char blockv    = vec_ld(0, block);
++        register vector unsigned char pixelsv1  = unaligned_load(0, pixels);
++        register vector unsigned char pixelsavg = vec_avg(pixelsv1, vec_sld(pixelsv1, pixelsv1, 1));
++        register vector unsigned char blocktemp;
++
++        if (rightside) {
++            blocktemp = vec_perm(blockv, pixelsavg, vcprm(0, 1, s0, s1));
++        } else {
++            blocktemp = vec_perm(blockv, pixelsavg, vcprm(s0, s1, 2, 3));
++        }
++
++        blockv = vec_avg(blocktemp, blockv);
++        vec_st(blockv, 0, block);
++
++        pixels += line_size;
++        block  += line_size;
++    }
++}
++
++/* next one assumes that ((line_size % 8) == 0) */
++static void avg_pixels8_y2_altivec(uint8_t *block, const uint8_t *pixels, ptrdiff_t line_size, int h)
++{
++    register int i;
++    register vector unsigned char pixelsv1 = unaligned_load(0, pixels);
++
++    for (i = 0; i < h; i++) {
++        int rightside = ((unsigned long)block & 0x0000000F);
++        register vector unsigned char blockv    = vec_ld(0, block);
++        register vector unsigned char pixelsv2  = unaligned_load(line_size, pixels);
++        register vector unsigned char pixelsavg = vec_avg(pixelsv1, pixelsv2);
++        register vector unsigned char blocktemp;
++
++        if (rightside) {
++            blocktemp = vec_perm(blockv, pixelsavg, vcprm(0, 1, s0, s1));
++        } else {
++            blocktemp = vec_perm(blockv, pixelsavg, vcprm(s0, s1, 2, 3));
++        }
++
++        blockv = vec_avg(blocktemp, blockv);
++        vec_st(blockv, 0, block);
++
++        pixelsv1 = pixelsv2;
++        pixels += line_size;
++        block  += line_size;
++    }
++}
++
++/* next one assumes that ((line_size % 16) == 0) */
++static void put_pixels16_x2_altivec(uint8_t *block, const uint8_t *pixels, ptrdiff_t line_size, int h)
++{
++    register int i;
++
++    for (i = 0; i < h; i++) {
++        register vector unsigned char first  = vec_ld(0,  pixels);
++        register vector unsigned char second = vec_ld(16, pixels);
++        register vector unsigned char perm   = vec_lvsl(0, pixels);
++        register vector unsigned char pixelsv1 = vec_perm(first, second, perm);
++        register vector unsigned char pixelsv2 = vec_perm(first, second, vec_add(perm, vec_splat_u8(1)));
++
++        vec_st(vec_avg(pixelsv1, pixelsv2), 0, block);
++
++        pixels += line_size;
++        block  += line_size;
++    }
++}
++
++/* next one assumes that ((line_size % 16) == 0) */
++static void put_pixels16_y2_altivec(uint8_t *block, const uint8_t *pixels, ptrdiff_t line_size, int h)
++{
++    register int i;
++    register vector unsigned char pixelsv1 = unaligned_load(0, pixels);
++
++    for (i = 0; i < h; i++) {
++        register vector unsigned char pixelsv2 = unaligned_load(line_size, pixels);
++
++        vec_st(vec_avg(pixelsv1, pixelsv2), 0, block);
++
++        pixelsv1 = pixelsv2;
++        pixels += line_size;
++        block  += line_size;
++    }
++}
++
++/* next one assumes that ((line_size % 16) == 0) */
++static void avg_pixels16_x2_altivec(uint8_t *block, const uint8_t *pixels, ptrdiff_t line_size, int h)
++{
++    register int i;
++
++    for (i = 0; i < h; i++) {
++        register vector unsigned char first  = vec_ld(0,  pixels);
++        register vector unsigned char second = vec_ld(16, pixels);
++        register vector unsigned char perm   = vec_lvsl(0, pixels);
++        register vector unsigned char pixelsv1 = vec_perm(first, second, perm);
++        register vector unsigned char pixelsv2 = vec_perm(first, second, vec_add(perm, vec_splat_u8(1)));
++        register vector unsigned char blockv   = vec_ld(0, block);
++
++        vec_st(vec_avg(blockv, vec_avg(pixelsv1, pixelsv2)), 0, block);
++
++        pixels += line_size;
++        block  += line_size;
++    }
++}
++
++/* next one assumes that ((line_size % 16) == 0) */
++static void avg_pixels16_y2_altivec(uint8_t *block, const uint8_t *pixels, ptrdiff_t line_size, int h)
++{
++    register int i;
++    register vector unsigned char pixelsv1 = unaligned_load(0, pixels);
++
++    for (i = 0; i < h; i++) {
++        register vector unsigned char pixelsv2 = unaligned_load(line_size, pixels);
++        register vector unsigned char blockv   = vec_ld(0, block);
++
++        vec_st(vec_avg(blockv, vec_avg(pixelsv1, pixelsv2)), 0, block);
++
++        pixelsv1 = pixelsv2;
++        pixels += line_size;
++        block  += line_size;
++    }
++}
++
++/* next one assumes that ((line_size % 8) == 0) */
+ static void put_pixels8_xy2_altivec(uint8_t *block, const uint8_t *pixels, ptrdiff_t line_size, int h)
+ {
+     register int i;
+@@ -357,6 +510,61 @@
+         }
+ 
+         blockv = vec_avg(blocktemp, blockv);
++        vec_st(blockv, 0, block);
++
++        block += line_size;
++        pixels += line_size;
++    }
++}
++
++/* next one assumes that ((line_size % 16) == 0) */
++static void avg_pixels16_xy2_altivec(uint8_t * block, const uint8_t * pixels, ptrdiff_t line_size, int h)
++{
++    register int i;
++    register vector unsigned char pixelsv1, pixelsv2, pixelsv3, pixelsv4;
++    register vector unsigned char blockv;
++    register vector unsigned short temp3, temp4,
++        pixelssum1, pixelssum2, pixelssum3, pixelssum4;
++    register const vector unsigned char vczero = (const vector unsigned char)vec_splat_u8(0);
++    register const vector unsigned short vctwo = (const vector unsigned short)vec_splat_u16(2);
++
++    pixelsv1 = VEC_LD(0, pixels);
++    pixelsv2 = VEC_LD(1, pixels);
++    pixelsv3 = VEC_MERGEL(vczero, pixelsv1);
++    pixelsv4 = VEC_MERGEL(vczero, pixelsv2);
++    pixelsv1 = VEC_MERGEH(vczero, pixelsv1);
++    pixelsv2 = VEC_MERGEH(vczero, pixelsv2);
++    pixelssum3 = vec_add((vector unsigned short)pixelsv3,
++                         (vector unsigned short)pixelsv4);
++    pixelssum3 = vec_add(pixelssum3, vctwo);
++    pixelssum1 = vec_add((vector unsigned short)pixelsv1,
++                         (vector unsigned short)pixelsv2);
++    pixelssum1 = vec_add(pixelssum1, vctwo);
++
++    for (i = 0; i < h ; i++) {
++        blockv = vec_ld(0, block);
++
++        pixelsv1 = unaligned_load(line_size, pixels);
++        pixelsv2 = unaligned_load(line_size+1, pixels);
++
++        pixelsv3 = VEC_MERGEL(vczero, pixelsv1);
++        pixelsv4 = VEC_MERGEL(vczero, pixelsv2);
++        pixelsv1 = VEC_MERGEH(vczero, pixelsv1);
++        pixelsv2 = VEC_MERGEH(vczero, pixelsv2);
++        pixelssum4 = vec_add((vector unsigned short)pixelsv3,
++                             (vector unsigned short)pixelsv4);
++        pixelssum2 = vec_add((vector unsigned short)pixelsv1,
++                             (vector unsigned short)pixelsv2);
++        temp4 = vec_add(pixelssum3, pixelssum4);
++        temp4 = vec_sra(temp4, vctwo);
++        temp3 = vec_add(pixelssum1, pixelssum2);
++        temp3 = vec_sra(temp3, vctwo);
++
++        pixelssum3 = vec_add(pixelssum4, vctwo);
++        pixelssum1 = vec_add(pixelssum2, vctwo);
++
++        blockv = vec_avg(blockv, vec_packsu(temp3, temp4));
++
+         vec_st(blockv, 0, block);
+ 
+         block += line_size;
+@@ -372,12 +580,23 @@
+         return;
+ 
+     c->avg_pixels_tab[0][0]        = ff_avg_pixels16_altivec;
++    c->avg_pixels_tab[0][1]        = avg_pixels16_x2_altivec;
++    c->avg_pixels_tab[0][2]        = avg_pixels16_y2_altivec;
++    c->avg_pixels_tab[0][3]        = avg_pixels16_xy2_altivec;
+     c->avg_pixels_tab[1][0]        = avg_pixels8_altivec;
++    c->avg_pixels_tab[1][1]        = avg_pixels8_x2_altivec;
++    c->avg_pixels_tab[1][2]        = avg_pixels8_y2_altivec;
+     c->avg_pixels_tab[1][3]        = avg_pixels8_xy2_altivec;
+ 
+     c->put_pixels_tab[0][0]        = ff_put_pixels16_altivec;
+-    c->put_pixels_tab[1][3]        = put_pixels8_xy2_altivec;
++    c->put_pixels_tab[0][1]        = put_pixels16_x2_altivec;
++    c->put_pixels_tab[0][2]        = put_pixels16_y2_altivec;
+     c->put_pixels_tab[0][3]        = put_pixels16_xy2_altivec;
++    /* [1][0] (8-wide copy) and [1][2] (8-wide y2) intentionally stay on
++     * the scalar C fallback: measured faster than AltiVec on a 7447A
++     * (see PowerVLC hpel harness) */
++    c->put_pixels_tab[1][1]        = put_pixels8_x2_altivec;
++    c->put_pixels_tab[1][3]        = put_pixels8_xy2_altivec;
+ 
+     c->put_no_rnd_pixels_tab[0][0] = ff_put_pixels16_altivec;
+     c->put_no_rnd_pixels_tab[1][3] = put_no_rnd_pixels8_xy2_altivec;

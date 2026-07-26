@@ -98,6 +98,10 @@ typedef struct
 {
     char  psz_version[10];
     int   i_lowpass;
+    /* Gapless (PowerVLC) */
+    uint16_t i_delay;
+    uint16_t i_padding;
+    bool     b_delay_valid;
 } lame_extra_t;
 
 typedef struct
@@ -539,6 +543,25 @@ static bool Parse( demux_t *p_demux, block_t **pp_output )
             if( !p_sys->p_es )
             {
                 p_sys->p_packetizer->fmt_out.b_packetized = true;
+
+                /* Gapless (PowerVLC): publish the LAME encoder delay/padding
+                 * so that the decoder owner can trim them off. */
+                if( p_sys->xing.b_lame && p_sys->xing.lame.b_delay_valid &&
+                    p_sys->xing.i_frames > 0 &&
+                    p_sys->xing.i_frame_samples > 0 )
+                {
+                    audio_format_t *a = &p_sys->p_packetizer->fmt_out.audio;
+                    uint32_t fs = p_sys->xing.i_frame_samples;
+                    /* The Xing frame itself is decoded (no decoder skips it),
+                     * plus the LAME delay, plus the 529 samples of decoder
+                     * synthesis delay common to mad/mpg123/avcodec. */
+                    a->i_gapless_priming = fs + p_sys->xing.lame.i_delay + 529;
+                    uint64_t total = (uint64_t)p_sys->xing.i_frames * fs;
+                    uint32_t dp = p_sys->xing.lame.i_delay
+                                + p_sys->xing.lame.i_padding;
+                    a->i_gapless_length = ( total > dp ) ? total - dp : 0;
+                }
+
                 p_sys->p_es = es_out_Add( p_demux->out,
                                           &p_sys->p_packetizer->fmt_out);
 
@@ -1027,7 +1050,11 @@ static int MpgaInit( demux_t *p_demux )
     else
         i_skip = MPGA_MODE( header ) != 3 ? 21 : 13;
 
-    if( i_skip + 8 >= i_xing || memcmp( &p_xing[i_skip], "Xing", 4 ) )
+    /* "Xing" for VBR streams, "Info" for CBR ones: same layout (PowerVLC:
+     * "Info" was previously ignored, which hid the LAME gapless data and the
+     * frame count of every CBR file). */
+    if( i_skip + 8 >= i_xing || ( memcmp( &p_xing[i_skip], "Xing", 4 ) &&
+                                  memcmp( &p_xing[i_skip], "Info", 4 ) ) )
         return VLC_SUCCESS;
 
     const uint32_t i_flags = GetDWBE( &p_xing[i_skip+4] );
@@ -1081,6 +1108,24 @@ static int MpgaInit( demux_t *p_demux )
         p_sys->rgf_replay_gain[AUDIO_REPLAY_GAIN_ALBUM] = (float) MpgaXingLameConvertGain( album );
 
         MpgaXingSkip( &p_xing, &i_xing, 1 ); /* flags */
+
+        /* Gapless (PowerVLC): encoder delay & padding, 12 bits each */
+        MpgaXingSkip( &p_xing, &i_xing, 1 ); /* ABR/minimal bitrate */
+        if( i_xing >= 3 )
+        {
+            p_lame->i_delay   = ((uint16_t)p_xing[0] << 4) | (p_xing[1] >> 4);
+            p_lame->i_padding = ((uint16_t)(p_xing[1] & 0x0F) << 8) | p_xing[2];
+            /* Some muxers (libavformat) write the "LAME3.100" string then
+             * fill the whole extension with 0xAA: that is not real data. */
+            p_lame->b_delay_valid = p_lame->i_delay <= 2880
+                                 && p_lame->i_padding <= 4096
+                                 && !( p_xing[0] == 0xAA && p_xing[1] == 0xAA
+                                    && p_xing[2] == 0xAA );
+            MpgaXingSkip( &p_xing, &i_xing, 3 );
+            msg_Dbg( p_demux, "lame encoder delay %u, padding %u (valid: %d)",
+                     p_lame->i_delay, p_lame->i_padding,
+                     p_lame->b_delay_valid );
+        }
     }
 
     return VLC_SUCCESS;

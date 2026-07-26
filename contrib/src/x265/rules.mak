@@ -6,7 +6,14 @@ X265_SNAPURL := https://bitbucket.org/multicoreware/x265_git/downloads/x265_$(X2
 
 ifdef BUILD_ENCODERS
 ifdef GPL
+ifdef HAVE_MACOSX
+# x265 requires posix_memalign, absent before Mac OS X 10.6
+ifeq ($(call darwin_min_os_at_least, 10.6), true)
 PKGS += x265
+endif
+else
+PKGS += x265
+endif
 endif
 endif
 

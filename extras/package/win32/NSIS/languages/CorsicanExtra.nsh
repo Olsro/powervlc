@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Aghjunghje l'icona à u vostru scagnu per un usu più faciule"
 ${LangFileString} Desc_Section03 \
-    "L'estensione VLC per Mozilla and Mozilla Firefox"
+    "L'estensione ${PRODUCT_NAME} per Mozilla and Mozilla Firefox"
 ${LangFileString} Desc_Section04 \
-    "L'estensione VLC per ActiveX"
+    "L'estensione ${PRODUCT_NAME} per ActiveX"
 ${LangFileString} Desc_Section05 \
     "Ripruduzzione diretta di DVD è CD"
 ${LangFileString} Desc_Section06 \
-    "Definisce VLC media player cum'è appiecazione predefinita per u tipu di schedariu specificatu"
+    "Definisce ${PRODUCT_NAME} cum'è appiecazione predefinita per u tipu di schedariu specificatu"
 ${LangFileString} Desc_Section07 \
-    "Aghjunghje l'elementi di listinu di cuntestu ('Sunà cù VLC' è 'Aghjunghje à a lista di lettura VLC')"
+    "Aghjunghje l'elementi di listinu di cuntestu ('Sunà cù ${PRODUCT_NAME}' è 'Aghjunghje à a lista di lettura ${PRODUCT_NAME}')"
 ${LangFileString} Desc_Section08 \
-    "Squassà e preferenze è i schedarii d'impiatta di VLC media player lasciati da e vechje installazioni"
+    "Squassà e preferenze è i schedarii d'impiatta di ${PRODUCT_NAME} lasciati da e vechje installazioni"
 
 ${LangFileString} Name_Section91 "Disinstallà"
 ${LangFileString} Name_Section92 "Squassà e preferenze è l’impiatta"
 
 ${LangFileString} Desc_Section91 \
-"Desinstallà VLC media player è tutti i so cumpunenti"
+"Desinstallà ${PRODUCT_NAME} è tutti i so cumpunenti"
 ${LangFileString} Desc_Section92 \
-"Squassà e preferenze è i schedarii d'impiatta di VLC media player"
+"Squassà e preferenze è i schedarii d'impiatta di ${PRODUCT_NAME}"
 
 ${LangFileString} ShellAssociation_Play "Sunà"
-${LangFileString} ContextMenuEntry_PlayWith "Sunà cù VLC media player"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Aghjunghje à a lista di lettura di VLC media player"
+${LangFileString} ContextMenuEntry_PlayWith "Sunà cù ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Aghjunghje à a lista di lettura di ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "Visità u situ Web VLC media player di VideoLAN"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Sunà Blu-ray"
 ${LangFileString} License_NextText "Avà site cognitu di i vostri diritti. Sceglie Seguente per cuntinuà."
 
 ${LangFileString} Detail_CheckProcesses "Cuntrollu di i prucedimenti…"
-${LangFileString} MessageBox_VLCRunning "VLC pare dighjà in funzione è hà da esse chjosu."
-${LangFileString} MessageBox_VLCUnableToClose "Stu stalladore ùn hà micca pussutu chjode VLC, ci vole à fallu manualmente."
+${LangFileString} MessageBox_VLCRunning "${PRODUCT_NAME} pare dighjà in funzione è hà da esse chjosu."
+${LangFileString} MessageBox_VLCUnableToClose "Stu stalladore ùn hà micca pussutu chjode ${PRODUCT_NAME}, ci vole à fallu manualmente."
 ${LangFileString} MessageBox_InstallAborted "Installazione interrotta !"
 
 ${LangFileString} Reinstall_Headline "Dighjà installatu"
-${LangFileString} Reinstall_HeadlineInstall "Sceglie cumu vulete installà VLC."
+${LangFileString} Reinstall_HeadlineInstall "Sceglie cumu vulete installà ${PRODUCT_NAME}."
 ${LangFileString} Reinstall_HeadlineMaintenance "Sceglie l’ozzione di mantenenza ch’ellu ci vole à fà."
-${LangFileString} Reinstall_MessageOlder "Una versione più vechja di VLC hè installata nant’à u vostru sistema. Selezziunà l’operazione chì ci vole à fà è cliccà Seguente per cuntinuà."
-${LangFileString} Reinstall_MessageNewer "Una versione più ricente di VLC hè dighjà installata ! Ùn hè micca ricumandatu di cambià per una versione più vechja. Selezziunà l’operazione chì ci vole à fà è cliccà Seguente per cuntinuà."
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} hè dighjà installata. Selezziunà l’operazione chì ci vole à fà è cliccà Seguente per cuntinuà."
-${LangFileString} Reinstall_OptionUpgrade "Mudernizà VLC impieghendu e preferenze arregistrate (ricumandatu)"
-${LangFileString} Reinstall_OptionDowngrade "Invechjà VLC impieghendu e preferenze arregistrate (ricumandatu)"
+${LangFileString} Reinstall_MessageOlder "Una versione più vechja di ${PRODUCT_NAME} hè installata nant’à u vostru sistema. Selezziunà l’operazione chì ci vole à fà è cliccà Seguente per cuntinuà."
+${LangFileString} Reinstall_MessageNewer "Una versione più ricente di ${PRODUCT_NAME} hè dighjà installata ! Ùn hè micca ricumandatu di cambià per una versione più vechja. Selezziunà l’operazione chì ci vole à fà è cliccà Seguente per cuntinuà."
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} hè dighjà installata. Selezziunà l’operazione chì ci vole à fà è cliccà Seguente per cuntinuà."
+${LangFileString} Reinstall_OptionUpgrade "Mudernizà ${PRODUCT_NAME} impieghendu e preferenze arregistrate (ricumandatu)"
+${LangFileString} Reinstall_OptionDowngrade "Invechjà ${PRODUCT_NAME} impieghendu e preferenze arregistrate (ricumandatu)"
 ${LangFileString} Reinstall_OptionComponents "Aghjunghje/Caccià/Reinstallà i cumpunenti"
 ${LangFileString} Reinstall_OptionAdvanced "Cambià e preferenze (modu espertu)"
-${LangFileString} Reinstall_OptionUninstall "Desinstallà VLC"
+${LangFileString} Reinstall_OptionUninstall "Desinstallà ${PRODUCT_NAME}"

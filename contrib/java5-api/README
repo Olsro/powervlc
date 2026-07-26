@@ -1,0 +1,47 @@
+Java 5 API index, used to verify the BD-J jars
+==============================================
+
+apple-jdk-1.5.0_19.txt.gz lists what Apple's Java 1.5.0_19 declares: class
+names, the class hierarchy, and member name/descriptor pairs. It is what
+contrib/src/bluray/check-bdj-java5.py resolves the BD-J jars against, so the
+contrib build fails if the jars reference anything Mac OS X 10.4 / 10.5 cannot
+provide. See contrib/src/bluray/rules.mak for why the jars target Java 5.
+
+Why an index and not a class library
+------------------------------------
+
+contrib/java6-bootclasspath holds OpenJDK 6's rt.jar outright, because OpenJDK 6
+is GPLv2 with the Classpath exception. There is no equivalent for Java 5:
+
+  - OpenJDK started at Java 6. Sun never open-sourced JDK 5.
+  - Apache Harmony (Apache 2.0) and GNU Classpath (GPL + linking exception) do
+    cover the Java 5 API, but they reimplement the platform and carry none of
+    Sun's internals. The BD-J adaptation layer plugs directly into those
+    (java.io.FileSystem, java.awt.peer.*, sun.awt.*), so checking against
+    either would report a flood of absent classes that say nothing about
+    whether the jars run on a real Mac OS X JRE.
+  - Apple's own class library answers the question exactly, but is not
+    redistributable.
+
+So the implementation is not copied: only the list of names it declares is,
+which is the same shape as the per-release API data a JDK ships in ct.sym.
+1.1 MB against 28 MB of jars, and nothing that runs.
+
+Regenerating
+------------
+
+Point the generator at a Mac OS X 10.4 or 10.5 install:
+
+    JC=/System/Library/Frameworks/JavaVM.framework/Versions/1.5/Classes
+    python3 contrib/src/bluray/make-java5-api-index.py \
+        -o contrib/java5-api/apple-jdk-1.5.0_19.txt.gz \
+        --source "Apple Java 1.5.0_19 (build 1.5.0_19-b02-306), Mac OS X 10.4.11 PowerPC" \
+        $JC/classes.jar $JC/ui.jar $JC/charsets.jar $JC/jce.jar $JC/jsse.jar
+
+classes.jar covers almost everything; ui.jar matters because it holds the AWT
+peer and look-and-feel classes the BD-J adaptation layer sits on top of. The
+output is deterministic, so regenerating an unchanged index leaves the file
+byte-identical.
+
+check-bdj-java5.py also still accepts --runtime <jar> to check straight against
+a real JRE's class library, when one happens to be at hand.

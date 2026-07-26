@@ -36,6 +36,7 @@
 #include "ui/update.h"
 
 class QEvent;
+class QUrl;
 
 class HelpDialog : public QVLCFrame, public Singleton<HelpDialog>
 {
@@ -48,6 +49,9 @@ public slots:
     void close() Q_DECL_OVERRIDE { toggleVisible(); }
 
     friend class    Singleton<HelpDialog>;
+
+private slots:
+    void onExternalLink( const QUrl &url );
 };
 
 class AboutDialog : public QVLCDialog, public Singleton<AboutDialog>
@@ -71,6 +75,7 @@ private slots:
     void showLicense();
     void showAuthors();
     void showCredit();
+    void onExternalLink( const QString &url );
 };
 
 #if defined(UPDATE_CHECK)

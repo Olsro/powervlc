@@ -114,6 +114,14 @@ liblibmpeg2_plugin_la_SOURCES = codec/libmpeg2.c \
 liblibmpeg2_plugin_la_CFLAGS = $(AM_CFLAGS) $(CFLAGS_libmpeg2)
 liblibmpeg2_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)'
 liblibmpeg2_plugin_la_LIBADD = $(LIBS_libmpeg2)
+if HAVE_DARWIN
+# Décodage MPEG-2 accéléré matériel via l'ABI DVDDriver* (ATI, vieux Mac PPC G3/G4).
+# S'auto-désactive (dvddriver_available()=false) hors des Mac ATI compatibles.
+liblibmpeg2_plugin_la_SOURCES += codec/dvddriver_backend.c codec/dvddriver_backend.h \
+	codec/dvddriver_spu.c codec/dvddriver_spu.h \
+	codec/dvddriver_piccontext.h
+liblibmpeg2_plugin_la_LDFLAGS += -Wl,-framework,ApplicationServices,-framework,IOKit,-framework,CoreFoundation
+endif
 EXTRA_LTLIBRARIES += liblibmpeg2_plugin.la
 codec_LTLIBRARIES += $(LTLIBlibmpeg2)
 
@@ -181,7 +189,14 @@ endif
 liblibass_plugin_la_SOURCES = codec/libass.c
 liblibass_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) $(CPPFLAGS_libass)
 liblibass_plugin_la_CFLAGS = $(AM_CFLAGS) $(LIBASS_CFLAGS)
+if HAVE_OSX
+# The libass contrib pulls CoreText symbols through the ApplicationServices
+# umbrella; without this the linker records the standalone CoreText path,
+# which does not exist before Mac OS X 10.8
+liblibass_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)' -Wl,-no_implicit_dylibs
+else
 liblibass_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)'
+endif
 liblibass_plugin_la_LIBADD = $(LIBASS_LIBS) $(LIBS_libass) $(LIBS_freetype) $(FREETYPE_LIBS)
 if HAVE_WINSTORE
 liblibass_plugin_la_LIBADD += -ldwrite
@@ -342,6 +357,26 @@ liboggspots_plugin_la_LIBADD = $(OGGSPOTS_LIBS)
 EXTRA_LTLIBRARIES += liboggspots_plugin.la
 codec_LTLIBRARIES += $(LTLIBoggspots)
 
+libvda_plugin_la_SOURCES = \
+	codec/vda.c codec/vt_utils.c codec/vt_utils.h \
+	codec/hxxx_helper.c codec/hxxx_helper.h \
+	packetizer/hxxx_nal.h packetizer/hxxx_nal.c \
+	packetizer/hxxx_sei.h packetizer/hxxx_sei.c \
+	packetizer/h264_slice.c packetizer/h264_slice.h \
+	packetizer/h264_nal.c packetizer/h264_nal.h \
+	packetizer/hevc_nal.c packetizer/hevc_nal.h
+# vt_utils.c and the IOSurface-backed output buffers need Mac OS X 10.6 APIs.
+# That costs nothing: VDA itself only exists from 10.6.3 on.
+libvda_plugin_la_CFLAGS = $(AM_CFLAGS) -mmacosx-version-min=10.6
+libvda_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)' \
+	-Wl,-framework,CoreFoundation -Wl,-framework,CoreVideo \
+	-Wl,-framework,VideoDecodeAcceleration
+if HAVE_OSX
+if HAVE_VDA_FRAMEWORK
+codec_LTLIBRARIES += libvda_plugin.la
+endif
+endif
+
 libvideotoolbox_plugin_la_SOURCES = \
 	codec/vt_utils.c codec/vt_utils.h \
 	codec/videotoolbox.m codec/hxxx_helper.c codec/hxxx_helper.h \
@@ -352,6 +387,7 @@ libvideotoolbox_plugin_la_SOURCES = \
 	packetizer/hevc_nal.c packetizer/hevc_nal.h
 libvideotoolbox_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)' -Wl,-framework,Foundation -Wl,-framework,VideoToolbox -Wl,-framework,CoreMedia -Wl,-framework,CoreVideo
 if HAVE_OSX
+libvideotoolbox_plugin_la_CFLAGS = $(AM_CFLAGS) -mmacosx-version-min=10.8
 libvideotoolbox_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -mmacosx-version-min=10.8
 endif
 if HAVE_IOS
@@ -364,7 +400,9 @@ libvideotoolbox_plugin_la_LDFLAGS += -Wl,-framework,UIKit
 endif
 libvideotoolbox_plugin_la_LIBADD = libchroma_copy.la
 EXTRA_LTLIBRARIES += libvideotoolbox_plugin.la
+if HAVE_VT_FRAMEWORK
 codec_LTLIBRARIES += $(LTLIBvideotoolbox)
+endif
 
 ### FFmpeg/libav ###
 libavcodec_common_la_SOURCES = codec/avcodec/fourcc.c codec/avcodec/avcommon.h \

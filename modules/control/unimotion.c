@@ -196,8 +196,17 @@ static int probe_sms(int kernFunc, char *servMatch, int dataType, void *data)
     memset(&inputStructure, 0, sizeof(union motion_data));
     memset(outputStructure, 0, sizeof(union motion_data));
 
-    result = IOConnectCallStructMethod(dataPort, kernFunc, &inputStructure, 
+#if defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED < 1050
+    /* IOConnectCallStructMethod is 10.5+; Tiger uses the legacy call */
+    IOByteCount legacyOutputSize = structureOutputSize;
+    result = IOConnectMethodStructureIStructureO(dataPort, kernFunc,
+                structureInputSize, &legacyOutputSize,
+                &inputStructure, outputStructure );
+    structureOutputSize = legacyOutputSize;
+#else
+    result = IOConnectCallStructMethod(dataPort, kernFunc, &inputStructure,
                 structureInputSize, outputStructure, &structureOutputSize );
+#endif
 
     IOServiceClose(dataPort);
 

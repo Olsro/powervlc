@@ -143,6 +143,7 @@ libqt_plugin_la_SOURCES = \
 	gui/qt/util/qvlcapp.hpp \
 	gui/qt/util/singleton.hpp \
 	gui/qt/util/imagehelper.cpp gui/qt/util/imagehelper.hpp \
+	gui/qt/util/powervlc_links.cpp gui/qt/util/powervlc_links.hpp \
 	gui/qt/styles/seekstyle.cpp gui/qt/styles/seekstyle.hpp
 if HAVE_WIN32
 libqt_plugin_la_SOURCES += \
@@ -159,8 +160,20 @@ moc_verbose__0 = $(moc_verbose_0)
 .hpp.moc.cpp:
 	$(moc_verbose)$(MOC) $(MOC_CPPFLAGS) -o $@ $<
 
-# These MOC files depend on the configure settings:
-dialogs_provider.moc.cpp dialogs/vlm.moc.cpp: $(top_builddir)/config.h
+# These MOC files depend on the configure settings: the slots they wrap are
+# behind #if defined(UPDATE_CHECK) / ENABLE_VLM, and moc reads config.h through
+# $(DEFS) in MOC_CPPFLAGS, so a config change must regenerate them.
+#
+# The paths were missing their gui/qt/ prefix. This file is include'd from
+# modules/Makefile.am, so every target here is named gui/qt/<x> (see
+# nodist_libqt_plugin_la_SOURCES below): the bare names matched nothing and the
+# dependency silently did nothing at all. An incremental build that turned
+# UPDATE_CHECK off therefore kept a moc file still wiring DialogsProvider::
+# updateDialog(), against a class that no longer declares it:
+#   dialogs_provider.moc.cpp:247: error: 'class DialogsProvider' has no member
+#   named 'updateDialog'
+# (hit on the Windows cross-build the moment the fork disabled the updater).
+gui/qt/dialogs_provider.moc.cpp gui/qt/dialogs/vlm.moc.cpp: $(top_builddir)/config.h
 
 nodist_libqt_plugin_la_SOURCES = \
 	gui/qt/main_interface.moc.cpp \

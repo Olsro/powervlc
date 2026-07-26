@@ -219,8 +219,9 @@ int libvlc_InternalAddIntf(libvlc_int_t *libvlc, const char *name)
                 free(pidfile);
             else
 #endif
-                msg_Info(libvlc, _("Running vlc with the default interface. "
-                         "Use 'cvlc' to use vlc without interface."));
+                msg_Info(libvlc, _("Running powervlc with the default "
+                         "interface. Use 'cpowervlc' to use powervlc without "
+                         "interface."));
         }
         ret = intf_Create(playlist, intf);
         free(intf);

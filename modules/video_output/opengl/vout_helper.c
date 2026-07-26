@@ -162,6 +162,11 @@ struct vout_display_opengl_t {
     /* Non-power-of-2 texture size support */
     bool supports_npot;
 
+    /* Fixed-function fallback: the GL engine is pre-2.0 and its advertised
+     * GLSL is not actually executable, so draw with the fixed-function
+     * pipeline instead of shaders (see the detection in vout_display_opengl_New). */
+    bool fixed_function;
+
     /* View point */
     float f_teta;
     float f_phi;
@@ -455,6 +460,18 @@ opengl_link_program(struct prgm *prgm)
 {
     opengl_tex_converter_t *tc = prgm->tc;
 
+    if (tc->fixed_function)
+    {
+        /* No GLSL program on this hardware: the picture is drawn with the
+         * fixed-function pipeline. Drop the fragment shader the converter
+         * created (it would never be used) and leave prgm->id at 0. */
+        if (tc->fshader != 0)
+            tc->vt->DeleteShader(tc->fshader);
+        tc->fshader = 0;
+        prgm->id = 0;
+        return VLC_SUCCESS;
+    }
+
     GLuint vertex_shader = BuildVertexShader(tc, tc->tex_count);
     GLuint shaders[] = { tc->fshader, vertex_shader };
 
@@ -607,6 +624,7 @@ opengl_init_program(vout_display_opengl_t *vgl, struct prgm *prgm,
     tc->b_dump_shaders = b_dump_shaders;
     tc->pf_fragment_shader_init = opengl_fragment_shader_init_impl;
     tc->glexts = glexts;
+    tc->fixed_function = vgl->fixed_function;
 #if defined(USE_OPENGL_ES2)
     tc->is_gles = true;
     tc->glsl_version = 100;
@@ -800,6 +818,18 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
     GET_PROC_ADDR_CORE_GL(GetTexLevelParameteriv);
     GET_PROC_ADDR_CORE_GL(TexEnvf);
 
+#if !defined(USE_OPENGL_ES2)
+    /* Fixed-function pipeline (optional; only used when GLSL is unusable). */
+    GET_PROC_ADDR_OPTIONAL(MatrixMode);
+    GET_PROC_ADDR_OPTIONAL(LoadIdentity);
+    GET_PROC_ADDR_OPTIONAL(LoadMatrixf);
+    GET_PROC_ADDR_OPTIONAL(EnableClientState);
+    GET_PROC_ADDR_OPTIONAL(DisableClientState);
+    GET_PROC_ADDR_OPTIONAL(VertexPointer);
+    GET_PROC_ADDR_OPTIONAL(TexCoordPointer);
+    GET_PROC_ADDR_OPTIONAL(Color4f);
+#endif
+
     GET_PROC_ADDR(CreateShader);
     GET_PROC_ADDR(ShaderSource);
     GET_PROC_ADDR(CompileShader);
@@ -870,6 +900,20 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
             msg_Err(gl, "shaders not supported, bailing out\n");
             free(vgl);
             return NULL;
+        }
+        /* A GLSL version is advertised, but on a pre-2.0 engine it is often not
+         * actually executable (e.g. the ATI Radeon 9200 under Mac OS X 10.5
+         * reports GLSL 1.20 on a GL 1.3 engine: shaders link yet render black).
+         * Fall back to the fixed-function pipeline when its entry points are
+         * available rather than showing a black picture. */
+        if (vgl->vt.MatrixMode != NULL && vgl->vt.LoadIdentity != NULL
+         && vgl->vt.LoadMatrixf != NULL && vgl->vt.EnableClientState != NULL
+         && vgl->vt.DisableClientState != NULL && vgl->vt.VertexPointer != NULL
+         && vgl->vt.TexCoordPointer != NULL && vgl->vt.Color4f != NULL) {
+            vgl->fixed_function = true;
+            msg_Warn(gl, "OpenGL %s engine advertises GLSL %s but likely cannot "
+                         "run it; using the fixed-function pipeline",
+                     (const char *)ogl_version, (const char *)glsl_version);
         }
     }
 #endif
@@ -1584,6 +1628,102 @@ static int SetupCoords(vout_display_opengl_t *vgl,
     return VLC_SUCCESS;
 }
 
+#if !defined(USE_OPENGL_ES2)
+/* out = a * b, column-major 4x4 (same multiplication order the vertex shader
+ * applies: OrientationMatrix * ProjectionMatrix * VertexPosition). */
+static void MatrixMultiply4(GLfloat *out, const GLfloat *a, const GLfloat *b)
+{
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+        {
+            GLfloat s = 0.f;
+            for (int k = 0; k < 4; k++)
+                s += a[k * 4 + i] * b[j * 4 + k];
+            out[j * 4 + i] = s;
+        }
+}
+
+/* Fixed-function counterpart of DrawWithShaders, for a single RGBA texture on
+ * hardware without a usable GLSL pipeline. Reuses the vertex/texture-coordinate
+ * buffer objects already filled by SetupCoords; the fragment sampler and the
+ * orientation/projection transform the GLSL program would apply are replaced
+ * by fixed-function texturing plus the modelview/projection matrices. */
+static void DrawFixedFunction(vout_display_opengl_t *vgl, struct prgm *prgm)
+{
+    const opengl_tex_converter_t *tc = prgm->tc;
+    GLfloat mvp[16];
+    MatrixMultiply4(mvp, prgm->var.OrientationMatrix, prgm->var.ProjectionMatrix);
+
+    vgl->vt.MatrixMode(GL_PROJECTION);
+    vgl->vt.LoadIdentity();
+    vgl->vt.MatrixMode(GL_MODELVIEW);
+    vgl->vt.LoadMatrixf(mvp);
+    vgl->vt.Color4f(1.f, 1.f, 1.f, 1.f);
+
+    vgl->vt.ActiveTexture(GL_TEXTURE0);
+    vgl->vt.BindTexture(tc->tex_target, vgl->texture[0]);
+    vgl->vt.Enable(GL_TEXTURE_2D);
+
+    vgl->vt.BindBuffer(GL_ARRAY_BUFFER, vgl->texture_buffer_object[0]);
+    vgl->vt.EnableClientState(GL_TEXTURE_COORD_ARRAY);
+    vgl->vt.TexCoordPointer(2, GL_FLOAT, 0, 0);
+
+    vgl->vt.BindBuffer(GL_ARRAY_BUFFER, vgl->vertex_buffer_object);
+    vgl->vt.EnableClientState(GL_VERTEX_ARRAY);
+    vgl->vt.VertexPointer(3, GL_FLOAT, 0, 0);
+
+    vgl->vt.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, vgl->index_buffer_object);
+    vgl->vt.DrawElements(GL_TRIANGLES, vgl->nb_indices, GL_UNSIGNED_SHORT, 0);
+
+    vgl->vt.DisableClientState(GL_VERTEX_ARRAY);
+    vgl->vt.DisableClientState(GL_TEXTURE_COORD_ARRAY);
+    vgl->vt.Disable(GL_TEXTURE_2D);
+    vgl->vt.BindBuffer(GL_ARRAY_BUFFER, 0);
+    vgl->vt.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+}
+
+/* Fixed-function draw of one subpicture region (RGBA texture, alpha-blended),
+ * using client-side arrays. */
+static void DrawFixedFunctionRegion(vout_display_opengl_t *vgl,
+                                    const opengl_tex_converter_t *tc,
+                                    const gl_region_t *glr)
+{
+    const GLfloat vertexCoord[] = {
+        glr->left,  glr->top,
+        glr->left,  glr->bottom,
+        glr->right, glr->top,
+        glr->right, glr->bottom,
+    };
+    const GLfloat textureCoord[] = {
+        0.0f,           0.0f,
+        0.0f,           glr->tex_height,
+        glr->tex_width, 0.0f,
+        glr->tex_width, glr->tex_height,
+    };
+
+    vgl->vt.MatrixMode(GL_PROJECTION);
+    vgl->vt.LoadIdentity();
+    vgl->vt.MatrixMode(GL_MODELVIEW);
+    vgl->vt.LoadIdentity();
+    vgl->vt.Color4f(1.f, 1.f, 1.f, glr->alpha);
+
+    vgl->vt.BindTexture(tc->tex_target, glr->texture);
+    vgl->vt.Enable(GL_TEXTURE_2D);
+
+    vgl->vt.BindBuffer(GL_ARRAY_BUFFER, 0);
+    vgl->vt.EnableClientState(GL_TEXTURE_COORD_ARRAY);
+    vgl->vt.TexCoordPointer(2, GL_FLOAT, 0, textureCoord);
+    vgl->vt.EnableClientState(GL_VERTEX_ARRAY);
+    vgl->vt.VertexPointer(2, GL_FLOAT, 0, vertexCoord);
+
+    vgl->vt.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    vgl->vt.DisableClientState(GL_VERTEX_ARRAY);
+    vgl->vt.DisableClientState(GL_TEXTURE_COORD_ARRAY);
+    vgl->vt.Disable(GL_TEXTURE_2D);
+}
+#endif
+
 static void DrawWithShaders(vout_display_opengl_t *vgl, struct prgm *prgm)
 {
     opengl_tex_converter_t *tc = prgm->tc;
@@ -1682,7 +1822,8 @@ int vout_display_opengl_Display(vout_display_opengl_t *vgl,
        Currently, the OS X provider uses it to get a smooth window resizing */
     vgl->vt.Clear(GL_COLOR_BUFFER_BIT);
 
-    vgl->vt.UseProgram(vgl->prgm->id);
+    if (!vgl->fixed_function)
+        vgl->vt.UseProgram(vgl->prgm->id);
 
     if (source->i_x_offset != vgl->last_source.i_x_offset
      || source->i_y_offset != vgl->last_source.i_y_offset
@@ -1728,17 +1869,32 @@ int vout_display_opengl_Display(vout_display_opengl_t *vgl,
         vgl->last_source.i_visible_width = source->i_visible_width;
         vgl->last_source.i_visible_height = source->i_visible_height;
     }
-    DrawWithShaders(vgl, vgl->prgm);
+#if !defined(USE_OPENGL_ES2)
+    if (vgl->fixed_function)
+        DrawFixedFunction(vgl, vgl->prgm);
+    else
+#endif
+        DrawWithShaders(vgl, vgl->prgm);
 
     /* Draw the subpictures */
-    // Change the program for overlays
     struct prgm *prgm = vgl->sub_prgm;
-    GLuint program = prgm->id;
     opengl_tex_converter_t *tc = prgm->tc;
-    vgl->vt.UseProgram(program);
 
     vgl->vt.Enable(GL_BLEND);
     vgl->vt.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    vgl->vt.ActiveTexture(GL_TEXTURE0 + 0);
+
+#if !defined(USE_OPENGL_ES2)
+    if (vgl->fixed_function)
+    {
+        for (int i = 0; i < vgl->region_count; i++)
+            DrawFixedFunctionRegion(vgl, tc, &vgl->region[i]);
+    }
+    else
+#endif
+    {
+    // Change the program for overlays
+    vgl->vt.UseProgram(prgm->id);
 
     /* We need two buffer objects for each region: for vertex and texture coordinates. */
     if (2 * vgl->region_count > vgl->subpicture_buffer_object_count) {
@@ -1757,7 +1913,6 @@ int vout_display_opengl_Display(vout_display_opengl_t *vgl,
                            vgl->subpicture_buffer_object);
     }
 
-    vgl->vt.ActiveTexture(GL_TEXTURE0 + 0);
     for (int i = 0; i < vgl->region_count; i++) {
         gl_region_t *glr = &vgl->region[i];
         const GLfloat vertexCoord[] = {
@@ -1805,6 +1960,7 @@ int vout_display_opengl_Display(vout_display_opengl_t *vgl,
 
         vgl->vt.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
+    } /* end of the shader subpicture path */
     vgl->vt.Disable(GL_BLEND);
 
     /* Display */

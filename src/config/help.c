@@ -164,6 +164,15 @@ static inline void print_help_on_full_help( void )
     puts(_("To get exhaustive help, use '-H'."));
 }
 
+/* Identify the product first, then the VLC release it is forked from: the
+ * command line is the only place where the two version numbers can be told
+ * apart (the bundle only advertises the PowerVLC one). */
+static inline void print_powervlc_header( void )
+{
+    printf(_("PowerVLC %s (forked from VLC %s)\n\n"),
+           POWERVLC_VERSION, VERSION_MESSAGE);
+}
+
 static const char vlc_usage[] = N_(
   "Usage: %s [options] [stream] ...\n"
   "You can specify multiple streams on the commandline.\n"
@@ -201,22 +210,23 @@ static const char vlc_usage[] = N_(
 static void Help (vlc_object_t *p_this, char const *psz_help_name)
 {
     ShowConsole();
+    print_powervlc_header();
 
     if( psz_help_name && !strcmp( psz_help_name, "help" ) )
     {
-        printf(_(vlc_usage), "vlc");
+        printf(_(vlc_usage), "powervlc");
         Usage( p_this, "=core" );
         print_help_on_full_help();
     }
     else if( psz_help_name && !strcmp( psz_help_name, "longhelp" ) )
     {
-        printf(_(vlc_usage), "vlc");
+        printf(_(vlc_usage), "powervlc");
         Usage( p_this, NULL );
         print_help_on_full_help();
     }
     else if( psz_help_name && !strcmp( psz_help_name, "full-help" ) )
     {
-        printf(_(vlc_usage), "vlc");
+        printf(_(vlc_usage), "powervlc");
         Usage( p_this, NULL );
     }
     else if( psz_help_name )
@@ -718,7 +728,8 @@ static void ListModules (vlc_object_t *p_this, bool b_verbose)
 static void Version( void )
 {
     ShowConsole();
-    printf(_("VLC version %s (%s)\n"), VERSION_MESSAGE, psz_vlc_changeset);
+    printf(_("PowerVLC version %s\n"), POWERVLC_VERSION);
+    printf(_("Forked from VLC %s (%s)\n"), VERSION_MESSAGE, psz_vlc_changeset);
     printf(_("Compiled by %s on %s (%s)\n"), VLC_CompileBy(),
            VLC_CompileHost(), __DATE__" "__TIME__ );
     printf(_("Compiler: %s\n"), VLC_Compiler());

@@ -86,6 +86,12 @@ static NSString * VLCMediaKeySupportSettingChangedNotification = @"VLCMediaKeySu
 + (VLCMain *)sharedInstance;
 + (void)killInstance;
 
+/* Opens a VideoLAN (or sub-domain) URL, but only after the user has confirmed
+ * a warning (translated through the usual gettext catalog) explaining that
+ * PowerVLC is an unofficial fork. Used by every button/link in the UI that
+ * redirects to VideoLAN. */
++ (void)openURLWithVideoLANConfirmation:(NSURL *)url;
+
 - (VLCMainMenu *)mainMenu;
 - (VLCMainWindow *)mainWindow;
 - (VLCBookmarksWindowController *)bookmarks;

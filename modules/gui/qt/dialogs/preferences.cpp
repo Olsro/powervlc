@@ -334,7 +334,7 @@ void PrefsDialog::reset()
     int ret = QMessageBox::question(
                  this,
                  qtr( "Reset Preferences" ),
-                 qtr( "Are you sure you want to reset your VLC media player preferences?" ),
+                 qtr( "Are you sure you want to reset your PowerVLC media player preferences?" ),
                  QMessageBox::Ok | QMessageBox::Cancel,
                  QMessageBox::Ok);
 

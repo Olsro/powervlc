@@ -121,7 +121,7 @@ noinst_HEADERS = \
 	../include/vlc_vout_wrapper.h \
 	$(NULL)
 
-../include/vlc_about.h: Makefile.am $(top_srcdir)/COPYING $(top_srcdir)/THANKS $(top_srcdir)/AUTHORS
+../include/vlc_about.h: Makefile.am $(top_srcdir)/COPYING $(top_srcdir)/THANKS_VLC $(top_srcdir)/AUTHORS
 	$(AM_V_at)rm -f -- "$@.tmp"
 	$(AM_V_at)$(MKDIR_P) "../include"
 	$(AM_V_GEN)(echo "/* Automatically generated file - DO NOT EDIT */" && \
@@ -130,7 +130,7 @@ noinst_HEADERS = \
 	echo ";" && \
 	echo "static const char psz_thanks[] =" && \
 	sed '/\$$Id:/d;s/"/\\"/g;s/<.*.> //;s/^.*$$/\"&\\n\"/' \
-		"$(top_srcdir)/THANKS" && \
+		"$(top_srcdir)/THANKS_VLC" && \
 	echo ";" && \
 	echo "static const char psz_authors[] =" && \
 	sed '/\$$Id:/d;s/"/\\"/g;s/<.*.> //;s/^.*$$/\"&\\n\"/' \
@@ -167,7 +167,7 @@ EXTRA_DIST += libvlc_win32_rc.rc.in
 # Building libvlc
 ###############################################################################
 
-lib_LTLIBRARIES = libvlccore.la
+lib_LTLIBRARIES = libpowervlccore.la
 
 AM_CPPFLAGS = $(INCICONV) $(IDN_CFLAGS) \
 	-DMODULE_STRING=\"core\" \
@@ -183,7 +183,7 @@ AM_CPPFLAGS += -DHAVE_DBUS
 AM_CFLAGS += $(DBUS_CFLAGS)
 endif
 
-libvlccore_la_SOURCES = \
+libpowervlccore_la_SOURCES = \
 	libvlc.c \
 	libvlc.h \
 	libvlc-module.c \
@@ -353,13 +353,13 @@ libvlccore_la_SOURCES = \
 	misc/text_style.c \
 	misc/subpicture.c \
 	misc/subpicture.h
-libvlccore_la_LIBADD = $(LIBS_libvlccore) \
+libpowervlccore_la_LIBADD = $(LIBS_libvlccore) \
 	../compat/libcompat.la \
 	$(LTLIBINTL) $(LTLIBICONV) \
 	$(IDN_LIBS) $(LIBPTHREAD) $(SOCKET_LIBS) $(LIBRT) $(LIBDL) $(LIBM)
 
 if HAVE_WIN32
-libvlccore_la_SOURCES += \
+libpowervlccore_la_SOURCES += \
 	win32/dirs.c \
 	win32/error.c \
 	win32/filesystem.c \
@@ -370,13 +370,13 @@ libvlccore_la_SOURCES += \
 	win32/thread.c \
 	win32/winsock.c
 if HAVE_WINSTORE
-libvlccore_la_SOURCES += posix/timer.c
+libpowervlccore_la_SOURCES += posix/timer.c
 else
-libvlccore_la_SOURCES += win32/timer.c
+libpowervlccore_la_SOURCES += win32/timer.c
 endif
 else
 if HAVE_OS2
-libvlccore_la_SOURCES += \
+libpowervlccore_la_SOURCES += \
 	os2/dirs.c \
 	darwin/error.c \
 	os2/filesystem.c \
@@ -388,7 +388,7 @@ libvlccore_la_SOURCES += \
 	os2/thread.c
 else
 if HAVE_NACL
-libvlccore_la_SOURCES += \
+libpowervlccore_la_SOURCES += \
 	android/error.c \
 	posix/dirs.c \
 	posix/filesystem.c \
@@ -397,13 +397,13 @@ libvlccore_la_SOURCES += \
 	posix/specific.c \
 	posix/timer.c
 else
-libvlccore_la_SOURCES += \
+libpowervlccore_la_SOURCES += \
 	posix/filesystem.c \
 	posix/plugin.c \
 	posix/rand.c \
 	posix/timer.c
 if HAVE_ANDROID
-libvlccore_la_SOURCES += \
+libpowervlccore_la_SOURCES += \
 	android/error.c \
 	android/specific.c \
 	android/thread.c \
@@ -412,32 +412,32 @@ libvlccore_la_SOURCES += \
 	linux/thread.c
 else
 if HAVE_DARWIN
-libvlccore_la_SOURCES += \
+libpowervlccore_la_SOURCES += \
 	darwin/dirs.c \
 	darwin/error.c \
 	darwin/netconf.c \
 	darwin/specific.c \
 	darwin/thread.c
 else
-libvlccore_la_LIBADD += $(LIBEXECINFO)
-libvlccore_la_SOURCES += \
+libpowervlccore_la_LIBADD += $(LIBEXECINFO)
+libpowervlccore_la_SOURCES += \
 	posix/dirs.c \
 	posix/error.c \
 	posix/netconf.c \
 	posix/specific.c \
 	posix/thread.c
 if HAVE_LINUX
-libvlccore_la_SOURCES += \
+libpowervlccore_la_SOURCES += \
 	linux/cpu.c \
 	linux/dirs.c \
 	linux/thread.c
 endif
 if HAVE_LIBANL
-libvlccore_la_SOURCES += \
+libpowervlccore_la_SOURCES += \
 	linux/getaddrinfo.c
-libvlccore_la_LIBADD += -lanl
+libpowervlccore_la_LIBADD += -lanl
 else
-libvlccore_la_SOURCES += \
+libpowervlccore_la_SOURCES += \
 	posix/getaddrinfo.c
 endif
 endif
@@ -447,43 +447,49 @@ endif
 endif
 
 if ENABLE_SOUT
-libvlccore_la_SOURCES += \
+libpowervlccore_la_SOURCES += \
 	stream_output/sap.c stream_output/sdp.c \
 	stream_output/stream_output.c stream_output/stream_output.h
 if ENABLE_VLM
-libvlccore_la_SOURCES += input/vlm.c input/vlm_event.c input/vlmshell.c
+libpowervlccore_la_SOURCES += input/vlm.c input/vlm_event.c input/vlmshell.c
 endif
 endif
 
 if UPDATE_CHECK
-libvlccore_la_SOURCES += \
+libpowervlccore_la_SOURCES += \
 	misc/update.h misc/update.c \
 	misc/update_crypto.c
 AM_CPPFLAGS += -DUPDATE_CHECK
 AM_CFLAGS += $(GCRYPT_CFLAGS)
-libvlccore_la_LIBADD += $(GCRYPT_LIBS)
+libpowervlccore_la_LIBADD += $(GCRYPT_LIBS)
 endif
 
-libvlccore_la_LDFLAGS = \
+libpowervlccore_la_LDFLAGS = \
 	$(LDFLAGS_libvlccore) \
 	-no-undefined \
 	-export-symbols $(srcdir)/libvlccore.sym \
 	-version-info 9:1:0
-libvlccore_la_DEPENDENCIES = libvlccore.sym
+libpowervlccore_la_DEPENDENCIES = libvlccore.sym
 if HAVE_WIN32
-libvlccore_la_DEPENDENCIES += libvlc_win32_rc.$(OBJEXT)
-libvlccore_la_LDFLAGS += -Wl,libvlc_win32_rc.$(OBJEXT) -avoid-version -Wc,-static $(LIBCOM)
+libpowervlccore_la_DEPENDENCIES += libvlc_win32_rc.$(OBJEXT)
+libpowervlccore_la_LDFLAGS += -Wl,libvlc_win32_rc.$(OBJEXT) -avoid-version -Wc,-static $(LIBCOM)
 endif
 if HAVE_OS2
-libvlccore_la_LDFLAGS += -avoid-version
+libpowervlccore_la_LDFLAGS += -avoid-version
 endif
 if HAVE_DBUS
-libvlccore_la_LIBADD += $(DBUS_LIBS)
+libpowervlccore_la_LIBADD += $(DBUS_LIBS)
 endif
 if HAVE_DARWIN
-libvlccore_la_LDFLAGS += -Xlinker -install_name -Xlinker @rpath/libvlccore.dylib
+libpowervlccore_la_LDFLAGS += -Xlinker -install_name -Xlinker @rpath/libpowervlccore.dylib
+# The CFNetwork proxy symbols (vlc_getProxyUrl) resolve through the
+# CoreServices umbrella; without this the linker records the standalone
+# CFNetwork.framework path, which only exists since Mac OS X 10.8. As the
+# library is weak-linked, it silently resolves to NULL on 10.5-10.7 and the
+# first https connection jumps to address zero.
+libpowervlccore_la_LDFLAGS += -Wl,-no_implicit_dylibs
 if !HAVE_OSX
-libvlccore_la_LDFLAGS += -Wl,-framework,CFNetwork
+libpowervlccore_la_LDFLAGS += -Wl,-framework,CFNetwork
 endif
 endif
 
@@ -542,7 +548,7 @@ test_headers_SOURCES = test/headers.c
 test_mrl_helpers_SOURCES = test/mrl_helpers.c
 
 AM_LDFLAGS = -no-install
-LDADD = libvlccore.la \
+LDADD = libpowervlccore.la \
 	../compat/libcompat.la
 
 ###############################################################################

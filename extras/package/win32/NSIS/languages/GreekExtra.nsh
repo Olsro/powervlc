@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Προσθήκη εικονιδίων στην επιφάνεια εργασίας για εύκολη πρόσβαση"
 ${LangFileString} Desc_Section03 \
-    "Πρόσθετα VLC Mozilla και Mozilla Firefox"
+    "Πρόσθετα ${PRODUCT_NAME} Mozilla και Mozilla Firefox"
 ${LangFileString} Desc_Section04 \
-    "Πρόσθετο VLC ActiveX"
+    "Πρόσθετο ${PRODUCT_NAME} ActiveX"
 ${LangFileString} Desc_Section05 \
     "Καταχώρηση αναπαραγωγής DVD και CD"
 ${LangFileString} Desc_Section06 \
-    "Ορίστε το VLC media player ως την προεπιλεγμένη εφαρμογή για το συγκεκριμένο τύπο αρχείου"
+    "Ορίστε το ${PRODUCT_NAME} ως την προεπιλεγμένη εφαρμογή για το συγκεκριμένο τύπο αρχείου"
 ${LangFileString} Desc_Section07 \
-    "Προσθήκη στοιχείων μενού ('Αναπαραγωγή με το VLC' και 'Προσθήκη στη λίστα αναπαραγωγής του VLC')"
+    "Προσθήκη στοιχείων μενού ('Αναπαραγωγή με το ${PRODUCT_NAME}' και 'Προσθήκη στη λίστα αναπαραγωγής του ${PRODUCT_NAME}')"
 ${LangFileString} Desc_Section08 \
-    "Διαγράφει τις προτιμήσεις και τα προσωρινά αρχεία μνήμης της εφαρμογής VLC που έχουν απομείνει από προηγούμενες εγκαταστάσεις"
+    "Διαγράφει τις προτιμήσεις και τα προσωρινά αρχεία μνήμης της εφαρμογής ${PRODUCT_NAME} που έχουν απομείνει από προηγούμενες εγκαταστάσεις"
 
 ${LangFileString} Name_Section91 "Απεγκατάσταση"
 ${LangFileString} Name_Section92 "Διαγραφή προτιμήσεων και της μνήμης cache"
 
 ${LangFileString} Desc_Section91 \
-"Απεγκατάσταση αναπαραγωγού πολυμέσων VLC και όλων των στοιχείων του"
+"Απεγκατάσταση αναπαραγωγού πολυμέσων ${PRODUCT_NAME} και όλων των στοιχείων του"
 ${LangFileString} Desc_Section92 \
-"Διαγράφει τις προτιμήσεις και τα προσωρινά αρχεία μνήμης του VLC"
+"Διαγράφει τις προτιμήσεις και τα προσωρινά αρχεία μνήμης του ${PRODUCT_NAME}"
 
 ${LangFileString} ShellAssociation_Play "Αναπαραγωγή"
-${LangFileString} ContextMenuEntry_PlayWith "Αναπαραγωγή με το VLC"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Προσθήκη στη λίστα αναπαραγωγής του VLC"
+${LangFileString} ContextMenuEntry_PlayWith "Αναπαραγωγή με το ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Προσθήκη στη λίστα αναπαραγωγής του ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "Επισκεφτείτε την ιστοσελίδα του VideoLAN VLC"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Αναπαραγωγή Blu-ray"
 ${LangFileString} License_NextText "Τώρα γνωρίζετε τα δικαιώματά σας. Κάνετε κλικ στο $\"Επόμενο$\" για να συνεχίσετε."
 
 ${LangFileString} Detail_CheckProcesses "Έλεγχος διεργασιών…"
-${LangFileString} MessageBox_VLCRunning "Το VLC φαίνεται να εκτελείται και τώρα θα τερματιστεί."
-${LangFileString} MessageBox_VLCUnableToClose "Το πρόγραμμα εγκατάστασης ήταν αδύνατο να τερματίσει το VLC, παρακαλούμε κλείστε το χειροκίνητα."
+${LangFileString} MessageBox_VLCRunning "Το ${PRODUCT_NAME} φαίνεται να εκτελείται και τώρα θα τερματιστεί."
+${LangFileString} MessageBox_VLCUnableToClose "Το πρόγραμμα εγκατάστασης ήταν αδύνατο να τερματίσει το ${PRODUCT_NAME}, παρακαλούμε κλείστε το χειροκίνητα."
 ${LangFileString} MessageBox_InstallAborted "Η εγκατάσταση ακυρώθηκε!"
 
 ${LangFileString} Reinstall_Headline "Ήδη εγκατεστημένο"
-${LangFileString} Reinstall_HeadlineInstall "Επιλέξτε πώς θέλετε να εγκαταστήσετε το VLC."
+${LangFileString} Reinstall_HeadlineInstall "Επιλέξτε πώς θέλετε να εγκαταστήσετε το ${PRODUCT_NAME}."
 ${LangFileString} Reinstall_HeadlineMaintenance "Επιλέξτε ποια επιλογή συντήρησης θα πραγματοποιηθεί."
-${LangFileString} Reinstall_MessageOlder "Μια παλαιότερη έκδοση του VLC έχει εγκατασταθεί στο σύστημά σας. Επιλέξτε τη λειτουργία που θέλετε να εκτελέσετε και κάντε κλικ στο $\"Επόμενο$\" για να συνεχίσετε."
-${LangFileString} Reinstall_MessageNewer "Μια νεότερη έκδοση του VLC έχει ήδη εγκατασταθεί! Δεν προτείνεται να το υποβαθμίσετε σε μια παλαιότερη έκδοση. Επιλέξτε τη λειτουργία που θέλετε να εκτελέσετε και κάντε κλικ στο $\"Επόμενο$\" για να συνεχίσετε."
-${LangFileString} Reinstall_MessageSame "Το VLC ${VERSION} έχει ήδη εγκατασταθεί. Επιλέξτε τη λειτουργία που θέλετε να εκτελέσετε και κάντε κλικ στο $\"Επόμενο$\" για να συνεχίσετε."
-${LangFileString} Reinstall_OptionUpgrade "Αναβαθμίστε το VLC χρησιμοποιώντας προηγούμενες ρυθμίσεις (προτείνεται)"
-${LangFileString} Reinstall_OptionDowngrade "Υποβαθμίστε το VLC χρησιμοποιώντας προηγούμενες ρυθμίσεις (προτείνεται)"
+${LangFileString} Reinstall_MessageOlder "Μια παλαιότερη έκδοση του ${PRODUCT_NAME} έχει εγκατασταθεί στο σύστημά σας. Επιλέξτε τη λειτουργία που θέλετε να εκτελέσετε και κάντε κλικ στο $\"Επόμενο$\" για να συνεχίσετε."
+${LangFileString} Reinstall_MessageNewer "Μια νεότερη έκδοση του ${PRODUCT_NAME} έχει ήδη εγκατασταθεί! Δεν προτείνεται να το υποβαθμίσετε σε μια παλαιότερη έκδοση. Επιλέξτε τη λειτουργία που θέλετε να εκτελέσετε και κάντε κλικ στο $\"Επόμενο$\" για να συνεχίσετε."
+${LangFileString} Reinstall_MessageSame "Το ${PRODUCT_NAME} ${VERSION} έχει ήδη εγκατασταθεί. Επιλέξτε τη λειτουργία που θέλετε να εκτελέσετε και κάντε κλικ στο $\"Επόμενο$\" για να συνεχίσετε."
+${LangFileString} Reinstall_OptionUpgrade "Αναβαθμίστε το ${PRODUCT_NAME} χρησιμοποιώντας προηγούμενες ρυθμίσεις (προτείνεται)"
+${LangFileString} Reinstall_OptionDowngrade "Υποβαθμίστε το ${PRODUCT_NAME} χρησιμοποιώντας προηγούμενες ρυθμίσεις (προτείνεται)"
 ${LangFileString} Reinstall_OptionComponents "Προσθήκη/Αφαίρεση/Επανεγκατάσταση στοιχείων"
 ${LangFileString} Reinstall_OptionAdvanced "Αλλαγή ρυθμίσεων (για προχωρημένους)"
-${LangFileString} Reinstall_OptionUninstall "Απεγκατάσταση του VLC"
+${LangFileString} Reinstall_OptionUninstall "Απεγκατάσταση του ${PRODUCT_NAME}"

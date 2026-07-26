@@ -1,0 +1,100 @@
+--- a/lib/random.c	2026-07-14 09:12:17
++++ b/lib/random.c	2026-07-14 09:12:18
+@@ -55,7 +55,37 @@
+ 
+ /* Flag to indicate initialization
+  */
++#if defined(__APPLE__) &&                                     \
++	defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && \
++	__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1070
++/* No compiler TLS on Mac OS X < 10.7: emulate it with a pthread key.
++ * The slot is heap-allocated per thread and freed by the key destructor. */
++#include <pthread.h>
++static pthread_key_t rnd_initialized_key;
++static pthread_once_t rnd_initialized_once = PTHREAD_ONCE_INIT;
++
++static void rnd_initialized_key_create(void)
++{
++	(void)pthread_key_create(&rnd_initialized_key, free);
++}
++
++static unsigned *rnd_initialized_slot(void)
++{
++	unsigned *slot;
++
++	pthread_once(&rnd_initialized_once, rnd_initialized_key_create);
++	slot = pthread_getspecific(rnd_initialized_key);
++	if (slot == NULL) {
++		slot = calloc(1, sizeof(*slot));
++		if (slot == NULL || pthread_setspecific(rnd_initialized_key, slot))
++			abort();
++	}
++	return slot;
++}
++#define rnd_initialized (*rnd_initialized_slot())
++#else
+ static _Thread_local unsigned rnd_initialized = 0;
++#endif
+ 
+ static void free_ctx(const void *ctx)
+ {
+--- a/lib/fips.c	2026-07-14 09:12:17
++++ b/lib/fips.c	2026-07-14 09:12:18
+@@ -58,9 +58,57 @@
+  * can use gnutls_fips140_set_mode() to override a specific
+  * operation on a thread */
+ static gnutls_fips_mode_t _global_fips_mode = -1;
++#if defined(__APPLE__) &&                                     \
++	defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && \
++	__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1070
++/* No compiler TLS on Mac OS X < 10.7: emulate it with pthread keys.
++ * The slots are heap-allocated per thread and freed by the key destructors. */
++#include <pthread.h>
++static pthread_key_t _tfips_mode_key;
++static pthread_key_t _tfips_context_key;
++static pthread_once_t _tfips_keys_once = PTHREAD_ONCE_INIT;
++
++static void _tfips_keys_create(void)
++{
++	(void)pthread_key_create(&_tfips_mode_key, free);
++	(void)pthread_key_create(&_tfips_context_key, free);
++}
++
++static gnutls_fips_mode_t *_tfips_mode_slot(void)
++{
++	gnutls_fips_mode_t *slot;
++
++	pthread_once(&_tfips_keys_once, _tfips_keys_create);
++	slot = pthread_getspecific(_tfips_mode_key);
++	if (slot == NULL) {
++		slot = malloc(sizeof(*slot));
++		if (slot == NULL || pthread_setspecific(_tfips_mode_key, slot))
++			abort();
++		*slot = (gnutls_fips_mode_t)-1;
++	}
++	return slot;
++}
++
++static gnutls_fips140_context_t *_tfips_context_slot(void)
++{
++	gnutls_fips140_context_t *slot;
++
++	pthread_once(&_tfips_keys_once, _tfips_keys_create);
++	slot = pthread_getspecific(_tfips_context_key);
++	if (slot == NULL) {
++		slot = calloc(1, sizeof(*slot));
++		if (slot == NULL || pthread_setspecific(_tfips_context_key, slot))
++			abort();
++	}
++	return slot;
++}
++#define _tfips_mode (*_tfips_mode_slot())
++#define _tfips_context (*_tfips_context_slot())
++#else
+ static _Thread_local gnutls_fips_mode_t _tfips_mode = -1;
+ 
+ static _Thread_local gnutls_fips140_context_t _tfips_context = NULL;
++#endif
+ 
+ static int _skip_integrity_checks = 0;
+ 

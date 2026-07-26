@@ -140,7 +140,7 @@ static char *getAppDependentDir(vlc_userdir_t type)
     }
 
     // Default fallback
-    const char *fallback = "org.videolan.vlc";
+    const char *fallback = "com.github.PowerVLC";
     char *name = NULL;
 
     CFBundleRef mainBundle = CFBundleGetMainBundle();

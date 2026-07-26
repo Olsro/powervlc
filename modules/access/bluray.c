@@ -38,6 +38,8 @@
 # include <sys/param.h>
 # include <sys/ucred.h>
 # include <sys/mount.h>
+# include <dlfcn.h>
+# include "bluray_darwin_disc.h"
 #endif
 
 #include <vlc_common.h>
@@ -192,6 +194,8 @@ struct  demux_sys_t
     bool                b_fatal_error;
     bool                b_menu;
     bool                b_menu_open;
+    bool                b_bdj_overlay;      /* BD-J ARGB plane is up, see
+                                             * blurayCacheInhibitUpdate() */
     bool                b_popup_available;
     vlc_tick_t          i_still_end_time;
 
@@ -210,12 +214,17 @@ struct  demux_sys_t
     vlc_demux_chained_t *p_parser;
     bool                b_flushed;
     bool                b_pl_playing;       /* true when playing playlist */
+    bool                b_cache_inhibited;  /* look-ahead cache, see blurayCacheInhibitUpdate() */
 
     /* stream input */
     vlc_mutex_t         read_block_lock;
 
     /* Used to store bluray disc path */
     char                *psz_bd_path;
+#ifdef __APPLE__
+    /* Set only where the disc has to be read over MMC (10.4); NULL otherwise. */
+    bluray_disc_t        *p_mmc;
+#endif
 };
 
 /*
@@ -452,6 +461,113 @@ static void FindMountPoint(char **file)
     VLC_UNUSED( device );
 #endif
 }
+
+#ifdef __APPLE__
+/*
+ * Prefer the raw device node over the mount point.
+ *
+ * Mac OS X 10.6 regressed its UDF driver: it issues one SCSI command per 2048
+ * byte sector with no clustering at all, which caps a mounted BD-ROM at about
+ * 21 Mbps over USB 2 (measured with iostat: KB/t = 2.00, ~1300 tps). Retail
+ * titles run well above that -- the reference disc here averages 31.5 Mbps --
+ * so the demuxer starves, pts_delay climbs and playback rebuffers every few
+ * seconds. Reading the device directly and letting libbluray's own UDF reader
+ * do the parsing issues 6 KB requests instead, which the same drive answers at
+ * 75 Mbps; larger requests reach 149 Mbps. 10.5 does cluster (KB/t = 170) and
+ * does not need this, but the raw path is no slower there.
+ *
+ * Falls back to whatever it was given when the raw device cannot actually be
+ * read. That is not hypothetical: 10.4 has no Blu-ray storage family, so it
+ * misdetects BD media as a CD with 2352 byte blocks and every read on the
+ * device returns EOF -- the disc does not even mount there. Probing with a real
+ * read rather than open() is what tells the two apart.
+ */
+static bool FindRawDevice(char **file)
+{
+    char *path = *file;
+    char *raw = NULL;
+
+    if (!strncmp(path, "/dev/r", 6)) {
+        /* Already a raw device node -- but still probe it below rather than
+         * trusting the name: on 10.4 the node exists and opens, and only a
+         * read reveals that it answers EOF. */
+        raw = strdup(path);
+        if (raw == NULL)
+            return false;
+    } else if (!strncmp(path, "/dev/", 5)) {
+        if (asprintf(&raw, "/dev/r%s", path + 5) < 0)
+            return false;
+    } else {
+        /* a mount point: statfs gives the block device backing it */
+        struct statfs st;
+        if (statfs(path, &st) != 0
+         || strncmp(st.f_mntfromname, "/dev/", 5)
+         || asprintf(&raw, "/dev/r%s", st.f_mntfromname + 5) < 0)
+            return false;
+    }
+
+    /* One aligned sector is enough to tell a working device node from one that
+     * answers EOF. The buffer has to be page aligned, not just the offset and
+     * length: an unaligned one goes down the kernel's physio path and faults on
+     * Tiger. valloc() rather than posix_memalign(), which is 10.6+. */
+    bool b_usable = false;
+    int fd = vlc_open(raw, O_RDONLY);
+    if (fd != -1) {
+        void *buf = valloc(2048);
+        if (buf != NULL) {
+            b_usable = read(fd, buf, 2048) == 2048;
+            free(buf);
+        }
+        vlc_close(fd);
+    }
+
+    if (!b_usable) {
+        free(raw);
+        return false;
+    }
+
+    free(*file);
+    *file = raw;
+    return true;
+}
+
+/* Hands our MMC channel to libaacs, which cannot open its own: SCSITaskLib
+ * grants exclusive access to a single owner. libbluray dlopen()s libaacs by the
+ * path SetupLibaacsPath() exported, so opening that same path here yields the
+ * very same image and therefore the same globals. Absent from older libaacs
+ * builds, hence the dlsym() rather than a direct call. */
+static void ShareMMCWithLibaacs(demux_t *p_demux, void *task_interface)
+{
+    const char *psz_lib = getenv("LIBAACS_PATH");
+    if (psz_lib == NULL)
+        return;
+
+    /* SetupLibaacsPath() exports the path *without* the extension, because that
+     * is what libbluray expects to append to. dlopen() needs the real file. */
+    char *psz_file;
+    if (asprintf(&psz_file, "%s.dylib", psz_lib) < 0)
+        return;
+
+    void *handle = dlopen(psz_file, RTLD_LAZY | RTLD_LOCAL);
+    free(psz_file);
+    if (handle == NULL) {
+        msg_Warn(p_demux, "could not open %s.dylib to share the MMC channel",
+                 psz_lib);
+        return;
+    }
+
+    void (*pf_use)(void *) = dlsym(handle, "aacs_use_external_mmc");
+    if (pf_use != NULL) {
+        pf_use(task_interface);
+        msg_Dbg(p_demux, "handed the MMC channel to libaacs");
+    } else {
+        msg_Warn(p_demux, "this libaacs cannot share our MMC channel; "
+                 "AACS discs will need a keydb entry");
+    }
+    /* deliberately not dlclose()d: libbluray holds the same image anyway, and
+     * closing it would drop the pointer just installed. */
+}
+#endif
 
 static void blurayReleaseVout(demux_t *p_demux)
 {
@@ -736,6 +852,77 @@ bailout:
 }
 
 /*****************************************************************************
+ * SetupLibaacsPath: point libbluray at the AACS library we ship
+ *
+ * libbluray does not link against libaacs, it dlopen()s it under a plain name
+ * ("libaacs.dylib", "libaacs.dll", "libaacs.so.0"). That relies on the
+ * platform library search path, which is fine for a distribution package but
+ * not for the copy we bundle: an application bundle is on no search path, and
+ * DYLD_/LD_LIBRARY_PATH cannot be counted on. libbluray does try
+ * @executable_path itself on Darwin, but that is one dyld behaviour on one
+ * platform to bet a retail Blu-ray on; it tries $LIBAACS_PATH before anything
+ * else, so point that at our own copy - unless the user already selected an
+ * implementation, e.g. libmmbd.
+ *
+ * The variable holds the path *without* the extension: libbluray appends the
+ * platform one itself (see dl_dlopen() in libbluray).
+ *****************************************************************************/
+static void SetupLibaacsPath(demux_t *p_demux)
+{
+#ifdef _WIN32
+    static const char psz_ext[] = ".dll";
+#elif defined(__APPLE__)
+    static const char psz_ext[] = ".dylib";
+#else
+    static const char psz_ext[] = ".so.0";
+#endif
+    static const char *const ppsz_fmt[] = {
+        "%s/lib/libaacs",  /* VLC.app/Contents/MacOS + /lib */
+        "%s/libaacs",      /* Windows: beside powervlc.exe; UNIX: $libdir */
+        "%s/../libaacs",   /* UNIX: $libdir is .../lib/vlc, library in lib/ */
+    };
+    static vlc_mutex_t lock = VLC_STATIC_MUTEX;
+
+    vlc_mutex_lock(&lock);
+
+    if (getenv("LIBAACS_PATH") != NULL)
+        goto out;
+
+    char *psz_libdir = config_GetLibDir();
+    if (psz_libdir == NULL)
+        goto out;
+
+    for (size_t i = 0; i < ARRAY_SIZE(ppsz_fmt); i++) {
+        char *psz_base;
+        if (asprintf(&psz_base, ppsz_fmt[i], psz_libdir) < 0)
+            break;
+
+        char *psz_file;
+        if (asprintf(&psz_file, "%s%s", psz_base, psz_ext) < 0) {
+            free(psz_base);
+            break;
+        }
+
+        struct stat st;
+        bool b_found = vlc_stat(psz_file, &st) == 0 && !S_ISDIR(st.st_mode);
+        if (b_found) {
+            msg_Dbg(p_demux, "using bundled AACS library %s", psz_file);
+            setenv("LIBAACS_PATH", psz_base, 1);
+        }
+
+        free(psz_file);
+        free(psz_base);
+
+        if (b_found)
+            break;
+    }
+
+    free(psz_libdir);
+out:
+    vlc_mutex_unlock(&lock);
+}
+
+/*****************************************************************************
  * blurayOpen: module init function
  *****************************************************************************/
 static int blurayOpen(vlc_object_t *object)
@@ -809,6 +996,7 @@ static int blurayOpen(vlc_object_t *object)
     var_AddCallback( p_demux->p_input, "intf-event", onIntfEvent, p_demux );
 
     /* Open BluRay */
+    SetupLibaacsPath(p_demux);
 #ifdef BLURAY_DEMUX
     if (p_demux->s) {
         i_init_pos = vlc_stream_Tell(p_demux->s);
@@ -829,10 +1017,72 @@ static int blurayOpen(vlc_object_t *object)
             p_sys->psz_bd_path = strdup(p_demux->psz_file);
         }
 
+#ifdef __APPLE__
+        /* Read the disc ourselves rather than through the OS filesystem, and
+         * always with read-ahead. Three cases, in decreasing order of
+         * preference:
+         *
+         *  - the raw device answers (10.5, 10.6): read /dev/rdiskN directly,
+         *    which is what gets 10.6 past its 2 KB per command UDF driver;
+         *  - it does not (10.4, where BD media is taken for a CD and the block
+         *    device returns EOF): drive the disc over MMC instead;
+         *  - neither: fall back to the mount point, i.e. upstream behaviour.
+         *
+         * Either way the blocks reach libbluray through the same read-ahead:
+         * libudfread asks for one 6144 byte unit at a time, and that request
+         * size is where USB 2 optical drives collapse (3.88 MB/s on the Mac
+         * Mini G4, against 14.7 MB/s at 1 MB per request).
+         */
+        FindMountPoint(&p_sys->psz_bd_path);
+        if (FindRawDevice(&p_sys->psz_bd_path)) {
+            /* Readable device node: read it ourselves anyway. Letting
+             * libbluray open it would have libudfread ask for one 6144 byte
+             * unit at a time, which is the request size USB 2 optical drives
+             * are worst at -- see bluray_disc_OpenRaw(). */
+            p_sys->p_mmc = bluray_disc_OpenRaw(VLC_OBJECT(p_demux),
+                                               p_sys->psz_bd_path);
+        }
+        if (p_sys->p_mmc == NULL) {
+            /* IOKit knows the media as "disk1", never "rdisk1", so drop the
+             * raw-device prefix if the caller handed us one. NULL means "any
+             * optical drive that answers", which is what a bare bluray:// with
+             * no path ends up as. */
+            const char *psz_bsd = NULL;
+            if (!strncmp(p_sys->psz_bd_path, "/dev/", 5)) {
+                psz_bsd = p_sys->psz_bd_path + 5;
+                if (!strncmp(psz_bsd, "rdisk", 5))
+                    psz_bsd++;
+            }
+
+            p_sys->p_mmc = bluray_disc_OpenMMC(VLC_OBJECT(p_demux), psz_bsd);
+        }
+
+        if (p_sys->p_mmc != NULL) {
+            /* Only the MMC backend has a channel to share; the raw one reads
+             * through a plain fd and leaves libaacs to open the drive itself.
+             * Must come before libbluray touches libaacs. */
+            void *mmc_chan = bluray_disc_TaskInterface(p_sys->p_mmc);
+            if (mmc_chan != NULL)
+                ShareMMCWithLibaacs(p_demux, mmc_chan);
+
+            p_sys->bluray = bd_init();
+            if (p_sys->bluray != NULL
+             && !bd_open_stream_dev(p_sys->bluray, p_sys->p_mmc,
+                                    bluray_disc_ReadBlocks,
+                                    p_sys->psz_bd_path, NULL)) {
+                bd_close(p_sys->bluray);
+                p_sys->bluray = NULL;
+            }
+        } else {
+            msg_Dbg(p_demux, "opening Blu-ray at %s", p_sys->psz_bd_path);
+            p_sys->bluray = bd_open(p_sys->psz_bd_path, NULL);
+        }
+#else
         /* If we're passed a block device, try to convert it to the mount point. */
         FindMountPoint(&p_sys->psz_bd_path);
 
         p_sys->bluray = bd_open(p_sys->psz_bd_path, NULL);
+#endif
     }
     if (!p_sys->bluray) {
         goto error;
@@ -859,15 +1109,18 @@ static int blurayOpen(vlc_object_t *object)
     if (disc_info->aacs_detected) {
         msg_Dbg(p_demux, "Disc is using AACS");
         if (!disc_info->libaacs_detected)
-            BLURAY_ERROR(_("This Blu-ray Disc needs a library for AACS decoding"
-                      ", and your system does not have it."));
+            /* libaacs ships with the player (see contrib/src/aacs), so this
+             * means the copy next to it is gone or unloadable. */
+            BLURAY_ERROR(_("The AACS decoding library could not be loaded, so "
+                      "this Blu-ray Disc cannot be read."));
         if (!disc_info->aacs_handled) {
             if (disc_info->aacs_error_code) {
                 switch (disc_info->aacs_error_code) {
                 case BD_AACS_CORRUPTED_DISC:
                     BLURAY_ERROR(_("Blu-ray Disc is corrupted."));
                 case BD_AACS_NO_CONFIG:
-                    BLURAY_ERROR(_("Missing AACS configuration file!"));
+                    BLURAY_ERROR(_("No AACS key database was found. Open a "
+                      "keydb.cfg file with this player to install one."));
                 case BD_AACS_NO_PK:
                     BLURAY_ERROR(_("No valid processing key found in AACS config file."));
                 case BD_AACS_NO_CERT:
@@ -983,6 +1236,12 @@ static int blurayOpen(vlc_object_t *object)
     p_demux->pf_control = blurayControl;
     p_demux->pf_demux   = blurayDemux;
 
+    /* Playback starts in first play / a menu, so the look-ahead cache is
+     * inhibited to begin with; blurayCacheInhibitUpdate() re-allows it once a
+     * title is actually playing. */
+    p_sys->b_cache_inhibited = true;
+    es_out_Control(p_demux->out, ES_OUT_SET_VIDEO_CACHE_INHIBIT, true);
+
     return VLC_SUCCESS;
 
 error:
@@ -1023,6 +1282,18 @@ static void blurayClose(vlc_object_t *object)
     if (p_sys->bluray) {
         bd_close(p_sys->bluray);
     }
+
+#ifdef __APPLE__
+    /* After libbluray, which still had libaacs holding our interface. Exclusive
+     * access is dropped only here: on 10.4 releasing it makes the OS re-probe
+     * media it cannot identify, and it answers by ejecting the disc. */
+    if (p_sys->p_mmc != NULL) {
+        if (bluray_disc_TaskInterface(p_sys->p_mmc) != NULL)
+            ShareMMCWithLibaacs(p_demux, NULL);
+        bluray_disc_Close(p_sys->p_mmc);
+        p_sys->p_mmc = NULL;
+    }
+#endif
 
     blurayReleaseVout(p_demux);
 
@@ -1964,11 +2235,16 @@ static void blurayArgbOverlayProc(void *ptr, const BD_ARGB_OVERLAY *const overla
     switch (overlay->cmd) {
     case BD_ARGB_OVERLAY_INIT:
         vlc_mutex_lock(&p_sys->bdj_overlay_lock);
+        /* libbluray raises BD_EVENT_MENU alongside this very command;
+         * remember that the flag now tracks a BD-J plane rather than an
+         * open menu (see blurayCacheInhibitUpdate). */
+        p_sys->b_bdj_overlay = true;
         blurayInitArgbOverlay(p_demux, overlay->plane, overlay->w, overlay->h);
         vlc_mutex_unlock(&p_sys->bdj_overlay_lock);
         break;
     case BD_ARGB_OVERLAY_CLOSE:
         vlc_mutex_lock(&p_sys->bdj_overlay_lock);
+        p_sys->b_bdj_overlay = false;
         blurayClearOverlay(p_demux, overlay->plane);
         blurayCloseOverlay(p_demux, overlay->plane);
         vlc_mutex_unlock(&p_sys->bdj_overlay_lock);
@@ -2753,6 +3029,63 @@ static void blurayOnClipUpdate(demux_t *p_demux, uint32_t clip)
     blurayResetStillImage(p_demux);
 }
 
+/*
+ * The look-ahead decode cache (video-cache-mb) is worth having on a Blu-ray --
+ * these are the highest bitrates the player ever sees -- but only while a title
+ * is actually playing. It used to be inhibited for the whole session, which
+ * threw the feature away on the one source that needs it most.
+ *
+ * What has to be avoided is a fill episode opening over material that cannot
+ * feed it: menus and stills produce roughly one picture at a time, so the gate
+ * would sit waiting for a target it can never reach while the user stares at a
+ * frozen menu. dvdnav solves this per domain (see DvdnavCacheInhibitUpdate);
+ * the same three conditions apply here.
+ *
+ * es_out is only told on a change, so this is cheap to call per demux
+ * iteration.
+ */
+static void blurayCacheInhibitUpdate(demux_t *p_demux)
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+
+    /* BD_EVENT_MENU does NOT mean "the user is sitting in a menu", and
+     * taking it at face value inhibited the look-ahead cache for entire
+     * episodes.
+     *
+     * MEASURED on a commercial HDMV disc (Snow Leopard, title started
+     * from the top menu): the flag went to 1 as the episode began and
+     * stayed there to the end, so the cache never engaged once -- the
+     * cushion sat at ~26 pictures against a target of 82. There the flag
+     * mirrors the graphics controller's GC_STATUS_MENU_OPEN, which is
+     * raised as soon as the interactive plane has been DRAWN, including
+     * the pop-up menu of a feature title, which stays drawn over the
+     * running episode. BD_EVENT_POPUP separates the two cases: libbluray
+     * sets it exactly when the interactive composition uses
+     * IG_UI_MODEL_POPUP, i.e. a menu laid over playing video rather than
+     * a full-screen menu page. So a drawn menu only counts as a menu
+     * when it is not a pop-up -- verified on the same disc, which still
+     * inhibits correctly on its real full-screen menu page.
+     *
+     * BD-J has the same trap by a different route (read from libbluray,
+     * not measured here -- this disc is HDMV): bd_bdj_osd_cb() raises
+     * BD_EVENT_MENU the moment the application CREATES its ARGB plane
+     * and only drops it when that plane closes, while a feature title
+     * keeps the plane up throughout to serve its pop-up menu. Once that
+     * plane exists the flag likewise says nothing about a menu. */
+    bool b_menu_shown = p_sys->b_menu_open
+                     && !p_sys->b_bdj_overlay
+                     && !p_sys->b_popup_available;
+
+    bool b_inhibit = !p_sys->b_pl_playing            /* menu / first play */
+                  || b_menu_shown                    /* interactive menu up */
+                  || p_sys->i_still_end_time != STILL_IMAGE_NOT_SET;
+
+    if (b_inhibit != p_sys->b_cache_inhibited) {
+        p_sys->b_cache_inhibited = b_inhibit;
+        es_out_Control(p_demux->out, ES_OUT_SET_VIDEO_CACHE_INHIBIT, b_inhibit);
+    }
+}
+
 static void blurayHandleEvent(demux_t *p_demux, const BD_EVENT *e, bool b_delayed)
 {
     demux_sys_t *p_sys = p_demux->p_sys;
@@ -3008,6 +3341,10 @@ static int blurayDemux(demux_t *p_demux)
             bd_get_event(p_sys->bluray, &e);
         }
     }
+
+    /* After the events, so a title/menu/still transition takes effect on the
+     * same iteration that reported it. */
+    blurayCacheInhibitUpdate(p_demux);
 
     /* Process delayed selections events */
     for(int i=0; i<p_sys->events_delayed.i_size; i++)

@@ -136,6 +136,18 @@ struct demux_sys_t
     /* */
     bool        b_reset_pcr;
     bool        b_readahead;
+    /* Last look-ahead-cache inhibition state sent to es_out (menu
+     * domains inhibit, the VTS title domain allows -- see
+     * ES_OUT_SET_VIDEO_CACHE_INHIBIT). */
+    bool        b_cache_inhibited;
+    /* Deferred VTS_CHANGE (round 88): the demux runs cushion-depth
+     * AHEAD of the display, so the VM reaches the end of a PGC
+     * (first-play trailers!) while the user is still WATCHING it. The
+     * stock handler tore the pipeline down on the spot (PCR reset +
+     * es_out_Del of every track), discarding the undisplayed tail.
+     * Instead the side effects are parked here and executed only once
+     * es_out reports empty -- same drain discipline as DVDNAV_WAIT. */
+    bool        b_vts_change_pending;
 
     struct
     {
@@ -224,6 +236,15 @@ static int CommonOpen( vlc_object_t *p_this,
 
     ps_track_init( p_sys->tk );
     p_sys->b_readahead = b_readahead;
+
+    /* Discs open on first-play/menu material: keep the look-ahead
+     * cache out of the way until a title (VTS) domain is entered --
+     * menu loops fire PCR resets that would each open a pointless fill
+     * episode parking the SPU decoder (no highlight meanwhile). The
+     * per-domain updates live in DvdnavCacheInhibitUpdate(). */
+    p_sys->b_cache_inhibited = true;
+    p_sys->b_vts_change_pending = false;
+    es_out_Control( p_demux->out, ES_OUT_SET_VIDEO_CACHE_INHIBIT, true );
 
     /* Configure dvdnav */
     if( dvdnav_set_readahead_flag( p_sys->dvdnav, p_sys->b_readahead ) !=
@@ -594,6 +615,15 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
                 if( dvdnav_sector_search( p_sys->dvdnav, pos, SEEK_SET ) ==
                       DVDNAV_STATUS_OK )
                 {
+                    /* NOTE: do NOT fire ES_OUT_RESET_PCR from here "to
+                     * close the stale window before the HOP lands" --
+                     * tried in round 74 and it made things WORSE (the
+                     * title-entry churn also traverses this control and
+                     * the extra reset re-mixed the pipeline: 892 late
+                     * pictures vs 234 without it). The deferred
+                     * HOP_CHANNEL reset is the lesser evil: ~1 s of
+                     * pre-seek cushion plays before the episode
+                     * re-arms. */
                     return VLC_SUCCESS;
                 }
                 break;
@@ -624,6 +654,7 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
             if( dvdnav_jump_to_sector_by_time( p_sys->dvdnav,
                                                i_time * 9 / 100,
                                                SEEK_SET ) == DVDNAV_STATUS_OK )
+                /* See DEMUX_SET_POSITION: no eager reset here. */
                 return VLC_SUCCESS;
             msg_Err( p_demux, "can't set time to %" PRId64, i_time );
             return VLC_EGENERIC;
@@ -831,6 +862,103 @@ static int ControlInternal( demux_t *p_demux, int i_query, ... )
 /*****************************************************************************
  * Demux:
  *****************************************************************************/
+
+/* Aligns es_out's look-ahead-cache inhibition on the current dvdnav
+ * domain: inhibited everywhere except the VTS title domain (the film).
+ * Menu domains loop cells and fire PCR resets at will -- each would
+ * open a fill episode that parks the SPU decoder (no menu highlight
+ * for seconds); title playback on the other hand is exactly what the
+ * cache exists for (MPEG-2 above budget on a G3). Called from every
+ * event that can change the domain; cheap and idempotent. */
+static void DvdnavCacheInhibitUpdate( demux_t *p_demux )
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+
+    /* Stills inhibit too, not just menu domains: a still feeds ~one
+     * picture and then trickles (the STILL_FRAME path sleeps 40 ms per
+     * event), so a fill gate against it can only crawl -- observed at
+     * title entry (studio-logo stills): 2-3 pictures in 5 s, the
+     * too-slow valve firing, and the user's fill-percent never
+     * honoured. When the still ends, es_out re-opens a proper fill
+     * episode (see ES_OUT_SET_VIDEO_CACHE_INHIBIT), so the wait lands
+     * right where the real film starts. */
+    vlc_mutex_lock( &p_sys->still.lock );
+    bool b_still = p_sys->still.b_enabled;
+    vlc_mutex_unlock( &p_sys->still.lock );
+    bool b_inhibit = !dvdnav_is_domain_vts( p_sys->dvdnav ) || b_still;
+
+    if( b_inhibit != p_sys->b_cache_inhibited )
+    {
+        p_sys->b_cache_inhibited = b_inhibit;
+        es_out_Control( p_demux->out, ES_OUT_SET_VIDEO_CACHE_INHIBIT,
+                        b_inhibit );
+    }
+}
+
+/* Deferred DVDNAV_VTS_CHANGE side effects (see b_vts_change_pending):
+ * exactly the stock handler body, run only once the pipeline is empty. */
+static void DemuxProcessVtsChange( demux_t *p_demux )
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+    int32_t i_title = 0;
+    int32_t i_part  = 0;
+
+    msg_Dbg( p_demux, "processing deferred VTS_CHANGE (pipeline drained)" );
+
+    /* Domain may have flipped menu<->title: align the cache
+     * inhibition BEFORE the PCR reset opens (or not) an episode. */
+    DvdnavCacheInhibitUpdate( p_demux );
+
+    /* reset PCR */
+    es_out_Control( p_demux->out, ES_OUT_RESET_PCR );
+
+    for( int i = 0; i < PS_TK_COUNT; i++ )
+    {
+        ps_track_t *tk = &p_sys->tk[i];
+        if( tk->b_configured )
+        {
+            es_format_Clean( &tk->fmt );
+            if( tk->es )
+            {
+                es_out_Del( p_demux->out, tk->es );
+                tk->es = NULL;
+            }
+        }
+        tk->b_configured = false;
+    }
+
+    uint32_t i_width, i_height;
+    if( dvdnav_get_video_resolution( p_sys->dvdnav,
+                                     &i_width, &i_height ) )
+        i_width = i_height = 0;
+    switch( dvdnav_get_video_aspect( p_sys->dvdnav ) )
+    {
+    case 0:
+        p_sys->sar.i_num = 4 * i_height;
+        p_sys->sar.i_den = 3 * i_width;
+        break;
+    case 3:
+        p_sys->sar.i_num = 16 * i_height;
+        p_sys->sar.i_den =  9 * i_width;
+        break;
+    default:
+        p_sys->sar.i_num = 0;
+        p_sys->sar.i_den = 0;
+        break;
+    }
+
+    if( dvdnav_current_title_info( p_sys->dvdnav, &i_title,
+                                   &i_part ) == DVDNAV_STATUS_OK )
+    {
+        if( i_title >= 0 && i_title < p_sys->i_title &&
+            p_sys->cur_title != i_title )
+        {
+            p_demux->info.i_update |= INPUT_UPDATE_TITLE;
+            p_sys->cur_title = i_title;
+        }
+    }
+}
+
 static int Demux( demux_t *p_demux )
 {
     demux_sys_t *p_sys = p_demux->p_sys;
@@ -840,6 +968,26 @@ static int Demux( demux_t *p_demux )
     int i_event;
     int i_len;
     dvdnav_status_t status;
+
+    if( p_sys->b_vts_change_pending )
+    {
+        /* Drain gate (round 88): hold the VM here -- no new blocks, no
+         * teardown -- until everything already demuxed has actually
+         * been SHOWN (ES_OUT_GET_EMPTY counts the decoded look-ahead
+         * cushion through vout_IsEmpty). Same 40 ms nap discipline as
+         * DVDNAV_WAIT below; the input keeps servicing controls between
+         * calls, and a user jump flushes es_out, which releases the
+         * gate at once. */
+        bool b_empty;
+        es_out_Control( p_demux->out, ES_OUT_GET_EMPTY, &b_empty );
+        if( !b_empty )
+        {
+            msleep( 40*1000 );
+            return 1;
+        }
+        p_sys->b_vts_change_pending = false;
+        DemuxProcessVtsChange( p_demux );
+    }
 
     if( p_sys->b_readahead )
         status = dvdnav_get_next_cache_block( p_sys->dvdnav, &packet, &i_event,
@@ -866,6 +1014,11 @@ static int Demux( demux_t *p_demux )
         vlc_timer_schedule( p_sys->still.timer, false, 0, 0 );
         p_sys->still.b_enabled = false;
         vlc_mutex_unlock( &p_sys->still.lock );
+        /* Still just ended (if one was on): re-allow the cache BEFORE
+         * the deferred PCR reset below -- that reset then opens the
+         * fill episode gating the REAL content at fill-percent, right
+         * where the film starts. */
+        DvdnavCacheInhibitUpdate( p_demux );
         if( p_sys->b_reset_pcr )
         {
             es_out_Control( p_demux->out, ES_OUT_RESET_PCR );
@@ -908,6 +1061,10 @@ static int Demux( demux_t *p_demux )
 
         if( b_still_init )
         {
+            /* Entering a still: inhibit the fill gate (a still trickles
+             * ~one picture, a gate against it can only crawl into the
+             * too-slow valve). */
+            DvdnavCacheInhibitUpdate( p_demux );
             DemuxForceStill( p_demux );
             p_sys->b_reset_pcr = true;
         }
@@ -972,62 +1129,20 @@ static int Demux( demux_t *p_demux )
 
     case DVDNAV_VTS_CHANGE:
     {
-        int32_t i_title = 0;
-        int32_t i_part  = 0;
-
         dvdnav_vts_change_event_t *event = (dvdnav_vts_change_event_t*)packet;
-        msg_Dbg( p_demux, "DVDNAV_VTS_CHANGE" );
+        msg_Dbg( p_demux, "DVDNAV_VTS_CHANGE (deferred until drained)" );
         msg_Dbg( p_demux, "     - vtsN=%d", event->new_vtsN );
         msg_Dbg( p_demux, "     - domain=%d", event->new_domain );
 
-        /* reset PCR */
-        es_out_Control( p_demux->out, ES_OUT_RESET_PCR );
-
-        for( int i = 0; i < PS_TK_COUNT; i++ )
-        {
-            ps_track_t *tk = &p_sys->tk[i];
-            if( tk->b_configured )
-            {
-                es_format_Clean( &tk->fmt );
-                if( tk->es )
-                {
-                    es_out_Del( p_demux->out, tk->es );
-                    tk->es = NULL;
-                }
-            }
-            tk->b_configured = false;
-        }
-
-        uint32_t i_width, i_height;
-        if( dvdnav_get_video_resolution( p_sys->dvdnav,
-                                         &i_width, &i_height ) )
-            i_width = i_height = 0;
-        switch( dvdnav_get_video_aspect( p_sys->dvdnav ) )
-        {
-        case 0:
-            p_sys->sar.i_num = 4 * i_height;
-            p_sys->sar.i_den = 3 * i_width;
-            break;
-        case 3:
-            p_sys->sar.i_num = 16 * i_height;
-            p_sys->sar.i_den =  9 * i_width;
-            break;
-        default:
-            p_sys->sar.i_num = 0;
-            p_sys->sar.i_den = 0;
-            break;
-        }
-
-        if( dvdnav_current_title_info( p_sys->dvdnav, &i_title,
-                                       &i_part ) == DVDNAV_STATUS_OK )
-        {
-            if( i_title >= 0 && i_title < p_sys->i_title &&
-                p_sys->cur_title != i_title )
-            {
-                p_demux->info.i_update |= INPUT_UPDATE_TITLE;
-                p_sys->cur_title = i_title;
-            }
-        }
+        /* Do NOT tear the pipeline down here: whatever the display has
+         * not shown yet (the whole look-ahead cushion of a trailer that
+         * the VM just finished READING) would be discarded. Park the
+         * side effects; the gate at the top of Demux() runs them once
+         * es_out is really empty. Every dvdnav query the deferred
+         * handler makes (resolution, aspect, title info) reads the
+         * CURRENT VM state, which stays put while we hold off
+         * dvdnav_get_next_block. */
+        p_sys->b_vts_change_pending = true;
         break;
     }
 
@@ -1046,6 +1161,11 @@ static int Demux( demux_t *p_demux )
         msg_Dbg( p_demux, "     - pgc_length=%"PRId64, event->pgc_length );
         msg_Dbg( p_demux, "     - cell_start=%"PRId64, event->cell_start );
         msg_Dbg( p_demux, "     - pg_start=%"PRId64, event->pg_start );
+
+        /* Menu<->title transitions inside the SAME VTS surface here
+         * without any DVDNAV_VTS_CHANGE: re-align the cache inhibition
+         * on every cell change (no-op when the domain is unchanged). */
+        DvdnavCacheInhibitUpdate( p_demux );
 
         /* Store the length in time of the current PGC */
         p_sys->i_pgc_length = event->pgc_length / 90 * 1000;
@@ -1136,6 +1256,9 @@ static int Demux( demux_t *p_demux )
         msg_Dbg( p_demux, "DVDNAV_HOP_CHANNEL" );
         p_sys->i_vobu_index = 0;
         p_sys->i_vobu_flush = 0;
+        /* Hops land on menus as often as on titles: align the cache
+         * inhibition before the reset can open an episode. */
+        DvdnavCacheInhibitUpdate( p_demux );
         es_out_Control( p_demux->out, ES_OUT_RESET_PCR );
         break;
 

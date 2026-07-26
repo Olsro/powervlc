@@ -85,6 +85,12 @@ void stats_ComputeInputStats(input_thread_t *input, input_stats_t *st)
     if (!libvlc_stats(input))
         return;
 
+    /* Queried before taking the stats locks: es_out has its own lock and
+     * must not nest inside them. */
+    size_t i_cache_count = 0, i_cache_target = 0, i_cache_bytes = 0;
+    es_out_Control(priv->p_es_out_display, ES_OUT_GET_VIDEO_CACHE_STATE,
+                   &i_cache_count, &i_cache_target, &i_cache_bytes);
+
     vlc_mutex_lock(&priv->counters.counters_lock);
     vlc_mutex_lock(&st->lock);
 
@@ -117,6 +123,11 @@ void stats_ComputeInputStats(input_thread_t *input, input_stats_t *st)
     st->i_displayed_pictures = stats_GetTotal(priv->counters.p_displayed_pictures);
     st->i_lost_pictures = stats_GetTotal(priv->counters.p_lost_pictures);
 
+    /* Look-ahead decode cache */
+    st->i_video_cache_pictures = i_cache_count;
+    st->i_video_cache_target = i_cache_target;
+    st->i_video_cache_bytes = i_cache_bytes;
+
     vlc_mutex_unlock(&st->lock);
     vlc_mutex_unlock(&priv->counters.counters_lock);
 }
@@ -129,6 +140,8 @@ void stats_ReinitInputStats( input_stats_t *p_stats )
     p_stats->i_demux_read_packets = p_stats->i_demux_read_bytes =
     p_stats->f_demux_bitrate = p_stats->f_average_demux_bitrate =
     p_stats->i_demux_corrupted = p_stats->i_demux_discontinuity =
+    p_stats->i_video_cache_pictures = p_stats->i_video_cache_target =
+    p_stats->i_video_cache_bytes =
     p_stats->i_displayed_pictures = p_stats->i_lost_pictures =
     p_stats->i_played_abuffers = p_stats->i_lost_abuffers =
     p_stats->i_decoded_video = p_stats->i_decoded_audio =

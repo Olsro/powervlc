@@ -36,6 +36,13 @@
 
 #import <Cocoa/Cocoa.h>
 
+/* NSUInteger only appeared with the 10.5 SDK */
+#ifndef NSINTEGER_DEFINED
+typedef int NSInteger;
+typedef unsigned int NSUInteger;
+#define NSINTEGER_DEFINED 1
+#endif
+
 static int Create (vlc_object_t *);
 static void Destroy(vlc_object_t *);
 static int RenderText(filter_t *,
@@ -95,7 +102,13 @@ static void Destroy(vlc_object_t *p_this)
 }
 
 static NSString * languageCodeForString(NSString *string) {
+#if defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED < 1050
+    /* CFStringTokenizer is 10.5+; keep the default voice on Tiger */
+    (void)string;
+    return nil;
+#else
     return (NSString *)CFStringTokenizerCopyBestStringLanguage((CFStringRef)string, CFRangeMake(0, [string length]));
+#endif
 }
 
 static int RenderText(filter_t *p_filter,
@@ -103,12 +116,17 @@ static int RenderText(filter_t *p_filter,
                       subpicture_region_t *p_region_in,
                       const vlc_fourcc_t *p_chroma_list)
 {
-    @autoreleasepool {
+    /* explicit pool: @autoreleasepool is clang-only and this file stays
+     * MRC anyway (the two are equivalent without ARC) */
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    {
         filter_sys_t *p_sys = p_filter->p_sys;
         text_segment_t *p_segment = p_region_in->p_text;
 
-        if (!p_segment)
+        if (!p_segment) {
+            [pool drain];
             return VLC_EGENERIC;
+        }
 
         for ( const text_segment_t *s = p_segment; s != NULL; s = s->p_next ) {
             if ( !s->psz_text )
@@ -135,7 +153,7 @@ static int RenderText(filter_t *p_filter,
                     p_sys->currentLocale = [detectedLocale retain];
                     msg_Dbg(p_filter, "switching speaker locale to '%s'", [p_sys->currentLocale UTF8String]);
                     NSArray *voices = [NSSpeechSynthesizer availableVoices];
-                    NSUInteger count = voices.count;
+                    NSUInteger count = [voices count];
                     NSRange range = NSMakeRange(0, 2);
 
                     for (NSUInteger i = 0; i < count; i++) {
@@ -156,6 +174,7 @@ static int RenderText(filter_t *p_filter,
             [p_sys->speechSynthesizer startSpeakingString:stringToSpeech];
         }
 
+        [pool drain];
         return VLC_SUCCESS;
     }
 }

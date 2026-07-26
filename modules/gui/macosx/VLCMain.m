@@ -32,6 +32,7 @@
 #endif
 
 #import "VLCMain.h"
+#import "VLCStringUtility.h"                              /* _NS() */
 
 #include <stdlib.h>                                      /* malloc(), free() */
 #include <string.h>
@@ -223,6 +224,55 @@ static VLCMain *sharedInstance = nil;
 + (void)killInstance
 {
     sharedInstance = nil;
+}
+
++ (void)openURLWithVideoLANConfirmation:(NSURL *)url
+{
+    if (url == nil)
+        return;
+
+    /* The warning is translated through VLC's usual gettext catalog (_NS), like
+     * every other interface string. The two Olsro links embedded in the body are
+     * made clickable and open directly (they are not VideoLAN links). */
+    NSString *body = _NS(
+        "You are currently using PowerVLC, an open source fork with no ads and no tracking, created independently by Olsro for the community and distributed freely. This derivative version would not exist without VLC itself, so out of respect I have chosen to keep all the links and buttons referring to VideoLAN, as well as the list of contributors.\n\n"
+        "To support me, I have a Patreon ( https://www.patreon.com/Olsro/ ) where I accept your donations. You can find me on GitHub ( https://github.com/Olsro ) and I invite you to share PowerVLC and to leave positive and/or constructive feedback if this project matters to you in your life.\n\n"
+        "Please do not bother VideoLAN with bug reports and support requests, as this fork is absolutely unofficial and not supported by VideoLAN.\n\n"
+        "By clicking \"Yes\", you will be redirected to the requested link.");
+
+    NSMutableAttributedString *attributedBody = [[NSMutableAttributedString alloc]
+        initWithString:body
+            attributes:@{NSFontAttributeName: [NSFont systemFontOfSize:[NSFont systemFontSize]],
+                         NSForegroundColorAttributeName: [NSColor textColor]}];
+    for (NSString *link in @[@"https://www.patreon.com/Olsro/", @"https://github.com/Olsro"]) {
+        NSRange range = [body rangeOfString:link];
+        if (range.location != NSNotFound)
+            [attributedBody addAttribute:NSLinkAttributeName value:[NSURL URLWithString:link] range:range];
+    }
+
+    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 440, 220)];
+    [scrollView setHasVerticalScroller:YES];
+    [scrollView setDrawsBackground:NO];
+    [scrollView setBorderType:NSNoBorder];
+    NSTextView *textView = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 440, 220)];
+    [textView setEditable:NO];
+    [textView setSelectable:YES];
+    [textView setDrawsBackground:NO];
+    [textView setVerticallyResizable:YES];
+    [textView setHorizontallyResizable:NO];
+    [[textView textContainer] setContainerSize:NSMakeSize(440, CGFLOAT_MAX)];
+    [[textView textContainer] setWidthTracksTextView:YES];
+    [[textView textStorage] setAttributedString:attributedBody];
+    [scrollView setDocumentView:textView];
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:_NS("Warning!")];
+    [alert setAccessoryView:scrollView];
+    [alert addButtonWithTitle:_NS("Yes")];
+    [alert addButtonWithTitle:_NS("No")];
+
+    if ([alert runModal] == NSAlertFirstButtonReturn)
+        [[NSWorkspace sharedWorkspace] openURL:url];
 }
 
 - (id)init

@@ -77,7 +77,7 @@ static const char no_password_body[] = N_(
 "<p>Preferences &gt; All &gt; Main interfaces &gt; Lua &gt; Lua HTTP &gt; Password.</p>"
 );
 
-static const char no_password_title[] = N_("VLC media player");
+static const char no_password_title[] = N_("PowerVLC media player");
 
 static int vlclua_httpd_tls_host_new( lua_State *L )
 {

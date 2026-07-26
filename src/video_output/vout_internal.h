@@ -102,6 +102,32 @@ struct vout_thread_sys_t
         vlc_tick_t  date;
     } pause;
 
+    /* Look-ahead decode cache (video-cache-mb): while the fill gate in
+     * es_out holds playback, the vout must neither display nor trash the
+     * pictures accumulating in decoder_fifo (their dates are only
+     * re-based when the gate opens). Behaves like pause for the display
+     * loop, but kept separate so it never collides with the real pause
+     * state machine (ThreadChangePause asserts on double pause). */
+    bool            cache_hold;
+    /* How many pictures the decoder may pile up in decoder_fifo without
+     * starving the pool (would deadlock in picture_pool_Wait otherwise).
+     * Computed by vout_InitWrapper from the actual pool size, 0 when
+     * unknown/no room. */
+    unsigned        cache_headroom;
+
+    /* Display punctuality telemetry (debug verbosity only): how far past
+     * its date every scheduled picture actually hit the display, sampled
+     * at the swap. Answers "is the playback micro-stuttering?" without a
+     * human staring at the screen -- late-but-under-the-drop-threshold
+     * frames are invisible in the logs otherwise. */
+    struct {
+        unsigned    count;
+        unsigned    late;       /* > 4 ms past their date */
+        vlc_tick_t  worst;
+        vlc_tick_t  sum;
+        vlc_tick_t  last_report;
+    } punctuality;
+
     /* OSD title configuration */
     struct {
         bool        show;

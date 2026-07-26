@@ -1284,11 +1284,11 @@ void MainInterface::setVLCWindowsTitle( const QString& aTitle )
 {
     if( aTitle.isEmpty() )
     {
-        setWindowTitle( qtr( "VLC media player" ) );
+        setWindowTitle( qtr( "PowerVLC media player" ) );
     }
     else
     {
-        setWindowTitle( aTitle + " - " + qtr( "VLC media player" ) );
+        setWindowTitle( aTitle + " - " + qtr( "PowerVLC media player" ) );
     }
 }
 
@@ -1325,9 +1325,9 @@ void MainInterface::createSystray()
     else
         iconVLC = QIcon::fromTheme( "vlc", QIcon( ":/logo/vlc256.png" ) );
     sysTray = new QSystemTrayIcon( iconVLC, this );
-    sysTray->setToolTip( qtr( "VLC media player" ));
+    sysTray->setToolTip( qtr( "PowerVLC media player" ));
 
-    systrayMenu = new QMenu( qtr( "VLC media player" ), this );
+    systrayMenu = new QMenu( qtr( "PowerVLC media player" ), this );
     systrayMenu->setIcon( iconVLC );
 
     VLCMenuBar::updateSystrayMenu( this, p_intf, true );
@@ -1435,7 +1435,7 @@ void MainInterface::handleSystrayClick(
 #endif
             break;
         case QSystemTrayIcon::MiddleClick:
-            sysTray->showMessage( qtr( "VLC media player" ),
+            sysTray->showMessage( qtr( "PowerVLC media player" ),
                     qtr( "Control menu for the player" ),
                     QSystemTrayIcon::Information, 3000 );
             break;
@@ -1452,7 +1452,7 @@ void MainInterface::updateSystrayTooltipName( const QString& name )
 {
     if( name.isEmpty() )
     {
-        sysTray->setToolTip( qtr( "VLC media player" ) );
+        sysTray->setToolTip( qtr( "PowerVLC media player" ) );
     }
     else
     {
@@ -1460,7 +1460,7 @@ void MainInterface::updateSystrayTooltipName( const QString& name )
         if( ( i_notificationSetting == NOTIFICATION_ALWAYS ) ||
             ( i_notificationSetting == NOTIFICATION_MINIMIZED && (isMinimized() || isHidden()) ) )
         {
-            sysTray->showMessage( qtr( "VLC media player" ), name,
+            sysTray->showMessage( qtr( "PowerVLC media player" ), name,
                     QSystemTrayIcon::NoIcon, 3000 );
         }
     }
@@ -1483,7 +1483,7 @@ void MainInterface::updateSystrayTooltipStatus( int i_status )
         sysTray->setToolTip( input_name + " - " + qtr( "Paused") );
         break;
     default:
-        sysTray->setToolTip( qtr( "VLC media player" ) );
+        sysTray->setToolTip( qtr( "PowerVLC media player" ) );
         break;
     }
     VLCMenuBar::updateSystrayMenu( this, p_intf );

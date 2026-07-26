@@ -81,6 +81,37 @@ vlc_module_begin ()
     add_glopts ()
 vlc_module_end ()
 
+/* Backing-store coordinate helpers: no-op fallback on Mac OS X 10.6,
+ * which has no HiDPI displays (points always equal pixels there). */
+static inline NSRect vlcConvertRectToBacking(NSView *view, NSRect rect)
+{
+/* convertRectToBacking: is 10.7+, unknown to older SDKs (no HiDPI there) */
+#if !defined(MAC_OS_X_VERSION_MAX_ALLOWED) || MAC_OS_X_VERSION_MAX_ALLOWED >= 1070
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpartial-availability"
+    if ([view respondsToSelector:@selector(convertRectToBacking:)])
+        return [view convertRectToBacking:rect];
+#pragma clang diagnostic pop
+#else
+    (void)view;
+#endif
+    return rect;
+}
+
+static inline NSPoint vlcConvertPointToBacking(NSView *view, NSPoint point)
+{
+#if !defined(MAC_OS_X_VERSION_MAX_ALLOWED) || MAC_OS_X_VERSION_MAX_ALLOWED >= 1070
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpartial-availability"
+    if ([view respondsToSelector:@selector(convertPointToBacking:)])
+        return [view convertPointToBacking:point];
+#pragma clang diagnostic pop
+#else
+    (void)view;
+#endif
+    return point;
+}
+
 /**
  * Obj-C protocol declaration that drawable-nsobject should follow
  */
@@ -136,7 +167,9 @@ static int Open (vlc_object_t *this)
     if (!sys)
         return VLC_ENOMEM;
 
-    @autoreleasepool {
+    /* explicit pool: @autoreleasepool is clang-only, this file is MRC */
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    {
         if (!CGDisplayUsesOpenGLAcceleration (kCGDirectMainDisplay))
             msg_Err (this, "no OpenGL hardware acceleration found. this can lead to slow output and unexpected results");
 
@@ -147,6 +180,23 @@ static int Open (vlc_object_t *this)
         sys->gl = NULL;
 
         var_Create(vd->obj.parent, "macosx-glcontext", VLC_VAR_ADDRESS);
+
+        /* U1 (décodage DVD accéléré ATI) — GÉOMÉTRIE VIDÉO publiée par le vout.
+         * Le vout display est la SOURCE DE VÉRITÉ du placement à l'écran : il
+         * connaît la vue, sa fenêtre et le rectangle vidéo letterboxé exact (SAR
+         * 4:3/16:9 compris, via vout_display_PlacePicture). On publie sur le bus
+         * libvlc (partagé avec le décodeur libmpeg2) pour que la sortie HW ATI
+         * puisse suivre la fenêtre/zone vidéo de VLC au lieu d'une fenêtre Carbon
+         * séparée. wid = numéro de fenêtre CGS ; rect-x/y/w/h = rectangle vidéo
+         * PLACÉ en coordonnées écran CGS (origine EN HAUT à gauche). wid=0 = pas
+         * de fenêtre (vout fermé / vue hors hiérarchie). Publié depuis -reshape
+         * (thread principal : initial, resize, plein écran, retour fenêtré). */
+        var_Create(vd->obj.libvlc, "dvddriver-vout-wid",    VLC_VAR_INTEGER);
+        var_Create(vd->obj.libvlc, "dvddriver-vout-rect-x", VLC_VAR_INTEGER);
+        var_Create(vd->obj.libvlc, "dvddriver-vout-rect-y", VLC_VAR_INTEGER);
+        var_Create(vd->obj.libvlc, "dvddriver-vout-rect-w", VLC_VAR_INTEGER);
+        var_Create(vd->obj.libvlc, "dvddriver-vout-rect-h", VLC_VAR_INTEGER);
+        var_SetInteger(vd->obj.libvlc, "dvddriver-vout-wid", 0);
 
         /* Get the drawable object */
         id container = var_CreateGetAddress (vd, "drawable-nsobject");
@@ -251,10 +301,12 @@ static int Open (vlc_object_t *this)
         /* */
         vout_display_SendEventDisplaySize (vd, vd->fmt.i_visible_width, vd->fmt.i_visible_height);
 
+        [pool drain];
         return VLC_SUCCESS;
 
     error:
         Close(this);
+        [pool drain];
         return VLC_EGENERIC;
     }
 }
@@ -264,7 +316,8 @@ void Close (vlc_object_t *this)
     vout_display_t *vd = (vout_display_t *)this;
     vout_display_sys_t *sys = vd->sys;
 
-    @autoreleasepool {
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    {
         [sys->glView setVoutDisplay:nil];
 
         var_Destroy (vd, "drawable-nsobject");
@@ -283,6 +336,17 @@ void Close (vlc_object_t *this)
                                    waitUntilDone:NO];
 
         var_Destroy(vd->obj.parent, "macosx-glcontext");
+
+        /* U1 : le vout se ferme → plus de fenêtre vidéo. Publier wid=0 (que le
+         * décodeur HW lit à chaque display : 0 = ne rien présenter dans la
+         * fenêtre VLC) AVANT de détruire les variables. */
+        var_SetInteger(vd->obj.libvlc, "dvddriver-vout-wid", 0);
+        var_Destroy(vd->obj.libvlc, "dvddriver-vout-wid");
+        var_Destroy(vd->obj.libvlc, "dvddriver-vout-rect-x");
+        var_Destroy(vd->obj.libvlc, "dvddriver-vout-rect-y");
+        var_Destroy(vd->obj.libvlc, "dvddriver-vout-rect-w");
+        var_Destroy(vd->obj.libvlc, "dvddriver-vout-rect-h");
+
         if (sys->vgl != NULL)
         {
             vlc_gl_MakeCurrent(sys->gl);
@@ -303,6 +367,7 @@ void Close (vlc_object_t *this)
             vout_display_DeleteWindow (vd, sys->embed);
         free (sys);
     }
+    [pool drain];
 }
 
 /*****************************************************************************
@@ -312,6 +377,30 @@ void Close (vlc_object_t *this)
 static picture_pool_t *Pool (vout_display_t *vd, unsigned requested_count)
 {
     vout_display_sys_t *sys = vd->sys;
+
+    /* Look-ahead decode cache (video-cache-mb): the decoder renders straight
+     * into this pool, so the cache is whatever headroom it has past the DPB.
+     * The core requests a fixed count, so without this the headroom is 0 and
+     * decoder.c switches the cache off -- measured on 10.6: budget 1 GiB,
+     * target 331 pictures before clamping, headroom 0, cache dead. This is the
+     * same thing macosx_gl1.m does for the legacy GL path. The pictures are
+     * plain system memory and vout_display_opengl_GetPool() caps the total at
+     * VLCGL_PICTURE_MAX. */
+    unsigned extra = vout_display_CacheExtraPictures (vd, 0);
+    if (extra > 0)
+    {
+        if (requested_count + extra > VLCGL_PICTURE_MAX)
+            extra = requested_count < VLCGL_PICTURE_MAX
+                  ? VLCGL_PICTURE_MAX - requested_count : 0;
+        /* Under the floor the cache is off anyway: do not pay for them. */
+        if (extra < 26)
+            extra = 0;
+        else
+        {
+            msg_Dbg (vd, "look-ahead cache: %u extra pool pictures", extra);
+            requested_count += extra;
+        }
+    }
 
     if (!sys->pool && vlc_gl_MakeCurrent(sys->gl) == VLC_SUCCESS)
     {
@@ -339,7 +428,12 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
     [sys->glView setVoutFlushing:YES];
     if (vlc_gl_MakeCurrent(sys->gl) == VLC_SUCCESS)
     {
-        if (@available(macOS 10.14, *)) {
+        /* Runtime AppKit version check instead of @available: the latter
+         * compiles into compiler-rt's __isOSVersionAtLeast, which relies on
+         * Grand Central Dispatch (dispatch_once_f), absent on Mac OS X 10.5.
+         * 1671 is NSAppKitVersionNumber10_14 (not spelled with the named
+         * constant, which older SDK headers lack). */
+        if (floor(NSAppKitVersionNumber) >= 1671) {
             vout_display_place_t place;
             vout_display_PlacePicture(&place, &vd->source, vd->cfg, false);
             vout_display_opengl_Viewport(vd->sys->vgl, place.x,
@@ -358,14 +452,11 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
         subpicture_Delete(subpicture);
 }
 
-static int Control (vout_display_t *vd, int query, va_list ap)
+static int ControlInPool (vout_display_t *vd, int query, va_list ap)
 {
     vout_display_sys_t *sys = vd->sys;
 
-    if (!vd->sys)
-        return VLC_EGENERIC;
-
-    @autoreleasepool {
+    {
         switch (query)
         {
             case VOUT_DISPLAY_CHANGE_DISPLAY_FILLED:
@@ -427,6 +518,17 @@ static int Control (vout_display_t *vd, int query, va_list ap)
     }
 }
 
+static int Control (vout_display_t *vd, int query, va_list ap)
+{
+    if (!vd->sys)
+        return VLC_EGENERIC;
+
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    int ret = ControlInPool (vd, query, ap);
+    [pool drain];
+    return ret;
+}
+
 /*****************************************************************************
  * vout opengl callbacks
  *****************************************************************************/
@@ -468,7 +570,13 @@ static void OpenglSwap (vlc_gl_t *gl)
  *****************************************************************************/
 @implementation VLCOpenGLVideoView
 
-#define VLCAssertMainThread() assert([[NSThread currentThread] isMainThread])
+#if defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED < 1050
+/* -[NSThread isMainThread] is 10.5+; pthread_main_np() is the 10.4 way */
+# include <pthread.h>
+# define VLCAssertMainThread() assert(pthread_main_np() != 0)
+#else
+# define VLCAssertMainThread() assert([[NSThread currentThread] isMainThread])
+#endif
 
 
 + (void)getNewView:(NSValue *)value
@@ -495,7 +603,10 @@ static void OpenglSwap (vlc_gl_t *gl)
         NSOpenGLPFAAlphaSize, 8,
         NSOpenGLPFADepthSize, 24,
         NSOpenGLPFAWindow,
+#if !defined(MAC_OS_X_VERSION_MAX_ALLOWED) || MAC_OS_X_VERSION_MAX_ALLOWED >= 1050
+        /* 10.5+; Tiger has no offline renderers to allow anyway */
         NSOpenGLPFAAllowOfflineRenderers,
+#endif
         0
     };
 
@@ -510,8 +621,13 @@ static void OpenglSwap (vlc_gl_t *gl)
     if (!self)
         return nil;
 
-    /* enable HiDPI support */
-    [self setWantsBestResolutionOpenGLSurface:YES];
+    /* enable HiDPI support (10.7+) */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpartial-availability"
+    if ([self respondsToSelector:@selector(setWantsBestResolutionOpenGLSurface:)]) {
+        [self setWantsBestResolutionOpenGLSurface:YES];
+    }
+#pragma clang diagnostic pop
 
     /* request our screen's HDR mode (introduced in OS X 10.11) */
 #pragma clang diagnostic push
@@ -527,17 +643,22 @@ static void OpenglSwap (vlc_gl_t *gl)
     GLint params[] = { 1 };
     CGLSetParameter ([[self openGLContext] CGLContextObj], kCGLCPSwapInterval, params);
 
-    [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationDidChangeScreenParametersNotification
-                                                      object:[NSApplication sharedApplication]
-                                                       queue:nil
-                                                  usingBlock:^(NSNotification *notification) {
-                                                      [self performSelectorOnMainThread:@selector(reshape)
-                                                                             withObject:nil
-                                                                          waitUntilDone:NO];
-                                                  }];
+    /* Use the classic observer API: the block-based variant requires
+     * Mac OS X 10.6 and the blocks runtime. */
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(applicationDidChangeScreenParameters:)
+                                                 name:NSApplicationDidChangeScreenParametersNotification
+                                               object:[NSApplication sharedApplication]];
 
     [self setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
     return self;
+}
+
+- (void)applicationDidChangeScreenParameters:(NSNotification *)notification
+{
+    [self performSelectorOnMainThread:@selector(reshape)
+                           withObject:nil
+                        waitUntilDone:NO];
 }
 
 - (void)dealloc
@@ -648,7 +769,7 @@ static void OpenglSwap (vlc_gl_t *gl)
     VLCAssertMainThread();
 
     /* on HiDPI displays, the point bounds don't equal the actual pixel based bounds */
-    NSRect bounds = [self convertRectToBacking:[self bounds]];
+    NSRect bounds = vlcConvertRectToBacking(self, [self bounds]);
     vout_display_place_t place;
 
     @synchronized(self) {
@@ -660,6 +781,43 @@ static void OpenglSwap (vlc_gl_t *gl)
             vout_display_PlacePicture (&place, &vd->source, &cfg_tmp, false);
             vd->sys->place = place;
             vout_display_SendEventDisplaySize (vd, bounds.size.width, bounds.size.height);
+
+            /* U1 — publier la géométrie vidéo (numéro de fenêtre CGS + rectangle
+             * vidéo placé en coordonnées écran CGS top-left) sur le bus libvlc.
+             * Thread principal (VLCAssertMainThread) : accès AppKit fenêtre/écran OK.
+             * NB : place et bounds sont en pixels BACKING ; on suppose 1× (cible
+             * G3/G4 non-HiDPI) → backing == points, donc pas de reconversion. */
+            NSWindow *win = [self window];
+            long widNum = win ? (long)[win windowNumber] : 0;
+            if (win && widNum > 0) {
+                float viewH = bounds.size.height;      /* même espace que place */
+                /* place : origine EN HAUT à gauche dans la vue → rect AppKit vue
+                 * (origine en bas à gauche). */
+                NSRect vrect = NSMakeRect(place.x, viewH - (place.y + place.height),
+                                          place.width, place.height);
+                NSRect wrect = [self convertRect:vrect toView:nil];   /* → fenêtre */
+                NSPoint sOrg = [win convertBaseToScreen:wrect.origin]; /* → écran (10.5-safe) */
+                /* Écran « zéro » (barre de menus) = origine des coordonnées CGS
+                 * globales ; sa hauteur sert au flip vers l'origine haut-gauche. */
+                NSArray *screens = [NSScreen screens];
+                NSScreen *zero = [screens count] ? [screens objectAtIndex:0]
+                                                 : [NSScreen mainScreen];
+                float screenH = [zero frame].size.height;
+                long rx = lround(sOrg.x);
+                long ry = lround(screenH - (sOrg.y + wrect.size.height));
+                long rw = lround(wrect.size.width);
+                long rh = lround(wrect.size.height);
+                var_SetInteger(vd->obj.libvlc, "dvddriver-vout-rect-x", rx);
+                var_SetInteger(vd->obj.libvlc, "dvddriver-vout-rect-y", ry);
+                var_SetInteger(vd->obj.libvlc, "dvddriver-vout-rect-w", rw);
+                var_SetInteger(vd->obj.libvlc, "dvddriver-vout-rect-h", rh);
+                var_SetInteger(vd->obj.libvlc, "dvddriver-vout-wid", widNum);
+                msg_Dbg(vd, "U1 géométrie vout : wid=%ld rect=%ld,%ld %ldx%ld (écran H=%d)",
+                        widNum, rx, ry, rw, rh, (int)screenH);
+            } else {
+                var_SetInteger(vd->obj.libvlc, "dvddriver-vout-wid", 0);
+                msg_Dbg(vd, "U1 géométrie vout : pas de fenêtre (wid=0)");
+            }
         }
     }
 
@@ -756,6 +914,17 @@ static void OpenglSwap (vlc_gl_t *gl)
     [super mouseDown:o_event];
 }
 
+- (void)rightMouseDown:(NSEvent *)o_event
+{
+    /* Forward to the hosting interface view so it can pop its contextual
+     * menu: on Mac OS X 10.6 AppKit does not bubble right-clicks up the
+     * responder chain by itself. */
+    if ([self superview])
+        [[self superview] rightMouseDown:o_event];
+    else
+        [super rightMouseDown:o_event];
+}
+
 - (void)otherMouseDown:(NSEvent *)o_event
 {
     @synchronized (self) {
@@ -795,8 +964,8 @@ static void OpenglSwap (vlc_gl_t *gl)
     NSRect videoRect = [self bounds];
     BOOL b_inside = [self mouse: ml inRect: videoRect];
 
-    ml = [self convertPointToBacking: ml];
-    videoRect = [self convertRectToBacking: videoRect];
+    ml = vlcConvertPointToBacking(self, ml);
+    videoRect = vlcConvertRectToBacking(self, videoRect);
 
     if (b_inside) {
         @synchronized (self) {

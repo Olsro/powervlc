@@ -1,0 +1,262 @@
+Support Mac OS X 10.4, and let the player own the MMC channel
+
+Three changes, all confined to the Darwin MMC backend.
+
+1. IOKit/storage/IOBDMediaBSDClient.h is included but no symbol from it is
+   used: the only Blu-ray specific thing in the file is the "IOBDServices"
+   string handed to IOServiceMatching. That header does not exist in the 10.4u
+   SDK, so the include alone was enough to keep libaacs out of the PowerPC and
+   Intel-32 slices -- i.e. no AACS, no retail Blu-ray, on every Mac that shipped
+   with Tiger or Leopard PowerPC.
+
+2. Tiger has no IOBDStorageFamily at all, so a Blu-ray drive publishes itself
+   under IODVDServices there instead of IOBDServices. Verified on 10.4.11 with
+   an external Pioneer BD drive: the MMC user client, GET CONFIGURATION and
+   READ(10) all behave exactly as they do under IOBDServices on 10.5 and 10.6,
+   and the drive still reports the AACS feature (0x010D). Both nubs exist from
+   10.5 on, and IOBDServices is still tried first, so nothing changes there.
+
+3. aacs_use_external_mmc() lets the application hand over a
+   SCSITaskDeviceInterface it already owns.
+
+   SCSITaskLib refuses every command unless the caller holds exclusive access
+   (measured: without ObtainExclusiveAccess, READ(10) comes back refused), and
+   exclusive access has exactly one owner. On 10.4 that is a hard conflict:
+   Tiger misdetects BD media as a CD with 2352 byte blocks, so the volume never
+   mounts and /dev/rdiskN returns EOF at any offset -- MMC is not merely the way
+   to talk to the drive, it is the only way to read the disc at all. The player
+   has to own that channel, which leaves libaacs unable to open a second one.
+
+   With an external interface libaacs skips the drive lookup, DiskArbitration,
+   the unmount and the exclusive access claim, and releases none of them on
+   close. get_mounted_device_from_path() is skipped too, which matters on 10.4
+   where there is no mount point to derive a BSD name from.
+
+   Note the unmount/remount dance is not merely unnecessary in that mode but
+   actively harmful on 10.4: releasing exclusive access makes the OS re-probe
+   the media, and since it cannot make sense of BD media it ejects the disc
+   (observed twice, with ASC 0x64 ILLEGAL MODE FOR THIS TRACK in the log).
+
+4. Two things that simply do not compile for the FSF GCC / 10.4u SDK slices,
+   found by building rather than by reading:
+
+   - SCSITaskSGElement only appears in the 10.5 SDK (IOVirtualRange on 32 bit,
+     IOAddressRange on 64 bit). The 10.4u SDK has neither the typedef nor a
+     64 bit target, so it gets IOVirtualRange, which is what
+     SetScatterGatherEntries takes there anyway.
+   - device_close() still declared "__block int rc". The dispatch_sync() block
+     that needed the qualifier is gone (see the no-libdispatch patch), and
+     __block is a clang extension FSF GCC rejects.
+
+   Verified: the file now compiles clean both with powerpc-apple-darwin8-gcc
+   against the 10.4u SDK and with clang against the current one.
+
+--- a/configure.ac
++++ b/configure.ac
+@@ -52,7 +52,14 @@
+     SYS=darwin
+     AC_DEFINE([USE_IOKIT], 1, [Use IOKit for MMC access])
+     LDFLAGS="${LDFLAGS} -lobjc -Wl,-framework,IOKit,-framework,Cocoa,-framework,DiskArbitration"
+-    SET_FEATURES="${SET_FEATURES} -D_DARWIN_C_SOURCE"
++    dnl _POSIX_C_SOURCE hides non-POSIX declarations on Mac OS X -- fsync() in
++    dnl <unistd.h>, used by src/file/file_posix.c, sits inside an
++    dnl "#ifndef _POSIX_C_SOURCE" block there. Modern SDKs undo that when
++    dnl _DARWIN_C_SOURCE is also defined, but the 10.4 SDK has no such escape
++    dnl hatch, so the build fails with an implicit declaration of fsync().
++    dnl Simply do not ask for strict POSIX visibility on Darwin (libbluray
++    dnl carries the same fix for the same reason).
++    SET_FEATURES="-D_ISOC99_SOURCE -D_DARWIN_C_SOURCE"
+     ;;
+   *)
+     SYS="${host_os}"
+--- a/src/file/mmc_device_darwin.c
++++ b/src/file/mmc_device_darwin.c
+@@ -44,8 +44,21 @@
+ #undef VERSION
+ #include <IOKit/scsi/SCSITaskLib.h>
+ 
+-#include <IOKit/storage/IOBDMediaBSDClient.h>
++/* SCSITaskSGElement only appears in the 10.5 SDK, where it is IOVirtualRange on
++ * 32 bit and IOAddressRange on 64 bit. The 10.4u SDK has neither the typedef nor
++ * a 64 bit target, so IOVirtualRange -- which it does have, and which is what
++ * SetScatterGatherEntries takes there -- is the right stand-in. */
++#if !defined(MAC_OS_X_VERSION_10_5) \
++ || MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_5
++typedef IOVirtualRange SCSITaskSGElement;
++#endif
+ 
++/* No symbol from IOKit/storage/IOBDMediaBSDClient.h is used here -- the only
++ * Blu-ray specific thing in this file is the "IOBDServices" string below. That
++ * header is absent from the 10.4u SDK (Tiger has no Blu-ray storage family at
++ * all), so including it would keep libaacs from building for the PowerPC and
++ * Intel-32 slices for no reason. */
++
+ #ifdef HAVE_SYS_TYPES_H
+ #include <sys/types.h>
+ #endif
+@@ -83,6 +96,11 @@
+     MMCDeviceInterface **mmcInterface;
+     SCSITaskDeviceInterface **taskInterface;
+ 
++    /* Set when taskInterface belongs to the application (see
++     * aacs_use_external_mmc): nothing here opened it, unmounted the disc or
++     * claimed exclusive access, so nothing here may undo any of that. */
++    int external_task_interface;
++
+     /* device short name (ie disk1) */
+     char bsd_name[MNAMELEN];
+ 
+@@ -182,6 +200,22 @@
+   struct statfs stat_info;
+   int rc;
+ 
++  /* A device node, not a mount point. Callers that read the disc themselves
++   * pass one of these: statfs() would answer devfs for it, and the drive would
++   * never be found. Both spellings map to the same BSD name -- /dev/rdisk1 is
++   * the character device for /dev/disk1, and IOKit knows it as "disk1". */
++  if (path && !strncmp(path, "/dev/", 5)) {
++    const char *name = path + 5;
++    if (!strncmp(name, "rdisk", 5)) {
++      name++;
++    }
++    if (!strncmp(name, "disk", 4)) {
++      strncpy(mmc->bsd_name, name, sizeof (mmc->bsd_name) - 1);
++      mmc->bsd_name[sizeof (mmc->bsd_name) - 1] = 0;
++      return 0;
++    }
++  }
++
+   rc = statfs(path, &stat_info);
+   if (0 != rc) {
+     return rc;
+@@ -254,8 +288,9 @@
+     return (mmc->disk_state == disk_unmounted) ? 0 : -1;
+ }
+ 
+-static int iokit_find_service_matching(MMCDEV *mmc, io_service_t *servp) {
+-    CFMutableDictionaryRef matchingDict = IOServiceMatching("IOBDServices");
++static int iokit_find_service_class(MMCDEV *mmc, const char *class_name,
++                                    io_service_t *servp) {
++    CFMutableDictionaryRef matchingDict = IOServiceMatching(class_name);
+     io_iterator_t deviceIterator;
+     io_service_t service;
+     int rc;
+@@ -265,7 +300,7 @@
+     *servp = IO_OBJECT_NULL;
+ 
+     if (!matchingDict) {
+-        BD_DEBUG(DBG_MMC, "Could not create a matching dictionary for IOBDServices\n");
++        BD_DEBUG(DBG_MMC, "Could not create a matching dictionary for %s\n", class_name);
+         return -1;
+     }
+ 
+@@ -301,6 +336,25 @@
+     return (service != IO_OBJECT_NULL) ? 0 : -1;
+ }
+ 
++static int iokit_find_service_matching(MMCDEV *mmc, io_service_t *servp) {
++    /* IOBDServices is what a Blu-ray drive publishes from Mac OS X 10.5 on.
++     * Tiger has no IOBDStorageFamily at all, so the very same drive shows up
++     * under IODVDServices there -- same MMC user client, same CDBs. Both nubs
++     * exist on 10.6+, and IOBDServices is tried first so nothing changes
++     * where it is available. */
++    static const char *const classes[] = { "IOBDServices", "IODVDServices" };
++    unsigned i;
++
++    for (i = 0; i < sizeof(classes) / sizeof(classes[0]); i++) {
++        if (0 == iokit_find_service_class(mmc, classes[i], servp)) {
++            BD_DEBUG(DBG_MMC, "Found the drive as %s\n", classes[i]);
++            return 0;
++        }
++    }
++
++    return -1;
++}
++
+ static int iokit_find_interfaces(MMCDEV *mmc, io_service_t service) {
+     SInt32 score;
+     int rc;
+@@ -415,6 +469,26 @@
+     dispatch_release(mmc->sync_sem);
+ }
+ 
++/*
++ * Adopting an MMC channel opened by the application.
++ *
++ * SCSITaskLib refuses every command unless the caller holds exclusive access,
++ * and exclusive access is exactly that: one owner per drive. On Mac OS X 10.4
++ * that is a hard conflict, because there the same channel is also the only way
++ * to read the disc at all -- Tiger misdetects BD media as a CD with 2352 byte
++ * blocks, so /dev/rdiskN returns EOF and the volume never mounts. The player
++ * therefore opens the drive itself, and hands the interface over here instead
++ * of libaacs opening a second one that could not exist.
++ *
++ * Passing NULL restores the normal behaviour of finding and claiming the drive.
++ */
++static SCSITaskDeviceInterface **s_external_task_interface = NULL;
++
++void aacs_use_external_mmc(void *task_interface)
++{
++    s_external_task_interface = (SCSITaskDeviceInterface **)task_interface;
++}
++
+ static int mmc_open_iokit(const char *path, MMCDEV *mmc) {
+     io_service_t service;
+     int rc;
+@@ -425,7 +499,18 @@
+     mmc->disk = NULL;
+     mmc->session = NULL;
+     mmc->disk_state = disk_mounted;
++    mmc->external_task_interface = 0;
+ 
++    if (NULL != s_external_task_interface) {
++        /* The application owns the channel: it is already exclusive and the
++         * disc is already unmounted (or was never mounted), so skip the lookup,
++         * DiskArbitration and the exclusive access claim entirely. */
++        BD_DEBUG(DBG_MMC, "Using the MMC channel supplied by the application\n");
++        mmc->taskInterface = s_external_task_interface;
++        mmc->external_task_interface = 1;
++        return 0;
++    }
++
+     /* get the bsd name associated with this mount */
+     rc = get_mounted_device_from_path(mmc, path);
+     if (0 != rc) {
+@@ -522,11 +607,11 @@
+          * either!
+          */
+ 
+-        if (mmc->taskInterface) {
++        if (mmc->taskInterface && !mmc->external_task_interface) {
+             (*mmc->taskInterface)->ReleaseExclusiveAccess(mmc->taskInterface);
+             (*mmc->taskInterface)->Release(mmc->taskInterface);
+-            mmc->taskInterface = NULL;
+         }
++        mmc->taskInterface = NULL;
+ 
+         if (mmc->mmcInterface) {
+             (*mmc->mmcInterface)->Release(mmc->mmcInterface);
+--- a/src/libaacs/aacs.h
++++ b/src/libaacs/aacs.h
+@@ -68,6 +68,21 @@
+  *
+  * @return  AACS object, NULL on error
+  */
++/**
++ *  Adopt an MMC channel opened by the application (Mac OS X only)
++ *
++ *  SCSITaskLib grants exclusive access to a single owner, so a player that has
++ *  to drive the disc over MMC itself -- the only option on Mac OS X 10.4, where
++ *  BD media is misdetected as a CD and never reaches the filesystem layer --
++ *  cannot let libaacs claim the drive a second time. Call this with the
++ *  SCSITaskDeviceInterface** before opening, and libaacs will use it as is,
++ *  without looking the drive up, unmounting anything, claiming exclusive access
++ *  or releasing any of it on close. Pass NULL to restore normal behaviour.
++ *
++ * @param task_interface  SCSITaskDeviceInterface**, or NULL
++ */
++AACS_PUBLIC void aacs_use_external_mmc(void *task_interface);
++
+ AACS_PUBLIC AACS *aacs_init(void);
+ 
+ /**

@@ -26,25 +26,25 @@ ${LangFileString} Desc_Section04 \
 ${LangFileString} Desc_Section05 \
     "Регистровање DVD и CD репродукције"
 ${LangFileString} Desc_Section06 \
-    "Поставља VLC Media Player као подразумевани програм за наведени тип датотека"
+    "Поставља ${PRODUCT_NAME} Media Player као подразумевани програм за наведени тип датотека"
 ${LangFileString} Desc_Section07 \
-    "Додаје ставке у контекстуални мени („Репродукуј помоћу VLC-а“ и „Додај у плејлисту VLC-а“)"
+    "Додаје ставке у контекстуални мени („Репродукуј помоћу ${PRODUCT_NAME}-а“ и „Додај у плејлисту ${PRODUCT_NAME}-а“)"
 ${LangFileString} Desc_Section08 \
-    "Брише датотеке са поставкама и кешом VLC Media Player-а које су остале од претходних инсталација"
+    "Брише датотеке са поставкама и кешом ${PRODUCT_NAME} Media Player-а које су остале од претходних инсталација"
 
 ${LangFileString} Name_Section91 "Деинсталирај"
 ${LangFileString} Name_Section92 "Обриши поставке и кеш"
 
 ${LangFileString} Desc_Section91 \
-"Деинсталирај VLC Media Player и све његове компоненте"
+"Деинсталирај ${PRODUCT_NAME} Media Player и све његове компоненте"
 ${LangFileString} Desc_Section92 \
-"Брише датотеке са поставкама и кешом VLC Media Player-а"
+"Брише датотеке са поставкама и кешом ${PRODUCT_NAME} Media Player-а"
 
 ${LangFileString} ShellAssociation_Play "Репродукуј"
-${LangFileString} ContextMenuEntry_PlayWith "Репродукуј помоћу VLC Media Player-а"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Додај у плејлисту VLC Media Player-а"
+${LangFileString} ContextMenuEntry_PlayWith "Репродукуј помоћу ${PRODUCT_NAME} Media Player-а"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Додај у плејлисту ${PRODUCT_NAME} Media Player-а"
 
-${LangFileString} Link_VisitWebsite "Посети сајт VLC Media Player-а"
+${LangFileString} Link_VisitWebsite "Посети сајт ${PRODUCT_NAME} Media Player-а"
 
 ${LangFileString} Name_InstTypeRecommended "Препоручено"
 ${LangFileString} Name_InstTypeMinimum "Минимална"
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Репродукуј Blu-ray"
 ${LangFileString} License_NextText "Сада сте свесни својих права. Кликните на „У реду“ да бисте наставили."
 
 ${LangFileString} Detail_CheckProcesses "Проверавам процесе…"
-${LangFileString} MessageBox_VLCRunning "Изгледа да је VLC покренут. Сада ће бити затворен."
-${LangFileString} MessageBox_VLCUnableToClose "Инсталациони програм не може да затвори VLC. Учините то ручно."
+${LangFileString} MessageBox_VLCRunning "Изгледа да је ${PRODUCT_NAME} покренут. Сада ће бити затворен."
+${LangFileString} MessageBox_VLCUnableToClose "Инсталациони програм не може да затвори ${PRODUCT_NAME}. Учините то ручно."
 ${LangFileString} MessageBox_InstallAborted "Инсталација је прекинута!"
 
 ${LangFileString} Reinstall_Headline "Већ је инсталиран"
-${LangFileString} Reinstall_HeadlineInstall "Изаберите како желите да инсталирате VLC."
+${LangFileString} Reinstall_HeadlineInstall "Изаберите како желите да инсталирате ${PRODUCT_NAME}."
 ${LangFileString} Reinstall_HeadlineMaintenance "Изаберите опцију одржавања коју желите да извршите."
-${LangFileString} Reinstall_MessageOlder "На вашем систему је инсталирана старија верзија VLC-а. Изаберите жељену радњу и кликните на „Следеће“ да бисте наставили."
-${LangFileString} Reinstall_MessageNewer "Инсталирана је новија верзија VLC-а. Не препоручујемо вам да се враћате на старију верзију. Изаберите жељену радњу и кликните на „Следеће“ да бисте наставили."
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} је већ инсталиран. Изаберите жељену радњу и кликните на „Следеће“ да бисте наставили."
-${LangFileString} Reinstall_OptionUpgrade "Надогради VLC помоћу претходних поставки (препоручује се)"
-${LangFileString} Reinstall_OptionDowngrade "Уназади VLC помоћу претходних поставки (препоручује се)"
+${LangFileString} Reinstall_MessageOlder "На вашем систему је инсталирана старија верзија ${PRODUCT_NAME}-а. Изаберите жељену радњу и кликните на „Следеће“ да бисте наставили."
+${LangFileString} Reinstall_MessageNewer "Инсталирана је новија верзија ${PRODUCT_NAME}-а. Не препоручујемо вам да се враћате на старију верзију. Изаберите жељену радњу и кликните на „Следеће“ да бисте наставили."
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} је већ инсталиран. Изаберите жељену радњу и кликните на „Следеће“ да бисте наставили."
+${LangFileString} Reinstall_OptionUpgrade "Надогради ${PRODUCT_NAME} помоћу претходних поставки (препоручује се)"
+${LangFileString} Reinstall_OptionDowngrade "Уназади ${PRODUCT_NAME} помоћу претходних поставки (препоручује се)"
 ${LangFileString} Reinstall_OptionComponents "Додај, уклони или поново инсталирај компоненте"
 ${LangFileString} Reinstall_OptionAdvanced "Промени поставке (напредно)"
-${LangFileString} Reinstall_OptionUninstall "Деинсталирај VLC"
+${LangFileString} Reinstall_OptionUninstall "Деинсталирај ${PRODUCT_NAME}"

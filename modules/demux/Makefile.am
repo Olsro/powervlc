@@ -46,7 +46,9 @@ demux_LTLIBRARIES += libreal_plugin.la
 libps_plugin_la_SOURCES = demux/mpeg/ps.c demux/mpeg/ps.h demux/mpeg/pes.h
 demux_LTLIBRARIES += libps_plugin.la
 
-libmod_plugin_la_SOURCES = demux/mod.c
+# dummy.cpp forces the C++ linker so -static-libstdc++ can embed the C++
+# runtime that libmodplug pulls in (see configure.ac HAVE_CXX_STATIC_RUNTIME).
+libmod_plugin_la_SOURCES = demux/mod.c dummy.cpp
 libmod_plugin_la_CFLAGS = $(AM_CFLAGS) $(CFLAGS_mod)
 libmod_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(demuxdir)'
 libmod_plugin_la_LIBADD = $(LIBS_mod)
@@ -108,7 +110,9 @@ demux_LTLIBRARIES += libsmf_plugin.la
 libdmxmus_plugin_la_SOURCES = demux/dmxmus.c
 demux_LTLIBRARIES += libdmxmus_plugin.la
 
-libgme_plugin_la_SOURCES = demux/gme.c
+# dummy.cpp forces the C++ linker so -static-libstdc++ can embed libgme's C++
+# runtime statically (see configure.ac HAVE_CXX_STATIC_RUNTIME).
+libgme_plugin_la_SOURCES = demux/gme.c dummy.cpp
 libgme_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(demuxdir)'
 libgme_plugin_la_LIBADD = $(LIBS_gme)
 EXTRA_LTLIBRARIES += libgme_plugin.la
@@ -127,6 +131,9 @@ demux_LTLIBRARIES += libdiracsys_plugin.la
 
 libimage_plugin_la_SOURCES = demux/image.c demux/mxpeg_helper.h
 demux_LTLIBRARIES += libimage_plugin.la
+
+libkeydb_plugin_la_SOURCES = demux/keydb.c
+demux_LTLIBRARIES += libkeydb_plugin.la
 
 libdemux_stl_plugin_la_SOURCES = demux/stl.c
 libdemux_stl_plugin_la_CPPFLAGS = $(AM_CPPFLAGS)

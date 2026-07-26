@@ -487,6 +487,26 @@ enum input_query_e
     /* External clock managments */
     INPUT_GET_PCR_SYSTEM,   /* arg1=vlc_tick_t *, arg2=vlc_tick_t *       res=can fail */
     INPUT_MODIFY_PCR_SYSTEM,/* arg1=int absolute, arg2=vlc_tick_t   res=can fail */
+
+    /* DEPRECATED: the video-cache-mb fill wait is not user-skippable
+     * anymore (playback must never start before the look-ahead cache
+     * reached its threshold); always returns VLC_EGENERIC now. Kept so
+     * stale callers fall through to their normal handling. */
+    INPUT_SET_VIDEO_CACHE_SKIP, /* no arg, res=always fails */
+
+    /* Live state of the video-cache-mb look-ahead cache (pictures queued
+     * ahead / current fill target, 0/0 when off). Queried synchronously
+     * from es_out, so it stays live even while the input is paused --
+     * which is precisely when the cache keeps filling and the user wants
+     * to watch it do so. */
+    INPUT_GET_VIDEO_CACHE_STATE, /* arg1=size_t *count, arg2=size_t *target, arg3=size_t *bytes (can be NULL) res=cannot fail */
+
+    /* Recompute the input_item_t.p_stats block right now, instead of
+     * waiting for the input thread's periodic statistics tick -- that
+     * tick pauses with the input (and a pause is exactly when the
+     * look-ahead cache visibly pre-fills), so a stats window refreshing
+     * from p_stats alone shows stale numbers. */
+    INPUT_UPDATE_STATS, /* no arg res=can fail */
 };
 
 /** @}*/
@@ -647,7 +667,7 @@ static inline int input_ModifyPcrSystem( input_thread_t *p_input, bool b_absolut
 VLC_API decoder_t * input_DecoderCreate( vlc_object_t *, const es_format_t *, input_resource_t * ) VLC_USED;
 VLC_API void input_DecoderDelete( decoder_t * );
 VLC_API void input_DecoderDecode( decoder_t *, block_t *, bool b_do_pace );
-VLC_API void input_DecoderDrain( decoder_t * );
+VLC_API void input_DecoderDrain( decoder_t *, bool b_gapless );
 VLC_API void input_DecoderFlush( decoder_t * );
 
 /**
@@ -672,6 +692,15 @@ VLC_API void input_resource_Release( input_resource_t * );
  * Forcefully destroys the video output (e.g. when the playlist is stopped).
  */
 VLC_API void input_resource_TerminateVout( input_resource_t * );
+
+/**
+ * Gapless (PowerVLC): tears down an audio output stream left parked by the
+ * previous track, if any. The audio output object itself is kept cached.
+ *
+ * \param b_wait if true, the audio still queued is played out first
+ *               (bounded by ~2 seconds); if false, it is cut immediately.
+ */
+VLC_API void input_resource_StopParkedAout( input_resource_t *, bool b_wait );
 
 /**
  * This function releases all resources (object).

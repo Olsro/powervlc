@@ -219,8 +219,16 @@ typedef pthread_mutex_t vlc_mutex_t;
 typedef pthread_cond_t vlc_cond_t;
 #define VLC_STATIC_COND PTHREAD_COND_INITIALIZER
 typedef semaphore_t     vlc_sem_t;
+# include <AvailabilityMacros.h>
+# if defined(MAC_OS_X_VERSION_MIN_REQUIRED) && MAC_OS_X_VERSION_MIN_REQUIRED < 1050
+/* Mac OS X 10.4 has pthread rwlocks but no PTHREAD_RWLOCK_INITIALIZER:
+ * its libpthread cannot lazily initialize a static rwlock (the SIG_init
+ * signature only appeared in 10.5), so use VLC's own emulation. */
+#  define LIBVLC_NEED_RWLOCK
+# else
 typedef pthread_rwlock_t vlc_rwlock_t;
 #define VLC_STATIC_RWLOCK PTHREAD_RWLOCK_INITIALIZER
+# endif
 typedef pthread_key_t   vlc_threadvar_t;
 typedef struct vlc_timer *vlc_timer_t;
 

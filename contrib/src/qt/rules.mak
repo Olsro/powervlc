@@ -63,6 +63,12 @@ endif
 	sed -i.orig -e "s/DEFINES += WINVER/DEFINES += NTDDI_VERSION=0x06000000 WINVER/" "$(UNPACK_DIR)/src/network/kernel/kernel.pri"
 	# TOUCHINPUT is properly defined in mingw since v4
 	sed -i.orig -e "s/defined(Q_CC_MINGW) || !defined(TOUCHEVENTF_MOVE)/!defined(TOUCHEVENTF_MOVE)/" "$(UNPACK_DIR)/src/plugins/platforms/windows/qtwindows_additional.h"
+	# PowerVLC (winarm64/llvm-mingw): Qt 5.6.3's moc cannot parse llvm-mingw's
+	# modern libc++ C++20 headers (<ranges> etc.). Cap moc's __cplusplus so those
+	# _LIBCPP_STD_VER >= 20 blocks are skipped. QMAKE_MOC_OPTIONS is appended last
+	# to every moc command (see mkspecs/features/moc.prf). Clang mkspec only, so
+	# the gcc-mingw win32/win64 builds are unaffected.
+	echo 'QMAKE_MOC_OPTIONS += -D__cplusplus=201402L' >> "$(UNPACK_DIR)/mkspecs/win32-clang-g++/qmake.conf"
 	$(MOVE)
 
 ifdef HAVE_MACOSX

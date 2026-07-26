@@ -1388,25 +1388,26 @@
 		</dict>
 	</array>
 	<key>CFBundleExecutable</key>
-	<string>VLC</string>
+	<string>PowerVLC</string>
 	<key>CFBundleIconFile</key>
 	<string>VLC.icns</string>
-	<key>CFBundleIconName</key>
-	<string>VLC</string>
+	<!-- PowerVLC fork: distinct identifier so config_GetUserDir() and
+	     NSUserDefaults never collide with the official VLC.app
+	     (~/Library/Preferences|Caches|Application Support/<identifier>) -->
 	<key>CFBundleIdentifier</key>
-	<string>org.videolan.vlc</string>
+	<string>com.github.PowerVLC</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>VLC</string>
+	<string>PowerVLC</string>
 	<key>CFBundleDisplayName</key>
-	<string>VLC</string>
+	<string>PowerVLC</string>
 	<key>CFBundleShortVersionString</key>
-	<string>@VERSION@</string>
+	<string>@POWERVLC_VERSION@</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleSignature</key>
-	<string>VLC#</string>
+	<string>????</string>
 	<key>BreakpadProduct</key>
 	<string>VLC</string>
 	<key>BreakpadVendor</key>
@@ -1416,7 +1417,7 @@
 	<key>BreakpadURL</key>
 	<string>@BREAKPAD_URL@/reports</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Copyright (c) @COPYRIGHT_YEARS@ VLC authors and VideoLAN</string>
+	<string>Copyright (c) @COPYRIGHT_YEARS@ PowerVLC, VLC authors and VideoLAN</string>
 	<key>NSCameraUsageDescription</key>
 	<string>VLC wants to access the camera as requested by the user.</string>
 	<key>NSMicrophoneUsageDescription</key>
@@ -1534,11 +1535,11 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>@VERSION@</string>
+	<string>@POWERVLC_VERSION@</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.video</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>10.7.5</string>
+	<string>@MACOSX_LSMINIMUM_VERSION@</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

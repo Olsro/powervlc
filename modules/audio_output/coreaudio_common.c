@@ -24,6 +24,11 @@
 
 #import "coreaudio_common.h"
 #import <CoreAudio/CoreAudioTypes.h>
+/* Legacy Component Manager API (FindNextComponent(), OpenAComponent(),
+ * CloseComponent()): available since Mac OS X 10.0, used as a fallback
+ * for au_NewOutputInstance()/au_DisposeOutputInstance() on releases
+ * that predate the modern AudioComponent API (Mac OS X 10.6). */
+#import <CoreServices/CoreServices.h>
 
 static inline uint64_t
 BytesToFrames(struct aout_sys_common *p_sys, size_t i_bytes)
@@ -49,16 +54,29 @@ UsToFrames(struct aout_sys_common *p_sys, vlc_tick_t i_us)
     return i_us * p_sys->i_rate / CLOCK_FREQ;
 }
 
+/* On Intel and Apple Silicon the mach timebase is small (1/1 resp. 125/3)
+ * and naive multiply-then-divide fits in 64 bits. On PowerPC the timebase
+ * is the raw bus frequency ratio (e.g. 1000000000/33330000): multiplying
+ * an uptime-based value by either member overflows uint64_t within hours
+ * of uptime, corrupting the render dates (first symptom: the render
+ * callback plays silence forever while ca_Play fills up and blocks).
+ * Split the scaling into quotient and remainder to stay in range. */
+static inline uint64_t
+ScaleU64(uint64_t v, uint32_t num, uint32_t den)
+{
+    return (v / den) * num + ((v % den) * num) / den;
+}
+
 static inline mtime_t
 HostTimeToTick(struct aout_sys_common *p_sys, uint64_t i_host_time)
 {
-    return i_host_time * p_sys->tinfo.numer / p_sys->tinfo.denom / 1000;
+    return ScaleU64(i_host_time, p_sys->tinfo.numer, p_sys->tinfo.denom) / 1000;
 }
 
 static inline uint64_t
 TickToHostTime(struct aout_sys_common *p_sys, vlc_tick_t i_us)
 {
-    return i_us * 1000 * p_sys->tinfo.denom / p_sys->tinfo.numer;
+    return ScaleU64((uint64_t)i_us * 1000, p_sys->tinfo.denom, p_sys->tinfo.numer);
 }
 
 static void
@@ -72,6 +90,21 @@ ca_ClearOutBuffers(audio_output_t *p_aout)
 
     p_sys->i_out_size = 0;
 }
+
+/* os_unfair_lock is only available since macOS 10.12: the checks on
+ * os_unfair_lock_lock below are a runtime weak-symbol test (it is
+ * NULL when the symbol is missing), which the compiler's static
+ * -Wpartial-availability check does not recognize as a guard. This is
+ * the same false positive already worked around for the "unfair"
+ * union member's declaration in coreaudio_common.h. */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpartial-availability"
+
+#ifdef VLC_CA_NO_UNFAIR_LOCK
+/* SDK without os/lock.h: force the runtime checks below to the mutex path */
+static void (*const os_unfair_lock_lock)(os_unfair_lock *) = NULL;
+static void (*const os_unfair_lock_unlock)(os_unfair_lock *) = NULL;
+#endif
 
 static void
 lock_init(struct aout_sys_common *p_sys)
@@ -106,6 +139,8 @@ lock_unlock(struct aout_sys_common *p_sys)
     else
         vlc_mutex_unlock(&p_sys->lock.mutex);
 }
+
+#pragma clang diagnostic pop
 
 int
 ca_Open(audio_output_t *p_aout)
@@ -509,6 +544,13 @@ void ca_SetDeviceLatency(audio_output_t *p_aout, vlc_tick_t i_dev_latency_us)
     lock_unlock(p_sys);
 }
 
+/* AudioComponentFindNext()/AudioComponentInstanceNew() require Mac OS X
+ * 10.6: on older releases, fall back to the legacy Component Manager
+ * API (FindNextComponent()/OpenAComponent()), which has provided the
+ * exact same functionality since Mac OS X 10.0. AudioComponentInstance
+ * (hence AudioUnit) is typedef'd to the legacy ComponentInstance on
+ * the desktop, so the instance handed out by either API can be used
+ * interchangeably by the rest of this module. */
 AudioUnit
 au_NewOutputInstance(audio_output_t *p_aout, OSType comp_sub_type)
 {
@@ -520,22 +562,60 @@ au_NewOutputInstance(audio_output_t *p_aout, OSType comp_sub_type)
         .componentFlagsMask = 0,
     };
 
-    AudioComponent au_component;
-    au_component = AudioComponentFindNext(NULL, &desc);
-    if (au_component == NULL)
+    if (__builtin_available(macOS 10.6, *))
     {
-        msg_Err(p_aout, "cannot find any AudioComponent, PCM output failed");
-        return NULL;
-    }
+        AudioComponent au_component;
+        au_component = AudioComponentFindNext(NULL, &desc);
+        if (au_component == NULL)
+        {
+            msg_Err(p_aout, "cannot find any AudioComponent, PCM output failed");
+            return NULL;
+        }
 
-    AudioUnit au;
-    OSStatus err = AudioComponentInstanceNew(au_component, &au);
-    if (err != noErr)
-    {
-        ca_LogErr("cannot open AudioComponent, PCM output failed");
-        return NULL;
+        AudioUnit au;
+        OSStatus err = AudioComponentInstanceNew(au_component, &au);
+        if (err != noErr)
+        {
+            ca_LogErr("cannot open AudioComponent, PCM output failed");
+            return NULL;
+        }
+        return au;
     }
-    return au;
+    else
+    {
+        ComponentDescription cdesc = {
+            .componentType = desc.componentType,
+            .componentSubType = desc.componentSubType,
+            .componentManufacturer = desc.componentManufacturer,
+            .componentFlags = desc.componentFlags,
+            .componentFlagsMask = desc.componentFlagsMask,
+        };
+
+        Component component = FindNextComponent(NULL, &cdesc);
+        if (component == NULL)
+        {
+            msg_Err(p_aout, "cannot find any Component, PCM output failed");
+            return NULL;
+        }
+
+        ComponentInstance instance;
+        OSErr err = OpenAComponent(component, &instance);
+        if (err != noErr)
+        {
+            ca_LogErr("cannot open Component, PCM output failed");
+            return NULL;
+        }
+        return (AudioUnit)instance;
+    }
+}
+
+void
+au_DisposeOutputInstance(AudioUnit au)
+{
+    if (__builtin_available(macOS 10.6, *))
+        AudioComponentInstanceDispose(au);
+    else
+        CloseComponent((ComponentInstance)au);
 }
 
 /*****************************************************************************

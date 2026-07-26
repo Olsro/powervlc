@@ -1,0 +1,3 @@
+# Build output of generate-icons.sh (rendered rasters); regenerate any time.
+out/
+__pycache__/

@@ -39,6 +39,45 @@ void vout_ChangePause( vout_thread_t *, bool b_paused, vlc_tick_t i_date );
 void spu_OffsetSubtitleDate( spu_t *p_spu, vlc_tick_t i_duration );
 
 /**
+ * Look-ahead decode cache (video-cache-mb): (un)holds the display of the
+ * pictures accumulating in the decoder fifo while es_out's fill gate is
+ * active. Thread safe; a flush clears the hold on its own.
+ */
+void vout_ChangeCacheHold( vout_thread_t *, bool b_hold );
+
+/**
+ * Whether the display hold above is currently effective on the vout
+ * side. Unsynchronized snapshot (the flag is owned by the vout thread):
+ * only good for opportunistic re-arming -- a stale read costs one more
+ * picture through DecoderPlayVideo, nothing else. Used to self-heal the
+ * seek race where the vout flush cancels a hold the fill just queued.
+ */
+bool vout_IsCacheHeld( vout_thread_t * );
+
+/**
+ * Re-bases the dates of every queued (not yet displayed) picture and of
+ * pending subtitles by i_duration. Used when the fill gate opens: the held
+ * pictures were dated against the pre-buffering clock origin, this applies
+ * the exact origin shift es_out gave the input clock. Thread safe (the
+ * fifo and the spu carry their own locks), call it BEFORE releasing the
+ * hold so the vout only ever pops re-based pictures.
+ */
+void vout_OffsetCacheDates( vout_thread_t *, vlc_tick_t i_duration );
+
+/**
+ * Number of pictures the decoder may accumulate in the decoder fifo
+ * without starving the picture pool (0 when unknown or no headroom).
+ */
+unsigned vout_GetCacheHeadroom( vout_thread_t * );
+
+/**
+ * Whether the decoder and display share one picture pool (direct
+ * rendering). Selects how the look-ahead cache target reserves pool
+ * buffers for the decode side; see DecoderVideoCacheTarget.
+ */
+bool vout_CacheIsDirectRendering( vout_thread_t * );
+
+/**
  * This function will return and reset internal statistics.
  */
 void vout_GetResetStatistic( vout_thread_t *p_vout, unsigned *pi_displayed,

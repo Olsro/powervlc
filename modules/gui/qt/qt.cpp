@@ -86,7 +86,7 @@ static void ShowDialog   ( intf_thread_t *, int, int, intf_dialog_args_t * );
 
 #define SYSTRAY_TEXT N_( "Systray icon" )
 #define SYSTRAY_LONGTEXT N_( "Show an icon in the systray " \
-                             "allowing you to control VLC media player " \
+                             "allowing you to control PowerVLC media player " \
                              "for basic actions." )
 
 #define MINIMIZED_TEXT N_( "Start VLC with only a systray icon" )

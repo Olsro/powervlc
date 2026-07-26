@@ -49,6 +49,9 @@
 #include <neaacdec.h>
 #include "../packetizer/mpeg4audio.h"
 
+/* Gapless (PowerVLC): samples in a plain AAC-LC frame */
+#define AAC_FRAME_SAMPLES 1024
+
 /*****************************************************************************
  * Module descriptor
  *****************************************************************************/
@@ -161,6 +164,20 @@ static int Open( vlc_object_t *p_this )
         p_dec->fmt_out.audio.i_physical_channels
             = mpeg4_asc_channelsbyindex[i_channels];
         date_Init( &p_sys->date, i_rate, 1 );
+
+        /* Gapless (PowerVLC): libfaad never outputs the very first frame of
+         * the stream, so that much of the encoder priming has already been
+         * dropped before the generic trimming sees anything. */
+        if( p_dec->fmt_in.audio.i_gapless_priming != 0 )
+        {
+            msg_Dbg( p_dec, "gapless: dropping one frame off the %u sample "
+                     "priming (never output by libfaad)",
+                     p_dec->fmt_in.audio.i_gapless_priming );
+            if( p_dec->fmt_in.audio.i_gapless_priming > AAC_FRAME_SAMPLES )
+                p_dec->fmt_in.audio.i_gapless_priming -= AAC_FRAME_SAMPLES;
+            else
+                p_dec->fmt_in.audio.i_gapless_priming = 0;
+        }
     }
     else
     {
@@ -200,6 +217,7 @@ static int Open( vlc_object_t *p_this )
     return VLC_SUCCESS;
 }
 
+/* Gapless (PowerVLC): samples in a plain AAC-LC frame */
 /*****************************************************************************
  * FlushBuffer:
  *****************************************************************************/

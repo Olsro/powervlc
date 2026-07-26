@@ -95,6 +95,15 @@ void    input_clock_GetSystemOrigin( input_clock_t *, vlc_tick_t *pi_system, vlc
 void    input_clock_ChangeSystemOrigin( input_clock_t *, bool b_absolute, vlc_tick_t i_system );
 
 /**
+ * This function shifts the system side of the reference by a plain offset
+ * ("the world stopped for this long", e.g. resuming after a mid-play
+ * decode-cache refill). Unlike the relative mode of
+ * input_clock_ChangeSystemOrigin it neither needs nor disturbs the
+ * external-clock (netsync) state.
+ */
+void    input_clock_OffsetSystemOrigin( input_clock_t *, vlc_tick_t i_offset );
+
+/**
  * This function converts a pair of timestamp from stream clock to system clock.
  *
  * If pi_rate is provided it will be filled with the rate value used for

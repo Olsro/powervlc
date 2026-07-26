@@ -33,8 +33,11 @@ if HAVE_ANDROID
 libfreetype_plugin_la_SOURCES += text_renderer/freetype/fonts/android.c
 endif
 if HAVE_DARWIN
+libfreetype_plugin_la_LDFLAGS += -Wl,-framework,CoreFoundation -Wl,-framework,ApplicationServices -Wl,-no_implicit_dylibs
+if HAVE_CORETEXT
 libfreetype_plugin_la_SOURCES += text_renderer/freetype/fonts/darwin.c
-libfreetype_plugin_la_LDFLAGS += -Wl,-framework,CoreFoundation -Wl,-framework,CoreText
+libfreetype_plugin_la_CPPFLAGS += -DHAVE_CORETEXT
+endif
 endif
 if HAVE_FRIBIDI
 libfreetype_plugin_la_CPPFLAGS += $(FRIBIDI_CFLAGS) -DHAVE_FRIBIDI

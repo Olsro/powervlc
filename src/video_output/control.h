@@ -49,6 +49,7 @@ enum {
     VOUT_CONTROL_CHANGE_SUB_MARGIN,     /* integer */
 
     VOUT_CONTROL_PAUSE,
+    VOUT_CONTROL_CACHE_HOLD,            /* boolean */
     VOUT_CONTROL_FLUSH,                 /* time */
     VOUT_CONTROL_STEP,                  /* time_ptr */
 

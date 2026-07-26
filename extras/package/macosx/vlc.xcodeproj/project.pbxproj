@@ -645,7 +645,7 @@
 		6B8229FD1E4D2DB400833BE1 /* noart.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = noart.png; sourceTree = "<group>"; };
 		6B8229FF1E4D2DD100833BE1 /* vlc.scriptSuite */ = {isa = PBXFileReference; lastKnownFileType = text.plist.scriptSuite; path = vlc.scriptSuite; sourceTree = "<group>"; };
 		6B822A001E4D2DD100833BE1 /* vlc.scriptTerminology */ = {isa = PBXFileReference; lastKnownFileType = text.plist.scriptTerminology; path = vlc.scriptTerminology; sourceTree = "<group>"; };
-		6B822A031E4D2DEB00833BE1 /* README */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = README; sourceTree = "<group>"; };
+		6B822A031E4D2DEB00833BE1 /* README_VLC */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = README_VLC; sourceTree = "<group>"; };
 		6B846FDC1CF5D88C00112E54 /* VLCHUDButtonCell.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = VLCHUDButtonCell.h; sourceTree = "<group>"; };
 		6B846FDD1CF5D88C00112E54 /* VLCHUDButtonCell.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = VLCHUDButtonCell.m; sourceTree = "<group>"; };
 		6B846FDE1CF5D88C00112E54 /* VLCHUDCheckboxCell.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = VLCHUDCheckboxCell.h; sourceTree = "<group>"; };
@@ -820,7 +820,7 @@
 				8E445F86047289E50059A3A7 /* File Icons */,
 				6B8229BE1E4D2CDA00833BE1 /* Preference Cones */,
 				CC0430EE13B2461A00D7D52E /* UI Graphics */,
-				6B822A031E4D2DEB00833BE1 /* README */,
+				6B822A031E4D2DEB00833BE1 /* README_VLC */,
 				6B8229FF1E4D2DD100833BE1 /* vlc.scriptSuite */,
 				6B822A001E4D2DD100833BE1 /* vlc.scriptTerminology */,
 			);

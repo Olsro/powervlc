@@ -281,6 +281,21 @@ pkgconfig: pkg-config-$(PKGCFG_VERSION).tar.gz
 	$(MOVE)
 
 .buildpkg-config: pkgconfig
+	# pkg-config-lite ships config.guess/config.sub dated 2009-12-30, which
+	# predate aarch64 entirely: on an ARM64 Linux builder configure dies with
+	# "cannot guess build type; you must specify one" -- and passing --build
+	# does not help either, that vintage config.sub rejects the triplet too.
+	# Harmless on the platforms that already worked, and it is what lets the
+	# Windows cross-builds run in a container on an Apple-Silicon Mac (the
+	# tool became mandatory in cb2f8045a9, so this stopped being optional).
+	# Refresh from whichever modern copy the host has; if none is found the
+	# build simply proceeds as before.
+	@for f in config.guess config.sub; do \
+	  for d in "`automake --print-libdir 2>/dev/null`" /usr/share/misc \
+	           /usr/share/automake* /usr/share/libtool/build-aux; do \
+	    if [ -f "$$d/$$f" ]; then cp -f "$$d/$$f" "$</$$f" && break; fi; \
+	  done; \
+	done
 	cd $<; ./configure --prefix=$(PREFIX) --disable-shared --enable-static --disable-dependency-tracking
 	+$(MAKE) -C $<
 	+$(MAKE) -C $< install

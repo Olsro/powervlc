@@ -43,7 +43,8 @@
 int aout_DecNew( audio_output_t *p_aout,
                  const audio_sample_format_t *p_format,
                  const audio_replay_gain_t *p_replay_gain,
-                 const aout_request_vout_t *p_request_vout )
+                 const aout_request_vout_t *p_request_vout,
+                 bool b_gapless_ok )
 {
     if( p_format->i_bitspersample > 0 )
     {
@@ -75,6 +76,47 @@ int aout_DecNew( audio_output_t *p_aout,
 
     /* TODO: reduce lock scope depending on decoder's real need */
     aout_OutputLock (p_aout);
+
+    if (owner->b_dec_parked)
+    {
+        if (b_gapless_ok && owner->mixer_format.i_format
+         && AOUT_FMTS_IDENTICAL(&owner->input_format, p_format)
+         && atomic_load(&owner->restart) == 0)
+        {
+            /* ADOPTION: leave the output module and the filters alone */
+            owner->b_dec_parked = false;
+            aout_volume_Delete (owner->volume);
+            owner->volume = aout_volume_New (p_aout, p_replay_gain);
+            aout_volume_SetFormat (owner->volume, owner->mixer_format.i_format);
+            /* The filters keep a pointer to owner->request_vout: only its
+             * contents may be rewritten, never its address. */
+            owner->request_vout = *p_request_vout;
+            owner->sync.b_gapless_pending = true; /* offset set on 1st block */
+            owner->sync.gapless_offset = 0;
+            owner->sync.discontinuity = false; /* no resync, no flush */
+            /* Do NOT touch: sync.end, resamp_type, filters_cfg, stereo-mode */
+            msg_Dbg (p_aout, "gapless: adopted parked stream");
+            aout_OutputUnlock (p_aout);
+
+            atomic_init (&owner->buffers_lost, 0);
+            atomic_init (&owner->buffers_played, 0);
+            atomic_store (&owner->vp.update, true);
+            return 0;
+        }
+
+        msg_Dbg (p_aout, "gapless: parked stream not compatible, "
+                 "restarting output");
+        if (owner->mixer_format.i_format)
+            /* Play out what is still queued (bounded by ~2 s) before tearing
+             * the stream down, otherwise the tail of the previous track would
+             * be lost. This is the blocking drain that used to happen at the
+             * end of that track, just deferred to here. */
+            aout_OutputFlush (p_aout, true);
+        aout_DecTeardownLocked (p_aout);
+        owner->b_dec_parked = false;
+        owner->sync.gapless_offset = 0;
+        owner->sync.b_gapless_pending = false;
+    }
 
     /* Create the audio output stream */
     owner->volume = aout_volume_New (p_aout, p_replay_gain);
@@ -121,11 +163,10 @@ error:
 /**
  * Stops all plugins involved in the audio output.
  */
-void aout_DecDelete (audio_output_t *aout)
+void aout_DecTeardownLocked (audio_output_t *aout)
 {
     aout_owner_t *owner = aout_owner (aout);
 
-    aout_OutputLock (aout);
     if (owner->mixer_format.i_format)
     {
         aout_FiltersDelete (aout, owner->filters);
@@ -133,6 +174,83 @@ void aout_DecDelete (audio_output_t *aout)
     }
     aout_volume_Delete (owner->volume);
     owner->volume = NULL;
+}
+
+void aout_DecDelete (audio_output_t *aout)
+{
+    aout_owner_t *owner = aout_owner (aout);
+
+    aout_OutputLock (aout);
+    aout_DecTeardownLocked (aout);
+    owner->b_dec_parked = false;
+    owner->sync.gapless_offset = 0;
+    owner->sync.b_gapless_pending = false;
+    aout_OutputUnlock (aout);
+}
+
+/**
+ * Drains the filters into the output without waiting for playback to finish.
+ * Used at the end of a track when the output stream is about to be parked.
+ */
+void aout_DecDrainAsync (audio_output_t *aout)
+{
+    aout_owner_t *owner = aout_owner (aout);
+
+    aout_OutputLock (aout);
+    if (owner->mixer_format.i_format)
+    {
+        block_t *block = aout_FiltersDrain (owner->filters);
+        if (block)
+        {
+            /* Keep sync.end in step: it is what the next track's PTS offset
+             * is computed from. */
+            if (block->i_pts > VLC_TICK_INVALID)
+                owner->sync.end = block->i_pts + block->i_length + 1;
+            aout_OutputPlay (aout, block);
+        }
+    }
+    aout_OutputUnlock (aout);
+}
+
+/**
+ * Keeps the output stream alive (module started, filters and queued audio
+ * still playing) while no decoder is attached to it.
+ */
+void aout_DecPark (audio_output_t *aout)
+{
+    aout_owner_t *owner = aout_owner (aout);
+
+    aout_OutputLock (aout);
+    owner->b_dec_parked = true;
+    msg_Dbg (aout, "gapless: parking output stream (buffered until %"PRId64")",
+             owner->sync.end);
+    aout_OutputUnlock (aout);
+}
+
+/**
+ * Tears down a parked stream. If b_wait, the queued audio is played out first
+ * (bounded by AOUT_MAX_PREPARE_TIME, i.e. ~2 seconds).
+ */
+void aout_DecStopParked (audio_output_t *aout, bool b_wait)
+{
+    aout_owner_t *owner = aout_owner (aout);
+
+    aout_OutputLock (aout);
+    if (owner->b_dec_parked)
+    {
+        msg_Dbg (aout, "gapless: stopping parked stream (wait=%d)", b_wait);
+        if (owner->mixer_format.i_format)
+        {
+            if (!b_wait)
+                aout_FiltersFlush (owner->filters);
+            aout_OutputFlush (aout, b_wait);
+        }
+        aout_DecTeardownLocked (aout);
+        owner->b_dec_parked = false;
+        owner->sync.end = VLC_TICK_INVALID;
+        owner->sync.gapless_offset = 0;
+        owner->sync.b_gapless_pending = false;
+    }
     aout_OutputUnlock (aout);
 }
 
@@ -384,6 +502,26 @@ int aout_DecPlay (audio_output_t *aout, block_t *block, int input_rate)
         msg_Err (aout, "buffer too early (%"PRId64" us): dropped", advance);
         goto drop;
     }
+    /* Gapless: the checks above must be done on the raw PTS, the offset can
+     * be large enough (~2 s) to trip the AOUT_MAX_ADVANCE_TIME test. */
+    if (owner->sync.b_gapless_pending)
+    {
+        owner->sync.b_gapless_pending = false;
+        if (owner->sync.end != VLC_TICK_INVALID && owner->sync.end > now)
+        {
+            owner->sync.gapless_offset = owner->sync.end - block->i_pts;
+            msg_Dbg (aout, "gapless: joining streams, offset %"PRId64" us",
+                     owner->sync.gapless_offset);
+        }
+        else
+        {   /* Queue already drained (transition too long, pause...) */
+            owner->sync.gapless_offset = 0;
+            owner->sync.discontinuity = true;
+            msg_Dbg (aout, "gapless: parked buffer underran, normal resync");
+        }
+    }
+    block->i_pts += owner->sync.gapless_offset;
+
     if (block->i_flags & BLOCK_FLAG_DISCONTINUITY)
         owner->sync.discontinuity = true;
 
@@ -452,6 +590,8 @@ void aout_DecFlush (audio_output_t *aout, bool wait)
 
     aout_OutputLock (aout);
     owner->sync.end = VLC_TICK_INVALID;
+    owner->sync.gapless_offset = 0;
+    owner->sync.b_gapless_pending = false;
     if (owner->mixer_format.i_format)
     {
         if (wait)

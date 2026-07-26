@@ -296,6 +296,12 @@ case "${OS}" in
 			    *x86_64*)
 			    add_make "PLATFORM_SHORT_ARCH := x86_64"
 			    ;;
+			    powerpc*|ppc*)
+			    add_make "PLATFORM_SHORT_ARCH := ppc"
+			    ;;
+			    i686*|i386*)
+			    add_make "PLATFORM_SHORT_ARCH := i386"
+			    ;;
 			esac;
 		else
 			check_ios_sdk

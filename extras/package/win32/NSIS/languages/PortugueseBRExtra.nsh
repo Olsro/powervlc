@@ -20,31 +20,31 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Adiciona ícone à sua área de trabalho para acesso fácil"
 ${LangFileString} Desc_Section03 \
-    "O VLC Mozilla e o complemento Mozilla Firefox"
+    "O ${PRODUCT_NAME} Mozilla e o complemento Mozilla Firefox"
 ${LangFileString} Desc_Section04 \
-    "O complemento VLC ActiveX"
+    "O complemento ${PRODUCT_NAME} ActiveX"
 ${LangFileString} Desc_Section05 \
     "Registro da reprodução de DVD e CD"
 ${LangFileString} Desc_Section06 \
-    "Define o reprodutor de mídias VLC como o aplicativo padrão para uma extensão de arquivo específica"
+    "Define o reprodutor de mídias ${PRODUCT_NAME} como o aplicativo padrão para uma extensão de arquivo específica"
 ${LangFileString} Desc_Section07 \
-    "Adicionar itens ao menu de contexto ('Reproduzir com o VLC' e 'Adicionar à Lista de Reprodução do VLC')"
+    "Adicionar itens ao menu de contexto ('Reproduzir com o ${PRODUCT_NAME}' e 'Adicionar à Lista de Reprodução do ${PRODUCT_NAME}')"
 ${LangFileString} Desc_Section08 \
-    "Exclui as preferências e arquivos de cache de instalações anteriores do reprodutor de mídias VLC"
+    "Exclui as preferências e arquivos de cache de instalações anteriores do reprodutor de mídias ${PRODUCT_NAME}"
 
 ${LangFileString} Name_Section91 "Desinstalar"
 ${LangFileString} Name_Section92 "Excluir as preferências e o cache"
 
 ${LangFileString} Desc_Section91 \
-"Desinstalar o reprodutor de mídias VLC e todos os seus componentes"
+"Desinstalar o reprodutor de mídias ${PRODUCT_NAME} e todos os seus componentes"
 ${LangFileString} Desc_Section92 \
-"Exclui os arquivos de preferências e de cache do reprodutor de mídias VLC"
+"Exclui os arquivos de preferências e de cache do reprodutor de mídias ${PRODUCT_NAME}"
 
 ${LangFileString} ShellAssociation_Play "Reproduzir"
-${LangFileString} ContextMenuEntry_PlayWith "Reproduzir com o reprodutor de mídias VLC"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Adicionar à Lista de Reprodução do reprodutor de mídias VLC"
+${LangFileString} ContextMenuEntry_PlayWith "Reproduzir com o reprodutor de mídias ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Adicionar à Lista de Reprodução do reprodutor de mídias ${PRODUCT_NAME}"
 
-${LangFileString} Link_VisitWebsite "Visite o sítio do reprodutor de mídias VLC na Internet"
+${LangFileString} Link_VisitWebsite "Visite o sítio do reprodutor de mídias ${PRODUCT_NAME} na Internet"
 
 ${LangFileString} Name_InstTypeRecommended "Recomendado"
 ${LangFileString} Name_InstTypeMinimum "Mínimo"
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Reproduzir Blu-Ray"
 ${LangFileString} License_NextText "Agora você está ciente dos seus direitos. Clique em Próximo para continuar."
 
 ${LangFileString} Detail_CheckProcesses "Verificando processos..."
-${LangFileString} MessageBox_VLCRunning "Parece que o VLC está sendo executado e não será fechado."
-${LangFileString} MessageBox_VLCUnableToClose "Este instalador não foi capaz de fechar o VLC. Por favor, faça isso manualmente."
+${LangFileString} MessageBox_VLCRunning "Parece que o ${PRODUCT_NAME} está sendo executado e não será fechado."
+${LangFileString} MessageBox_VLCUnableToClose "Este instalador não foi capaz de fechar o ${PRODUCT_NAME}. Por favor, faça isso manualmente."
 ${LangFileString} MessageBox_InstallAborted "Instalação interrompida!"
 
 ${LangFileString} Reinstall_Headline "Já instalado"
-${LangFileString} Reinstall_HeadlineInstall "Escolha como deseja instalar o VLC."
+${LangFileString} Reinstall_HeadlineInstall "Escolha como deseja instalar o ${PRODUCT_NAME}."
 ${LangFileString} Reinstall_HeadlineMaintenance "Escolha a opção de manutenção que deseja executar."
-${LangFileString} Reinstall_MessageOlder "Uma versão anterior do VLC está instalada em seu sistema. Selecione a operação que deseja executar e clique em Próximo para continuar."
-${LangFileString} Reinstall_MessageNewer "Uma versão mais recente do VLC já está instalada em seu sistema e não é recomendado que você regrida para uma versão anterior. Selecione a operação que deseja e clique em Próximo para continuar."
-${LangFileString} Reinstall_MessageSame "O VLC ${VERSION} já está instalado. Selecione a operação que deseja executar e clique em Próximo para continuar."
-${LangFileString} Reinstall_OptionUpgrade "Atualizar o VLC usando configurações definidas (recomendado)"
-${LangFileString} Reinstall_OptionDowngrade "Regredir a versão do VLC usando as configurações definidas (recomendado)"
+${LangFileString} Reinstall_MessageOlder "Uma versão anterior do ${PRODUCT_NAME} está instalada em seu sistema. Selecione a operação que deseja executar e clique em Próximo para continuar."
+${LangFileString} Reinstall_MessageNewer "Uma versão mais recente do ${PRODUCT_NAME} já está instalada em seu sistema e não é recomendado que você regrida para uma versão anterior. Selecione a operação que deseja e clique em Próximo para continuar."
+${LangFileString} Reinstall_MessageSame "O ${PRODUCT_NAME} ${VERSION} já está instalado. Selecione a operação que deseja executar e clique em Próximo para continuar."
+${LangFileString} Reinstall_OptionUpgrade "Atualizar o ${PRODUCT_NAME} usando configurações definidas (recomendado)"
+${LangFileString} Reinstall_OptionDowngrade "Regredir a versão do ${PRODUCT_NAME} usando as configurações definidas (recomendado)"
 ${LangFileString} Reinstall_OptionComponents "Adicionar/Remover/Reinstalar componentes"
 ${LangFileString} Reinstall_OptionAdvanced "Alterar as configurações (avançado)"
-${LangFileString} Reinstall_OptionUninstall "Desinstalar o VLC"
+${LangFileString} Reinstall_OptionUninstall "Desinstalar o ${PRODUCT_NAME}"

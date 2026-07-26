@@ -1177,13 +1177,13 @@ void VLCMenuBar::updateSystrayMenu( MainInterface *mi,
     if( mi->isVisible() || b_force_visible )
     {
         sysMenu->addAction( QIcon( ":/logo/vlc16.png" ),
-                            qtr( "&Hide VLC media player in taskbar" ), mi,
+                            qtr( "&Hide PowerVLC media player in taskbar" ), mi,
                             SLOT( hideUpdateSystrayMenu() ) );
     }
     else
     {
         sysMenu->addAction( QIcon( ":/logo/vlc16.png" ),
-                            qtr( "Sho&w VLC media player" ), mi,
+                            qtr( "Sho&w PowerVLC media player" ), mi,
                             SLOT( showUpdateSystrayMenu() ) );
     }
     sysMenu->addSeparator();

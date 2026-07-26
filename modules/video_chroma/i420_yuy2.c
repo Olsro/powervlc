@@ -84,7 +84,15 @@ static picture_t *I420_Y211_Filter    ( filter_t *, picture_t * );
 vlc_module_begin ()
 #if defined (MODULE_NAME_IS_i420_yuy2)
     set_description( N_("Conversions from " SRC_FOURCC " to " DEST_FOURCC) )
+# if defined (__powerpc__) || defined (__POWERPC__)
+    /* On SIMD-less PowerPC (G3), this direct packing routine must win over
+     * the generic swscale path (score 150), which burns the whole CPU
+     * (hScale8To15_c/yuv2yuyv422_X_c seen at 50%+ on DVD playback). The
+     * AltiVec variant (250) still wins on G4/G5. */
+    set_capability( "video converter", 170 )
+# else
     set_capability( "video converter", 80 )
+# endif
 # define vlc_CPU_capable() (true)
 #elif defined (MODULE_NAME_IS_i420_yuy2_mmx)
     set_description( N_("MMX conversions from " SRC_FOURCC " to " DEST_FOURCC) )
@@ -227,56 +235,58 @@ static void I420_YUY2( filter_t *p_filter, picture_t *p_source,
     vector unsigned char uv_vec;
     vector unsigned char y_vec;
 
-    if( !( ( (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) % 32 ) |
-           ( (p_filter->fmt_in.video.i_y_offset + p_filter->fmt_in.video.i_visible_height) % 2 ) ) )
+    /* 16-byte alignment of every plane base and pitch: vec_ld/vec_st
+     * silently truncate unaligned addresses, and explicit margin handling
+     * below is what makes padded pitches (DVD: chroma 360 visible, 368+
+     * pitch) safe -- the old code assumed pitch == visible width. The
+     * 16-pixel tail never over-reads: with a 16-multiple chroma pitch,
+     * visible_c + 8 rounds up inside the row padding by construction. */
+    if( !( ( (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) % 16 ) |
+           ( (p_filter->fmt_in.video.i_y_offset + p_filter->fmt_in.video.i_visible_height) % 2 ) |
+           (int)( ( (uintptr_t)p_dest->p->p_pixels
+                  | (uintptr_t)p_dest->p->i_pitch
+                  | (uintptr_t)p_source->p[Y_PLANE].p_pixels
+                  | (uintptr_t)p_source->p[Y_PLANE].i_pitch
+                  | (uintptr_t)p_u | (uintptr_t)p_v
+                  | (uintptr_t)p_source->p[U_PLANE].i_pitch ) & 15 ) ) )
     {
-        /* Width is a multiple of 32, we take 2 lines at a time */
+        const int i_vec_width = p_filter->fmt_in.video.i_x_offset
+                              + p_filter->fmt_in.video.i_visible_width;
+        const bool b_tail = ( i_vec_width % 32 ) != 0; /* trailing 16 px */
+        const int i_vec_sm = p_source->p[0].i_pitch
+                           - p_source->p[0].i_visible_pitch
+                           - p_filter->fmt_in.video.i_x_offset;
+        const int i_vec_sm_c = p_source->p[1].i_pitch
+                             - p_source->p[1].i_visible_pitch
+                             - ( p_filter->fmt_in.video.i_x_offset / 2 );
+        const int i_vec_dm = p_dest->p->i_pitch
+                           - p_dest->p->i_visible_pitch
+                           - ( p_filter->fmt_out.video.i_x_offset * 2 );
+
         for( i_y = (p_filter->fmt_in.video.i_y_offset + p_filter->fmt_in.video.i_visible_height) / 2 ; i_y-- ; )
         {
             VEC_NEXT_LINES( );
-            for( i_x = (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) / 32 ; i_x-- ; )
+            for( i_x = i_vec_width / 32 ; i_x-- ; )
             {
                 VEC_LOAD_UV( );
                 VEC_MERGE( vec_mergeh );
                 VEC_MERGE( vec_mergel );
             }
+            if( b_tail )
+            {
+                /* Last 16 pixels of the pair (DVD: 720 = 22*32 + 16):
+                 * only the high half of a chroma load pairs with one Y
+                 * vector, so chroma advances by 8, not 16. */
+                u_vec = vec_ld( 0, p_u ); p_u += 8;
+                v_vec = vec_ld( 0, p_v ); p_v += 8;
+                VEC_MERGE( vec_mergeh );
+            }
+            p_y2 += i_vec_sm;
+            p_u += i_vec_sm_c;
+            p_v += i_vec_sm_c;
+            p_line2 += i_vec_dm;
         }
     }
-#warning FIXME: converting widths % 16 but !widths % 32 is broken on altivec
-#if 0
-    else if( !( ( (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) % 16 ) |
-                ( (p_filter->fmt_in.video.i_y_offset + p_filter->fmt_in.video.i_visible_height) % 4 ) ) )
-    {
-        /* Width is only a multiple of 16, we take 4 lines at a time */
-        for( i_y = (p_filter->fmt_in.video.i_y_offset + p_filter->fmt_in.video.i_visible_height) / 4 ; i_y-- ; )
-        {
-            /* Line 1 and 2, pixels 0 to ( width - 16 ) */
-            VEC_NEXT_LINES( );
-            for( i_x = (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) / 32 ; i_x-- ; )
-            {
-                VEC_LOAD_UV( );
-                VEC_MERGE( vec_mergeh );
-                VEC_MERGE( vec_mergel );
-            }
-
-            /* Line 1 and 2, pixels ( width - 16 ) to ( width ) */
-            VEC_LOAD_UV( );
-            VEC_MERGE( vec_mergeh );
-
-            /* Line 3 and 4, pixels 0 to 16 */
-            VEC_NEXT_LINES( );
-            VEC_MERGE( vec_mergel );
-
-            /* Line 3 and 4, pixels 16 to ( width ) */
-            for( i_x = (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) / 32 ; i_x-- ; )
-            {
-                VEC_LOAD_UV( );
-                VEC_MERGE( vec_mergeh );
-                VEC_MERGE( vec_mergel );
-            }
-        }
-    }
-#endif
     else
     {
         /* Crap, use the C version */
@@ -305,6 +315,47 @@ static void I420_YUY2( filter_t *p_filter, picture_t *p_source,
         p_y2 += p_source->p[Y_PLANE].i_pitch;
 
 #if !defined (MODULE_NAME_IS_i420_yuy2_mmx)
+# if (defined (__powerpc__) || defined (__POWERPC__)) && defined (WORDS_BIGENDIAN)
+        /* This loop is memory-bound on cacheless-SIMD PowerPC: dcbz
+         * pre-zeroes each 32-byte destination cache line, skipping its
+         * read-for-ownership and halving the write traffic. Every pair
+         * of iterations fills exactly one line per row, and the entry
+         * condition guarantees full lines are always overwritten. dcbz
+         * keeps 32-byte semantics even on the 970 (dcbzl is the wide
+         * one), so this stays correct on G5. The word-load macros also
+         * need 4-byte-aligned Y rows and 2-byte-aligned chroma rows,
+         * checked here once per frame. */
+        if( !( ((uintptr_t)p_dest->p->p_pixels & 31)
+             | (uintptr_t)(p_dest->p->i_pitch & 31)
+             | ((uintptr_t)p_source->p[Y_PLANE].p_pixels & 3)
+             | (uintptr_t)(p_source->p[Y_PLANE].i_pitch & 3)
+             | ((uintptr_t)p_u & 1) | ((uintptr_t)p_v & 1)
+             | (uintptr_t)(p_source->p[U_PLANE].i_pitch & 1)
+             | (uintptr_t)((p_filter->fmt_in.video.i_x_offset
+                  + p_filter->fmt_in.video.i_visible_width) & 15) ) )
+        for( i_x = (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) / 8; i_x-- ; )
+        {
+            if( !((uintptr_t)p_line1 & 31) )
+            {
+                /* dcbz avoids the read-for-ownership of the destination
+                 * lines; dcbt streams the source Y (both rows) a couple of
+                 * cache lines ahead. The 750's hardware prefetch is weak,
+                 * so this measurably cuts the memory stalls of this
+                 * bandwidth-bound loop. */
+                __asm__ volatile ("dcbz 0,%0" :: "r" (p_line1) : "memory");
+                __asm__ volatile ("dcbz 0,%0" :: "r" (p_line2) : "memory");
+                __asm__ volatile ("dcbt 0,%0" :: "r" (p_y1 + 64));
+                __asm__ volatile ("dcbt 0,%0" :: "r" (p_y2 + 64));
+                /* chroma advances at half the Y rate: +32 keeps the same
+                 * prefetch distance (two iterations) for U and V */
+                __asm__ volatile ("dcbt 0,%0" :: "r" (p_u + 32));
+                __asm__ volatile ("dcbt 0,%0" :: "r" (p_v + 32));
+            }
+            C_YUV420_YUYV_W4( );
+            C_YUV420_YUYV_W4( );
+        }
+        else
+# endif
         for( i_x = (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) / 8; i_x-- ; )
         {
             C_YUV420_YUYV( );
@@ -442,51 +493,50 @@ static void I420_YVYU( filter_t *p_filter, picture_t *p_source,
     vector unsigned char vu_vec;
     vector unsigned char y_vec;
 
-    if( !( ( (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) % 32 ) |
-           ( (p_filter->fmt_in.video.i_y_offset + p_filter->fmt_in.video.i_visible_height) % 2 ) ) )
+    /* Same alignment/margin discipline as I420_YUY2 (see there): the old
+     * "multiple of 16, 4 lines at a time" path assumed pitch == visible
+     * width and read the next chroma row out of this row's padding. */
+    if( !( ( (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) % 16 ) |
+           ( (p_filter->fmt_in.video.i_y_offset + p_filter->fmt_in.video.i_visible_height) % 2 ) |
+           (int)( ( (uintptr_t)p_dest->p->p_pixels
+                  | (uintptr_t)p_dest->p->i_pitch
+                  | (uintptr_t)p_source->p[Y_PLANE].p_pixels
+                  | (uintptr_t)p_source->p[Y_PLANE].i_pitch
+                  | (uintptr_t)p_u | (uintptr_t)p_v
+                  | (uintptr_t)p_source->p[U_PLANE].i_pitch ) & 15 ) ) )
     {
-        /* Width is a multiple of 32, we take 2 lines at a time */
+        const int i_vec_width = p_filter->fmt_in.video.i_x_offset
+                              + p_filter->fmt_in.video.i_visible_width;
+        const bool b_tail = ( i_vec_width % 32 ) != 0; /* trailing 16 px */
+        const int i_vec_sm = p_source->p[0].i_pitch
+                           - p_source->p[0].i_visible_pitch
+                           - p_filter->fmt_in.video.i_x_offset;
+        const int i_vec_sm_c = p_source->p[1].i_pitch
+                             - p_source->p[1].i_visible_pitch
+                             - ( p_filter->fmt_in.video.i_x_offset / 2 );
+        const int i_vec_dm = p_dest->p->i_pitch
+                           - p_dest->p->i_visible_pitch
+                           - ( p_filter->fmt_out.video.i_x_offset * 2 );
+
         for( i_y = (p_filter->fmt_in.video.i_y_offset + p_filter->fmt_in.video.i_visible_height) / 2 ; i_y-- ; )
         {
             VEC_NEXT_LINES( );
-            for( i_x = (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) / 32 ; i_x-- ; )
+            for( i_x = i_vec_width / 32 ; i_x-- ; )
             {
                 VEC_LOAD_UV( );
                 VEC_MERGE( vec_mergeh );
                 VEC_MERGE( vec_mergel );
             }
-        }
-    }
-    else if( !( ( (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) % 16 ) |
-                ( (p_filter->fmt_in.video.i_y_offset + p_filter->fmt_in.video.i_visible_height) % 4 ) ) )
-    {
-        /* Width is only a multiple of 16, we take 4 lines at a time */
-        for( i_y = (p_filter->fmt_in.video.i_y_offset + p_filter->fmt_in.video.i_visible_height) / 4 ; i_y-- ; )
-        {
-            /* Line 1 and 2, pixels 0 to ( width - 16 ) */
-            VEC_NEXT_LINES( );
-            for( i_x = (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) / 32 ; i_x-- ; )
+            if( b_tail )
             {
-                VEC_LOAD_UV( );
+                u_vec = vec_ld( 0, p_u ); p_u += 8;
+                v_vec = vec_ld( 0, p_v ); p_v += 8;
                 VEC_MERGE( vec_mergeh );
-                VEC_MERGE( vec_mergel );
             }
-
-            /* Line 1 and 2, pixels ( width - 16 ) to ( width ) */
-            VEC_LOAD_UV( );
-            VEC_MERGE( vec_mergeh );
-
-            /* Line 3 and 4, pixels 0 to 16 */
-            VEC_NEXT_LINES( );
-            VEC_MERGE( vec_mergel );
-
-            /* Line 3 and 4, pixels 16 to ( width ) */
-            for( i_x = (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) / 32 ; i_x-- ; )
-            {
-                VEC_LOAD_UV( );
-                VEC_MERGE( vec_mergeh );
-                VEC_MERGE( vec_mergel );
-            }
+            p_y2 += i_vec_sm;
+            p_u += i_vec_sm_c;
+            p_v += i_vec_sm_c;
+            p_line2 += i_vec_dm;
         }
     }
     else
@@ -655,51 +705,50 @@ static void I420_UYVY( filter_t *p_filter, picture_t *p_source,
     vector unsigned char uv_vec;
     vector unsigned char y_vec;
 
-    if( !( ( (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) % 32 ) |
-           ( (p_filter->fmt_in.video.i_y_offset + p_filter->fmt_in.video.i_visible_height) % 2 ) ) )
+    /* Same alignment/margin discipline as I420_YUY2 (see there): the old
+     * "multiple of 16, 4 lines at a time" path assumed pitch == visible
+     * width and read the next chroma row out of this row's padding. */
+    if( !( ( (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) % 16 ) |
+           ( (p_filter->fmt_in.video.i_y_offset + p_filter->fmt_in.video.i_visible_height) % 2 ) |
+           (int)( ( (uintptr_t)p_dest->p->p_pixels
+                  | (uintptr_t)p_dest->p->i_pitch
+                  | (uintptr_t)p_source->p[Y_PLANE].p_pixels
+                  | (uintptr_t)p_source->p[Y_PLANE].i_pitch
+                  | (uintptr_t)p_u | (uintptr_t)p_v
+                  | (uintptr_t)p_source->p[U_PLANE].i_pitch ) & 15 ) ) )
     {
-        /* Width is a multiple of 32, we take 2 lines at a time */
+        const int i_vec_width = p_filter->fmt_in.video.i_x_offset
+                              + p_filter->fmt_in.video.i_visible_width;
+        const bool b_tail = ( i_vec_width % 32 ) != 0; /* trailing 16 px */
+        const int i_vec_sm = p_source->p[0].i_pitch
+                           - p_source->p[0].i_visible_pitch
+                           - p_filter->fmt_in.video.i_x_offset;
+        const int i_vec_sm_c = p_source->p[1].i_pitch
+                             - p_source->p[1].i_visible_pitch
+                             - ( p_filter->fmt_in.video.i_x_offset / 2 );
+        const int i_vec_dm = p_dest->p->i_pitch
+                           - p_dest->p->i_visible_pitch
+                           - ( p_filter->fmt_out.video.i_x_offset * 2 );
+
         for( i_y = (p_filter->fmt_in.video.i_y_offset + p_filter->fmt_in.video.i_visible_height) / 2 ; i_y-- ; )
         {
             VEC_NEXT_LINES( );
-            for( i_x = (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) / 32 ; i_x-- ; )
+            for( i_x = i_vec_width / 32 ; i_x-- ; )
             {
                 VEC_LOAD_UV( );
                 VEC_MERGE( vec_mergeh );
                 VEC_MERGE( vec_mergel );
             }
-        }
-    }
-    else if( !( ( (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) % 16 ) |
-                ( (p_filter->fmt_in.video.i_y_offset + p_filter->fmt_in.video.i_visible_height) % 4 ) ) )
-    {
-        /* Width is only a multiple of 16, we take 4 lines at a time */
-        for( i_y = (p_filter->fmt_in.video.i_y_offset + p_filter->fmt_in.video.i_visible_height) / 4 ; i_y-- ; )
-        {
-            /* Line 1 and 2, pixels 0 to ( width - 16 ) */
-            VEC_NEXT_LINES( );
-            for( i_x = (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) / 32 ; i_x-- ; )
+            if( b_tail )
             {
-                VEC_LOAD_UV( );
+                u_vec = vec_ld( 0, p_u ); p_u += 8;
+                v_vec = vec_ld( 0, p_v ); p_v += 8;
                 VEC_MERGE( vec_mergeh );
-                VEC_MERGE( vec_mergel );
             }
-
-            /* Line 1 and 2, pixels ( width - 16 ) to ( width ) */
-            VEC_LOAD_UV( );
-            VEC_MERGE( vec_mergeh );
-
-            /* Line 3 and 4, pixels 0 to 16 */
-            VEC_NEXT_LINES( );
-            VEC_MERGE( vec_mergel );
-
-            /* Line 3 and 4, pixels 16 to ( width ) */
-            for( i_x = (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) / 32 ; i_x-- ; )
-            {
-                VEC_LOAD_UV( );
-                VEC_MERGE( vec_mergeh );
-                VEC_MERGE( vec_mergel );
-            }
+            p_y2 += i_vec_sm;
+            p_u += i_vec_sm_c;
+            p_v += i_vec_sm_c;
+            p_line2 += i_vec_dm;
         }
     }
     else
@@ -729,6 +778,33 @@ static void I420_UYVY( filter_t *p_filter, picture_t *p_source,
         p_y1 = p_y2;
         p_y2 += p_source->p[Y_PLANE].i_pitch;
 
+#if !defined (MODULE_NAME_IS_i420_yuy2_mmx) \
+ && (defined (__powerpc__) || defined (__POWERPC__)) && defined (WORDS_BIGENDIAN)
+        /* same dcbz + word-load fast path as I420_YUY2 (see there) */
+        if( !( ((uintptr_t)p_dest->p->p_pixels & 31)
+             | (uintptr_t)(p_dest->p->i_pitch & 31)
+             | ((uintptr_t)p_source->p[Y_PLANE].p_pixels & 3)
+             | (uintptr_t)(p_source->p[Y_PLANE].i_pitch & 3)
+             | ((uintptr_t)p_u & 1) | ((uintptr_t)p_v & 1)
+             | (uintptr_t)(p_source->p[U_PLANE].i_pitch & 1)
+             | (uintptr_t)((p_filter->fmt_in.video.i_x_offset
+                  + p_filter->fmt_in.video.i_visible_width) & 15) ) )
+        for( i_x = (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) / 8 ; i_x-- ; )
+        {
+            if( !((uintptr_t)p_line1 & 31) )
+            {
+                __asm__ volatile ("dcbz 0,%0" :: "r" (p_line1) : "memory");
+                __asm__ volatile ("dcbz 0,%0" :: "r" (p_line2) : "memory");
+                __asm__ volatile ("dcbt 0,%0" :: "r" (p_y1 + 64));
+                __asm__ volatile ("dcbt 0,%0" :: "r" (p_y2 + 64));
+                __asm__ volatile ("dcbt 0,%0" :: "r" (p_u + 32));
+                __asm__ volatile ("dcbt 0,%0" :: "r" (p_v + 32));
+            }
+            C_YUV420_UYVY_W4( );
+            C_YUV420_UYVY_W4( );
+        }
+        else
+#endif
         for( i_x = (p_filter->fmt_in.video.i_x_offset + p_filter->fmt_in.video.i_visible_width) / 8 ; i_x-- ; )
         {
 #if !defined (MODULE_NAME_IS_i420_yuy2_mmx)

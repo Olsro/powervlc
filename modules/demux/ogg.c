@@ -459,6 +459,24 @@ static int Demux( demux_t * p_demux )
                 assert( p_stream->prepcr.pp_blocks == NULL );
                 b_doprepcr = true;
             }
+            /* FLAC has no prepcr rebase pass (unlike Vorbis/Opus/Speex): a
+             * long-running Ogg-FLAC webradio is joined mid-stream at a huge
+             * absolute granulepos, so its first PCR would land days ahead and
+             * wedge input buffering — es_out declares buffering done at once
+             * while the decoder is still empty, hence "buffer deadlock
+             * prevented", the ES is dropped and no sound is heard (reproduced
+             * identically on modern builds; upstream 3.0 gap). Anchor that
+             * first page to the timeline origin so the offset carries into
+             * every FLAC block PTS and page PCR below; a real file that starts
+             * near granule 0 stays below the threshold and is untouched. */
+            else if ( p_stream->fmt.i_codec == VLC_CODEC_FLAC &&
+                      p_sys->i_nzpcr_offset == 0 )
+            {
+                int64_t i_ts = Oggseek_GranuleToAbsTimestamp( p_stream,
+                        ogg_page_granulepos( &p_sys->current_page ), false );
+                if ( i_ts > CLOCK_FREQ * 10 )
+                    p_sys->i_nzpcr_offset = -i_ts;
+            }
         }
 
         int i_real_page_packets = 0;
@@ -1342,8 +1360,17 @@ static void Ogg_DecodePacket( demux_t *p_demux,
             break;
         }
 
-        /* Backup the ogg packet (likely an header packet) */
-        if( !b_xiph && (p_stream->i_headers + p_oggpacket->bytes) )
+        /* Backup the ogg packet (likely an header packet).
+         * Non-xiph codecs (FLAC) store their headers raw: realloc(NULL, ...)
+         * acts as malloc, so the very first packet (i_headers == 0 and a fresh
+         * p_headers == NULL) is stored correctly right here. Commit 532e81b9
+         * added the `&& p_stream->i_headers` guard to dodge a double free
+         * (#29220), but that also diverted FLAC's first header packet into
+         * xiph_AppendHeaders(), which prepends a spurious xiph count byte and
+         * corrupts STREAMINFO parsing -> garbage rate/bps -> endless "emulated
+         * sync word" and no audio on Ogg-FLAC web radios. Keep the guard only
+         * for the dangling case (i_headers == 0 with a non-NULL p_headers). */
+        if( !b_xiph && (p_stream->i_headers || p_stream->p_headers == NULL) )
         {
             uint8_t *p_realloc = realloc( p_stream->p_headers, p_stream->i_headers + p_oggpacket->bytes );
             if( p_realloc )

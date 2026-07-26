@@ -72,6 +72,11 @@ VLC_API picture_t * picture_fifo_Peek( picture_fifo_t * ) VLC_USED;
 VLC_API void picture_fifo_Push( picture_fifo_t *, picture_t * );
 
 /**
+ * It returns the number of picture_t currently held in the fifo.
+ */
+VLC_API size_t picture_fifo_Count( picture_fifo_t * ) VLC_USED;
+
+/**
  * It release all picture inside the fifo that have a lower or equal date
  * if flush_before or higher or equal to if not flush_before than the given one.
  *

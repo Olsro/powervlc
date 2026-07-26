@@ -631,6 +631,7 @@ static int ControlLocked( es_out_t *p_out, int i_query, va_list args )
     /* Pass-through control */
     case ES_OUT_SET_MODE:
     case ES_OUT_SET_GROUP:
+    case ES_OUT_SET_VIDEO_CACHE_INHIBIT:
     case ES_OUT_SET_PCR:
     case ES_OUT_SET_GROUP_PCR:
     case ES_OUT_RESET_PCR:
@@ -1384,6 +1385,7 @@ static int CmdInitControl( ts_cmd_t *p_cmd, int i_query, va_list args, bool b_co
     case ES_OUT_SET_MODE:    /* arg1= int                            */
     case ES_OUT_SET_GROUP:   /* arg1= int                            */
     case ES_OUT_DEL_GROUP:   /* arg1=int i_group */
+    case ES_OUT_SET_VIDEO_CACHE_INHIBIT: /* arg1=int (bool) */
         p_cmd->u.control.u.i_int = (int)va_arg( args, int );
         break;
 
@@ -1544,6 +1546,7 @@ static int CmdExecuteControl( es_out_t *p_out, ts_cmd_t *p_cmd )
     case ES_OUT_SET_MODE:    /* arg1= int                            */
     case ES_OUT_SET_GROUP:   /* arg1= int                            */
     case ES_OUT_DEL_GROUP:   /* arg1=int i_group */
+    case ES_OUT_SET_VIDEO_CACHE_INHIBIT: /* arg1=int (bool) */
         return es_out_Control( p_out, i_query, p_cmd->u.control.u.i_int );
 
     case ES_OUT_SET_PCR:                /* arg1=int64_t i_pcr(microsecond!) (using default group 0)*/

@@ -1,0 +1,21 @@
+Darwin: don't define _POSIX_C_SOURCE
+
+On Mac OS X, defining _POSIX_C_SOURCE hides non-POSIX declarations such
+as Dl_info/dladdr() (used by src/file/dl_posix.c). Modern SDKs undo the
+damage when _DARWIN_C_SOURCE is also defined, but that escape hatch does
+not exist in the 10.4 SDK, so simply do not request strict POSIX
+visibility on Darwin.
+
+--- a/meson.build
++++ b/meson.build
+@@ -47,7 +47,9 @@ if host_machine.system() == 'windows'
+         extra_dependencies += cc.find_library('ssp')
+         test_args += '-D__USE_MINGW_ANSI_STDIO=1'
+     endif
+-else
++elif host_machine.system() == 'darwin'
++    # _POSIX_C_SOURCE would hide Dl_info/dladdr in <dlfcn.h> (pre-10.5 SDKs)
++else
+     test_args += '-D_POSIX_C_SOURCE=200809L'
+ endif
+

@@ -1,0 +1,250 @@
+BD-J: let the jar run on a Java 5 JRE
+
+Mac OS X 10.4 and 10.5 on PowerPC top out at Apple's Java 1.5.0_19; Java 6 on
+Mac was Intel-only, and the community PowerPC port of it is not something a
+release should depend on. Lowering -source/-target alone is not enough: the
+J2SE adaptation layer replaces JDK-internal classes, and a handful of those
+changed shape between Java 5 and Java 6, so the jar would load and then die.
+
+Measured against Apple's own 1.5.0_19 class library, the divergence is small:
+java.awt.Toolkit has zero abstract methods that Java 6 dropped (it only adds),
+java.awt.peer.ComponentPeer has two, FramePeer one, and java.io.FileSystem two.
+requestFocus(Component,boolean,boolean,long) was already implemented, so four
+methods had to be added. They are all extra methods on Java 6+, where they
+override nothing and are never called, which keeps a single jar valid on both.
+
+  - BDComponentPeer.flip(FlipContents): Java 6 reshaped it to
+    flip(int,int,int,int,FlipContents). Different signature, so both coexist.
+  - BDFramePeer.setIconImage(Image): replaced by WindowPeer.updateIconImages
+    in Java 6.
+  - BDFileSystemImpl.checkAccess(File,boolean): Java 6 changed the second
+    parameter to an int.
+  - BDFileSystemImpl.deleteOnExit(File): abstract in Java 5, gone in Java 6.
+
+The last two delegate through reflection: the jar is compiled against a Java 6
+rt.jar, where the delegate has neither member, and resolving them statically is
+impossible. On Java 6+ the reflective lookup is never reached.
+
+HScene is the one case that could not be solved by adding a method.
+Container.getComponentZOrder and setComponentZOrder are *final* in Java 5, and
+a class overriding a final method fails verification the moment it is loaded --
+fatal, and unconditional, since HScene is central to BD-J menus. Both were only
+ever called from inside HScene (checked across the whole BD-J tree), so they
+become private helpers; anything outside now gets Container's implementation,
+which is what a real Java 5 BD-J stack would have used in the first place. The
+only visible difference is that Container throws on an out-of-range index where
+libbluray's version returned silently.
+
+After this, the only post-Java-5 references left in the jars are the Java 6
+members reached exclusively from the dead methods above (Dialog.ModalityType,
+Dialog.ModalExclusionType, FileSystem.checkAccess(File,int), setPermission,
+getSpace) plus the CausedFocusEvent/FocusEvent.Cause pair upstream already
+treats as lazily linked. None is reachable on a Java 5 VM.
+
+--- a/src/libbluray/bdj/java/org/havi/ui/HScene.java
++++ b/src/libbluray/bdj/java/org/havi/ui/HScene.java
+@@ -87,17 +87,23 @@
+         return false;
+     }
+ 
+-    public int getComponentZOrder(Component component) {
++    /* Not overrides: Container.getComponentZOrder and setComponentZOrder are
++     * final in Java 5, and overriding a final method makes the class fail
++     * verification (java.lang.VerifyError) as soon as it is loaded. They were
++     * only ever called from within HScene, so they are private helpers now and
++     * external callers get Container's own implementation - which is what any
++     * Java 5 BD-J stack would have used anyway. */
++    private int zOrderOf(Component component) {
+         for (int i = 0; i < getComponentCount(); i++)
+             if (getComponent(i) == component)
+                 return i;
+         return -1;
+     }
+ 
+-    public /*boolean*/void setComponentZOrder(Component component, int index) {
++    private void setZOrder(Component component, int index) {
+         if (index < 0)
+             return;//return false;
+-        int i = getComponentZOrder(component);
++        int i = zOrderOf(component);
+         if (i < 0)
+             return;//return false;
+         if (i == index)
+@@ -111,7 +117,7 @@
+     }
+ 
+     public Component addBefore(Component component, Component behind) {
+-        int index = getComponentZOrder(behind);
++        int index = zOrderOf(behind);
+         if (index < 0)
+             return null;
+ 
+@@ -119,7 +125,7 @@
+     }
+ 
+     public Component addAfter(Component component, Component front) {
+-        int index = getComponentZOrder(front);
++        int index = zOrderOf(front);
+         if (index < 0)
+             return null;
+ 
+@@ -127,59 +133,59 @@
+     }
+ 
+     public boolean popToFront(Component component) {
+-        if (getComponentZOrder(component) < 0)
++        if (zOrderOf(component) < 0)
+             return false;
+-        /*return */setComponentZOrder(component, 0);
++        /*return */setZOrder(component, 0);
+         return true;
+     }
+ 
+     public boolean pushToBack(Component component) {
+-        if (getComponentZOrder(component) < 0)
++        if (zOrderOf(component) < 0)
+             return false;
+-        /*return */setComponentZOrder(component, getComponentCount());
++        /*return */setZOrder(component, getComponentCount());
+         return true;
+     }
+ 
+     public boolean pop(Component component) {
+-        int index = getComponentZOrder(component);
++        int index = zOrderOf(component);
+         if (index < 0)
+             return false;
+         if (index == 0)
+             return true; // already at the front
+ 
+-        /*return */setComponentZOrder(component, index - 1);
++        /*return */setZOrder(component, index - 1);
+         return true;
+     }
+ 
+     public boolean push(Component component) {
+-        int index = getComponentZOrder(component);
++        int index = zOrderOf(component);
+         if (index < 0)
+             return false;
+ 
+         if (index == getComponentCount())
+             return true; // already at the back
+ 
+-        /*return */setComponentZOrder(component, index + 1);
++        /*return */setZOrder(component, index + 1);
+         return true;
+     }
+ 
+     public boolean popInFrontOf(Component move, Component behind) {
+-        int index = getComponentZOrder(behind);
++        int index = zOrderOf(behind);
+ 
+         // the behind component must already be in the Container
+-        if (index < 0 || getComponentZOrder(move) < 0)
++        if (index < 0 || zOrderOf(move) < 0)
+             return false;
+ 
+-        /*return */setComponentZOrder(move, getComponentZOrder(behind));
++        /*return */setZOrder(move, zOrderOf(behind));
+         return true;
+     }
+ 
+     public boolean pushBehind(Component move, Component front) {
+-        int index = getComponentZOrder(front);
+-        if (index < 0 || getComponentZOrder(move) < 0)
++        int index = zOrderOf(front);
++        if (index < 0 || zOrderOf(move) < 0)
+             return false;
+ 
+-        /*return */setComponentZOrder(move, index + 1);
++        /*return */setZOrder(move, index + 1);
+         return true;
+     }
+ 
+--- a/src/libbluray/bdj/java-j2se/java/awt/peer/BDComponentPeer.java
++++ b/src/libbluray/bdj/java-j2se/java/awt/peer/BDComponentPeer.java
+@@ -91,6 +91,11 @@
+     public void flip(int a, int b, int c, int d, java.awt.BufferCapabilities.FlipContents e) {
+     }
+ 
++    /* java 5 only: ComponentPeer.flip took just the contents there. Harmless
++     * extra method on Java 6+, where it overrides nothing. */
++    public void flip(java.awt.BufferCapabilities.FlipContents e) {
++    }
++
+     /* java 6 only */
+     public Rectangle getBounds() {
+         return new Rectangle(location.x, location.y, size.width, size.height);
+--- a/src/libbluray/bdj/java-j2se/java/awt/peer/BDFramePeer.java
++++ b/src/libbluray/bdj/java-j2se/java/awt/peer/BDFramePeer.java
+@@ -65,6 +65,11 @@
+     public void emulateActivation(boolean doActivate) {
+     }
+ 
++    /* java 5 only: FramePeer.setIconImage was replaced by
++     * WindowPeer.updateIconImages in Java 6. */
++    public void setIconImage(Image im) {
++    }
++
+     //
+     // ContainerPeer
+     //
+--- a/src/libbluray/bdj/java-j2se/java/io/BDFileSystemImpl.java
++++ b/src/libbluray/bdj/java-j2se/java/io/BDFileSystemImpl.java
+@@ -43,4 +43,55 @@
+     public int getNameMax(String path) {
+         return 255;
+     }
++
++    /*
++     * Java 5 only. FileSystem declared two abstract methods there that Java 6
++     * dropped or reshaped, and a concrete subclass must implement both or the
++     * class cannot be instantiated (AbstractMethodError). They are compiled
++     * against a Java 6 rt.jar, where the delegate has neither, so the delegation
++     * goes through reflection; on Java 6+ these override nothing and are dead
++     * code. See contrib/src/bluray/rules.mak for the Java 5 target rationale.
++     */
++    private static java.lang.reflect.Method lookup(Class cls, String name,
++                                                   Class[] sig) {
++        while (cls != null) {
++            try {
++                java.lang.reflect.Method m = cls.getDeclaredMethod(name, sig);
++                m.setAccessible(true);
++                return m;
++            } catch (Throwable t) {
++                cls = cls.getSuperclass();
++            }
++        }
++        return null;
++    }
++
++    /* Java 5: checkAccess(File, boolean write); Java 6: checkAccess(File, int) */
++    public boolean checkAccess(File f, boolean write) {
++        java.lang.reflect.Method m = lookup(fs.getClass(), "checkAccess",
++                new Class[] { File.class, Boolean.TYPE });
++        if (m == null) {
++            return false;
++        }
++        try {
++            return ((Boolean)m.invoke(fs,
++                    new Object[] { f, Boolean.valueOf(write) })).booleanValue();
++        } catch (Throwable t) {
++            return false;
++        }
++    }
++
++    /* Java 5 only: gone from FileSystem in Java 6. */
++    public boolean deleteOnExit(File f) {
++        java.lang.reflect.Method m = lookup(fs.getClass(), "deleteOnExit",
++                new Class[] { File.class });
++        if (m == null) {
++            return false;
++        }
++        try {
++            return ((Boolean)m.invoke(fs, new Object[] { f })).booleanValue();
++        } catch (Throwable t) {
++            return false;
++        }
++    }
+ }

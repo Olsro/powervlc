@@ -413,6 +413,14 @@ struct input_stats_t
     int64_t i_displayed_pictures;
     int64_t i_lost_pictures;
 
+    /* Look-ahead decode cache (video-cache-mb): live fill level and
+     * current target in pictures, plus the memory the cached pictures
+     * actually use; target is 0 when the feature is off or no video is
+     * playing. */
+    int64_t i_video_cache_pictures;
+    int64_t i_video_cache_target;
+    int64_t i_video_cache_bytes;
+
     /* Sout */
     int64_t i_sent_packets;
     int64_t i_sent_bytes;

@@ -101,8 +101,29 @@ static filter_t *FindResampler (vlc_object_t *obj,
                                 const audio_sample_format_t *infmt,
                                 const audio_sample_format_t *outfmt)
 {
-    return CreateFilter (obj, "audio resampler", "$audio-resampler", NULL,
-                         infmt, outfmt, NULL, true);
+    char *name = var_InheritString (obj, "audio-resampler");
+
+    /* PowerVLC: when no resampler is explicitly requested, default the
+     * adaptive (clock-drift) resampler to the light, band-limited Speex
+     * resampler rather than libsamplerate's SINC. The drift ratio stays
+     * ~1.0, so SINC's cost (several % of a core on old Macs) buys no
+     * audible quality; Speex is as cheap as nearest-neighbour yet
+     * artefact-free. This only touches drift correction -- fixed-rate
+     * conversion (e.g. 44.1->48 kHz for music) uses the separate "audio
+     * converter" and is left alone. Toggle via "audio-efficient-resampler". */
+    if (name == NULL && var_InheritBool (obj, "audio-efficient-resampler"))
+    {
+        filter_t *f = CreateFilter (obj, "audio resampler", "speex", NULL,
+                                    infmt, outfmt, NULL, true);
+        if (f != NULL)
+            return f;
+        /* Speex not available in this build: fall back to the default. */
+    }
+
+    filter_t *f = CreateFilter (obj, "audio resampler", name, NULL,
+                                infmt, outfmt, NULL, true);
+    free (name);
+    return f;
 }
 
 /**

@@ -1,0 +1,58 @@
+Java 6 boot class path for the BD-J build
+=========================================
+
+What this is
+------------
+rt.jar from **OpenJDK 6 b38** as packaged by Debian (IcedTea 1.13.10), taken
+from the binary package:
+
+    openjdk-6-jre-headless_6b38-1.13.10-1~deb7u1_amd64.deb
+    sha256 fdfa1442b906e62a46a82a582e48b0b6b3e67611b569606678107536a2e333ce
+    http://archive.debian.org/debian/pool/main/o/openjdk-6/
+
+The checksum above is the one published in Debian's own (HTTPS-served) package
+indexes for both wheezy/main and wheezy/updates, and was verified on download.
+rt.jar is architecture-independent: the amd64 package is only where it happens
+to ship. COPYRIGHT is that package's Debian copyright file.
+
+Why it is archived here
+-----------------------
+The BD-J jars built by contrib/src/bluray must run on the oldest JRE our targets
+can offer, which is Java 6 (including the community Java 6 PowerPC port on
+10.4+). Two build steps need a real Java 6 class library, and neither should
+depend on a network fetch or on an old machine being powered on:
+
+  - javac compiles the BD-J sources with -bootclasspath pointing here, so the
+    compiler physically cannot link against an API newer than Java 6;
+  - check-bdj-java6.py resolves against this jar the references that the JDK's
+    ct.sym cannot describe, because ct.sym only records the *documented* API and
+    BD-J's AWT replacement legitimately reaches into package-private and sun.awt
+    internals (sun.awt.CausedFocusEvent, sun.awt.ComponentFactory,
+    java.awt.EventDispatchThread, java.io.FileSystem and friends).
+
+Both are wired up in contrib/src/bluray/rules.mak through BLURAY_JAVA6_DIR;
+every .jar found in this directory joins the boot class path automatically.
+
+This jar is **compile-time only**. Nothing here is copied into the application
+bundle, and PowerVLC never redistributes a JRE: BD-J menus require the user to
+have installed one.
+
+Licensing
+---------
+OpenJDK 6 is GPLv2 with the Classpath Exception — redistributable, unlike the
+Apple or Oracle runtimes. See COPYRIGHT. GPLv2 section 3 ties redistribution of
+the binary to making the corresponding source available; the matching Debian
+source package is:
+
+    openjdk-6_6b38-1.13.10.orig.tar.gz
+    http://archive.debian.org/debian/pool/main/o/openjdk-6/
+
+Why not Apple's Java 6
+----------------------
+Apple's classes.jar/ui.jar (1.6.0_65) is what the PowerPC port descends from, so
+it is the most faithful reference, but it is proprietary and cannot be shipped
+in a public tree. It was used once, off a 10.6.8 machine, to cross-check this
+setup: the BD-J jars compiled against the OpenJDK 6 rt.jar below verify clean
+against Apple's class library too, every internal reference included. That check
+can be repeated at any time by pointing BLURAY_JAVA6_DIR at a local copy of
+Apple's Classes/ directory.

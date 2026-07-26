@@ -83,6 +83,9 @@ typedef struct playlist_private_t
     vlc_mutex_t lock; /**< dah big playlist global lock */
     vlc_cond_t signal; /**< wakes up the playlist engine thread */
     bool     killed; /**< playlist is shutting down */
+    /** Gapless (PowerVLC): the playlist stopped on a user request (stop or
+     * shutdown) rather than at the natural end of the playlist. */
+    bool     request_stopped;
     bool     cork_effective; /**< Corked while actively playing */
 
     int      i_last_playlist_id; /**< Last id to an item */

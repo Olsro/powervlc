@@ -34,21 +34,40 @@ endif
 libgnutls_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(miscdir)'
 if HAVE_DARWIN
 libgnutls_plugin_la_LDFLAGS += -Wl,-framework,Security,-framework,CoreFoundation
+# memmem() only exists since macOS 10.7 (see misc/darwin_memmem.c)
+libgnutls_plugin_la_SOURCES += misc/darwin_memmem.c
 endif
 EXTRA_LTLIBRARIES += libgnutls_plugin.la
 misc_LTLIBRARIES += $(LTLIBgnutls)
 
 if HAVE_DARWIN
+if HAVE_SECURETRANSPORT
 libsecuretransport_plugin_la_SOURCES = misc/securetransport.c
-libsecuretransport_plugin_la_CFLAGS = $(AM_CFLAGS) $(SECURETRANSPORT_CFLAGS)
+# SSLCopyPeerTrust()/SSLSetSessionOption()/SecPolicyCreateSSL() require
+# Mac OS X 10.6; on an older deployment target, this simply makes the
+# plugin fail to load at runtime there instead of being unavailable at
+# compile time (gnutls remains available as a TLS backend).
+libsecuretransport_plugin_la_CFLAGS = $(AM_CFLAGS) $(SECURETRANSPORT_CFLAGS) -mmacosx-version-min=10.6
 libsecuretransport_plugin_la_LIBADD = $(SECURETRANSPORT_LIBS)
 libsecuretransport_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(miscdir)' -Wl,-framework,Security,-framework,CoreFoundation
 misc_LTLIBRARIES += libsecuretransport_plugin.la
+endif
 endif
 
 libxdg_screensaver_plugin_la_SOURCES = misc/inhibit/xdg.c
 if HAVE_XCB
 misc_LTLIBRARIES += libxdg_screensaver_plugin.la
+endif
+
+libdarwin_legacy_inhibit_plugin_la_SOURCES = misc/inhibit/darwin_legacy.c
+libdarwin_legacy_inhibit_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(miscdir)' \
+	-Wl,-framework,CoreServices
+if HAVE_OSX
+if !HAVE_OSX_GCD
+# Only useful below 10.6: from there the (modern) interface holds proper
+# IOPMAssertions itself.
+misc_LTLIBRARIES += libdarwin_legacy_inhibit_plugin.la
+endif
 endif
 
 libdbus_screensaver_plugin_la_SOURCES = misc/inhibit/dbus.c

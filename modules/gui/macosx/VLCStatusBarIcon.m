@@ -375,7 +375,7 @@
         }
     } else {
         /* Nothing playing */
-        title = _NS("VLC media player");
+        title = _NS("PowerVLC media player");
         artist = _NS("Nothing playing");
     }
 

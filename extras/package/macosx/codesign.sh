@@ -72,21 +72,21 @@ if [ "x$1" != "x" ]; then
 fi
 
 VLCCACHEGEN=""
-if [ -e "./bin/vlc-cache-gen" ]; then
-    VLCCACHEGEN="./bin/vlc-cache-gen"
+if [ -e "./bin/powervlc-cache-gen" ]; then
+    VLCCACHEGEN="./bin/powervlc-cache-gen"
 fi
-if [ -e "./vlc-cache-gen" ]; then
-    VLCCACHEGEN="./vlc-cache-gen"
+if [ -e "./powervlc-cache-gen" ]; then
+    VLCCACHEGEN="./powervlc-cache-gen"
 fi
 
 $VLCCACHEGEN --help 1>/dev/null 2>&1 && returncode=$? || returncode=$?
 if [ $returncode -ne 0 ]; then
-    info "WARN: Cannot execute vlc-cache-gen with path '$VLCCACHEGEN' (wrong arch?)"
+    info "WARN: Cannot execute powervlc-cache-gen with path '$VLCCACHEGEN' (wrong arch?)"
     VLCCACHEGEN=""
 fi
 
 if [ -z "$VLCCACHEGEN" ]; then
-    info "WARN: Cannot find vlc-cache-gen, cache will be removed for signing"
+    info "WARN: Cannot find powervlc-cache-gen, cache will be removed for signing"
 fi
 
 SCRIPTDIR=$(dirname "$0")

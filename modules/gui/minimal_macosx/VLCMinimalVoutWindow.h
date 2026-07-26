@@ -31,6 +31,7 @@
 
 - (id)initWithContentRect:(NSRect)contentRect;
 
+- (void)setSizeFromValue:(NSValue *)value;
 - (void)enterFullscreen;
 - (void)leaveFullscreen;
 @end

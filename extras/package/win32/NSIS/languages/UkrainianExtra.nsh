@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Додає піктограми до вашого робочого столу для легкого доступу"
 ${LangFileString} Desc_Section03 \
-    "Модуль VLC для Mozilla та Mozilla Firefox"
+    "Модуль ${PRODUCT_NAME} для Mozilla та Mozilla Firefox"
 ${LangFileString} Desc_Section04 \
-    "Модуль VLC ActiveX"
+    "Модуль ${PRODUCT_NAME} ActiveX"
 ${LangFileString} Desc_Section05 \
     "Реєстрація відтворення DVD та CD"
 ${LangFileString} Desc_Section06 \
-    "Установлює медіапрогравач VLC як типову програму для вказаного типу файлів"
+    "Установлює медіапрогравач ${PRODUCT_NAME} як типову програму для вказаного типу файлів"
 ${LangFileString} Desc_Section07 \
-    "Додати елементи контекстного меню ('Відтворити з VLC' and 'Додати до списку відтворення VLC')"
+    "Додати елементи контекстного меню ('Відтворити з ${PRODUCT_NAME}' and 'Додати до списку відтворення ${PRODUCT_NAME}')"
 ${LangFileString} Desc_Section08 \
-    "Вилучає налаштування медіапрогравача VLC та файли кешу, які залишилися від попередніх інсталяцій"
+    "Вилучає налаштування медіапрогравача ${PRODUCT_NAME} та файли кешу, які залишилися від попередніх інсталяцій"
 
 ${LangFileString} Name_Section91 "Видалити"
 ${LangFileString} Name_Section92 "Вилучити налаштування і кеш"
 
 ${LangFileString} Desc_Section91 \
-"Видалити медіапрогравач VLC та усі його компоненти"
+"Видалити медіапрогравач ${PRODUCT_NAME} та усі його компоненти"
 ${LangFileString} Desc_Section92 \
-"Вилучає налаштування медіапрогравача VLC та файли кешу"
+"Вилучає налаштування медіапрогравача ${PRODUCT_NAME} та файли кешу"
 
 ${LangFileString} ShellAssociation_Play "Відтворити"
-${LangFileString} ContextMenuEntry_PlayWith "Відтворити через медіапрогравач VLC"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Додати до списку відтворення медіапрогравача VLC"
+${LangFileString} ContextMenuEntry_PlayWith "Відтворити через медіапрогравач ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Додати до списку відтворення медіапрогравача ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "Відвідати веб-сайт медіапрогравача VLC від  VideoLAN"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Відтворювати Blu-ray"
 ${LangFileString} License_NextText "Тепер ви обізнані про свої права. Натисніть кнопку Далі, аби продовжити."
 
 ${LangFileString} Detail_CheckProcesses "Перевіряються процеси…"
-${LangFileString} MessageBox_VLCRunning "VLC наразі запущена і невдовзі буде закрита."
-${LangFileString} MessageBox_VLCUnableToClose "Програма установки не може закрити VLC. Будь ласка, зробіть це вручну."
+${LangFileString} MessageBox_VLCRunning "${PRODUCT_NAME} наразі запущена і невдовзі буде закрита."
+${LangFileString} MessageBox_VLCUnableToClose "Програма установки не може закрити ${PRODUCT_NAME}. Будь ласка, зробіть це вручну."
 ${LangFileString} MessageBox_InstallAborted "Перервано встановлення!"
 
 ${LangFileString} Reinstall_Headline "Вже встановлено"
-${LangFileString} Reinstall_HeadlineInstall "Виберіть, як ви хочете встановити VLC."
+${LangFileString} Reinstall_HeadlineInstall "Виберіть, як ви хочете встановити ${PRODUCT_NAME}."
 ${LangFileString} Reinstall_HeadlineMaintenance "Виберіть варіант дії для виконання."
-${LangFileString} Reinstall_MessageOlder "Старіша версія VLC встановлена у вашій системі. Виберіть, яку дію слід виконати, і натисніть Далі для продовження."
-${LangFileString} Reinstall_MessageNewer "Новіша версія VLC встановлена у вашій системі. Не рекомендується встановлювати старішу версію. Виберіть, яку дію слід виконати, і натисніть Далі для продовження."
-${LangFileString} Reinstall_MessageSame "Програма VLC ${VERSION} встановлена у вашій системі. Виберіть, яку дію слід виконати, і натисніть Далі для продовження."
-${LangFileString} Reinstall_OptionUpgrade "Встановити новішу версію VLC з попередніми установками (рекомендовано)"
-${LangFileString} Reinstall_OptionDowngrade "Встановити старішу версію VLC з попередніми установками (рекомендовано)"
+${LangFileString} Reinstall_MessageOlder "Старіша версія ${PRODUCT_NAME} встановлена у вашій системі. Виберіть, яку дію слід виконати, і натисніть Далі для продовження."
+${LangFileString} Reinstall_MessageNewer "Новіша версія ${PRODUCT_NAME} встановлена у вашій системі. Не рекомендується встановлювати старішу версію. Виберіть, яку дію слід виконати, і натисніть Далі для продовження."
+${LangFileString} Reinstall_MessageSame "Програма ${PRODUCT_NAME} ${VERSION} встановлена у вашій системі. Виберіть, яку дію слід виконати, і натисніть Далі для продовження."
+${LangFileString} Reinstall_OptionUpgrade "Встановити новішу версію ${PRODUCT_NAME} з попередніми установками (рекомендовано)"
+${LangFileString} Reinstall_OptionDowngrade "Встановити старішу версію ${PRODUCT_NAME} з попередніми установками (рекомендовано)"
 ${LangFileString} Reinstall_OptionComponents "Додати/Вилучити/Перевстановити компоненти"
 ${LangFileString} Reinstall_OptionAdvanced "Змінити параметри (розширені)"
-${LangFileString} Reinstall_OptionUninstall "Видалити VLC"
+${LangFileString} Reinstall_OptionUninstall "Видалити ${PRODUCT_NAME}"

@@ -223,8 +223,17 @@ check autoconf $MIN_AUTOCONF
 check automake $MIN_AUTOMAKE
 check m4 $MIN_M4
 check libtool $MIN_LIBTOOL
-check pkg-config
+# PowerVLC: always build pkg-config. Which binary answers matters as much as its
+# version: the one built here is configured --prefix=build, so its BUILT-IN
+# default search path is only build/lib/pkgconfig, which is what keeps VLC's
+# own configure from finding host .pc files. A Homebrew pkg-config passes the
+# version check but defaults to /opt/homebrew/lib/pkgconfig, and then configure
+# silently picks up host libraries: it found Homebrew's dbus and linked
+# libdbus-1.3.dylib into the executable and ~all plugins, producing a bundle
+# that cannot launch on a Mac without Homebrew.
+NEEDED="$NEEDED pkg-config"
 check cmake $MIN_CMAKE
+check yasm
 check_tar
 check_sed
 check_majmin protoc $MIN_PROTOC
@@ -236,7 +245,13 @@ check_nasm $MIN_NASM
 check help2man
 check meson $MIN_MESON
 check_ninja $MIN_NINJA
-check gettext
+# PowerVLC: gettext is needed for its autoconf MACROS, not just its binaries, so
+# "does gettext --version work" is the wrong question. contrib packages autoreconf
+# with -I extras/tools/build/share/aclocal, and libcddb's configure.ac calls
+# AM_ICONV, which lives in gettext's iconv.m4. A Homebrew gettext satisfies the
+# binary check but is keg-only, so its share/aclocal is on nobody's search path
+# and .cddb then dies on "possibly undefined macro: AM_ICONV". Always build it.
+NEEDED="$NEEDED gettext"
 check zstd $MIN_ZSTD
 
 DEPS_ONLY="help2man"

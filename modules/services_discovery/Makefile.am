@@ -83,8 +83,11 @@ sd_LTLIBRARIES += $(LTLIBmicrodns)
 EXTRA_LTLIBRARIES += libmicrodns_plugin.la
 
 libbonjour_plugin_la_SOURCES = services_discovery/bonjour.m
-libbonjour_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -fobjc-arc
+# ARC is rejected by clang below Mac OS X 10.6.
+libbonjour_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -fobjc-arc -mmacosx-version-min=10.6
 libbonjour_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(sddir)' -Wl,-framework,Foundation
 if HAVE_DARWIN
+if HAVE_OBJC_ARC
 sd_LTLIBRARIES += libbonjour_plugin.la
+endif
 endif

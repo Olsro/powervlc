@@ -99,13 +99,13 @@ libcompat:
 	cd compat && $(MAKE) $(AM_MAKEFLAGS)
 
 libvlccore: libcompat
-	cd src && $(MAKE) $(AM_MAKEFLAGS) libvlccore.la
+	cd src && $(MAKE) $(AM_MAKEFLAGS) libpowervlccore.la
 
 libvlc: libvlccore
-	cd lib && $(MAKE) $(AM_MAKEFLAGS) libvlc.la
+	cd lib && $(MAKE) $(AM_MAKEFLAGS) libpowervlc.la
 
-core: libvlc vlc$(EXEEXT)
-	cd bin && $(MAKE) $(AM_MAKEFLAGS) vlc$(EXEEXT) vlc-static$(EXEEXT)
+core: libvlc powervlc$(EXEEXT)
+	cd bin && $(MAKE) $(AM_MAKEFLAGS) powervlc$(EXEEXT) powervlc-static$(EXEEXT)
 
 doc:
 	cd doc && $(MAKE) $(AM_MAKEFLAGS) doc
@@ -116,7 +116,7 @@ doc:
 # Building aliases
 ###############################################################################
 
-ALL_ALIASES = cvlc rvlc svlc qvlc nvlc
+ALL_ALIASES = cpowervlc rpowervlc spowervlc qpowervlc npowervlc
 if BUILD_VLC
 bin_SCRIPTS = $(ALIASES)
 endif
@@ -127,30 +127,30 @@ dist_noinst_SCRIPTS += make-alias
 
 MKALIAS = bindir="$(bindir)" transform="$(transform)" program_prefix="$(program_prefix)" program_suffix="$(program_suffix)" $(top_srcdir)/make-alias $@
 
-cvlc: make-alias Makefile
+cpowervlc: make-alias Makefile
 	$(AM_V_GEN)$(MKALIAS) dummy
 
-rvlc: make-alias Makefile
+rpowervlc: make-alias Makefile
 	$(AM_V_GEN)$(MKALIAS) rc
 
-svlc: make-alias Makefile
+spowervlc: make-alias Makefile
 	$(AM_V_GEN)$(MKALIAS) skins2
 
-qvlc: make-alias Makefile
+qpowervlc: make-alias Makefile
 	$(AM_V_GEN)$(MKALIAS) qt
 
-nvlc: make-alias Makefile
+npowervlc: make-alias Makefile
 	$(AM_V_GEN)$(MKALIAS) ncurses
 
 if BUILD_VLC
-noinst_SCRIPTS = vlc$(EXEEXT)
+noinst_SCRIPTS = powervlc$(EXEEXT)
 endif
 
-vlc$(EXEEXT):
+powervlc$(EXEEXT):
 if HAVE_DARWIN
-	$(AM_V_GEN)$(LN_S) -f bin/vlc-osx-static vlc
+	$(AM_V_GEN)$(LN_S) -f bin/powervlc-osx-static powervlc
 else
-	$(AM_V_GEN)$(LN_S) -f bin/vlc-static$(EXEEXT) vlc$(EXEEXT)
+	$(AM_V_GEN)$(LN_S) -f bin/powervlc-static$(EXEEXT) powervlc$(EXEEXT)
 endif
 
 TESTS = test/run_vlc.sh
@@ -165,7 +165,7 @@ install-exec-hook:
 		PATH="$(DESTDIR)$(bindir):$$PATH" \
 		LD_LIBRARY_PATH="$(DESTDIR)$(libdir):$$LD_LIBRARY_PATH" \
 		DYLD_LIBRARY_PATH="$(DESTDIR)$(libdir):$$DYLD_LIBRARY_PATH" \
-		"$(DESTDIR)$(vlclibdir)/vlc-cache-gen$(EXEEXT)" \
+		"$(DESTDIR)$(vlclibdir)/powervlc-cache-gen$(EXEEXT)" \
 			 "$(DESTDIR)$(vlclibdir)/plugins" ; \
 	else \
 		echo "Cross-compilation: cache generation skipped!" ; \

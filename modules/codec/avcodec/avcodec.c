@@ -126,8 +126,17 @@ vlc_module_begin ()
     add_obsolete_bool( "ffmpeg-fast" ) /* removed since 2.1.0 */
     add_bool( "avcodec-fast", false, FAST_TEXT, FAST_LONGTEXT, false )
     add_obsolete_integer ( "ffmpeg-skiploopfilter" ) /* removed since 2.1.0 */
+#if (defined (__powerpc__) || defined (__POWERPC__)) && !defined (__ALTIVEC__)
+    /* Every saved cycle counts on SIMD-less PowerPC: skip the in-loop
+     * deblocking on non-reference frames only. Those frames are never
+     * used for prediction, so the (slight) extra blockiness cannot
+     * propagate; H.264/HEVC 480p goes from saturated to borderline. */
+    add_integer ( "avcodec-skiploopfilter", 1, SKIPLOOPF_TEXT,
+                  SKIPLOOPF_LONGTEXT, false)
+#else
     add_integer ( "avcodec-skiploopfilter", 0, SKIPLOOPF_TEXT,
                   SKIPLOOPF_LONGTEXT, false)
+#endif
         change_safe ()
         change_integer_list( nloopf_list, nloopf_list_text )
 

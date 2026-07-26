@@ -22,6 +22,12 @@ OPUS_CONF= --disable-extra-programs --disable-doc
 ifndef HAVE_FPU
 OPUS_CONF += --enable-fixed-point
 endif
+ifdef HAVE_MACOSX
+ifneq ($(call darwin_min_os_at_least, 10.5), true)
+# libSystem before 10.5 has no __stack_chk_fail/__stack_chk_guard
+OPUS_CONF += --disable-stack-protector
+endif
+endif
 
 # disable rtcd on aarch64-windows
 ifeq ($(ARCH)-$(HAVE_WIN32),aarch64-1)

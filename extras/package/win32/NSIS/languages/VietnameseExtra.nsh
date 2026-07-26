@@ -16,19 +16,19 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Thêm biểu tượng vào Desktop để dễ truy cập"
 ${LangFileString} Desc_Section08 \
-    "Xoá cài đặt và tệp bộ nhớ đệm của trình phát phương tiện VLC còn sót lại từ các lần cài đặt trước"
+    "Xoá cài đặt và tệp bộ nhớ đệm của trình phát phương tiện ${PRODUCT_NAME} còn sót lại từ các lần cài đặt trước"
 
 ${LangFileString} Name_Section91 "Gỡ cài đặt"
 ${LangFileString} Name_Section92 "Xoá cài đặt và bộ nhớ đệm"
 
 ${LangFileString} Desc_Section91 \
-"Gỡ cài đặt trình phát phương tiện VLC và tất cả thành phần của nó"
+"Gỡ cài đặt trình phát phương tiện ${PRODUCT_NAME} và tất cả thành phần của nó"
 ${LangFileString} Desc_Section92 \
-"Xoá cài đặt và tệp bộ nhớ đệm của trình phát phương tiện VLC"
+"Xoá cài đặt và tệp bộ nhớ đệm của trình phát phương tiện ${PRODUCT_NAME}"
 
 ${LangFileString} ShellAssociation_Play "Phát"
-${LangFileString} ContextMenuEntry_PlayWith "Phát bằng trình phát phương tiện VLC"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Thêm vào danh sách phát của trình phát phương tiện VLC"
+${LangFileString} ContextMenuEntry_PlayWith "Phát bằng trình phát phương tiện ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Thêm vào danh sách phát của trình phát phương tiện ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "Đi đến trang web của VideoLAN trình phát phương tiện VLC"
 
@@ -48,18 +48,18 @@ ${LangFileString} Action_OnArrivalBluray "Phát Blu-ray"
 ${LangFileString} License_NextText "Bây giờ bạn đã nhận thức được các quyền của bạn. Click Tiếp để tiếp tục."
 
 ${LangFileString} Detail_CheckProcesses "Đang kiểm tra các tiến trình..."
-${LangFileString} MessageBox_VLCRunning "VLC có vẻ đang chạy và sẽ được đóng ngay."
-${LangFileString} MessageBox_VLCUnableToClose "Trình cài đặt này không thể đóng VLC, hãy đóng nó thủ công."
+${LangFileString} MessageBox_VLCRunning "${PRODUCT_NAME} có vẻ đang chạy và sẽ được đóng ngay."
+${LangFileString} MessageBox_VLCUnableToClose "Trình cài đặt này không thể đóng ${PRODUCT_NAME}, hãy đóng nó thủ công."
 ${LangFileString} MessageBox_InstallAborted "Cài đặt bị huỷ!"
 
 ${LangFileString} Reinstall_Headline "Đã được cài đặt"
-${LangFileString} Reinstall_HeadlineInstall "Chọn cách bạn muốn cài đặt VLC."
+${LangFileString} Reinstall_HeadlineInstall "Chọn cách bạn muốn cài đặt ${PRODUCT_NAME}."
 ${LangFileString} Reinstall_HeadlineMaintenance "Chọn tuỳ chọn bảo trì để thực hiện."
-${LangFileString} Reinstall_MessageOlder "Một phiên bản cũ hơn của VLC được cài đặt trên hệ thống của bạn. Chọn hoạt động bạn muốn thực hiện và click Tiếp để tiếp tục."
-${LangFileString} Reinstall_MessageNewer "Một phiên bản mới hơn của VLC đã được cài đặt! Việc hạ cấp xuống một phiên bản cũ hơn không được khuyến nghị. Chọn hoạt động bạn muốn thực hiện và click Tiếp để tiếp tục."
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} đã được cài đặt. Chọn hoạt động bạn muốn thực hiện và click Tiếp để tiếp tục."
-${LangFileString} Reinstall_OptionUpgrade "Nâng cấp VLC dùng cài đặt trước (được khuyến nghị)"
-${LangFileString} Reinstall_OptionDowngrade "Hạ cấp VLC dùng cài đặt trước (được khuyến nghị)"
+${LangFileString} Reinstall_MessageOlder "Một phiên bản cũ hơn của ${PRODUCT_NAME} được cài đặt trên hệ thống của bạn. Chọn hoạt động bạn muốn thực hiện và click Tiếp để tiếp tục."
+${LangFileString} Reinstall_MessageNewer "Một phiên bản mới hơn của ${PRODUCT_NAME} đã được cài đặt! Việc hạ cấp xuống một phiên bản cũ hơn không được khuyến nghị. Chọn hoạt động bạn muốn thực hiện và click Tiếp để tiếp tục."
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} đã được cài đặt. Chọn hoạt động bạn muốn thực hiện và click Tiếp để tiếp tục."
+${LangFileString} Reinstall_OptionUpgrade "Nâng cấp ${PRODUCT_NAME} dùng cài đặt trước (được khuyến nghị)"
+${LangFileString} Reinstall_OptionDowngrade "Hạ cấp ${PRODUCT_NAME} dùng cài đặt trước (được khuyến nghị)"
 ${LangFileString} Reinstall_OptionComponents "Thêm/Gỡ bỏ/Cài đặt lại các thành phần"
 ${LangFileString} Reinstall_OptionAdvanced "Thay đổi cài đặt (nâng cao)"
-${LangFileString} Reinstall_OptionUninstall "Gỡ cài đặt VLC"
+${LangFileString} Reinstall_OptionUninstall "Gỡ cài đặt ${PRODUCT_NAME}"

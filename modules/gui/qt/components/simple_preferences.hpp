@@ -128,6 +128,7 @@ private slots:
 #endif
     void configML();
     void changeStyle( QString );
+    void onSkinsLink( const QString & );
 };
 
 #endif

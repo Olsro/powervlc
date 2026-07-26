@@ -108,6 +108,11 @@ struct aout_sys_t
     /* Whether we need to set the mixing mode back */
     bool                        b_changed_mixing;
 
+    /* Original device nominal sample rate to restore on Stop (0 = none).
+     * Switching the device to the stream rate (like Apple's DVD Player
+     * does) removes every resampling stage, which a G3 cannot afford. */
+    Float64                     f_revert_rate;
+
     CFArrayRef                  device_list;
     /* protects access to device_list */
     vlc_mutex_t                 device_list_lock;
@@ -1060,6 +1065,65 @@ WarnConfiguration(audio_output_t *p_aout)
 /*
  * StartAnalog: open and setup a HAL AudioUnit to do PCM audio output
  */
+/* Switch the device nominal sample rate to the stream rate when the
+ * hardware supports it: this removes both VLC's resampler and the AUHAL
+ * internal converter from the pipeline. Returns the rate to restore on
+ * Stop, or 0 when nothing was changed. */
+static Float64
+SetDeviceRate(audio_output_t *p_aout, AudioObjectID i_dev, unsigned i_rate)
+{
+    Float64 f_current = 0;
+    if (AO_GET1PROP(i_dev, Float64, &f_current,
+                    kAudioDevicePropertyNominalSampleRate,
+                    kAudioObjectPropertyScopeGlobal) != VLC_SUCCESS)
+        return 0;
+
+    if ((unsigned)(f_current + 0.5) == i_rate)
+        return 0;
+
+    UInt32 i_ranges = 0;
+    AudioValueRange *p_ranges = NULL;
+    if (AO_GETPROP(i_dev, AudioValueRange, &i_ranges, &p_ranges,
+                   kAudioDevicePropertyAvailableNominalSampleRates,
+                   kAudioObjectPropertyScopeGlobal) != VLC_SUCCESS)
+        return 0;
+
+    bool b_supported = false;
+    for (UInt32 i = 0; i < i_ranges && !b_supported; i++)
+        b_supported = i_rate >= (unsigned)p_ranges[i].mMinimum
+                   && i_rate <= (unsigned)p_ranges[i].mMaximum;
+    free(p_ranges);
+
+    if (!b_supported)
+    {
+        msg_Dbg(p_aout, "device cannot run at %u Hz, will resample", i_rate);
+        return 0;
+    }
+
+    Float64 f_rate = i_rate;
+    int ret = AO_SETPROP(i_dev, sizeof(f_rate), &f_rate,
+                         kAudioDevicePropertyNominalSampleRate,
+                         kAudioObjectPropertyScopeGlobal)
+    if (ret != VLC_SUCCESS)
+        return 0;
+
+    /* The switch is asynchronous on some HALs: give it a moment */
+    for (int i = 0; i < 20; i++)
+    {
+        Float64 f_check = 0;
+        if (AO_GET1PROP(i_dev, Float64, &f_check,
+                        kAudioDevicePropertyNominalSampleRate,
+                        kAudioObjectPropertyScopeGlobal) == VLC_SUCCESS
+         && (unsigned)(f_check + 0.5) == i_rate)
+            break;
+        msleep(10000);
+    }
+
+    msg_Dbg(p_aout, "switched device from %u Hz to %u Hz",
+            (unsigned)(f_current + 0.5), i_rate);
+    return f_current;
+}
+
 static int
 StartAnalog(audio_output_t *p_aout, audio_sample_format_t *fmt)
 {
@@ -1070,6 +1134,9 @@ StartAnalog(audio_output_t *p_aout, audio_sample_format_t *fmt)
 
     if (aout_FormatNbChannels(fmt) == 0)
         return VLC_EGENERIC;
+
+    p_sys->f_revert_rate =
+        SetDeviceRate(p_aout, p_sys->i_selected_dev, fmt->i_rate);
 
     p_sys->au_unit = au_NewOutputInstance(p_aout, kAudioUnitSubType_HALOutput);
     if (p_sys->au_unit == NULL)
@@ -1139,7 +1206,7 @@ StartAnalog(audio_output_t *p_aout, audio_sample_format_t *fmt)
 
     return VLC_SUCCESS;
 error:
-    AudioComponentInstanceDispose(p_sys->au_unit);
+    au_DisposeOutputInstance(p_sys->au_unit);
     free(layout);
     return VLC_EGENERIC;
 }
@@ -1425,7 +1492,15 @@ Stop(audio_output_t *p_aout)
     {
         AudioOutputUnitStop(p_sys->au_unit);
         au_Uninitialize(p_aout, p_sys->au_unit);
-        AudioComponentInstanceDispose(p_sys->au_unit);
+        au_DisposeOutputInstance(p_sys->au_unit);
+    }
+
+    if (p_sys->f_revert_rate != 0)
+    {
+        AO_SETPROP(p_sys->i_selected_dev, sizeof(p_sys->f_revert_rate),
+                   &p_sys->f_revert_rate, kAudioDevicePropertyNominalSampleRate,
+                   kAudioObjectPropertyScopeGlobal);
+        p_sys->f_revert_rate = 0;
     }
     else
     {

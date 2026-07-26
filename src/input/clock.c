@@ -523,6 +523,17 @@ void input_clock_ChangeSystemOrigin( input_clock_t *cl, bool b_absolute, vlc_tic
     vlc_mutex_unlock( &cl->lock );
 }
 
+void input_clock_OffsetSystemOrigin( input_clock_t *cl, vlc_tick_t i_offset )
+{
+    vlc_mutex_lock( &cl->lock );
+
+    assert( cl->b_has_reference );
+    cl->ref.i_system += i_offset;
+    cl->last.i_system += i_offset;
+
+    vlc_mutex_unlock( &cl->lock );
+}
+
 void input_clock_GetSystemOrigin( input_clock_t *cl, vlc_tick_t *pi_system, vlc_tick_t *pi_delay )
 {
     vlc_mutex_lock( &cl->lock );

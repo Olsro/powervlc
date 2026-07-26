@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Lisää kuvakkeita työpöydälle jotta käyttö on helpompaa"
 ${LangFileString} Desc_Section03 \
-    "VLC-, Mozilla- ja Mozilla Firefox-liitännäinen"
+    "${PRODUCT_NAME}-, Mozilla- ja Mozilla Firefox-liitännäinen"
 ${LangFileString} Desc_Section04 \
-    "VLC ActiveX-liitännäinen"
+    "${PRODUCT_NAME} ActiveX-liitännäinen"
 ${LangFileString} Desc_Section05 \
     "DVD- ja CD-toiston rekisteröinti"
 ${LangFileString} Desc_Section06 \
-    "Asettaa VLC-mediatoistimen oletusohjelmaksi valitulle tiedostotyypille"
+    "Asettaa ${PRODUCT_NAME}-mediatoistimen oletusohjelmaksi valitulle tiedostotyypille"
 ${LangFileString} Desc_Section07 \
-    "Lisää asiayhteysvalikkoon kohteet ('Toista VLC:n kanssa' ja 'Lisää VLC:n soittolistaan')"
+    "Lisää asiayhteysvalikkoon kohteet ('Toista ${PRODUCT_NAME}:n kanssa' ja 'Lisää ${PRODUCT_NAME}:n soittolistaan')"
 ${LangFileString} Desc_Section08 \
-    "Poistaa vanhat VLC-mediatoistimen asetukset ja välimuistitiedostot edellisistä asennuksista"
+    "Poistaa vanhat ${PRODUCT_NAME}-mediatoistimen asetukset ja välimuistitiedostot edellisistä asennuksista"
 
 ${LangFileString} Name_Section91 "Poista asennus"
 ${LangFileString} Name_Section92 "Tyhjää asetukset ja välimuisti"
 
 ${LangFileString} Desc_Section91 \
-"Poistaa VLC-mediatoistimen ja kaikki sen lisäosat"
+"Poistaa ${PRODUCT_NAME}-mediatoistimen ja kaikki sen lisäosat"
 ${LangFileString} Desc_Section92 \
-"Poistaa VLC-mediatoistimen asetukset ja välimuistin"
+"Poistaa ${PRODUCT_NAME}-mediatoistimen asetukset ja välimuistin"
 
 ${LangFileString} ShellAssociation_Play "Toista"
-${LangFileString} ContextMenuEntry_PlayWith "Toista VLC-mediatoistimella"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Lisää VLC-mediatoistimen soittolistaan"
+${LangFileString} ContextMenuEntry_PlayWith "Toista ${PRODUCT_NAME}-mediatoistimella"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Lisää ${PRODUCT_NAME}-mediatoistimen soittolistaan"
 
 ${LangFileString} Link_VisitWebsite "Vieraile VideoLAN VLC-mediatoistimen kotisivuilla"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Toista Blu-ray"
 ${LangFileString} License_NextText "Nyt olet tietoinen oikeuksistasi. Paina Seuraava jatkaaksesi."
 
 ${LangFileString} Detail_CheckProcesses "Tarkistetaan prosessit..."
-${LangFileString} MessageBox_VLCRunning "VLC näyttäisi olevan käynnissä se suljetaan."
-${LangFileString} MessageBox_VLCUnableToClose "Asennusohjelma ei kyennyt sulkemaan VLC-mediatoistinta, suljethan sen itse."
+${LangFileString} MessageBox_VLCRunning "${PRODUCT_NAME} näyttäisi olevan käynnissä se suljetaan."
+${LangFileString} MessageBox_VLCUnableToClose "Asennusohjelma ei kyennyt sulkemaan ${PRODUCT_NAME}-mediatoistinta, suljethan sen itse."
 ${LangFileString} MessageBox_InstallAborted "Asennus keskeytettiin!"
 
 ${LangFileString} Reinstall_Headline "On jo asennettu"
-${LangFileString} Reinstall_HeadlineInstall "Valitse kuinka haluat asentaa VLC:n."
+${LangFileString} Reinstall_HeadlineInstall "Valitse kuinka haluat asentaa ${PRODUCT_NAME}:n."
 ${LangFileString} Reinstall_HeadlineMaintenance "Valitse suoritettava huoltotoimenpide."
-${LangFileString} Reinstall_MessageOlder "Vanhempi versio VLC-mediatoistimesta on asennettu järjestelmääsi. Valitse toiminto jonka haluat suorittaa ja klikkaa Seuraava jatkaaksesi."
-${LangFileString} Reinstall_MessageNewer "Uudempi versio VLC-mediatoistimesta on asennettu! Ei ole suositeltavaa, että vaihdat vanhempaan versioon. Valitse toiminto jonka haluat suorittaa ja paina Seuraava jatkaaksesi."
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} on jo asennettu. Valitse toiminto jonka haluat suorittaa ja paina Seuraava jatkaaksesi."
-${LangFileString} Reinstall_OptionUpgrade "Päivitä VLC käyttäen edellisiä asetuksia (suositeltavaa)"
-${LangFileString} Reinstall_OptionDowngrade "Asenna vanhempi versio VLC:sta käyttäen edellisiä asetuksia (suositeltavaa)"
+${LangFileString} Reinstall_MessageOlder "Vanhempi versio ${PRODUCT_NAME}-mediatoistimesta on asennettu järjestelmääsi. Valitse toiminto jonka haluat suorittaa ja klikkaa Seuraava jatkaaksesi."
+${LangFileString} Reinstall_MessageNewer "Uudempi versio ${PRODUCT_NAME}-mediatoistimesta on asennettu! Ei ole suositeltavaa, että vaihdat vanhempaan versioon. Valitse toiminto jonka haluat suorittaa ja paina Seuraava jatkaaksesi."
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} on jo asennettu. Valitse toiminto jonka haluat suorittaa ja paina Seuraava jatkaaksesi."
+${LangFileString} Reinstall_OptionUpgrade "Päivitä ${PRODUCT_NAME} käyttäen edellisiä asetuksia (suositeltavaa)"
+${LangFileString} Reinstall_OptionDowngrade "Asenna vanhempi versio ${PRODUCT_NAME}:sta käyttäen edellisiä asetuksia (suositeltavaa)"
 ${LangFileString} Reinstall_OptionComponents "Lisää/Poista/Uudelleenasenna komponentteja"
 ${LangFileString} Reinstall_OptionAdvanced "Muuta asetuksia (edistyneille)"
-${LangFileString} Reinstall_OptionUninstall "Poista VLC:n asennus"
+${LangFileString} Reinstall_OptionUninstall "Poista ${PRODUCT_NAME}:n asennus"

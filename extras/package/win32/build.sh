@@ -435,6 +435,14 @@ if [ -n "$PREBUILT_FAILED" ]; then
 else
     make .luac
 fi
+
+# libaacs is dlopen()ed by libbluray and shipped next to powervlc.exe (see
+# contrib/src/aacs), and packaging refuses to ship a Blu-ray plugin without it.
+# A prebuilt contrib set never contains it: build that one target.
+if ! ls ../$CONTRIB_PREFIX/bin/libaacs*.dll >/dev/null 2>&1; then
+    info "Building libaacs contrib"
+    make .aacs
+fi
 cd ../..
 
 info "Bootstrapping"

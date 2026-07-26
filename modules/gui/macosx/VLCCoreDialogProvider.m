@@ -241,10 +241,20 @@ static void updateProgressCallback(void *p_data,
 
 - (void)displayQuestion:(NSArray *)dialogData
 {
+    NSString *cancelTitle = [dialogData objectAtIndex:4];
+    NSString *action1Title = [dialogData objectAtIndex:5];
+    NSString *action2Title = [dialogData objectAtIndex:6];
+
+    /* A question without any action is a notification: the cancel button is
+     * the only one, and it belongs in the default position. Passing it as the
+     * "other" button with no default would make AppKit synthesize a second,
+     * unwanted OK button. */
+    BOOL isNotification = action1Title.length == 0 && action2Title.length == 0;
+
     NSAlert *alert = [NSAlert alertWithMessageText:[dialogData objectAtIndex:1]
-                                     defaultButton:[dialogData objectAtIndex:5]
-                                   alternateButton:[dialogData objectAtIndex:6]
-                                       otherButton:[dialogData objectAtIndex:4]
+                                     defaultButton:isNotification ? cancelTitle : action1Title
+                                   alternateButton:isNotification ? nil : action2Title
+                                       otherButton:isNotification ? nil : cancelTitle
                          informativeTextWithFormat:@"%@", [dialogData objectAtIndex:2]];
 
     switch ([[dialogData objectAtIndex:3] intValue]) {
@@ -260,6 +270,10 @@ static void updateProgressCallback(void *p_data,
     }
 
     NSInteger returnValue = [alert runModal];
+    if (isNotification) {
+        vlc_dialog_id_dismiss([[dialogData objectAtIndex:0] pointerValue]);
+        return;
+    }
     switch (returnValue) {
         case NSAlertDefaultReturn:
             vlc_dialog_id_post_action([[dialogData objectAtIndex:0] pointerValue], 1);

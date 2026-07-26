@@ -51,8 +51,8 @@ CHANGELOGS = \
 	$(NULL)
 
 man1_MANS = \
-	   vlc.1 \
-	   vlc-wrapper.1
+	   powervlc.1 \
+	   powervlc-wrapper.1
 
 EXTRA_DIST = \
 	$(CHANGELOGS) \

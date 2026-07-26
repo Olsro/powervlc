@@ -4,7 +4,15 @@ VPX_VERSION := 1.16.0
 VPX_URL := $(GITHUB)/webmproject/libvpx/archive/v${VPX_VERSION}.tar.gz
 
 ifneq ($(filter arm aarch64 i386 loongarch64 mipsel mips64el ppc64le x86_64, $(ARCH)),)
+ifdef HAVE_MACOSX
+# vpx requires pthread_setname_np, absent before Mac OS X 10.6
+# (ffmpeg decodes VP8/VP9 natively anyway)
+ifeq ($(call darwin_min_os_at_least, 10.6), true)
 PKGS += vpx
+endif
+else
+PKGS += vpx
+endif
 endif
 ifeq ($(call need_pkg,"vpx >= 1.5.0"),)
 PKGS_FOUND += vpx

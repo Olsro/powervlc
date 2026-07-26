@@ -1,0 +1,22 @@
+From: VLC contrib <vlc@videolan.org>
+Subject: [PATCH] cryptor: require a 10.7+ deployment target for CommonCrypto
+
+CCCryptorCreateWithMode() and CCKeyDerivationPBKDF() are only available
+since Mac OS X 10.7. Gate their use on the deployment target rather than
+only on the SDK version, so builds targeting 10.6 fall back to the
+unsupported-crypto stubs instead of weak-linked calls that would crash
+at runtime.
+
+--- a/libarchive/archive_cryptor_private.h
++++ b/libarchive/archive_cryptor_private.h
+@@ -42,7 +42,9 @@
+ #ifdef __APPLE__
+ # include <AvailabilityMacros.h>
+ # if MAC_OS_X_VERSION_MAX_ALLOWED >= 1080
+-#  define ARCHIVE_CRYPTOR_USE_Apple_CommonCrypto
++#  if !defined(MAC_OS_X_VERSION_MIN_REQUIRED) || MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
++#   define ARCHIVE_CRYPTOR_USE_Apple_CommonCrypto
++#  endif
+ # endif
+ #endif
+

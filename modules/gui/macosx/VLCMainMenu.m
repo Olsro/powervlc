@@ -27,6 +27,7 @@
 #import <vlc_common.h>
 #import <vlc_playlist.h>
 #import <vlc_input.h>
+#import <vlc_modules.h>
 
 #import "VLCAboutWindowController.h"
 #import "VLCOpenWindowController.h"
@@ -113,6 +114,21 @@
     intf_thread_t *p_intf = getIntf();
 
     [self initStrings];
+
+    /* interface switcher, below Preferences and its separator (only when
+     * this build also ships the legacy interface) */
+    if (module_exists("legacy_macosx")) {
+        msg_Dbg(p_intf, "adding the legacy interface switcher menu item");
+        NSMenu *appMenu = [_prefs menu];
+        NSInteger prefsIndex = [appMenu indexOfItem:_prefs];
+        NSMenuItem *switchItem = [[NSMenuItem alloc]
+            initWithTitle:_NS("Switch to the legacy interface")
+                   action:@selector(switchToLegacyInterface:)
+            keyEquivalent:@""];
+        [switchItem setTarget:self];
+        [appMenu insertItem:switchItem atIndex:prefsIndex + 2];
+        [appMenu insertItem:[NSMenuItem separatorItem] atIndex:prefsIndex + 3];
+    }
 
     key = config_GetPsz(p_intf, "key-quit");
     keyString = [NSString stringWithFormat:@"%s", key];
@@ -336,7 +352,7 @@
 - (void)initStrings
 {
     /* main menu */
-    [_about setTitle: [_NS("About VLC media player") \
+    [_about setTitle: [_NS("About PowerVLC media player") \
                            stringByAppendingString: @"..."]];
     [_checkForUpdate setTitle: _NS("Check for Update...")];
     [_prefs setTitle: _NS("Preferences...")];
@@ -346,10 +362,10 @@
     [_add_intf setTitle: _NS("Add Interface")];
     [_add_intfMenu setTitle: _NS("Add Interface")];
     [_services setTitle: _NS("Services")];
-    [_hide setTitle: _NS("Hide VLC")];
+    [_hide setTitle: _NS("Hide PowerVLC")];
     [_hide_others setTitle: _NS("Hide Others")];
     [_show_all setTitle: _NS("Show All")];
-    [_quit setTitle: _NS("Quit VLC")];
+    [_quit setTitle: _NS("Quit PowerVLC")];
 
     [_fileMenu setTitle: _ANS("1:File")];
     [_open_generic setTitle: _NS("Advanced Open File...")];
@@ -486,7 +502,7 @@
     [_bring_atf setTitle: _NS("Bring All to Front")];
 
     [_helpMenu setTitle: _NS("Help")];
-    [_help setTitle: _NS("VLC media player Help...")];
+    [_help setTitle: _NS("PowerVLC media player Help...")];
     [_license setTitle: _NS("License")];
     [_documentation setTitle: _NS("Online Documentation...")];
     [_website setTitle: _NS("VideoLAN Website...")];
@@ -1253,6 +1269,33 @@
     [_addonsController showWindow:self];
 }
 
+- (IBAction)switchToLegacyInterface:(id)sender
+{
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:_NS("Change the interface?")];
+    [alert setInformativeText:_NS("VLC needs to restart to switch interfaces. "
+                                  "Do you want to continue?")];
+    [alert addButtonWithTitle:_NS("Yes")];
+    [alert addButtonWithTitle:_NS("No")];
+    if ([alert runModal] != NSAlertFirstButtonReturn)
+        return;
+
+    intf_thread_t *p_intf = getIntf();
+    config_PutPsz(p_intf, "intf", "legacy_macosx");
+    config_SaveConfigFile(p_intf);
+
+    /* detached relaunch; the bundle path travels as $0, immune to quoting */
+    NSTask *task = [[NSTask alloc] init];
+    [task setLaunchPath:@"/bin/sh"];
+    [task setArguments:@[@"-c", @"sleep 1; exec /usr/bin/open -n \"$0\"",
+                         [[NSBundle mainBundle] bundlePath]]];
+    @try {
+        [task launch];
+    } @catch (NSException *exception) {
+    }
+    [NSApp terminate:nil];
+}
+
 - (IBAction)showErrorsAndWarnings:(id)sender
 {
     [[[[VLCMain sharedInstance] coreDialogProvider] errorPanel] showWindow:self];
@@ -1303,28 +1346,28 @@
 {
     NSURL *url = [NSURL URLWithString: @"https://www.videolan.org/doc/"];
 
-    [[NSWorkspace sharedWorkspace] openURL: url];
+    [VLCMain openURLWithVideoLANConfirmation: url];
 }
 
 - (IBAction)openWebsite:(id)sender
 {
     NSURL *url = [NSURL URLWithString: @"https://www.videolan.org/"];
 
-    [[NSWorkspace sharedWorkspace] openURL: url];
+    [VLCMain openURLWithVideoLANConfirmation: url];
 }
 
 - (IBAction)openForum:(id)sender
 {
     NSURL *url = [NSURL URLWithString: @"https://forum.videolan.org/"];
 
-    [[NSWorkspace sharedWorkspace] openURL: url];
+    [VLCMain openURLWithVideoLANConfirmation: url];
 }
 
 - (IBAction)openDonate:(id)sender
 {
     NSURL *url = [NSURL URLWithString: @"https://www.videolan.org/contribute.html#paypal"];
 
-    [[NSWorkspace sharedWorkspace] openURL: url];
+    [VLCMain openURLWithVideoLANConfirmation: url];
 }
 
 - (IBAction)showInformationPanel:(id)sender

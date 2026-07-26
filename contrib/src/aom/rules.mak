@@ -2,7 +2,14 @@
 AOM_VERSION := 3.14.1
 AOM_URL := https://storage.googleapis.com/aom-releases/libaom-$(AOM_VERSION).tar.gz
 
+ifdef HAVE_MACOSX
+# aom requires pthread_setname_np, absent before Mac OS X 10.6
+ifeq ($(call darwin_min_os_at_least, 10.6), true)
 PKGS += aom
+endif
+else
+PKGS += aom
+endif
 ifeq ($(call need_pkg,"aom"),)
 PKGS_FOUND += aom
 endif

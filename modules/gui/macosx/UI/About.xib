@@ -18,6 +18,7 @@
                 <outlet property="o_joinus_txt" destination="2284" id="2322"/>
                 <outlet property="o_name_field" destination="2235" id="2318"/>
                 <outlet property="o_name_version_field" destination="2232" id="2319"/>
+                <outlet property="o_powervlc_field" destination="3001" id="pv1-Ou-005"/>
                 <outlet property="o_revision_field" destination="2234" id="2321"/>
                 <outlet property="o_trademarks_txt" destination="2314" id="2326"/>
                 <outlet property="window" destination="1345" id="2317"/>
@@ -28,11 +29,11 @@
         <window title="About VLC media player" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" frameAutosaveName="" animationBehavior="default" id="1345" userLabel="About">
             <windowStyleMask key="styleMask" titled="YES" closable="YES" miniaturizable="YES"/>
             <windowPositionMask key="initialPositionMask" leftStrut="YES" rightStrut="YES" topStrut="YES" bottomStrut="YES"/>
-            <rect key="contentRect" x="173" y="74" width="721" height="356"/>
+            <rect key="contentRect" x="173" y="74" width="721" height="436"/>
             <rect key="screenRect" x="0.0" y="0.0" width="1920" height="1177"/>
             <value key="minSize" type="size" width="231.86799999999999" height="107"/>
             <view key="contentView" id="1344">
-                <rect key="frame" x="0.0" y="0.0" width="721" height="356"/>
+                <rect key="frame" x="0.0" y="0.0" width="721" height="436"/>
                 <autoresizingMask key="autoresizingMask"/>
                 <subviews>
                     <scrollView borderType="none" horizontalLineScroll="10" horizontalPageScroll="10" verticalLineScroll="10" verticalPageScroll="10" hasHorizontalScroller="NO" usesPredominantAxisScrolling="NO" translatesAutoresizingMaskIntoConstraints="NO" id="1348">
@@ -57,7 +58,7 @@
                             </connections>
                         </clipView>
                         <constraints>
-                            <constraint firstAttribute="height" constant="204" id="Toy-9Z-Tp5"/>
+                            <constraint firstAttribute="height" constant="284" id="Toy-9Z-Tp5"/>
                         </constraints>
                         <scroller key="horizontalScroller" hidden="YES" wantsLayer="YES" verticalHuggingPriority="750" doubleValue="1" horizontal="YES" id="2279">
                             <rect key="frame" x="-100" y="-100" width="430" height="16"/>
@@ -121,6 +122,18 @@ VLC uses its internal codecs and works on essentially every popular platform and
 Help and join us!.</string>
                             <color key="textColor" name="secondaryLabelColor" catalog="System" colorSpace="catalog"/>
                             <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                        </textFieldCell>
+                    </textField>
+                    <textField verticalHuggingPriority="750" horizontalCompressionResistancePriority="250" allowsCharacterPickerTouchBarItem="YES" translatesAutoresizingMaskIntoConstraints="NO" id="3001">
+                        <rect key="frame" x="271" y="249" width="426" height="64"/>
+                        <constraints>
+                            <constraint firstAttribute="width" constant="426" id="pv1-Wd-001"/>
+                            <constraint firstAttribute="height" constant="64" id="pv1-Ht-002"/>
+                        </constraints>
+                        <textFieldCell key="cell" sendsActionOnEndEditing="YES" selectable="YES" alignment="left" title="PowerVLC" id="3002">
+                            <font key="font" metaFont="label"/>
+                            <color key="textColor" name="tertiaryLabelColor" catalog="System" colorSpace="catalog"/>
+                            <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>
                         </textFieldCell>
                     </textField>
                     <box autoresizesSubviews="NO" borderType="line" title="Box" titlePosition="noTitle" translatesAutoresizingMaskIntoConstraints="NO" id="2313">
@@ -203,6 +216,8 @@ Help and join us!.</string>
                     <constraint firstItem="2235" firstAttribute="leading" secondItem="1348" secondAttribute="leading" id="lQQ-YJ-62H"/>
                     <constraint firstItem="2284" firstAttribute="top" secondItem="1348" secondAttribute="bottom" constant="-145" id="nK9-Kg-9Ut"/>
                     <constraint firstItem="2231" firstAttribute="leading" secondItem="1344" secondAttribute="leading" constant="20" id="uWE-0X-Z9i"/>
+                    <constraint firstItem="3001" firstAttribute="leading" secondItem="1348" secondAttribute="leading" id="pv1-Ld-003"/>
+                    <constraint firstItem="3001" firstAttribute="top" secondItem="2234" secondAttribute="bottom" constant="8" id="pv1-Tp-004"/>
                 </constraints>
             </view>
             <connections>

@@ -247,6 +247,8 @@ static bool PlayItem( playlist_t *p_playlist, playlist_item_t *p_item )
 
     PL_LOCK;
     p_sys->p_input = p_input_thread;
+    if( p_input_thread != NULL )
+        p_sys->request_stopped = false;
     PL_UNLOCK;
 
     var_SetAddress( p_playlist, "input-current", p_input_thread );
@@ -285,7 +287,10 @@ static playlist_item_t *NextItem( playlist_t *p_playlist )
         p_new = p_sys->request.p_item;
 
         if( p_new == NULL && p_sys->request.p_node == NULL )
+        {
+            p_sys->request_stopped = true;
             return NULL; /* Stop request! */
+        }
 
         int i_skip = p_sys->request.i_skip;
         PL_DEBUG( "processing request item: %s, node: %s, skip: %i",
@@ -533,6 +538,15 @@ static void *Thread ( void *data )
             msg_Info( p_playlist, "end of playlist, exiting" );
             libvlc_Quit( p_playlist->obj.libvlc );
         }
+
+        /* Gapless (PowerVLC): an audio output stream may have been left
+         * parked by the last track. At the natural end of the playlist let
+         * its queue play out; on a user stop, cut it immediately. */
+        PL_UNLOCK; /* Mind: NO LOCKS while manipulating input resources! */
+        input_resource_StopParkedAout( p_sys->p_input_resource,
+                                       !p_sys->request_stopped
+                                        && !p_sys->killed );
+        PL_LOCK;
 
         /* Destroy any video display now (XXX: ugly hack) */
         if( input_resource_HasVout( p_sys->p_input_resource ) )

@@ -135,7 +135,16 @@ typedef void (APIENTRY *PFNGLVIEWPORTPROC) (GLint x, GLint y, GLsizei width, GLs
 #   define PFNGLBUFFERDATAPROC               typeof(glBufferData)*
 #   define PFNGLBUFFERSUBDATAPROC            typeof(glBufferSubData)*
 #   define PFNGLDELETEBUFFERSPROC            typeof(glDeleteBuffers)*
+#ifdef GL_FRAMEBUFFER
 #   define PFNGLGETFRAMEBUFFERATTACHMENTPARAMETERIVPROC typeof(glGetFramebufferAttachmentParameteriv)*
+#else
+/* Core (non-EXT) framebuffer objects are missing from old Apple GL headers
+ * (10.4/10.5 SDKs); the function pointer is resolved at run time and stays
+ * NULL there, so only the types and enums are needed to compile. */
+typedef void (APIENTRY *PFNGLGETFRAMEBUFFERATTACHMENTPARAMETERIVPROC) (GLenum target, GLenum attachment, GLenum pname, GLint *params);
+#   define GL_FRAMEBUFFER 0x8D40
+#   define GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE 0x8213
+#endif
 #if defined(__APPLE__)
 #   import <CoreFoundation/CoreFoundation.h>
 #endif
@@ -151,6 +160,25 @@ typedef GLboolean (APIENTRY *PFNGLUNMAPBUFFERPROC) (GLenum target);
 typedef GLsync (APIENTRY *PFNGLFENCESYNCPROC) (GLenum condition, GLbitfield flags);
 typedef void (APIENTRY *PFNGLDELETESYNCPROC) (GLsync sync);
 typedef GLenum (APIENTRY *PFNGLCLIENTWAITSYNCPROC) (GLsync sync, GLbitfield flags, GLuint64 timeout);
+#endif
+
+#if !defined(USE_OPENGL_ES2)
+/* Fixed-function pipeline entry points (GL 1.1 core). Used ONLY as a fallback
+ * for desktop GL hardware that advertises a GLSL version it cannot actually
+ * execute — e.g. the ATI Radeon 9200 under Mac OS X 10.5 reports GLSL 1.20 on
+ * a GL 1.3 engine, so shaders link but render black. glext.h has no PFN
+ * typedefs for these 1.1 functions, so declare our own. */
+#ifndef VLC_GL_FIXED_FUNCTION_PFN
+#define VLC_GL_FIXED_FUNCTION_PFN
+typedef void (APIENTRY *PFNGLMATRIXMODEPROC)(GLenum mode);
+typedef void (APIENTRY *PFNGLLOADIDENTITYPROC)(void);
+typedef void (APIENTRY *PFNGLLOADMATRIXFPROC)(const GLfloat *m);
+typedef void (APIENTRY *PFNGLENABLECLIENTSTATEPROC)(GLenum cap);
+typedef void (APIENTRY *PFNGLDISABLECLIENTSTATEPROC)(GLenum cap);
+typedef void (APIENTRY *PFNGLVERTEXPOINTERPROC)(GLint size, GLenum type, GLsizei stride, const void *ptr);
+typedef void (APIENTRY *PFNGLTEXCOORDPOINTERPROC)(GLint size, GLenum type, GLsizei stride, const void *ptr);
+typedef void (APIENTRY *PFNGLCOLOR4FPROC)(GLfloat r, GLfloat g, GLfloat b, GLfloat a);
+#endif
 #endif
 
 /**
@@ -186,6 +214,17 @@ typedef struct {
     /* GL only core functions: NULL for GLES2 */
     PFNGLGETTEXLEVELPARAMETERIVPROC GetTexLevelParameteriv; /* Can be NULL */
     PFNGLTEXENVFPROC                TexEnvf; /* Can be NULL */
+
+    /* GL only fixed-function pipeline: NULL on GLES2 and only used as a
+     * fallback for hardware without usable GLSL (see tc->fixed_function). */
+    PFNGLMATRIXMODEPROC         MatrixMode;         /* Can be NULL */
+    PFNGLLOADIDENTITYPROC       LoadIdentity;       /* Can be NULL */
+    PFNGLLOADMATRIXFPROC        LoadMatrixf;        /* Can be NULL */
+    PFNGLENABLECLIENTSTATEPROC  EnableClientState;  /* Can be NULL */
+    PFNGLDISABLECLIENTSTATEPROC DisableClientState; /* Can be NULL */
+    PFNGLVERTEXPOINTERPROC      VertexPointer;      /* Can be NULL */
+    PFNGLTEXCOORDPOINTERPROC    TexCoordPointer;    /* Can be NULL */
+    PFNGLCOLOR4FPROC            Color4f;            /* Can be NULL */
 
     /*
      * GL / GLES extensions
@@ -303,6 +342,10 @@ struct opengl_tex_converter_t
 
     /* True if the current API is OpenGL ES, set by the caller */
     bool is_gles;
+    /* True when the caller has no usable GLSL pipeline and falls back to the
+     * fixed-function pipeline (desktop GL only). The converter then avoids any
+     * shader-only chroma (YUV) so a single RGBA texture is drawn directly. */
+    bool fixed_function;
     /* GLSL version, set by the caller. 100 for GLSL ES, 120 for desktop GLSL */
     unsigned glsl_version;
     /* Precision header, set by the caller. In OpenGLES, the fragment language

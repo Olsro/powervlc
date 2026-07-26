@@ -1,0 +1,25 @@
+Drop the obsolete Apple-only -no-cpp-precomp flag
+
+FSF GCC (used for the legacy ppc/i386 Mac OS X cross builds) rejects it;
+even Apple compilers have ignored it for two decades.
+
+--- a/configure.ac
++++ b/configure.ac
+@@ -29,7 +29,6 @@ dnl check the operating system
+ case "${target_os}" in
+   darwin*)
+     SYS=darwin
+-    CFLAGS_dist="${CFLAGS_dist} -no-cpp-precomp"
+     ;;
+   *mingw32*)
+     SYS=mingw32
+--- a/configure
++++ b/configure
+@@ -12333,7 +12333,6 @@
+ case "${target_os}" in
+   darwin*)
+     SYS=darwin
+-    CFLAGS_dist="${CFLAGS_dist} -no-cpp-precomp"
+     ;;
+   *mingw32*)
+     SYS=mingw32

@@ -345,7 +345,7 @@ static int Open(vout_window_t *wnd, const vout_window_cfg_t *cfg)
 
     char *title = var_InheritString(wnd, "video-title");
     wl_shell_surface_set_title(shell_surface, title ? title
-                                                    : _("VLC media player"));
+                                                    : _("PowerVLC media player"));
     free(title);
 
     //if (var_InheritBool (wnd, "keyboard-events"))

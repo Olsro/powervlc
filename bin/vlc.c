@@ -155,9 +155,12 @@ int main( int i_argc, const char *ppsz_argv[] )
 
     if (isatty (STDERR_FILENO))
         /* This message clutters error logs. It is printed only on a TTY.
-         * Fortunately, LibVLC prints version info with -vv anyway. */
-        fprintf (stderr, "VLC media player %s (revision %s)\n",
-                 libvlc_get_version(), libvlc_get_changeset());
+         * Fortunately, LibVLC prints version info with -vv anyway.
+         * Announce the product first, then the VLC release it is forked from —
+         * same convention as --version and --help (src/config/help.c). */
+        fprintf (stderr, "PowerVLC %s (forked from VLC %s, revision %s)\n",
+                 POWERVLC_VERSION, libvlc_get_version(),
+                 libvlc_get_changeset());
 
     sigset_t set;
 

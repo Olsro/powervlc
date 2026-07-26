@@ -40,7 +40,14 @@
 #include <pthread.h>
 #include <mach/mach_init.h> /* mach_task_self in semaphores */
 #include <mach/mach_time.h>
-#include <execinfo.h>
+#include <sys/types.h>
+#include <sys/sysctl.h> /* HW_NCPU fallback for vlc_GetCPUCount on 10.4 */
+#include <AvailabilityMacros.h>
+#if !defined(MAC_OS_X_VERSION_MAX_ALLOWED) || MAC_OS_X_VERSION_MAX_ALLOWED >= 1050
+/* execinfo.h (backtrace) first shipped with the Mac OS X 10.5 SDK */
+# include <execinfo.h>
+# define VLC_DARWIN_HAVE_EXECINFO 1
+#endif
 
 static mach_timebase_info_data_t vlc_clock_conversion_factor;
 
@@ -68,9 +75,11 @@ void vlc_trace (const char *fn, const char *file, unsigned line)
 {
      fprintf (stderr, "at %s:%u in %s\n", file, line, fn);
      fflush (stderr); /* needed before switch to low-level I/O */
+#ifdef VLC_DARWIN_HAVE_EXECINFO
      void *stack[20];
      int len = backtrace (stack, sizeof (stack) / sizeof (stack[0]));
      backtrace_symbols_fd (stack, len, 2);
+#endif
      fsync (2);
 }
 
@@ -267,8 +276,32 @@ void vlc_cond_broadcast (vlc_cond_t *p_condvar)
 
 void vlc_cond_wait (vlc_cond_t *p_condvar, vlc_mutex_t *p_mutex)
 {
+#if defined(MAC_OS_X_VERSION_MIN_REQUIRED) && MAC_OS_X_VERSION_MIN_REQUIRED < 1050
+    /* Tiger's pthread_cond_wait is NOT a cancellation point (the conforming
+     * $UNIX2003 variants only appeared with 10.5), so a thread blocked here
+     * never honors vlc_cancel() and joins deadlock (seen with
+     * input_DecoderDelete). Chunk the wait and poll for cancellation.
+     *
+     * CRITICAL: on ETIMEDOUT the chunk RETURNS to the caller as a
+     * spurious wakeup (allowed by POSIX, every caller rechecks its
+     * predicate in a loop) instead of re-waiting internally. Tiger's
+     * semaphore-based condvars can eat a pthread_cond_signal that races
+     * a chunk expiry (the wait returns ETIMEDOUT and the wakeup is
+     * spent); an internal re-wait then sleeps forever with the caller's
+     * predicate already true -- observed as the playlist thread missing
+     * INPUT_EVENT_DEAD, wedging end-of-stream/stop/quit at random
+     * (~once per few hundred transitions). Returning instead bounds any
+     * lost wakeup to one 100 ms chunk, for the same wakeup rate. */
+    pthread_testcancel();
+    struct timespec ts = { 0, 100 * 1000 * 1000 }; /* 100 ms */
+    int val = pthread_cond_timedwait_relative_np(p_condvar, p_mutex, &ts);
+    if (val != ETIMEDOUT)
+        VLC_THREAD_ASSERT ("waiting on condition");
+    return;
+#else
     int val = pthread_cond_wait (p_condvar, p_mutex);
     VLC_THREAD_ASSERT ("waiting on condition");
+#endif
 }
 
 int vlc_cond_timedwait (vlc_cond_t *p_condvar, vlc_mutex_t *p_mutex,
@@ -278,6 +311,28 @@ int vlc_cond_timedwait (vlc_cond_t *p_condvar, vlc_mutex_t *p_mutex,
      * Of course, Darwin does not care */
     pthread_testcancel();
 
+#if defined(MAC_OS_X_VERSION_MIN_REQUIRED) && MAC_OS_X_VERSION_MIN_REQUIRED < 1050
+    /* Same Tiger limitation as vlc_cond_wait: chunk the wait to 100 ms
+     * slices to poll for cancellation. And the same eaten-wakeup hazard
+     * (see vlc_cond_wait): a chunk expiry that races the signal spends
+     * the wakeup, so a chunk that times out BEFORE the real deadline
+     * must return 0 to the caller (spurious wakeup) rather than re-wait
+     * internally -- the caller rechecks its predicate and deadline. */
+    vlc_tick_t remaining = deadline - mdate();
+    if (remaining < 0)
+        remaining = 0;
+    vlc_tick_t chunk = remaining > 100000 ? 100000 : remaining;
+    struct timespec ts = mtime_to_ts(chunk);
+    int val = pthread_cond_timedwait_relative_np(p_condvar, p_mutex, &ts);
+    if (val != ETIMEDOUT)
+    {
+        VLC_THREAD_ASSERT ("timed-waiting on condition");
+        return val;
+    }
+    if (chunk == remaining) /* the real deadline passed */
+        return ETIMEDOUT;
+    return 0; /* spurious wakeup: caller re-evaluates */
+#else
     /*
      * mdate() is the monotonic clock, pthread_cond_timedwait expects
      * origin of gettimeofday(). Use timedwait_relative_np() instead.
@@ -292,6 +347,7 @@ int vlc_cond_timedwait (vlc_cond_t *p_condvar, vlc_mutex_t *p_mutex,
     if (val != ETIMEDOUT)
         VLC_THREAD_ASSERT ("timed-waiting on condition");
     return val;
+#endif
 }
 
 /* variant for vlc_cond_init_daytime */
@@ -367,6 +423,10 @@ void vlc_sem_wait (vlc_sem_t *sem)
     VLC_THREAD_ASSERT ("locking semaphore");
 }
 
+#ifndef LIBVLC_NEED_RWLOCK
+/* On Mac OS X 10.4, vlc_threads.h defines LIBVLC_NEED_RWLOCK and the
+ * portable emulation from src/misc/threads.c is used instead (Tiger's
+ * libpthread has no static rwlock initializer). */
 void vlc_rwlock_init (vlc_rwlock_t *lock)
 {
     if (unlikely(pthread_rwlock_init (lock, NULL)))
@@ -396,6 +456,7 @@ void vlc_rwlock_unlock (vlc_rwlock_t *lock)
     int val = pthread_rwlock_unlock (lock);
     VLC_THREAD_ASSERT ("releasing R/W lock");
 }
+#endif /* !LIBVLC_NEED_RWLOCK */
 
 int vlc_threadvar_create (vlc_threadvar_t *key, void (*destr) (void *))
 {
@@ -440,7 +501,30 @@ static int vlc_clone_attr (vlc_thread_t *th, pthread_attr_t *attr,
         pthread_sigmask (SIG_BLOCK, &set, &oldset);
     }
 
-    (void) priority;
+    /* Apply the requested priority (VLC_THREAD_PRIORITY_*): the output
+     * and input threads are meant to outrank the video decoder thread,
+     * but this port had been discarding the parameter -- on a saturated
+     * single-core machine (the whole point of the look-ahead decode
+     * cache) the flat-out decoder then steals the vout's wakeups and
+     * playback micro-stutters even with every frame ready in advance.
+     * Fixed-priority round-robin needs no privileges on Darwin (only the
+     * Mach time-constraint policy does), Mac OS X 10.4 included.
+     * The numeric VLC priorities are meaningless on Darwin: the Mach
+     * scheduler maps sched_priority straight onto its global bands, and
+     * 22 lands BELOW the default time-share band (~31) -- "prioritized"
+     * threads would run WORSE than untouched ones (measured: the vout's
+     * frame pacing degraded). Any positive request becomes "just under
+     * the top of the fixed-priority range" instead. */
+    if (priority > 0)
+    {
+        struct sched_param sp;
+        memset (&sp, 0, sizeof (sp));
+        sp.sched_priority = sched_get_priority_max (SCHED_RR) - 2;
+        if (sp.sched_priority > 0
+         && pthread_attr_setinheritsched (attr, PTHREAD_EXPLICIT_SCHED) == 0
+         && pthread_attr_setschedpolicy (attr, SCHED_RR) == 0)
+            pthread_attr_setschedparam (attr, &sp);
+    }
 
 #define VLC_STACKSIZE (128 * sizeof (void *) * 1024)
 
@@ -496,7 +580,15 @@ unsigned long vlc_thread_id (void)
 
 int vlc_set_priority (vlc_thread_t th, int priority)
 {
-    (void) th; (void) priority;
+    if (priority > 0)
+    {
+        struct sched_param sp;
+        memset (&sp, 0, sizeof (sp));
+        sp.sched_priority = sched_get_priority_max (SCHED_RR) - 2;
+        if (sp.sched_priority <= 0
+         || pthread_setschedparam (th, SCHED_RR, &sp))
+            return VLC_EGENERIC;
+    }
     return VLC_SUCCESS;
 }
 
@@ -546,16 +638,28 @@ vlc_tick_t mdate (void)
     vlc_clock_setup();
     uint64_t date = mach_absolute_time();
 
-    /* denom is uint32_t, switch to 64 bits to prevent overflow. */
+    /* On Intel and Apple Silicon the timebase ratio is small (1/1, 125/3)
+     * and simple scalings fit in 64 bits. On PowerPC the kernel returns the
+     * raw, unreduced bus ratio (e.g. 1000000000/24834288): the previous
+     * `d.rem * date` product overflowed there within minutes of uptime,
+     * wrapping mdate() every ~12 minutes (audible as constant audio clock
+     * corrections). Split both the ratio AND the date so every partial
+     * product stays far below 2^64:
+     *   ns = date * (numer/denom)
+     *      = date*quot + (date/denom)*rem + (date%denom)*rem/denom
+     * with quot = numer/denom, rem = numer%denom (rem < denom <= 2^32). */
+    uint64_t numer = vlc_clock_conversion_factor.numer;
     uint64_t denom = vlc_clock_conversion_factor.denom;
 
+    uint64_t quot = numer / denom;
+    uint64_t rem  = numer % denom;
+
+    uint64_t ns = date * quot
+                + (date / denom) * rem
+                + ((date % denom) * rem) / denom;
+
     /* Switch to microsecs */
-    denom *= 1000LL;
-
-    /* Split the division to prevent overflow */
-    lldiv_t d = lldiv (vlc_clock_conversion_factor.numer, denom);
-
-    return (d.quot * date) + ((d.rem * date) / denom);
+    return ns / 1000;
 }
 
 #undef mwait
@@ -569,15 +673,44 @@ void mwait (vlc_tick_t deadline)
 #undef msleep
 void msleep (vlc_tick_t delay)
 {
+#if defined(MAC_OS_X_VERSION_MIN_REQUIRED) && MAC_OS_X_VERSION_MIN_REQUIRED < 1050
+    /* Tiger's nanosleep is not a cancellation point either (see
+     * vlc_cond_wait above); a cancelled thread sleeping in a wait loop
+     * (e.g. ca_Play waiting for the audio render callback) would never
+     * terminate. Sleep in 100 ms slices and poll for cancellation. */
+    vlc_tick_t deadline = mdate () + delay;
+    for (;;)
+    {
+        pthread_testcancel ();
+        vlc_tick_t remaining = deadline - mdate ();
+        if (remaining <= 0)
+            return;
+        vlc_tick_t chunk = remaining > 100000 ? 100000 : remaining;
+        struct timespec ts = mtime_to_ts (chunk);
+        while (nanosleep (&ts, &ts) == -1)
+            assert (errno == EINTR);
+    }
+#else
     struct timespec ts = mtime_to_ts (delay);
 
     /* nanosleep uses mach_absolute_time and mach_wait_until internally,
        but also handles kernel errors. Thus we use just this. */
     while (nanosleep (&ts, &ts) == -1)
         assert (errno == EINTR);
+#endif
 }
 
 unsigned vlc_GetCPUCount(void)
 {
+#ifdef _SC_NPROCESSORS_CONF
     return sysconf(_SC_NPROCESSORS_CONF);
+#else
+    /* Mac OS X 10.4: no _SC_NPROCESSORS_*; use the BSD sysctl instead */
+    int count = 1;
+    size_t size = sizeof(count);
+    int mib[2] = { CTL_HW, HW_NCPU };
+    if (sysctl(mib, 2, &count, &size, NULL, 0) || count < 1)
+        count = 1;
+    return count;
+#endif
 }

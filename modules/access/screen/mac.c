@@ -38,7 +38,9 @@
 #import "screen.h"
 
 #import <ApplicationServices/ApplicationServices.h>
-#import <QuartzCore/QuartzCore.h>
+/* No QuartzCore import here: nothing from it is used, and pulling it into
+ * a plain C translation unit drags in (Objective-C) Foundation headers,
+ * which the 10.4 SDK does not guard against C compilation. */
 
 extern int CGSMainConnectionID();
 extern CGImageRef CGSCreateRegisteredCursorImage(int, char*, CGPoint*);
@@ -69,7 +71,9 @@ int screen_InitCapture(demux_t *p_demux)
 {
     demux_sys_t *p_sys = p_demux->p_sys;
     screen_data_t *p_data;
-    CGLError returnedError;
+    /* CGGetOnlineDisplayList returns a CGError (the previous CGLError only
+     * compiled because QuartzCore dragged the OpenGL headers in) */
+    CGError returnedError;
 
     p_sys->p_data = p_data = calloc(1, sizeof(screen_data_t));
     if (!p_data)
@@ -178,7 +182,18 @@ block_t *screen_Capture(demux_t *p_demux)
     capture_rect.size.height = p_data->height;
 
     /* fetch image data */
-    image = CGDisplayCreateImageForRect(p_data->display_id, capture_rect);
+    /* CGDisplayCreateImageForRect() requires Mac OS X 10.6; there is no
+     * earlier equivalent, so screen capture simply fails on older
+     * releases rather than being unavailable at compile time. */
+#if !defined(MAC_OS_X_VERSION_MAX_ALLOWED) || MAC_OS_X_VERSION_MAX_ALLOWED >= 1060
+    if (__builtin_available(macOS 10.6, *))
+        image = CGDisplayCreateImageForRect(p_data->display_id, capture_rect);
+    else
+        image = NULL;
+#else
+    /* the 10.4/10.5 SDKs do not even declare it */
+    image = NULL;
+#endif
     if (!image) {
         msg_Warn(p_demux, "no image!");
         return NULL;

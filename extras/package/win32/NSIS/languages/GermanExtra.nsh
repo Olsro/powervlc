@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Fügt ein Desktopsymbol für leichten Zugang ein"
 ${LangFileString} Desc_Section03 \
-    "Das VLC Mozilla und Mozilla-Firefox Plugin"
+    "Das ${PRODUCT_NAME} Mozilla und Mozilla-Firefox Plugin"
 ${LangFileString} Desc_Section04 \
-    "Das VLC ActiveX-Plugin"
+    "Das ${PRODUCT_NAME} ActiveX-Plugin"
 ${LangFileString} Desc_Section05 \
     "DVD und CD Wiedergabe Registrierung"
 ${LangFileString} Desc_Section06 \
-    "Setzt den VLC media player als Standard-Anwendung für die ausgewählten Dateitypen"
+    "Setzt den ${PRODUCT_NAME} als Standard-Anwendung für die ausgewählten Dateitypen"
 ${LangFileString} Desc_Section07 \
-    "Fügt Kontextmenü-Einträge hinzu ('Wiedergabe mit VLC' und 'Zur VLC-Wiedergabeliste hinzufügen')"
+    "Fügt Kontextmenü-Einträge hinzu ('Wiedergabe mit ${PRODUCT_NAME}' und 'Zur ${PRODUCT_NAME}-Wiedergabeliste hinzufügen')"
 ${LangFileString} Desc_Section08 \
-    "Löscht die VLC media player Einstellungen und übergebliebenen Cache-Dateien der alten Installation"
+    "Löscht die ${PRODUCT_NAME} Einstellungen und übergebliebenen Cache-Dateien der alten Installation"
 
 ${LangFileString} Name_Section91 "Deinstallieren"
 ${LangFileString} Name_Section92 "Einstellungen und Cache löschen"
 
 ${LangFileString} Desc_Section91 \
-"VLC media player und alle Komponenten deinstallieren"
+"${PRODUCT_NAME} und alle Komponenten deinstallieren"
 ${LangFileString} Desc_Section92 \
-"VLC media player Einstellungen und Cache-Dateien löschen"
+"${PRODUCT_NAME} Einstellungen und Cache-Dateien löschen"
 
 ${LangFileString} ShellAssociation_Play "Wiedergabe"
-${LangFileString} ContextMenuEntry_PlayWith "Mit VLC media player wiedergeben"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Zur VLC media player Wiedergabeliste hinzufügen"
+${LangFileString} ContextMenuEntry_PlayWith "Mit ${PRODUCT_NAME} wiedergeben"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Zur ${PRODUCT_NAME} Wiedergabeliste hinzufügen"
 
 ${LangFileString} Link_VisitWebsite "Besuchen Sie die VideoLAN VLC media player Webseite"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Blu-ray wiedergeben"
 ${LangFileString} License_NextText "Jetzt sind Sie über Ihre Rechte informiert. Klicken Sie auf Weiter."
 
 ${LangFileString} Detail_CheckProcesses "Überprüfen der Prozesse..."
-${LangFileString} MessageBox_VLCRunning "VLC scheint ausgeführt zu werden und wird nun geschlossen."
-${LangFileString} MessageBox_VLCUnableToClose "Dieses Installationsprogramm konnte VLC nicht schließen, tun Sie es bitte manuell."
+${LangFileString} MessageBox_VLCRunning "${PRODUCT_NAME} scheint ausgeführt zu werden und wird nun geschlossen."
+${LangFileString} MessageBox_VLCUnableToClose "Dieses Installationsprogramm konnte ${PRODUCT_NAME} nicht schließen, tun Sie es bitte manuell."
 ${LangFileString} MessageBox_InstallAborted "Installation abgebrochen!"
 
 ${LangFileString} Reinstall_Headline "Bereits installiert"
-${LangFileString} Reinstall_HeadlineInstall "Wählen Sie, wie Sie den VLC media player installieren möchten."
+${LangFileString} Reinstall_HeadlineInstall "Wählen Sie, wie Sie den ${PRODUCT_NAME} installieren möchten."
 ${LangFileString} Reinstall_HeadlineMaintenance "Wählen Sie die durchgeführte Wartungsoption aus."
-${LangFileString} Reinstall_MessageOlder "Eine ältere Version des VLC media players ist auf dem System installiert. Wählen Sie die durchgeführte Operation aus und klicken Sie auf Weiter, um fortzufahren."
-${LangFileString} Reinstall_MessageNewer "Eine neuere Version des VLC media players ist bereits installiert! Es wird nicht empfohlen, auf eine ältere Version downzugraden. Wählen Sie die durchgeführte Operation aus und klicken Sie auf Weiter, um fortzufahren."
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} ist bereits installiert. Wählen Sie die durchgeführte Operation aus und klicken Sie auf Weiter, um fortzufahren."
-${LangFileString} Reinstall_OptionUpgrade "Aktualisieren Sie den VLC media player mit vorherigen Einstellungen (empfohlen)"
-${LangFileString} Reinstall_OptionDowngrade "Ein Downgrade des VLC media players mit vorherigen Einstellungen (empfohlen)"
+${LangFileString} Reinstall_MessageOlder "Eine ältere Version des ${PRODUCT_NAME}s ist auf dem System installiert. Wählen Sie die durchgeführte Operation aus und klicken Sie auf Weiter, um fortzufahren."
+${LangFileString} Reinstall_MessageNewer "Eine neuere Version des ${PRODUCT_NAME}s ist bereits installiert! Es wird nicht empfohlen, auf eine ältere Version downzugraden. Wählen Sie die durchgeführte Operation aus und klicken Sie auf Weiter, um fortzufahren."
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} ist bereits installiert. Wählen Sie die durchgeführte Operation aus und klicken Sie auf Weiter, um fortzufahren."
+${LangFileString} Reinstall_OptionUpgrade "Aktualisieren Sie den ${PRODUCT_NAME} mit vorherigen Einstellungen (empfohlen)"
+${LangFileString} Reinstall_OptionDowngrade "Ein Downgrade des ${PRODUCT_NAME}s mit vorherigen Einstellungen (empfohlen)"
 ${LangFileString} Reinstall_OptionComponents "Hinzufügen/Entfernen/Installieren von Komponenten"
 ${LangFileString} Reinstall_OptionAdvanced "Einstellungen ändern (erweitert)"
-${LangFileString} Reinstall_OptionUninstall "Deinstallieren des VLC media players"
+${LangFileString} Reinstall_OptionUninstall "Deinstallieren des ${PRODUCT_NAME}s"

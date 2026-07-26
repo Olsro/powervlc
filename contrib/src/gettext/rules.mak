@@ -63,6 +63,14 @@ ifdef HAVE_MACOSX
 # macOS 10.10
 GETTEXT_CONF += ac_cv_func_faccessat=no
 
+# macOS 10.7: force the gnulib strnlen replacement and demote the
+# availability diagnostic (the SDK declaration keeps its 10.7 availability
+# attribute even though the linked implementation is gnulib's)
+ifneq ($(call darwin_min_os_at_least, 10.7), true)
+GETTEXT_CONF += ac_cv_func_strnlen=no \
+	CFLAGS="$(CFLAGS) $(WNO_PARTIAL_AVAILABILITY)"
+endif
+
 endif
 
 .gettext: gettext

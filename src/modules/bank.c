@@ -263,6 +263,9 @@ typedef struct module_bank
     size_t        size;
     vlc_plugin_t **plugins;
     vlc_plugin_t *cache;
+#ifdef __APPLE__
+    size_t        misses; /* plugins that had to be loaded from disk */
+#endif
 } module_bank_t;
 
 /**
@@ -298,6 +301,9 @@ static int AllocatePluginFile (module_bank_t *bank, const char *abspath,
             plugin->path = xstrdup(relpath);
             plugin->mtime = st->st_mtime;
             plugin->size = st->st_size;
+#ifdef __APPLE__
+            bank->misses++;
+#endif
         }
     }
 
@@ -306,7 +312,13 @@ static int AllocatePluginFile (module_bank_t *bank, const char *abspath,
 
     vlc_plugin_store(plugin);
 
+#ifdef __APPLE__
+    /* Collect entries whenever scanning, so an updated cache can be saved
+     * when the on-disk one turns out missing or stale (see below). */
+    if (bank->mode & (CACHE_WRITE_FILE|CACHE_SCAN_DIR))
+#else
     if (bank->mode & CACHE_WRITE_FILE) /* Add entry to to-be-saved cache */
+#endif
     {
         bank->plugins = xrealloc(bank->plugins,
                                  (bank->size + 1) * sizeof (vlc_plugin_t *));
@@ -502,6 +514,21 @@ static void AllocatePluginPath(vlc_object_t *obj, const char *path,
 
     if (mode & CACHE_WRITE_FILE)
         CacheSave(obj, path, bank.plugins, bank.size);
+#ifdef __APPLE__
+    /* The app bundle is deployed by unpacking an archive: no installer ever
+     * runs vlc-cache-gen, and without a cache every launch re-loads and
+     * re-links all ~330 plugins (tens of seconds on the PowerPC Macs this
+     * branch targets). When the scan had to load plugins the cache did not
+     * cover, save an updated cache (atomic tmp+rename; fails silently on a
+     * read-only install). */
+    else if ((mode & (CACHE_READ_FILE|CACHE_SCAN_DIR)) ==
+                     (CACHE_READ_FILE|CACHE_SCAN_DIR) && bank.misses > 0)
+    {
+        msg_Dbg(obj, "saving plugins cache (%zu plugin(s) were not cached)",
+                bank.misses);
+        CacheSave(obj, path, bank.plugins, bank.size);
+    }
+#endif
 
     free(bank.plugins);
 }
