@@ -68,7 +68,13 @@
 
 #import <Foundation/Foundation.h>
 #import <Cocoa/Cocoa.h>
-#import <Growl/Growl.h>
+
+/* The Growl SDK framework is optional (contribs); without it, old
+ * systems are still served through the distributed-notification protocol
+ * understood by Growl <= 1.2 (the releases running on 10.4/10.5). */
+#ifdef HAVE_GROWL_FRAMEWORK
+# import <Growl/Growl.h>
+#endif
 
 #define VLC_MODULE_LICENSE VLC_LICENSE_GPL_2_PLUS
 #include <vlc_common.h>
@@ -82,7 +88,10 @@
 /*****************************************************************************
  * intf_sys_t, VLCGrowlDelegate
  *****************************************************************************/
-@interface VLCGrowlDelegate : NSObject <GrowlApplicationBridgeDelegate>
+@interface VLCGrowlDelegate : NSObject
+#ifdef HAVE_GROWL_FRAMEWORK
+    <GrowlApplicationBridgeDelegate>
+#endif
 {
     NSString *applicationName;
     NSString *notificationType;
@@ -164,7 +173,9 @@ static void Close( vlc_object_t *p_this )
 
     var_DelCallback( p_playlist, "input-current", InputCurrent, p_intf );
 
+#ifdef HAVE_GROWL_FRAMEWORK
     [GrowlApplicationBridge setGrowlDelegate:nil];
+#endif
     [p_sys->o_growl_delegate release];
     free( p_sys );
 }
@@ -243,7 +254,9 @@ static int InputCurrent( vlc_object_t *p_this, const char *psz_var,
     if( !( self = [super init] ) )
         return nil;
 
-    @autoreleasepool {
+    /* NSAutoreleasePool: @autoreleasepool needs a modern runtime */
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    {
         // Subscribe to notifications to determine if VLC is in foreground or not
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(applicationActiveChange:)
@@ -255,6 +268,7 @@ static int InputCurrent( vlc_object_t *p_this, const char *psz_var,
                                                      name:NSApplicationDidResignActiveNotification
                                                    object:nil];
     }
+    [pool release];
     // Start in background
     isInForeground = NO;
 
@@ -274,20 +288,20 @@ static int InputCurrent( vlc_object_t *p_this, const char *psz_var,
 
 - (void)dealloc
 {
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wpartial-availability"
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= 1080
     // Clear the remaining lastNotification in Notification Center, if any
-    @autoreleasepool {
-        if (lastNotification && hasNativeNotifications) {
-            [NSUserNotificationCenter.defaultUserNotificationCenter
-             removeDeliveredNotification:(NSUserNotification *)lastNotification];
-            [lastNotification release];
-        }
-        [[NSNotificationCenter defaultCenter] removeObserver:self];
+    if (lastNotification && hasNativeNotifications) {
+        [[NSUserNotificationCenter defaultUserNotificationCenter]
+         removeDeliveredNotification:(NSUserNotification *)lastNotification];
+        [lastNotification release];
     }
 #endif
 #pragma clang diagnostic pop
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [pool release];
 
     // Release everything
     [applicationName release];
@@ -298,29 +312,64 @@ static int InputCurrent( vlc_object_t *p_this, const char *psz_var,
 
 - (void)registerToGrowl
 {
-    @autoreleasepool {
-        applicationName = [[NSString alloc] initWithUTF8String:_( "VLC media player" )];
-        notificationType = [[NSString alloc] initWithUTF8String:_( "New input playing" )];
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
-        NSArray *defaultAndAllNotifications = [NSArray arrayWithObject: notificationType];
-        registrationDictionary = [[NSMutableDictionary alloc] init];
-        [registrationDictionary setObject:defaultAndAllNotifications
-                                   forKey:GROWL_NOTIFICATIONS_ALL];
-        [registrationDictionary setObject:defaultAndAllNotifications
-                                   forKey: GROWL_NOTIFICATIONS_DEFAULT];
+    applicationName = [[NSString alloc] initWithUTF8String:_( "PowerVLC media player" )];
+    notificationType = [[NSString alloc] initWithUTF8String:_( "New input playing" )];
 
-        [GrowlApplicationBridge setGrowlDelegate:self];
+    NSArray *defaultAndAllNotifications = [NSArray arrayWithObject: notificationType];
+
+#ifdef HAVE_GROWL_FRAMEWORK
+    registrationDictionary = [[NSMutableDictionary alloc] init];
+    [registrationDictionary setObject:defaultAndAllNotifications
+                               forKey:GROWL_NOTIFICATIONS_ALL];
+    [registrationDictionary setObject:defaultAndAllNotifications
+                               forKey: GROWL_NOTIFICATIONS_DEFAULT];
+
+    [GrowlApplicationBridge setGrowlDelegate:self];
+#else
+    /* Register with a running Growl (<= 1.2) over distributed
+     * notifications; harmless no-op when Growl is not installed. */
+    NSMutableDictionary *registration = [NSMutableDictionary dictionary];
+    [registration setObject:applicationName forKey:@"ApplicationName"];
+    [registration setObject:defaultAndAllNotifications
+                     forKey:@"AllNotifications"];
+    [registration setObject:defaultAndAllNotifications
+                     forKey:@"DefaultNotifications"];
+    /* Ship the app icon so Growl's preferences show PowerVLC's icon and
+     * not the generic placeholder. -applicationIconImage goes through the
+     * in-process NSImage .icns decoder, which fails on 10.5 (it chokes on
+     * some icon representations and hands back the generic icon); ask
+     * IconServices instead — it is tolerant and returns the very icon the
+     * Dock shows. Fall back to -applicationIconImage if that ever fails. */
+    NSImage *icon = [[NSWorkspace sharedWorkspace]
+        iconForFile:[[NSBundle mainBundle] bundlePath]];
+    if (!icon && NSApp != nil)
+        icon = [NSApp applicationIconImage];
+    if (icon) {
+        [icon setSize:NSMakeSize(128, 128)];
+        NSData *iconData = [icon TIFFRepresentation];
+        if (iconData)
+            [registration setObject:iconData forKey:@"ApplicationIcon"];
+    }
+    [[NSDistributedNotificationCenter defaultCenter]
+        postNotificationName:@"GrowlApplicationRegistrationNotification"
+                      object:nil
+                    userInfo:registration
+          deliverImmediately:YES];
+#endif
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wpartial-availability"
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= 1080
-        if (hasNativeNotifications) {
-            [[NSUserNotificationCenter defaultUserNotificationCenter]
-             setDelegate:(id<NSUserNotificationCenterDelegate>)self];
-        }
+    if (hasNativeNotifications) {
+        [[NSUserNotificationCenter defaultUserNotificationCenter]
+         setDelegate:(id<NSUserNotificationCenterDelegate>)self];
+    }
 #endif
 #pragma clang diagnostic pop
-    }
+
+    [pool release];
 }
 
 - (void)notifyWithTitle:(const char *)title
@@ -328,51 +377,91 @@ static int InputCurrent( vlc_object_t *p_this, const char *psz_var,
                   album:(const char *)album
               andArtUrl:(const char *)url
 {
-    @autoreleasepool {
-        // Do not notify if in foreground
-        if (isInForeground)
-            return;
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
-        // Init Cover
-        NSData *coverImageData = nil;
-        NSImage *coverImage = nil;
+    // Do not notify if in foreground
+    if (isInForeground) {
+        [pool release];
+        return;
+    }
 
-        if (url) {
-            coverImageData = [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:url]];
-            coverImage = [[NSImage alloc] initWithData:coverImageData];
+    // Init Cover
+    NSData *coverImageData = nil;
+    NSImage *coverImage = nil;
+
+    if (url) {
+        coverImageData = [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:url]];
+        coverImage = [[NSImage alloc] initWithData:coverImageData];
+    }
+
+    // Init Track info
+    NSString *titleStr = nil;
+    NSString *artistStr = nil;
+    NSString *albumStr = nil;
+
+    if (title) {
+        titleStr = [NSString stringWithUTF8String:title];
+    } else {
+        // Without title, notification makes no sense, so return here
+        // title should never be empty, but better check than crash.
+        [coverImage release];
+        [pool release];
+        return;
+    }
+    if (artist)
+        artistStr = [NSString stringWithUTF8String:artist];
+    if (album)
+        albumStr = [NSString stringWithUTF8String:album];
+
+    /* Runtime priority: native notification center when the OS has it,
+     * then the Growl SDK framework when compiled in, and finally the
+     * Growl <= 1.2 distributed-notification protocol (old systems). */
+    BOOL handled = NO;
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpartial-availability"
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 1080
+    if (hasNativeNotifications) {
+        // Make the OS X notification and string
+        NSUserNotification *notification = [NSUserNotification new];
+        NSString *desc = nil;
+
+        if (artistStr && albumStr) {
+            desc = [NSString stringWithFormat:@"%@ – %@", artistStr, albumStr];
+        } else if (artistStr) {
+            desc = artistStr;
         }
 
-        // Init Track info
-        NSString *titleStr = nil;
-        NSString *artistStr = nil;
-        NSString *albumStr = nil;
+        notification.title              = titleStr;
+        notification.subtitle           = desc;
+        notification.hasActionButton    = YES;
+        notification.actionButtonTitle  = [NSString stringWithUTF8String:_("Skip")];
 
-        if (title) {
-            titleStr = [NSString stringWithUTF8String:title];
+        // Private APIs to set cover image, see rdar://23148801
+        // and show action button, see rdar://23148733
+        [notification setValue:coverImage forKey:@"_identityImage"];
+        [notification setValue:@(YES) forKey:@"_showsButtons"];
+        [NSUserNotificationCenter.defaultUserNotificationCenter deliverNotification:notification];
+        [notification release];
+        handled = YES;
+    }
+#endif
+#pragma clang diagnostic pop
+
+    if (!handled) {
+        // Make the Growl notification string
+        NSString *desc = nil;
+
+        if (artistStr && albumStr) {
+            desc = [NSString stringWithFormat:@"%@\n%@ [%@]", titleStr, artistStr, albumStr];
+        } else if (artistStr) {
+            desc = [NSString stringWithFormat:@"%@\n%@", titleStr, artistStr];
         } else {
-            // Without title, notification makes no sense, so return here
-            // title should never be empty, but better check than crash.
-            [coverImage release];
-            return;
+            desc = titleStr;
         }
-        if (artist)
-            artistStr = [NSString stringWithUTF8String:artist];
-        if (album)
-            albumStr = [NSString stringWithUTF8String:album];
 
-        // Notification stuff
+#ifdef HAVE_GROWL_FRAMEWORK
         if ([GrowlApplicationBridge isGrowlRunning]) {
-            // Make the Growl notification string
-            NSString *desc = nil;
-
-            if (artistStr && albumStr) {
-                desc = [NSString stringWithFormat:@"%@\n%@ [%@]", titleStr, artistStr, albumStr];
-            } else if (artistStr) {
-                desc = [NSString stringWithFormat:@"%@\n%@", titleStr, artistStr];
-            } else {
-                desc = titleStr;
-            }
-
             // Send notification
             [GrowlApplicationBridge notifyWithTitle:[NSString stringWithUTF8String:_("Now playing")]
                                         description:desc
@@ -382,38 +471,32 @@ static int InputCurrent( vlc_object_t *p_this, const char *psz_var,
                                            isSticky:NO
                                        clickContext:nil
                                          identifier:@"VLCNowPlayingNotification"];
-        } else if (hasNativeNotifications) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wpartial-availability"
-#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 1080
-            // Make the OS X notification and string
-            NSUserNotification *notification = [NSUserNotification new];
-            NSString *desc = nil;
-
-            if (artistStr && albumStr) {
-                desc = [NSString stringWithFormat:@"%@ – %@", artistStr, albumStr];
-            } else if (artistStr) {
-                desc = artistStr;
-            }
-
-            notification.title              = titleStr;
-            notification.subtitle           = desc;
-            notification.hasActionButton    = YES;
-            notification.actionButtonTitle  = [NSString stringWithUTF8String:_("Skip")];
-
-            // Private APIs to set cover image, see rdar://23148801
-            // and show action button, see rdar://23148733
-            [notification setValue:coverImage forKey:@"_identityImage"];
-            [notification setValue:@(YES) forKey:@"_showsButtons"];
-            [NSUserNotificationCenter.defaultUserNotificationCenter deliverNotification:notification];
-            [notification release];
-#endif
-#pragma clang diagnostic pop
         }
-
-        // Release stuff
-        [coverImage release];
+#else
+        /* Growl <= 1.2 distributed-notification protocol; a no-op when
+         * no Growl daemon listens */
+        NSMutableDictionary *info = [NSMutableDictionary dictionary];
+        [info setObject:applicationName forKey:@"ApplicationName"];
+        [info setObject:notificationType forKey:@"NotificationName"];
+        [info setObject:[NSString stringWithUTF8String:_("Now playing")]
+                 forKey:@"NotificationTitle"];
+        [info setObject:desc forKey:@"NotificationDescription"];
+        if (coverImage) {
+            NSData *coverTIFF = [coverImage TIFFRepresentation];
+            if (coverTIFF)
+                [info setObject:coverTIFF forKey:@"NotificationIcon"];
+        }
+        [[NSDistributedNotificationCenter defaultCenter]
+            postNotificationName:@"GrowlNotification"
+                          object:nil
+                        userInfo:info
+              deliverImmediately:YES];
+#endif
     }
+
+    // Release stuff
+    [coverImage release];
+    [pool release];
 }
 
 /*****************************************************************************
@@ -430,9 +513,9 @@ static int InputCurrent( vlc_object_t *p_this, const char *psz_var,
 }
 
 - (void)applicationActiveChange:(NSNotification *)n {
-    if (n.name == NSApplicationDidBecomeActiveNotification)
+    if ([[n name] isEqualToString:NSApplicationDidBecomeActiveNotification])
         isInForeground = YES;
-    else if (n.name == NSApplicationDidResignActiveNotification)
+    else if ([[n name] isEqualToString:NSApplicationDidResignActiveNotification])
         isInForeground = NO;
 }
 

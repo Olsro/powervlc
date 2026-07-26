@@ -136,6 +136,31 @@ typedef struct {
 } max_align_t;
 #endif
 
+#if defined (__APPLE__) && defined (__clang__)
+/* The macOS SDK unconditionally annotates a few POSIX functions as
+ * unavailable before a given release (unlike e.g. dirfd(), which the
+ * SDK itself implements as a macro when the deployment target is old
+ * enough), even though VLC links in its own implementation from
+ * compat/ whenever the matching HAVE_* macro is unset (see the darwin
+ * case in configure.ac). Renaming VLC's replacements so that call
+ * sites never spell out the original identifier avoids
+ * -Werror=partial-availability rejecting them for reliance on a
+ * "future" API that in fact is never used.
+ *
+ * <string.h>, <strings.h>, <stdio.h>, <stdlib.h> and <time.h> are
+ * force-included here, under their real names, before any renaming
+ * macro below can come into scope: the SDK's own declarations (and
+ * the bounds-checking macros they use internally) must not be renamed
+ * by them, or they fail to parse. Any later #include of these
+ * headers elsewhere in the same translation unit is a no-op, guarded
+ * by their own include guards. */
+# include <string.h>
+# include <strings.h>
+# include <stdio.h>
+# include <stdlib.h>
+# include <time.h>
+#endif
+
 /* stdio.h */
 #ifndef HAVE_ASPRINTF
 int asprintf (char **, const char *, ...);
@@ -151,8 +176,15 @@ int putchar_unlocked (int);
 #endif
 
 #ifndef HAVE_GETDELIM
+# if defined (__APPLE__) && defined (__clang__)
+ssize_t vlc_getdelim (char **, size_t *, int, FILE *);
+ssize_t vlc_getline (char **, size_t *, FILE *);
+#  define getdelim vlc_getdelim
+#  define getline  vlc_getline
+# else
 ssize_t getdelim (char **, size_t *, int, FILE *);
 ssize_t getline (char **, size_t *, FILE *);
+# endif
 #endif
 
 #ifndef HAVE_REWIND
@@ -165,7 +197,12 @@ int vasprintf (char **, const char *, va_list);
 
 /* string.h */
 #ifndef HAVE_FFSLL
+# if defined (__APPLE__) && defined (__clang__)
+int vlc_ffsll(long long);
+#  define ffsll vlc_ffsll
+# else
 int ffsll(long long);
+# endif
 #endif
 
 #ifndef HAVE_MEMRCHR
@@ -189,7 +226,12 @@ int strverscmp (const char *, const char *);
 #endif
 
 #ifndef HAVE_STRNLEN
+# if defined (__APPLE__) && defined (__clang__)
+size_t vlc_strnlen (const char *, size_t);
+#  define strnlen vlc_strnlen
+# else
 size_t strnlen (const char *, size_t);
+# endif
 #endif
 
 #ifndef HAVE_STRNSTR
@@ -197,7 +239,12 @@ char * strnstr (const char *, const char *, size_t);
 #endif
 
 #ifndef HAVE_STRNDUP
+# if defined (__APPLE__) && defined (__clang__)
+char *vlc_strndup (const char *, size_t);
+#  define strndup vlc_strndup
+# else
 char *strndup (const char *, size_t);
+# endif
 #endif
 
 #ifndef HAVE_STRLCPY
@@ -251,9 +298,16 @@ time_t timegm(struct tm *);
 #endif
 
 #ifndef HAVE_TIMESPEC_GET
+#ifndef TIME_UTC
 #define TIME_UTC 1
+#endif
 struct timespec;
+# if defined (__APPLE__) && defined (__clang__)
+int vlc_timespec_get(struct timespec *, int);
+#  define timespec_get vlc_timespec_get
+# else
 int timespec_get(struct timespec *, int);
+# endif
 #endif
 
 /* sys/time.h */
@@ -307,7 +361,15 @@ int unsetenv (const char *);
 #endif
 
 #ifndef HAVE_ALIGNED_ALLOC
+# if defined (__APPLE__) && defined (__clang__)
+void *vlc_aligned_alloc(size_t, size_t);
+#  define aligned_alloc vlc_aligned_alloc
+# else
 void *aligned_alloc(size_t, size_t);
+# endif
+# if !defined (HAVE_POSIX_MEMALIGN) && !defined (HAVE_MEMALIGN)
+void vlc_aligned_free(void *);
+# endif
 #endif
 
 #ifdef __cplusplus
@@ -318,6 +380,8 @@ void *aligned_alloc(size_t, size_t);
 #define aligned_free(ptr)  __mingw_aligned_free(ptr)
 #elif defined (_WIN32) && defined(_MSC_VER)
 #define aligned_free(ptr)  _aligned_free(ptr)
+#elif !defined (HAVE_ALIGNED_ALLOC) && !defined (HAVE_POSIX_MEMALIGN) && !defined (HAVE_MEMALIGN)
+#define aligned_free(ptr)  vlc_aligned_free(ptr)
 #else
 #define aligned_free(ptr)  free(ptr)
 #endif

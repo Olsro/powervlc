@@ -1,0 +1,38 @@
+# PowerVLC — native Linux build environment for AppImage packaging.
+#
+# Built for the target arch via `--platform` and an OLD-glibc base (`--build-arg
+# BASE=...`). glibc is only forward compatible, so building on an old base (e.g.
+# Ubuntu 18.04 = glibc 2.27) yields an AppImage that runs on virtually every
+# still-used desktop Linux. On an arm64 host the arm64 build is native (fast);
+# amd64 and i386 run under QEMU emulation (correct, but slow).
+#
+# The orchestrator (build-in-docker.sh) runs the VLC build + AppImage packaging
+# inside a container from this image. PowerVLC uses the system Qt5/FFmpeg dev
+# packages here (the contrib system is only for Windows/macOS/Android cross-builds).
+#
+# PowerVLC is an unofficial fork of VLC, not affiliated with VideoLAN.
+
+ARG BASE=ubuntu:18.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+# linuxdeploy / appimagetool need FUSE to self-mount; Docker has none, so tell
+# them to extract-and-run instead.
+ENV APPIMAGE_EXTRACT_AND_RUN=1
+
+# Enable deb-src so `apt build-dep vlc` can pull this distro's exact VLC build
+# dependencies (old-style single-file sources.list on Ubuntu 18.04 / Debian).
+RUN if [ -f /etc/apt/sources.list ]; then \
+      grep '^deb ' /etc/apt/sources.list | sed 's/^deb /deb-src /' >> /etc/apt/sources.list ; \
+    fi
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential git ca-certificates curl wget file rsync xz-utils \
+      autoconf automake libtool libtool-bin pkg-config gettext autopoint \
+      flex bison \
+    && ( apt-get build-dep -y vlc || echo "WARN: build-dep vlc failed; some modules may be disabled" ) \
+    && apt-get install -y --no-install-recommends \
+      qtbase5-dev qtbase5-private-dev libqt5svg5-dev libqt5x11extras5-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work

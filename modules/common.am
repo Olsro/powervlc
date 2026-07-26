@@ -12,7 +12,7 @@ pluginsdir = $(vlclibdir)/plugins
 BUILT_SOURCES =
 CLEANFILES = $(BUILT_SOURCES)
 
-LTLIBVLCCORE = $(top_builddir)/src/libvlccore.la
+LTLIBVLCCORE = $(top_builddir)/src/libpowervlccore.la
 
 # Module name from object or executable file name.
 MODULE_NAME = $$(p="$@"; p="$${p\#\#*/}"; p="$${p\#lib}"; p="$${p%_plugin*}"; p=$$(echo "$$p"|sed 's/-/_/g'); p="$${p%.lo}"; echo "$$p")
@@ -34,6 +34,13 @@ AM_LDFLAGS = \
 	$(top_builddir)/compat/libcompat.la $(LTLIBVLCCORE) 
 if HAVE_WIN32
 AM_LDFLAGS += $(top_builddir)/modules/module.rc.lo -Wc,-static
+endif
+# PowerVLC: statically embed the FSF C++ runtime in every plugin on the legacy
+# toolchain so the bundled shared libstdc++.6.dylib never loads alongside the
+# system one (see configure.ac HAVE_CXX_STATIC_RUNTIME). -XCClinker makes these
+# survive libtool, which drops bare -static-libstdc++/-static-libgcc.
+if HAVE_CXX_STATIC_RUNTIME
+AM_LDFLAGS += -XCClinker -static-libstdc++ -XCClinker -static-libgcc
 endif
 AM_YFLAGS = -d
 

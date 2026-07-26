@@ -124,11 +124,37 @@ struct decoder_owner_sys_t
     bool b_first;
     bool b_has_data;
 
+    /* Look-ahead decode cache (video-cache-* options, video ES only).
+     * While b_waiting and the vout fifo holds fewer than the target
+     * number of pictures, the decoder keeps decoding instead of parking
+     * after its first picture (which is what makes es_out's fill gate
+     * reachable at all -- see EsOutVideoCacheFillRatio). */
+    size_t i_cache_bytes;        /* MB budget in bytes, 0 = feature off */
+    unsigned i_cache_max_seconds;
+    size_t i_cache_pic_bytes;    /* measured on the first queued picture */
+    bool b_cache_hold;           /* this episode's vout hold was requested */
+    /* Adaptive refill pacing (round 87b): controller state, decoder
+     * thread only -- no locking. */
+    vlc_tick_t i_cache_pace_yield; /* current base yield between pictures */
+    vlc_tick_t i_cache_pace_mark;  /* date of last controller update, 0 = reset */
+    size_t i_cache_pace_count;     /* cushion count at last update */
+
     /* Flushing */
     bool flushing;
     bool b_draining;
     atomic_bool drained;
     bool b_idle;
+
+    /* Gapless (PowerVLC) */
+    bool b_gapless_eos;     /* end of stream: drain without waiting */
+    bool b_gapless_drained; /* async drain done, output queue still playing */
+
+    /* Gapless (PowerVLC): encoder priming/padding trimming */
+    uint64_t i_gl_count;    /* decoded samples seen so far */
+    uint64_t i_gl_end;      /* index of the first padding sample */
+    uint32_t i_gl_priming;  /* samples to drop at the start */
+    bool     b_gl_active;   /* trimming enabled for this track */
+    bool     b_gl_init;     /* parameters already read from the format */
 
     /* CC */
 #define MAX_CC_DECODERS 64 /* The es_out only creates one type of es */
@@ -378,9 +404,16 @@ static int aout_update_format( decoder_t *p_dec )
             if( p_dec->fmt_out.i_codec == VLC_CODEC_DTS )
                 var_SetBool( p_aout, "dtshd", p_dec->fmt_out.i_profile > 0 );
 
+            /* Gapless: only a plain audio playback input may adopt a parked
+             * output stream (no streaming out, no video anywhere). */
+            bool b_gapless_ok = p_owner->p_input != NULL
+                             && p_owner->p_sout == NULL
+                             && var_GetBool( p_owner->p_input,
+                                             "gapless-eligible" );
+
             if( aout_DecNew( p_aout, &format,
                              &p_dec->fmt_out.audio_replay_gain,
-                             &request_vout ) )
+                             &request_vout, b_gapless_ok ) )
             {
                 input_resource_PutAout( p_owner->p_resource, p_aout );
                 p_aout = NULL;
@@ -733,6 +766,133 @@ void decoder_AbortPictures( decoder_t *p_dec, bool b_abort )
     vlc_mutex_unlock( &p_owner->lock );
 }
 
+/* Look-ahead decode cache: pool reserve kept free for the DECODE side
+ * (reference frames + the frame being decoded + reorder in flight). The
+ * cache target is capped this many pictures below the pool headroom (see
+ * DecoderVideoCacheTarget) so the fill loop always stops with at least
+ * this many buffers free -- the decode never sinks into picture_pool_Wait
+ * with the vout idle (paused and/or held by a fill episode), where a
+ * B-pyramid could grab several decode buffers between two outputs and
+ * block INSIDE avcodec with nobody left to free the pool (the full app
+ * freeze once seen after a pause/play storm on the Mini G4). 720p H.264
+ * tops out at a DPB of 5, plus in-flight and reorder slack -- 10 covers
+ * the worst legal reorder depth; 6 was NOT enough.
+ *
+ * This used to be the STAGING threshold: past it every further decoded
+ * picture was copied into plain memory (releasing its pool buffer) so the
+ * cache could grow to the whole MB budget instead of stopping at the
+ * pool. That copy cost one full-frame memcpy per picture -- and on the
+ * single-core software-decode machines this cache exists for, those were
+ * exactly the cycles the decoder needed, trading smooth-with-the-odd
+ * -dropout playback for a steady stutter. Dropped: the cache is now
+ * simply bounded by the pool. */
+#define VIDEO_CACHE_POOL_MARGIN 10
+
+/* Round 87: pace the look-ahead REFILL so decoding-ahead never saturates
+ * the single-core PPC targets. Flat-out decode-ahead was measured to peg
+ * the core (0% idle / 57% sys) during every mid-play top-up, starving the
+ * audio chain into a "playback too late" flush that resets the clock and
+ * forces the very re-buffer the cache exists to prevent (see HANDOFF
+ * round 87).
+ *
+ * A FIXED yield proved insufficient (round 87b): on heavy scenes the
+ * per-picture decode time grows past (frame period - yield), the paced
+ * refill silently drops below 1x, the cushion drains over a minute, and
+ * the old low-water flat-out cliff then re-created the saturation hiccup
+ * it was meant to avoid. Instead, an adaptive CONTROLLER: every
+ * PACE_INTERVAL the decoder compares the cushion count to the previous
+ * mark. Cushion not growing => the yield shrinks (more core to decode);
+ * growing faster than needed => the yield grows (hand the core back to
+ * the 1x consumers). The yield is further scaled by cushion fullness
+ * (near-empty decodes almost flat-out, near-full coasts), so a sudden
+ * heavy burst is countered faster than the controller interval. Flat-out
+ * is reserved for b_waiting episodes (initial fill and es_out re-buffer:
+ * display frozen, nothing to starve, shortest freeze wins). */
+#define VIDEO_CACHE_PACE_INTERVAL   (CLOCK_FREQ / 2)  /* controller period */
+#define VIDEO_CACHE_PACE_INIT       (12 * 1000)       /* starting yield */
+#define VIDEO_CACHE_PACE_MAX        (30 * 1000)       /* yield ceiling */
+#define VIDEO_CACHE_PACE_STEP       (2 * 1000)        /* adjust step */
+#define VIDEO_CACHE_PACE_SLOPE_MIN  1   /* min cushion growth / interval */
+#define VIDEO_CACHE_PACE_SLOPE_MAX  4   /* growth beyond which we relax */
+
+/* Effective look-ahead cache target in pictures for the current stream:
+ * the smaller of the MB budget, the seconds cap and the pool headroom.
+ * This is the single source of truth for both the decoder's own fill loop
+ * and es_out's fill gate (through input_DecoderGetCacheState): if they
+ * diverged, the decoder could park short of what es_out waits for and
+ * buffering would only end at EOF. Returns 0 when unknown yet (no picture
+ * measured / no vout). Owner lock held. */
+static size_t DecoderVideoCacheTarget( decoder_t *p_dec )
+{
+    decoder_owner_sys_t *p_owner = p_dec->p_owner;
+
+    if( p_owner->i_cache_bytes == 0 || p_owner->i_cache_pic_bytes == 0
+     || p_owner->p_vout == NULL )
+        return 0;
+
+    size_t i_target = p_owner->i_cache_bytes / p_owner->i_cache_pic_bytes;
+
+    const video_format_t *fmt = &p_dec->fmt_out.video;
+    if( p_owner->i_cache_max_seconds > 0
+     && fmt->i_frame_rate > 0 && fmt->i_frame_rate_base > 0 )
+    {
+        size_t i_cap = (size_t)( (double)fmt->i_frame_rate
+                     / fmt->i_frame_rate_base * p_owner->i_cache_max_seconds );
+        if( i_cap < i_target )
+            i_target = i_cap;
+    }
+
+    /* The cache lives in the vout fifo as pool buffers, so it can never
+     * grow past the pool headroom minus the decode-side reserve (there is
+     * no staging fallback: see VIDEO_CACHE_POOL_MARGIN). Clamp the target
+     * to that bound -- otherwise the fill gate would wait on a count the
+     * fill can never reach, top out after a second and loop episodes
+     * forever. */
+    size_t i_headroom = vout_GetCacheHeadroom( p_owner->p_vout );
+    if( vout_CacheIsDirectRendering( p_owner->p_vout ) )
+    {
+        /* Direct rendering: the decoder's pictures ARE the display pool's.
+         * MEASURED on the Mini G4 (Radeon 9200, 720p): a micro-cushion is
+         * WORSE than no cache at all -- the whole machinery (100 ms
+         * decoder-throttle quantum, refill hold/release cycles) is tuned
+         * for cushions of dozens of pictures, and a ~8-picture target
+         * produced a refill every second with 300+ late pictures where the
+         * plain path plays clean. Below a viability floor, turn the cache
+         * OFF entirely for this stream. This pool's headroom already
+         * excludes the codec DPB, so a small extra margin suffices.
+         *
+         * The display is expected to have sized its pool for the requested
+         * budget (macosx_gl1.m's Pool() does, bounded by RAM); a display
+         * that hands out a fixed cushion simply lands under the floor and
+         * runs without a cache, as before. */
+        enum { VIDEO_CACHE_DR_POOL_MARGIN = 4,
+               VIDEO_CACHE_DR_MIN_VIABLE  = 24 };
+        size_t i_bound = i_headroom > VIDEO_CACHE_DR_POOL_MARGIN
+                       ? i_headroom - VIDEO_CACHE_DR_POOL_MARGIN : 1;
+        if( i_bound < VIDEO_CACHE_DR_MIN_VIABLE )
+            i_bound = 0;
+        if( i_bound < i_target )
+            i_target = i_bound;
+    }
+    else
+    {
+        /* Indirect rendering: the decoder pool is separate system memory,
+         * eagerly sized to hold the whole budget (see vout_wrapper.c), so
+         * this clamp normally leaves the requested target untouched and
+         * only bites when the budget exceeds the pool's up-front RAM cap.
+         * The headroom here still counts the codec DPB, so the reserve is
+         * the full VIDEO_CACHE_POOL_MARGIN. No viability floor: the eager
+         * pool is always large, and a small explicit budget is the user's
+         * to make. */
+        size_t i_bound = i_headroom > VIDEO_CACHE_POOL_MARGIN
+                       ? i_headroom - VIDEO_CACHE_POOL_MARGIN : 1;
+        if( i_bound < i_target )
+            i_target = i_bound;
+    }
+
+    return i_target;
+}
+
 static void DecoderWaitUnblock( decoder_t *p_dec )
 {
     decoder_owner_sys_t *p_owner = p_dec->p_owner;
@@ -1038,13 +1198,65 @@ static int DecoderPlayVideo( decoder_t *p_dec, picture_t *p_picture,
         p_owner->b_has_data = true;
         vlc_cond_signal( &p_owner->wait_acknowledge );
     }
-    bool b_first_after_wait = p_owner->b_waiting && p_owner->b_has_data;
 
-    DecoderWaitUnblock( p_dec );
-
-    if( p_owner->b_waiting )
+    /* Look-ahead decode cache: while es_out's fill gate holds playback
+     * (b_waiting), keep decoding into the vout fifo instead of parking
+     * on the second picture, until the fill target is reached. The vout
+     * is put on hold first so it neither displays nor trashes those
+     * pictures (their dates, converted against the still-frozen clock
+     * origin, are re-based by es_out when the gate opens). */
+    bool b_cache_fill = false;
+    if( p_owner->i_cache_bytes > 0 && p_vout != NULL )
     {
-        assert( p_owner->b_first );
+        /* (Re-)measured on every picture: a mid-stream format change
+         * would otherwise leave the byte-budget target computed against
+         * a stale picture size. Opaque hardware pictures measure 0 and
+         * keep the previous (or unknown) size. */
+        size_t i_bytes = 0;
+        for( int i = 0; i < p_picture->i_planes; i++ )
+            i_bytes += (size_t)p_picture->p[i].i_pitch
+                     * p_picture->p[i].i_lines;
+        if( i_bytes > 0 )
+            p_owner->i_cache_pic_bytes = i_bytes;
+    }
+    /* Computed once under the owner lock for the fill-mode check below. */
+    size_t i_cache_target = 0;
+    if( p_owner->i_cache_bytes > 0 && p_vout != NULL )
+        i_cache_target = DecoderVideoCacheTarget( p_dec );
+    if( p_owner->b_waiting && !p_owner->b_first
+     && p_owner->i_cache_bytes > 0 && p_vout != NULL
+     && vout_GetDecoderFifoCount( p_vout ) < i_cache_target )
+    {
+        b_cache_fill = true;
+        /* Not a pure latch anymore: a seek can interleave the decoder
+         * flush's vout-flush command AFTER the hold this fill just
+         * queued (both traverse the vout control queue) -- the vout
+         * ends up unheld while b_cache_hold still says held, the
+         * unheld vout eats every picture as it lands and the fill
+         * crawls at ~1% until the wall timeout (observed on seek: 276
+         * pictures lost, ~10 s stall, recovery only via the next
+         * refill). Cross-checking the vout's own state self-heals that
+         * desync at the very next picture; the release race this could
+         * reopen is closed by input_DecoderStopWait being the one to
+         * queue the final unhold, under this same owner lock. */
+        if( !p_owner->b_cache_hold || !vout_IsCacheHeld( p_vout ) )
+        {
+            p_owner->b_cache_hold = true;
+            vout_ChangeCacheHold( p_vout, true );
+        }
+    }
+
+    bool b_first_after_wait = p_owner->b_waiting && p_owner->b_has_data
+                           && !b_cache_fill;
+
+    if( !b_cache_fill )
+        DecoderWaitUnblock( p_dec );
+
+    if( p_owner->b_waiting && p_owner->b_first )
+    {
+        /* Not an assert on b_first anymore: in cache-fill mode the
+         * decoder passes here for every accumulated picture, and only
+         * the very first one must be forced on screen. */
         msg_Dbg( p_dec, "Received first picture" );
         p_owner->b_first = false;
         p_picture->b_force = true;
@@ -1052,8 +1264,35 @@ static int DecoderPlayVideo( decoder_t *p_dec, picture_t *p_picture,
 
     const bool b_dated = p_picture->date > VLC_TICK_INVALID;
     int i_rate = INPUT_RATE_DEFAULT;
+    vlc_tick_t i_ts_bound = DECODER_BOGUS_VIDEO_DELAY;
+    if( p_owner->i_cache_bytes > 0 )
+    {
+        /* The look-ahead cache legitimately decodes up to its whole
+         * time-depth ahead of the clock, so pictures near the far edge
+         * of the cushion carry dates that far in the future -- the
+         * stock bogus-date guard (~9 s) skips them as broken stream
+         * timestamps. Observed at video-cache-mb=512 (353-picture
+         * target, ~15 s of 24 fps video): every picture decoded past
+         * ~10 s ahead was dropped "early picture skipped", silently
+         * capping the cache and burning the core decoding into the
+         * same wall forever. Widen the guard by the current target's
+         * time-depth; truly insane dates (minutes off) stay caught. */
+        const video_format_t *fmt = &p_dec->fmt_out.video;
+        size_t i_target = DecoderVideoCacheTarget( p_dec );
+        if( i_target > 0
+         && fmt->i_frame_rate > 0 && fmt->i_frame_rate_base > 0 )
+            i_ts_bound += (vlc_tick_t)i_target * CLOCK_FREQ
+                        * fmt->i_frame_rate_base / fmt->i_frame_rate;
+        else if( p_owner->i_cache_max_seconds > 0 )
+            i_ts_bound += (vlc_tick_t)p_owner->i_cache_max_seconds
+                        * CLOCK_FREQ;
+        else
+            /* No target measured yet and no seconds cap: cover the
+             * worst case rather than skipping legitimate pictures. */
+            i_ts_bound += (vlc_tick_t)60 * CLOCK_FREQ;
+    }
     DecoderFixTs( p_dec, &p_picture->date, NULL, NULL,
-                  &i_rate, DECODER_BOGUS_VIDEO_DELAY );
+                  &i_rate, i_ts_bound );
 
     vlc_mutex_unlock( &p_owner->lock );
 
@@ -1077,7 +1316,26 @@ static int DecoderPlayVideo( decoder_t *p_dec, picture_t *p_picture,
             vout_Flush( p_vout, p_picture->date );
             p_owner->i_last_rate = i_rate;
         }
+
+        /* The look-ahead cache is bounded by the pool: the decoder's fill
+         * loop stops at a target kept VIDEO_CACHE_POOL_MARGIN below the
+         * headroom (see DecoderVideoCacheTarget), so the queued pool
+         * pictures never exhaust it and the decode side never wedges in
+         * picture_pool_Wait. Queue the pool picture as-is. */
         vout_PutPicture( p_vout, p_picture );
+
+        /* NO es_out_Control() from this thread, ever: the input thread
+         * deletes decoders (EsUnselect at stop and on every dvdnav
+         * ES churn) while HOLDING the es_out lock and pthread_join()s
+         * this very thread -- a synchronous call back into es_out here
+         * deadlocks the whole player the moment those two cross
+         * (observed on DVD seek storms: decoder blocked on the es_out
+         * lock, input blocked in the join, UI blocked behind both).
+         * The fill gate is instead re-evaluated on the INPUT thread:
+         * by ES_OUT_SET_PCR while the demux is active, and by the EOF
+         * wait's ES_OUT_GET_EMPTY poll (EsOutDecodersIsEmpty calls
+         * EsOutDecodersStopBuffering) once a local file is fully
+         * demuxed -- worst-case ~100 ms of extra gate latency. */
     }
     else
     {
@@ -1132,6 +1390,106 @@ static int DecoderQueueVideo( decoder_t *p_dec, picture_t *p_pic )
     return ret;
 }
 
+/**
+ * Gapless (PowerVLC): drops the encoder priming/padding samples advertised by
+ * the demuxer in the input format. Generic: works with any audio decoder.
+ *
+ * \return the block to play, possibly shortened, or NULL if it was entirely
+ * made of encoder samples (this is not an error).
+ */
+static block_t *DecoderGaplessTrim( decoder_t *p_dec, block_t *p_audio )
+{
+    decoder_owner_sys_t *p_owner = p_dec->p_owner;
+
+    if( !p_owner->b_gl_init )
+    {
+        p_owner->b_gl_init = true;
+
+        uint64_t i_priming = p_dec->fmt_in.audio.i_gapless_priming;
+        uint64_t i_length  = p_dec->fmt_in.audio.i_gapless_length;
+        unsigned i_in_rate  = p_dec->fmt_in.audio.i_rate;
+        unsigned i_out_rate = p_dec->fmt_out.audio.i_rate;
+
+        if( ( i_priming != 0 || i_length != 0 )
+         && AOUT_FMT_LINEAR( &p_dec->fmt_out.audio ) && i_out_rate != 0 )
+        {
+            bool b_ok = true;
+
+            if( i_in_rate != 0 && i_out_rate != i_in_rate )
+            {
+                /* SBR (HE-AAC): the decoder doubles the sample rate, the
+                 * counts given by the demuxer are at the media rate. Only an
+                 * integral ratio can be handled safely. */
+                if( i_out_rate % i_in_rate == 0 )
+                {
+                    unsigned i_mul = i_out_rate / i_in_rate;
+                    i_priming *= i_mul;
+                    i_length  *= i_mul;
+                }
+                else
+                    b_ok = false;
+            }
+
+            if( b_ok )
+            {
+                p_owner->i_gl_priming = i_priming;
+                p_owner->i_gl_end = i_length ? i_priming + i_length
+                                             : UINT64_MAX;
+                p_owner->b_gl_active = true;
+                msg_Dbg( p_dec, "gapless trim: priming %"PRIu64", "
+                         "valid samples %"PRIu64, i_priming, i_length );
+            }
+        }
+    }
+
+    if( p_audio->i_nb_samples == 0 || p_audio->i_buffer == 0 )
+        return p_audio;
+
+    const size_t i_bpf = p_audio->i_buffer / p_audio->i_nb_samples;
+    const unsigned i_rate = p_dec->fmt_out.audio.i_rate;
+    const uint64_t i_pos = p_owner->i_gl_count;
+
+    /* Always counted: the total is logged when the decoder dies, which is
+     * how the priming/padding formulas are checked empirically. */
+    p_owner->i_gl_count += p_audio->i_nb_samples;
+
+    if( !p_owner->b_gl_active )
+        return p_audio;
+
+    /* Tail: everything past the last valid sample is encoder padding. */
+    if( i_pos >= p_owner->i_gl_end )
+    {
+        block_Release( p_audio );
+        return NULL;
+    }
+    if( p_owner->i_gl_count > p_owner->i_gl_end )
+    {
+        unsigned i_keep = p_owner->i_gl_end - i_pos;
+        p_audio->i_nb_samples = i_keep;
+        p_audio->i_buffer = i_keep * i_bpf;
+        p_audio->i_length = CLOCK_FREQ * i_keep / i_rate;
+    }
+
+    /* Head: encoder delay. */
+    if( i_pos < p_owner->i_gl_priming )
+    {
+        uint64_t i_skip = p_owner->i_gl_priming - i_pos;
+
+        if( i_skip >= p_audio->i_nb_samples )
+        {
+            block_Release( p_audio );
+            return NULL;
+        }
+        p_audio->p_buffer += i_skip * i_bpf;
+        p_audio->i_buffer -= i_skip * i_bpf;
+        p_audio->i_nb_samples -= i_skip;
+        p_audio->i_pts += CLOCK_FREQ * i_skip / i_rate;
+        p_audio->i_length = CLOCK_FREQ * p_audio->i_nb_samples / i_rate;
+    }
+
+    return p_audio;
+}
+
 static int DecoderPlayAudio( decoder_t *p_dec, block_t *p_audio,
                              unsigned *restrict pi_lost_sum )
 {
@@ -1139,6 +1497,10 @@ static int DecoderPlayAudio( decoder_t *p_dec, block_t *p_audio,
     bool prerolled;
 
     assert( p_audio != NULL );
+
+    p_audio = DecoderGaplessTrim( p_dec, p_audio );
+    if( p_audio == NULL )
+        return 0; /* fully consumed encoder samples, not a loss */
 
     vlc_mutex_lock( &p_owner->lock );
     if( p_owner->i_preroll_end > p_audio->i_pts )
@@ -1506,8 +1868,29 @@ static void DecoderProcessFlush( decoder_t *p_dec )
 #endif
     if( p_dec->fmt_out.i_cat == AUDIO_ES )
     {
-        if( p_owner->p_aout )
-            aout_DecFlush( p_owner->p_aout, false );
+        /* Gapless: once the end of stream has been drained, the only flush
+         * that can still arrive is the teardown one — input_DecoderDelete
+         * raises "flushing" to unblock DecoderTimedWait before joining the
+         * thread. Flushing the output there would throw away the very
+         * audio the next track is meant to adopt (it did: the transition
+         * was gapless on a fast machine, which usually cancelled the
+         * thread before it ran this, and never on a slow one). */
+        if( p_owner->b_gapless_drained )
+        {
+            msg_Dbg( p_dec, "gapless: teardown flush, keeping the queued "
+                     "audio for the next track" );
+        }
+        else
+        {
+            if( p_owner->p_aout )
+                aout_DecFlush( p_owner->p_aout, false );
+            /* A seek/stop before the end of stream cancels the parking:
+             * the output buffer has just been thrown away. */
+            p_owner->b_gapless_eos = false;
+            /* Sample counting is impossible after a seek: give up trimming
+             * (degrades to the plain, untrimmed behaviour). */
+            p_owner->b_gl_active = false;
+        }
     }
     else if( p_dec->fmt_out.i_cat == VIDEO_ES )
     {
@@ -1530,6 +1913,10 @@ static void DecoderProcessFlush( decoder_t *p_dec )
 
     vlc_mutex_lock( &p_owner->lock );
     p_owner->i_preroll_end = INT64_MIN;
+    /* The vout flush above dropped any held cache pictures and cleared
+     * the hold on the vout side (see ThreadFlush); a new fill episode
+     * must request it again. */
+    p_owner->b_cache_hold = false;
     vlc_mutex_unlock( &p_owner->lock );
 }
 
@@ -1592,12 +1979,154 @@ static void *DecoderThread( void *p_data )
         }
 
         if( p_owner->paused && p_owner->frames_countdown == 0 )
-        {   /* Wait for resumption from pause */
-            p_owner->b_idle = true;
-            vlc_cond_signal( &p_owner->wait_acknowledge );
-            vlc_fifo_Wait( p_owner->p_fifo );
-            p_owner->b_idle = false;
-            continue;
+        {
+            /* Look-ahead decode cache: a pause is a free opportunity to
+             * decode ahead -- keep filling the cache up to its full
+             * target instead of idling. The pictures decoded here carry
+             * frozen-clock dates, like any picture decoded just before
+             * the pause: the vout already re-bases the whole decoder
+             * fifo by the pause duration on resume (ThreadChangePause),
+             * so they come out correctly timed. */
+            bool b_pause_fill = false;
+            if( p_owner->i_cache_bytes > 0
+             && !vlc_fifo_IsEmpty( p_owner->p_fifo ) )
+            {
+                /* DecoderVideoCacheTarget needs the owner lock, which
+                 * nests OUTSIDE the fifo lock everywhere else: drop and
+                 * re-take. */
+                vlc_fifo_Unlock( p_owner->p_fifo );
+                vlc_mutex_lock( &p_owner->lock );
+                vout_thread_t *p_vout = p_owner->p_vout;
+                b_pause_fill = p_vout != NULL
+                    && vout_GetDecoderFifoCount( p_vout )
+                       < DecoderVideoCacheTarget( p_dec );
+                vlc_mutex_unlock( &p_owner->lock );
+                vlc_fifo_Lock( p_owner->p_fifo );
+                /* State may have moved while unlocked (flush, resume):
+                 * re-run the loop checks instead of trusting it. */
+                if( p_owner->flushing || !p_owner->paused )
+                    continue;
+            }
+            if( !b_pause_fill )
+            {   /* Wait for resumption from pause */
+                p_owner->b_idle = true;
+                vlc_cond_signal( &p_owner->wait_acknowledge );
+                vlc_fifo_Wait( p_owner->p_fifo );
+                p_owner->b_idle = false;
+                continue;
+            }
+            /* else fall through: dequeue and decode one block while
+             * paused, then come back here for the next re-check */
+        }
+
+        /* Look-ahead cache: cushion at target -- throttle HERE, in the
+         * decoder loop where flushing/paused/kill are re-checked every
+         * wakeup, NEVER by letting the decode sink into
+         * picture_pool_Wait inside the codec. A decoder faster than
+         * the display (MPEG-2 DVD on a G4) used to top the target then
+         * pile pool-backed pictures until picture_pool_Wait blocked it
+         * INSIDE avcodec for as long as the vout took to drain back to
+         * a pool picture -- minutes behind a deep cushion, deaf
+         * to everything. A dvdnav WAIT/STILL reset arriving meanwhile
+         * could never be flushed: the fifo kept its stale-epoch
+         * pictures, the unheld vout dribble-dropped them and the fill
+         * gate hung on a descending percentage for the whole drain
+         * (observed live: 90%..0% over minutes on the Chihiro title,
+         * RAM ballooning from the unpaced demux all along). */
+        if( p_owner->i_cache_bytes > 0 && !p_owner->flushing
+         && p_owner->frames_countdown == 0
+         && !vlc_fifo_IsEmpty( p_owner->p_fifo ) )
+        {
+            size_t i_target = 0, i_count = 0;
+            bool b_waiting = false;
+            vlc_fifo_Unlock( p_owner->p_fifo );
+            vlc_mutex_lock( &p_owner->lock );
+            vout_thread_t *p_vout_full = p_owner->p_vout;
+            if( p_vout_full != NULL )
+            {
+                i_target = DecoderVideoCacheTarget( p_dec );
+                i_count  = vout_GetDecoderFifoCount( p_vout_full );
+            }
+            b_waiting = p_owner->b_waiting;
+            vlc_mutex_unlock( &p_owner->lock );
+            vlc_fifo_Lock( p_owner->p_fifo );
+            if( p_owner->flushing )
+                continue;
+            if( i_target > 0 && i_count >= i_target )
+            {
+                /* Cushion full. Poll every 100 ms: nothing signals the
+                 * fifo when the vout drains a picture, and flush/delete
+                 * signal wait_timed (same pattern as DecoderTimedWait). */
+                p_owner->i_cache_pace_mark = 0; /* controller restart */
+                p_owner->b_idle = true;
+                vlc_cond_signal( &p_owner->wait_acknowledge );
+                vlc_fifo_TimedWaitCond( p_owner->p_fifo,
+                                        &p_owner->wait_timed,
+                                        mdate() + CLOCK_FREQ / 10 );
+                p_owner->b_idle = false;
+                continue;
+            }
+            if( i_target > 0 && !b_waiting )
+            {
+                /* Adaptive paced refill (round 87b, see the PACE defines
+                 * above): steady playback with the cushion below target.
+                 * Yield between decoded pictures, with the yield servoed
+                 * on the measured cushion slope, then fall through to
+                 * decode exactly ONE picture and re-pace. Safe to raise
+                 * b_idle here: the fifo is non-empty (guarded above and
+                 * only drained by this thread), so the empty+idle
+                 * starve/drain checks never trip. */
+                const vlc_tick_t now = mdate();
+                if( p_owner->i_cache_pace_mark == 0 )
+                {
+                    p_owner->i_cache_pace_mark = now;
+                    p_owner->i_cache_pace_count = i_count;
+                }
+                else if( now - p_owner->i_cache_pace_mark
+                         >= VIDEO_CACHE_PACE_INTERVAL )
+                {
+                    /* Cushion growth since the previous mark (negative
+                     * = draining). */
+                    ssize_t i_slope = (ssize_t)i_count
+                                    - (ssize_t)p_owner->i_cache_pace_count;
+                    if( i_slope < VIDEO_CACHE_PACE_SLOPE_MIN )
+                    {
+                        if( p_owner->i_cache_pace_yield
+                            > VIDEO_CACHE_PACE_STEP )
+                            p_owner->i_cache_pace_yield
+                                -= VIDEO_CACHE_PACE_STEP;
+                        else
+                            p_owner->i_cache_pace_yield = 0;
+                    }
+                    else if( i_slope > VIDEO_CACHE_PACE_SLOPE_MAX
+                          && p_owner->i_cache_pace_yield
+                             < VIDEO_CACHE_PACE_MAX )
+                        p_owner->i_cache_pace_yield
+                            += VIDEO_CACHE_PACE_STEP / 2;
+                    p_owner->i_cache_pace_mark = now;
+                    p_owner->i_cache_pace_count = i_count;
+                }
+                /* Proportional term: scale the yield by cushion fullness
+                 * so a sudden drain is countered faster than the
+                 * controller interval (near-empty => near flat-out). */
+                vlc_tick_t i_yield = p_owner->i_cache_pace_yield
+                                   * (vlc_tick_t)i_count
+                                   / (vlc_tick_t)i_target;
+                if( i_yield > 0 )
+                {
+                    p_owner->b_idle = true;
+                    vlc_cond_signal( &p_owner->wait_acknowledge );
+                    vlc_fifo_TimedWaitCond( p_owner->p_fifo,
+                                            &p_owner->wait_timed,
+                                            now + i_yield );
+                    p_owner->b_idle = false;
+                    if( p_owner->flushing )
+                        continue;
+                }
+                /* fall through: decode one picture, then re-check */
+            }
+            else if( i_target > 0 )
+                p_owner->i_cache_pace_mark = 0; /* b_waiting: flat-out */
         }
 
         vlc_cond_signal( &p_owner->wait_fifo );
@@ -1627,7 +2156,16 @@ static void *DecoderThread( void *p_data )
         {   /* Draining: the decoder is drained and all decoded buffers are
              * queued to the output at this point. Now drain the output. */
             if( p_owner->p_aout != NULL )
-                aout_DecFlush( p_owner->p_aout, true );
+            {
+                if( p_owner->b_gapless_eos )
+                {   /* Gapless: do not wait for playback, the queued audio
+                     * keeps playing while the next input is being set up. */
+                    aout_DecDrainAsync( p_owner->p_aout );
+                    p_owner->b_gapless_drained = true;
+                }
+                else
+                    aout_DecFlush( p_owner->p_aout, true );
+            }
         }
         vlc_restorecancel( canc );
 
@@ -1703,8 +2241,39 @@ static decoder_t * CreateDecoder( vlc_object_t *p_parent,
     p_owner->flushing = false;
     p_owner->b_draining = false;
     p_owner->drained = false;
+    p_owner->b_gapless_eos = false;
+    p_owner->b_gapless_drained = false;
+    p_owner->i_gl_count = 0;
+    p_owner->i_gl_end = 0;
+    p_owner->i_gl_priming = 0;
+    p_owner->b_gl_active = false;
+    p_owner->b_gl_init = false;
     atomic_init( &p_owner->reload, RELOAD_NO_REQUEST );
     p_owner->b_idle = false;
+
+    p_owner->i_cache_bytes = 0;
+    p_owner->i_cache_max_seconds = 0;
+    p_owner->i_cache_pic_bytes = 0;
+    p_owner->b_cache_hold = false;
+    p_owner->i_cache_pace_yield = VIDEO_CACHE_PACE_INIT;
+    p_owner->i_cache_pace_mark = 0;
+    p_owner->i_cache_pace_count = 0;
+    if( fmt->i_cat == VIDEO_ES && p_sout == NULL && p_input != NULL )
+    {
+        /* No per-URI disc blacklist here anymore: menu-capable disc
+         * demuxers now declare their menu domains themselves through
+         * ES_OUT_SET_VIDEO_CACHE_INHIBIT (dvdnav per domain, bluray for
+         * the whole session), so TITLE playback gets the cache -- slow
+         * machines genuinely need it for MPEG-2 (iBook G3) -- while
+         * menus never open fill episodes. */
+        int64_t i_cache_mb = var_InheritInteger( p_dec, "video-cache-mb" );
+        if( i_cache_mb > 0 )
+            p_owner->i_cache_bytes = (size_t)i_cache_mb * 1024 * 1024;
+        int64_t i_max_s =
+            var_InheritInteger( p_dec, "video-cache-max-seconds" );
+        if( i_max_s > 0 )
+            p_owner->i_cache_max_seconds = (unsigned)i_max_s;
+    }
 
     es_format_Init( &p_owner->fmt, fmt->i_cat, 0 );
 
@@ -1819,6 +2388,10 @@ static void DeleteDecoder( decoder_t * p_dec )
     msg_Dbg( p_dec, "killing decoder fourcc `%4.4s'",
              (char*)&p_dec->fmt_in.i_codec );
 
+    if( p_owner->i_gl_count != 0 )
+        msg_Dbg( p_dec, "gapless trim: %"PRIu64" samples seen",
+                 p_owner->i_gl_count );
+
     const bool b_flush_spu = p_dec->fmt_out.i_cat == SPU_ES;
     UnloadDecoder( p_dec );
 
@@ -1828,9 +2401,16 @@ static void DeleteDecoder( decoder_t * p_dec )
     /* Cleanup */
     if( p_owner->p_aout )
     {
-        /* TODO: REVISIT gap-less audio */
-        aout_DecFlush( p_owner->p_aout, false );
-        aout_DecDelete( p_owner->p_aout );
+        if( p_owner->b_gapless_drained )
+        {   /* Gapless: keep the output stream alive with its queued audio,
+             * the next track will adopt it. No flush, no teardown. */
+            aout_DecPark( p_owner->p_aout );
+        }
+        else
+        {
+            aout_DecFlush( p_owner->p_aout, false );
+            aout_DecDelete( p_owner->p_aout );
+        }
         input_resource_PutAout( p_owner->p_resource, p_owner->p_aout );
         if( p_owner->p_input != NULL )
             input_SendEventAout( p_owner->p_input );
@@ -2104,11 +2684,17 @@ bool input_DecoderIsEmpty( decoder_t * p_dec )
  * @note The function does not actually wait for draining. It just signals that
  * draining should be performed once the decoder has emptied FIFO.
  */
-void input_DecoderDrain( decoder_t *p_dec )
+void input_DecoderDrain( decoder_t *p_dec, bool b_gapless )
 {
     decoder_owner_sys_t *p_owner = p_dec->p_owner;
 
     vlc_fifo_Lock( p_owner->p_fifo );
+    /* Only the first drain request decides whether the output stream may be
+     * parked: the later call from EsOutDel (which always passes false) must
+     * not clear the flag set at end of stream. */
+    if( !p_owner->b_draining && !atomic_load( &p_owner->drained ) )
+        p_owner->b_gapless_eos = b_gapless
+                              && p_dec->fmt_out.i_cat == AUDIO_ES;
     p_owner->b_draining = true;
     vlc_fifo_Signal( p_owner->p_fifo );
     vlc_fifo_Unlock( p_owner->p_fifo );
@@ -2293,8 +2879,71 @@ void input_DecoderStopWait( decoder_t *p_dec )
 
     vlc_mutex_lock( &p_owner->lock );
     p_owner->b_waiting = false;
+    if( p_owner->b_cache_hold && p_owner->p_vout != NULL )
+        /* Authoritative end-of-episode unhold. Queued AFTER b_waiting
+         * went false under this lock: any in-flight fill picture either
+         * ran before us (its hold(true) precedes this false in the vout
+         * control queue) or after (b_waiting false, no hold at all), so
+         * the unhold always lands last and the vout can never stay
+         * wedged held with the gate open. es_out's release only
+         * re-bases dates/flushes the OSD; the unhold lives here. */
+        vout_ChangeCacheHold( p_owner->p_vout, false );
+    p_owner->b_cache_hold = false;
     vlc_cond_signal( &p_owner->wait_request );
     vlc_mutex_unlock( &p_owner->lock );
+}
+
+/* Look-ahead decode cache: reports how full this (video) decoder's vout
+ * fifo is against the effective target, so es_out's fill gate and the
+ * decoder's own fill loop share one truth (see DecoderVideoCacheTarget).
+ * *pb_starved is true when the decoder cannot make further progress (its
+ * input fifo is empty and it is idle) -- at demux EOF that is the signal
+ * to stop waiting for the cache. Returns false when the feature is off
+ * for this decoder. */
+bool input_DecoderGetCacheState( decoder_t *p_dec, size_t *pi_count,
+                                 size_t *pi_target, size_t *pi_bytes,
+                                 bool *pb_starved )
+{
+    decoder_owner_sys_t *p_owner = p_dec->p_owner;
+
+    if( p_owner->i_cache_bytes == 0 )
+        return false;
+
+    vlc_mutex_lock( &p_owner->lock );
+    *pi_target = DecoderVideoCacheTarget( p_dec );
+    *pi_count = p_owner->p_vout != NULL
+              ? vout_GetDecoderFifoCount( p_owner->p_vout ) : 0;
+    if( pi_bytes != NULL )
+        /* Every cached picture has the format the first measured picture
+         * had. */
+        *pi_bytes = *pi_count * p_owner->i_cache_pic_bytes;
+    vlc_mutex_unlock( &p_owner->lock );
+
+    if( pb_starved != NULL )
+    {
+        vlc_fifo_Lock( p_owner->p_fifo );
+        *pb_starved = vlc_fifo_IsEmpty( p_owner->p_fifo )
+                   && p_owner->b_idle;
+        vlc_fifo_Unlock( p_owner->p_fifo );
+    }
+
+    return true;
+}
+
+/* Whether the decoder has produced a picture and is parked on the
+ * buffering gate (b_has_data): with an unmeasurable picture size
+ * (opaque hardware pictures, target stuck at 0) this is the signal
+ * that nothing will ever accumulate -- the parked decoder holds its
+ * next picture in hand -- so the fill gate must open right away. */
+bool input_DecoderIsReadyWaiting( decoder_t *p_dec )
+{
+    decoder_owner_sys_t *p_owner = p_dec->p_owner;
+    bool b_ready;
+
+    vlc_mutex_lock( &p_owner->lock );
+    b_ready = p_owner->b_waiting && p_owner->b_has_data;
+    vlc_mutex_unlock( &p_owner->lock );
+    return b_ready;
 }
 
 void input_DecoderWait( decoder_t *p_dec )
@@ -2302,6 +2951,15 @@ void input_DecoderWait( decoder_t *p_dec )
     decoder_owner_sys_t *p_owner = p_dec->p_owner;
 
     assert( p_owner->b_waiting );
+
+    /* Hard bound on the whole wait: this runs on the INPUT thread with
+     * the es_out lock held -- if the decoder cannot acknowledge (e.g.
+     * wedged inside its codec on some resource), waiting forever here
+     * freezes every input control (stop, pause, quit, the time display)
+     * with it. A decoder that has anything to give signals within
+     * milliseconds; five seconds means something is already wrong, and
+     * a degraded start beats a dead player. */
+    const vlc_tick_t i_deadline = mdate() + 5 * CLOCK_FREQ;
 
     vlc_mutex_lock( &p_owner->lock );
     while( !p_owner->b_has_data )
@@ -2318,7 +2976,13 @@ void input_DecoderWait( decoder_t *p_dec )
             break;
         }
         vlc_fifo_Unlock( p_owner->p_fifo );
-        vlc_cond_wait( &p_owner->wait_acknowledge, &p_owner->lock );
+        if( vlc_cond_timedwait( &p_owner->wait_acknowledge, &p_owner->lock,
+                                i_deadline ) )
+        {
+            msg_Warn( p_dec, "decoder wait timed out, proceeding without "
+                      "its acknowledgement" );
+            break;
+        }
     }
     vlc_mutex_unlock( &p_owner->lock );
 }

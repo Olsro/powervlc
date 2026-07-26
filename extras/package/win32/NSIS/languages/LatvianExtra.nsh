@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Vieglākai piekļuvei pievieno ikonu jūsu darbvirsmai"
 ${LangFileString} Desc_Section03 \
-    "VLC Mozilla un Mozilla Firefox spraudnis"
+    "${PRODUCT_NAME} Mozilla un Mozilla Firefox spraudnis"
 ${LangFileString} Desc_Section04 \
-    "VLC ActiveX spraudnis"
+    "${PRODUCT_NAME} ActiveX spraudnis"
 ${LangFileString} Desc_Section05 \
     "DVD un CD atskaņošanas reģistrācija"
 ${LangFileString} Desc_Section06 \
-    "Iestata VLC mediju atskaņotāju kā noklusējuma lietotni norādītajam datnes tipam"
+    "Iestata ${PRODUCT_NAME} mediju atskaņotāju kā noklusējuma lietotni norādītajam datnes tipam"
 ${LangFileString} Desc_Section07 \
-    "Pievienot konteksta izvēlnes vienumus ('Atskaņot ar VLC' un 'Pievienot VLC atskaņošanas sarakstam')"
+    "Pievienot konteksta izvēlnes vienumus ('Atskaņot ar ${PRODUCT_NAME}' un 'Pievienot ${PRODUCT_NAME} atskaņošanas sarakstam')"
 ${LangFileString} Desc_Section08 \
-    "Dzēš VLC mediju atskaņotāja iestatījumus un kešatmiņas datņu atlikumus no iepriekšējām instalācijām"
+    "Dzēš ${PRODUCT_NAME} mediju atskaņotāja iestatījumus un kešatmiņas datņu atlikumus no iepriekšējām instalācijām"
 
 ${LangFileString} Name_Section91 "Atinstalēt"
 ${LangFileString} Name_Section92 "Dzēst iestatījumus un kešatmiņu"
 
 ${LangFileString} Desc_Section91 \
-"Atinstalēt VLC mediju atskaņotāju un visas tā komponentes"
+"Atinstalēt ${PRODUCT_NAME} mediju atskaņotāju un visas tā komponentes"
 ${LangFileString} Desc_Section92 \
-"Dzēš VLC mediju atskaņotāja iestatījumus un kešatmiņas datnes"
+"Dzēš ${PRODUCT_NAME} mediju atskaņotāja iestatījumus un kešatmiņas datnes"
 
 ${LangFileString} ShellAssociation_Play "Atskaņot"
-${LangFileString} ContextMenuEntry_PlayWith "Atskaņot ar VLC mediju atskaņotāju"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Pievienot VLC mediju atskaņotāja atskaņošanas sarakstam"
+${LangFileString} ContextMenuEntry_PlayWith "Atskaņot ar ${PRODUCT_NAME} mediju atskaņotāju"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Pievienot ${PRODUCT_NAME} mediju atskaņotāja atskaņošanas sarakstam"
 
 ${LangFileString} Link_VisitWebsite "Apmeklēt VideoLAN VLC mediju atskaņotāja tīmekļa vietni"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Atskaņot Blu-ray"
 ${LangFileString} License_NextText "Tagad jūs esat apzinājies savas tiesības. Noklikšķiniet uz Tālāk, lai turpinātu."
 
 ${LangFileString} Detail_CheckProcesses "Pārbauda processus..."
-${LangFileString} MessageBox_VLCRunning "Izskatās, ka VLC darbojas, un nu tiks aizvērts."
-${LangFileString} MessageBox_VLCUnableToClose "Instalētājs nespēja aizvērt VLC. Lūdzu, izdariet to pašrocīgi."
+${LangFileString} MessageBox_VLCRunning "Izskatās, ka ${PRODUCT_NAME} darbojas, un nu tiks aizvērts."
+${LangFileString} MessageBox_VLCUnableToClose "Instalētājs nespēja aizvērt ${PRODUCT_NAME}. Lūdzu, izdariet to pašrocīgi."
 ${LangFileString} MessageBox_InstallAborted "Instalācija pārtraukta!"
 
 ${LangFileString} Reinstall_Headline "Jau instalēts"
-${LangFileString} Reinstall_HeadlineInstall "Izvēlieties, kā jūs vēlaties instalēt VLC."
+${LangFileString} Reinstall_HeadlineInstall "Izvēlieties, kā jūs vēlaties instalēt ${PRODUCT_NAME}."
 ${LangFileString} Reinstall_HeadlineMaintenance "Izvēlieties izpildāmo uzturēšanas opciju."
-${LangFileString} Reinstall_MessageOlder "Jūsu sistēmā ir instalēta vecāka VLC versija. Atlasiet darbību, ko jūs vēlaties izpildīt, un klikšķiniet Tālāk, lai turpinātu."
-${LangFileString} Reinstall_MessageNewer "Jaunāka VLC versija jau ir instalēta! Nav ieteicams, ka jūs pazemināt uz vecāku VLC versiju. Atlasiet darbību, ko jūs vēlaties izpildīt, un klikšķiniet Tālāk, lai turpinātu."
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} ir jau instalēts. Atlasiet darbību, ko jūs vēlaties izpildīt, un klikšķiniet Tālāk, lai turpinātu."
-${LangFileString} Reinstall_OptionUpgrade "Jaunināt VLC, izmantojot iepriekšējos iestatījumus (ieteicams)"
-${LangFileString} Reinstall_OptionDowngrade "Pazemināt VLC versiju, izmantojot iepriekšējos iestatījumus (ieteicams)"
+${LangFileString} Reinstall_MessageOlder "Jūsu sistēmā ir instalēta vecāka ${PRODUCT_NAME} versija. Atlasiet darbību, ko jūs vēlaties izpildīt, un klikšķiniet Tālāk, lai turpinātu."
+${LangFileString} Reinstall_MessageNewer "Jaunāka ${PRODUCT_NAME} versija jau ir instalēta! Nav ieteicams, ka jūs pazemināt uz vecāku ${PRODUCT_NAME} versiju. Atlasiet darbību, ko jūs vēlaties izpildīt, un klikšķiniet Tālāk, lai turpinātu."
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} ir jau instalēts. Atlasiet darbību, ko jūs vēlaties izpildīt, un klikšķiniet Tālāk, lai turpinātu."
+${LangFileString} Reinstall_OptionUpgrade "Jaunināt ${PRODUCT_NAME}, izmantojot iepriekšējos iestatījumus (ieteicams)"
+${LangFileString} Reinstall_OptionDowngrade "Pazemināt ${PRODUCT_NAME} versiju, izmantojot iepriekšējos iestatījumus (ieteicams)"
 ${LangFileString} Reinstall_OptionComponents "Pievienot/noņemt/atkārtoti instalēt komponentus"
 ${LangFileString} Reinstall_OptionAdvanced "Mainīt iestatījumus (pieredzējušiem)"
-${LangFileString} Reinstall_OptionUninstall "Noņemt VLC"
+${LangFileString} Reinstall_OptionUninstall "Noņemt ${PRODUCT_NAME}"

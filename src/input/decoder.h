@@ -107,4 +107,17 @@ size_t input_DecoderGetFifoSize( decoder_t *p_dec );
  */
 void input_DecoderGetObjects( decoder_t *, vout_thread_t **, audio_output_t ** );
 
+/* Look-ahead decode cache (video-cache-* options): current fill vs target,
+ * in pictures, the memory those pictures actually use (pi_bytes may be
+ * NULL), plus whether the decoder is out of input data. Returns false
+ * when the feature is disabled for this decoder. */
+bool input_DecoderGetCacheState( decoder_t *, size_t *pi_count,
+                                 size_t *pi_target, size_t *pi_bytes,
+                                 bool *pb_starved );
+
+/* True when the decoder produced a picture and is parked on the buffering
+ * gate: with an unmeasurable picture size (target 0) nothing more will
+ * ever accumulate, the gate must not wait. */
+bool input_DecoderIsReadyWaiting( decoder_t * );
+
 #endif

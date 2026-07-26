@@ -20,28 +20,28 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "바탕화면에 아이콘을 추가합니다"
 ${LangFileString} Desc_Section03 \
-    "VLC 모질라, 모질라 파이어폭스 플러그인"
+    "${PRODUCT_NAME} 모질라, 모질라 파이어폭스 플러그인"
 ${LangFileString} Desc_Section04 \
-    "VLC 액티브엑스 플러그인"
+    "${PRODUCT_NAME} 액티브엑스 플러그인"
 ${LangFileString} Desc_Section05 \
     "DVD / CD 재생 등록"
 ${LangFileString} Desc_Section06 \
-    "지정한 파일 형식에 대해 VLC 미디어 재생기를 기본 프로그램으로 설정합니다"
+    "지정한 파일 형식에 대해 ${PRODUCT_NAME} 미디어 재생기를 기본 프로그램으로 설정합니다"
 ${LangFileString} Desc_Section07 \
-    "컨텍스트 메뉴 항목 추가하기 ('VLC로 재생하기', 'VLC 재생목록에 추가하기')"
+    "컨텍스트 메뉴 항목 추가하기 ('VLC로 재생하기', '${PRODUCT_NAME} 재생목록에 추가하기')"
 ${LangFileString} Desc_Section08 \
-    "이전에 설치된 VLC 미디어 플레이어의 환경설정과 남은 캐쉬 파일을 완전히 삭제합니다"
+    "이전에 설치된 ${PRODUCT_NAME} 미디어 플레이어의 환경설정과 남은 캐쉬 파일을 완전히 삭제합니다"
 
 ${LangFileString} Name_Section91 "제거하기"
 ${LangFileString} Name_Section92 "환경설정과 캐쉬 제거하기"
 
 ${LangFileString} Desc_Section91 \
-"VLC 미디어 플레이어와 종속된 모든 컴포넌트를 제거합니다"
+"${PRODUCT_NAME} 미디어 플레이어와 종속된 모든 컴포넌트를 제거합니다"
 ${LangFileString} Desc_Section92 \
-"VLC 미디어 플레이어 환경설정과 캐쉬 파일을 삭제합니다"
+"${PRODUCT_NAME} 미디어 플레이어 환경설정과 캐쉬 파일을 삭제합니다"
 
 ${LangFileString} ShellAssociation_Play "재생"
-${LangFileString} ContextMenuEntry_PlayWith "VLC 로 재생하기"
+${LangFileString} ContextMenuEntry_PlayWith "${PRODUCT_NAME} 로 재생하기"
 ${LangFileString} ContextMenuEntry_AddToPlaylist "VLC의 재생목록에 추가하기"
 
 ${LangFileString} Link_VisitWebsite "VideoLAN VLC 웹사이트에 방문하기"
@@ -67,13 +67,13 @@ ${LangFileString} MessageBox_VLCUnableToClose "VLC를 종료할 수 없습니다
 ${LangFileString} MessageBox_InstallAborted "설치를 중단했습니다!"
 
 ${LangFileString} Reinstall_Headline "이미 설치했습니다"
-${LangFileString} Reinstall_HeadlineInstall "VLC 설치 방법을 선택하세요."
+${LangFileString} Reinstall_HeadlineInstall "${PRODUCT_NAME} 설치 방법을 선택하세요."
 ${LangFileString} Reinstall_HeadlineMaintenance "수행할 관리 옵션을 선택하세요."
 ${LangFileString} Reinstall_MessageOlder "이전 버전의 VLC가 이미 설치되어 있습니다. 수행할 동작을 선택하고 다음을 눌러 계속하세요."
 ${LangFileString} Reinstall_MessageNewer "새 버전의 VLC가 이미 설치되어 있습니다! 이전 버전으로 다운그레이드는 권장하지 않습니다. 수행할 동작을 선택하고 다음을 눌러 계속하세요."
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} 가 이미 설치되어 있습니다. 수행할 동작을 선택하고 다음을 눌러 계속하세요."
-${LangFileString} Reinstall_OptionUpgrade "이전 설정값을 사용하여 VLC 업그레이드 (권장)"
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} 가 이미 설치되어 있습니다. 수행할 동작을 선택하고 다음을 눌러 계속하세요."
+${LangFileString} Reinstall_OptionUpgrade "이전 설정값을 사용하여 ${PRODUCT_NAME} 업그레이드 (권장)"
 ${LangFileString} Reinstall_OptionDowngrade "이전 설정을 사용하여 다운그레이드하기 (권장)"
 ${LangFileString} Reinstall_OptionComponents "컴포넌트 추가/제거/재설치하기"
 ${LangFileString} Reinstall_OptionAdvanced "설정을 변경하기 (고급)"
-${LangFileString} Reinstall_OptionUninstall "VLC 제거하기"
+${LangFileString} Reinstall_OptionUninstall "${PRODUCT_NAME} 제거하기"

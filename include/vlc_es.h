@@ -112,6 +112,12 @@ struct audio_format_t
     unsigned     i_bitspersample;
     unsigned     i_blockalign;
     uint8_t      i_channels; /* must be <=32 */
+
+    /* Gapless (PowerVLC): encoder samples to trim off the decoder output.
+     * 0/0 means unknown: no trimming at all. */
+    uint32_t     i_gapless_priming; /* samples to drop at the start, decoder
+                                     * delay included */
+    uint64_t     i_gapless_length;  /* number of VALID samples after priming */
 };
 
 /* Values available for audio channels */

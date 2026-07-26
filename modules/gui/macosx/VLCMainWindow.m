@@ -70,6 +70,14 @@
     BOOL b_podcastView_displayed;
 
     NSRect frameBeforePlayback;
+
+    /* cover art of the playing item, at the bottom of the sidebar like
+     * the Qt interface shows it; the panel is user-resizable in height
+     * and the height is remembered across sessions */
+    NSImageView *sidebarArtView;
+    NSString *sidebarArtUrl;
+    NSView *sidebarArtDivider;
+    CGFloat artPanelHeight;
 }
 - (void)makeSplitViewVisible;
 - (void)makeSplitViewHidden;
@@ -78,6 +86,59 @@
 @end
 
 static const float f_min_window_height = 307.;
+
+/* NSUserDefaults key for the persisted cover-art panel height */
+static NSString *const VLCMainArtHeightKey = @"VLCMainWindowSidebarArtHeight";
+#define VLC_ART_DIVIDER_THICKNESS 6.0
+#define VLC_ART_MIN_HEIGHT        40.0
+#define VLC_ART_MIN_LIST_HEIGHT   80.0
+
+/* A thin draggable handle between the sidebar list and the cover art at
+ * the bottom of it; dragging it resizes the art panel, and the height is
+ * remembered across sessions (see the controller's persistence). */
+@protocol VLCArtDividerDelegate <NSObject>
+- (void)artDividerDraggedToPaneY:(CGFloat)y;
+@end
+
+@interface VLCArtDivider : NSView
+{
+    __unsafe_unretained id<VLCArtDividerDelegate> dragDelegate;
+}
+- (void)setDragDelegate:(id<VLCArtDividerDelegate>)delegate;
+@end
+
+@implementation VLCArtDivider
+- (void)setDragDelegate:(id<VLCArtDividerDelegate>)delegate
+{
+    dragDelegate = delegate;
+}
+- (BOOL)isFlipped { return NO; }
+- (void)drawRect:(NSRect)dirtyRect
+{
+    NSRect b = [self bounds];
+    /* a subtle separator line along the top edge of the handle */
+    [[NSColor colorWithCalibratedWhite:0.5 alpha:0.35] set];
+    NSRectFill(NSMakeRect(0, b.size.height - 1, b.size.width, 1));
+}
+- (void)resetCursorRects
+{
+    [self addCursorRect:[self bounds] cursor:[NSCursor resizeUpDownCursor]];
+}
+- (void)mouseDown:(NSEvent *)event    { [self relayDrag:event]; }
+- (void)mouseDragged:(NSEvent *)event { [self relayDrag:event]; }
+- (void)relayDrag:(NSEvent *)event
+{
+    NSView *pane = [self superview];
+    NSPoint p = [pane convertPoint:[event locationInWindow] fromView:nil];
+    [dragDelegate artDividerDraggedToPaneY:p.y];
+}
+@end
+
+/* default window title ("Lecteur multimedia PowerVLC" in French) */
+static NSString *defaultWindowTitle(void)
+{
+    return _NS("PowerVLC media player");
+}
 
 @implementation VLCMainWindow
 
@@ -182,12 +243,50 @@ static const float f_min_window_height = 307.;
 
     [_sidebarView selectRowIndexes:[NSIndexSet indexSetWithIndex:1] byExtendingSelection:NO];
 
+    // Cover art of the current item at the bottom of the sidebar, the
+    // same presentation as the Qt interface on Windows/Linux
+    {
+        NSView *leftPane = self.splitViewLeft;
+        NSScrollView *sidebarScroll = self.sidebarScrollView;
+        NSNumber *savedArtHeight = [defaults objectForKey:VLCMainArtHeightKey];
+        artPanelHeight = savedArtHeight ? [savedArtHeight doubleValue] : 120.;
+        [sidebarScroll setTranslatesAutoresizingMaskIntoConstraints:YES];
+        /* vertical placement is driven by -layoutSidebarArtStack, not the
+         * autoresizing machinery, so keep only the width follow-through */
+        [sidebarScroll setAutoresizingMask:NSViewWidthSizable];
+        sidebarArtView = [[NSImageView alloc]
+            initWithFrame:NSMakeRect(0., 0., [leftPane bounds].size.width, 10.)];
+        [sidebarArtView setAutoresizingMask:NSViewWidthSizable];
+        [sidebarArtView setImageScaling:NSImageScaleProportionallyDown];
+        [sidebarArtView setImage:[NSImage imageNamed:@"noart"]];
+        [sidebarArtView setEditable:NO];
+        [sidebarArtView unregisterDraggedTypes];
+        [leftPane addSubview:sidebarArtView];
+
+        VLCArtDivider *divider = [[VLCArtDivider alloc]
+            initWithFrame:NSMakeRect(0., 0., [leftPane bounds].size.width,
+                                     VLC_ART_DIVIDER_THICKNESS)];
+        [divider setAutoresizingMask:NSViewWidthSizable];
+        [divider setDragDelegate:(id)self];
+        sidebarArtDivider = divider;
+        [leftPane addSubview:sidebarArtDivider];
+
+        /* relayout the art stack whenever the left pane changes size
+         * (window resize, sidebar divider drag) */
+        [leftPane setPostsFrameChangedNotifications:YES];
+        [defaultCenter addObserver:self
+                          selector:@selector(sidebarPaneFrameChanged:)
+                              name:NSViewFrameDidChangeNotification
+                            object:leftPane];
+        [self layoutSidebarArtStack];
+    }
+
     /*
      * Set up translatable strings for the UI elements
      */
 
     // Window title
-    [self setTitle:_NS("VLC media player")];
+    [self setTitle:defaultWindowTitle()];
 
     // Search Field
     [_searchField setToolTip:_NS("Search in Playlist")];
@@ -300,6 +399,56 @@ static const float f_min_window_height = 307.;
     /* restore split view */
     f_lastLeftSplitViewWidth = 200;
     [[[VLCMain sharedInstance] mainMenu] updateSidebarMenuItem: ![_splitView isSubviewCollapsed:_splitViewLeft]];
+}
+
+#pragma mark -
+#pragma mark cover-art panel resizing
+
+/* Position the sidebar list, the divider and the cover art inside the
+ * left split pane. The art keeps its user-set height (clamped to the
+ * available space); the list takes whatever is left above it. */
+- (void)layoutSidebarArtStack
+{
+    NSView *pane = self.splitViewLeft;
+    NSScrollView *sidebarScroll = self.sidebarScrollView;
+    if (!pane || !sidebarScroll || !sidebarArtView)
+        return;
+    CGFloat W = [pane bounds].size.width;
+    CGFloat H = [pane bounds].size.height;
+    CGFloat div = VLC_ART_DIVIDER_THICKNESS;
+
+    CGFloat h = artPanelHeight;
+    CGFloat maxH = H - VLC_ART_MIN_LIST_HEIGHT - div;
+    if (h > maxH) h = maxH;
+    if (h < VLC_ART_MIN_HEIGHT) h = VLC_ART_MIN_HEIGHT;
+    if (h + div > H) h = (H > div) ? H - div : 0;
+
+    [sidebarArtView setFrame:NSMakeRect(0, 0, W, h)];
+    [sidebarArtDivider setFrame:NSMakeRect(0, h, W, div)];
+    [sidebarScroll setFrame:NSMakeRect(0, h + div, W,
+                                       (H > h + div) ? H - h - div : 0)];
+}
+
+- (void)sidebarPaneFrameChanged:(NSNotification *)notification
+{
+    [self layoutSidebarArtStack];
+}
+
+/* VLCArtDividerDelegate: the user dragged the handle. Convert the
+ * pane-space y into an art height, clamp it, relayout and persist. */
+- (void)artDividerDraggedToPaneY:(CGFloat)y
+{
+    CGFloat H = [self.splitViewLeft bounds].size.height;
+    CGFloat div = VLC_ART_DIVIDER_THICKNESS;
+    CGFloat h = y - div / 2.0;
+    CGFloat maxH = H - VLC_ART_MIN_LIST_HEIGHT - div;
+    if (h > maxH) h = maxH;
+    if (h < VLC_ART_MIN_HEIGHT) h = VLC_ART_MIN_HEIGHT;
+    artPanelHeight = h;
+    [self layoutSidebarArtStack];
+    [[NSUserDefaults standardUserDefaults]
+        setObject:[NSNumber numberWithDouble:artPanelHeight]
+           forKey:VLCMainArtHeightKey];
 }
 
 #pragma mark -
@@ -531,6 +680,10 @@ static const float f_min_window_height = 307.;
 
 - (void)updateName
 {
+    /* the art may only appear once the meta fetcher is done: updateName
+     * runs on those events too */
+    [self updateSidebarCoverArt];
+
     input_thread_t *p_input;
     p_input = pl_CurrentInput(getIntf());
     if (p_input) {
@@ -578,19 +731,53 @@ static const float f_min_window_height = 307.;
 
             [self.fspanel setStreamTitle: aString];
         } else {
-            [self setTitle: _NS("VLC media player")];
+            [self setTitle: defaultWindowTitle()];
             [self setRepresentedURL: nil];
         }
 
         vlc_object_release(p_input);
     } else {
-        [self setTitle: _NS("VLC media player")];
+        [self setTitle: defaultWindowTitle()];
         [self setRepresentedURL: nil];
     }
 }
 
+/* cover art of the playing item in the sidebar (Qt interface parity);
+ * also called when the meta/art of the input are fetched late */
+- (void)updateSidebarCoverArt
+{
+    NSString *artUrl = nil;
+    input_thread_t *p_input = pl_CurrentInput(getIntf());
+    if (p_input) {
+        input_item_t *p_item = input_GetItem(p_input);
+        char *psz_url = p_item ? input_item_GetArtworkURL(p_item) : NULL;
+        if (psz_url) {
+            artUrl = toNSStr(psz_url);
+            free(psz_url);
+        }
+        vlc_object_release(p_input);
+    }
+    if (!artUrl)
+        artUrl = @"";
+    if ([artUrl isEqualToString:sidebarArtUrl])
+        return;
+    sidebarArtUrl = artUrl;
+
+    NSImage *art = nil;
+    if ([artUrl length]) {
+        char *psz_path = vlc_uri2path([artUrl UTF8String]);
+        if (psz_path) {
+            art = [[NSImage alloc]
+                initWithContentsOfFile:toNSStr(psz_path)];
+            free(psz_path);
+        }
+    }
+    [sidebarArtView setImage:art ? art : [NSImage imageNamed:@"noart"]];
+}
+
 - (void)updateWindow
 {
+    [self updateSidebarCoverArt];
     [self.controlsBar updateControls];
     [[[VLCMain sharedInstance] voutController] updateControlsBarsUsingBlock:^(VLCControlsBarCommon *controlsBar) {
         [controlsBar updateControls];
@@ -1027,7 +1214,7 @@ static const float f_min_window_height = 307.;
             [self setHasShadow:NO];
             [self setHasShadow:YES];
 
-            [self setTitle: _NS("VLC media player")];
+            [self setTitle: defaultWindowTitle()];
 
             [self setContentMinSize: NSMakeSize(363., f_min_video_height + [[self controlsBar] height] + [self.titlebarView frame].size.height)];
         } else {

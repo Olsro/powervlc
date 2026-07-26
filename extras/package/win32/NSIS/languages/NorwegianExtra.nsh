@@ -20,28 +20,28 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Legger til ikon på skrivebordet for lett tilgang"
 ${LangFileString} Desc_Section03 \
-    "Tilleggene VLC Mozilla og Mozilla Firefox"
+    "Tilleggene ${PRODUCT_NAME} Mozilla og Mozilla Firefox"
 ${LangFileString} Desc_Section04 \
-    "ActiveX-tillegget for VLC"
+    "ActiveX-tillegget for ${PRODUCT_NAME}"
 ${LangFileString} Desc_Section05 \
     "Registrering av avspilling for CD- og DVD-er"
 ${LangFileString} Desc_Section06 \
-    "Gjør VLC-mediespilleren til standardprogram for den angitte filtypen"
+    "Gjør ${PRODUCT_NAME}-mediespilleren til standardprogram for den angitte filtypen"
 ${LangFileString} Desc_Section07 \
-    "Legger til menyinlegg («Spill i VLC» og Legg til i spilleliste i VLC»)"
+    "Legger til menyinlegg («Spill i ${PRODUCT_NAME}» og Legg til i spilleliste i ${PRODUCT_NAME}»)"
 ${LangFileString} Desc_Section08 \
-    "Sletter innstillingene og og mellomlageret som er til overs fra tidligere VLC-installasjoner"
+    "Sletter innstillingene og og mellomlageret som er til overs fra tidligere ${PRODUCT_NAME}-installasjoner"
 
 ${LangFileString} Name_Section91 "Avinstaller"
 ${LangFileString} Name_Section92 "Slett innstillinger og mellomlager"
 
 ${LangFileString} Desc_Section91 \
-"Slett VLC-mediespilleren og alle relaterte komponenter"
+"Slett ${PRODUCT_NAME}-mediespilleren og alle relaterte komponenter"
 ${LangFileString} Desc_Section92 \
-"Sletter innstillinger og mellomlager for VLC"
+"Sletter innstillinger og mellomlager for ${PRODUCT_NAME}"
 
 ${LangFileString} ShellAssociation_Play "Spill av"
-${LangFileString} ContextMenuEntry_PlayWith "Spill i VLC mediespiller"
+${LangFileString} ContextMenuEntry_PlayWith "Spill i ${PRODUCT_NAME} mediespiller"
 ${LangFileString} ContextMenuEntry_AddToPlaylist "Legg til i VLCs spilleliste"
 
 ${LangFileString} Link_VisitWebsite "Se nettstedet til VideoLAN VLC mediespiller"
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Spill av Blu-ray"
 ${LangFileString} License_NextText "Du er nå klar over rettighetene dine.  Trykk «Neste» for å fortsette."
 
 ${LangFileString} Detail_CheckProcesses "Sjekker prosesser…"
-${LangFileString} MessageBox_VLCRunning "VLC ser ut til å kjøre og vil nå lukkes."
-${LangFileString} MessageBox_VLCUnableToClose "Denne veiviseren kunne ikke lukke VLC, gjør det manuelt."
+${LangFileString} MessageBox_VLCRunning "${PRODUCT_NAME} ser ut til å kjøre og vil nå lukkes."
+${LangFileString} MessageBox_VLCUnableToClose "Denne veiviseren kunne ikke lukke ${PRODUCT_NAME}, gjør det manuelt."
 ${LangFileString} MessageBox_InstallAborted "Installasjonen ble avbrutt!"
 
 ${LangFileString} Reinstall_Headline "Allerede installert"
-${LangFileString} Reinstall_HeadlineInstall "Velg hvordan du vil installere VLC."
+${LangFileString} Reinstall_HeadlineInstall "Velg hvordan du vil installere ${PRODUCT_NAME}."
 ${LangFileString} Reinstall_HeadlineMaintenance "Velg hva som skal vedlikeholdes"
-${LangFileString} Reinstall_MessageOlder "En eldre versjon av VLC er installert på systemet. Velg hva som skal gjøres og trykk «Neste» for å fortsette."
-${LangFileString} Reinstall_MessageNewer "En nyere versjon av VLC er allerede installert! Det anbefales at du ikke nedgraderer til en tidligere versjon. Velg hva som skal gjøres og trykk «Neste» for å fortsette."
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} er allerede installert. Velg hva du vil gjøre og trykk «Neste» for å fortsette."
-${LangFileString} Reinstall_OptionUpgrade "Oppgrader VLC med de forrige innstillingene (anbefalt)"
-${LangFileString} Reinstall_OptionDowngrade "Nedgrader VLC med de tidligere innstillingene (anbefalt)"
+${LangFileString} Reinstall_MessageOlder "En eldre versjon av ${PRODUCT_NAME} er installert på systemet. Velg hva som skal gjøres og trykk «Neste» for å fortsette."
+${LangFileString} Reinstall_MessageNewer "En nyere versjon av ${PRODUCT_NAME} er allerede installert! Det anbefales at du ikke nedgraderer til en tidligere versjon. Velg hva som skal gjøres og trykk «Neste» for å fortsette."
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} er allerede installert. Velg hva du vil gjøre og trykk «Neste» for å fortsette."
+${LangFileString} Reinstall_OptionUpgrade "Oppgrader ${PRODUCT_NAME} med de forrige innstillingene (anbefalt)"
+${LangFileString} Reinstall_OptionDowngrade "Nedgrader ${PRODUCT_NAME} med de tidligere innstillingene (anbefalt)"
 ${LangFileString} Reinstall_OptionComponents "Legg til/Fjern/Ominstaller komponenter"
 ${LangFileString} Reinstall_OptionAdvanced "Endre innstillinger (avansert)"
-${LangFileString} Reinstall_OptionUninstall "Avinstaller VLC"
+${LangFileString} Reinstall_OptionUninstall "Avinstaller ${PRODUCT_NAME}"

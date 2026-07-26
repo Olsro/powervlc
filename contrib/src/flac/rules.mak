@@ -22,6 +22,12 @@ ifdef HAVE_WINSTORE
 endif
 ifdef HAVE_DARWIN_OS
 	cd $(UNPACK_DIR) && sed -e 's,-dynamiclib,-dynamiclib -arch $(ARCH),' -i.orig configure
+ifeq ($(ARCH),ppc)
+	# libFLAC's Makefile.am hardcodes -faltivec on Darwin/ppc regardless of
+	# --disable-altivec (upstream FIXME); it stamps every object ppc7400,
+	# unloadable on a G3 (the .flac rule autoreconfs, propagating this)
+	cd $(UNPACK_DIR) && sed -i.orig -e 's/-faltivec//g' src/libFLAC/Makefile.am
+endif
 endif
 ifdef HAVE_ANDROID
 ifeq ($(ANDROID_ABI), x86)
@@ -46,6 +52,15 @@ FLACCONF := \
 ifdef HAVE_DARWIN_OS
 ifneq ($(findstring $(ARCH),i386 x86_64),)
 FLACCONF += --disable-asm-optimizations
+endif
+ifeq ($(ARCH),ppc)
+# G3 baseline: the AltiVec code paths would stamp every object ppc7400,
+# which dyld then refuses to load on a ppc750 machine
+FLACCONF += --disable-altivec --disable-asm-optimizations
+endif
+ifneq ($(call darwin_min_os_at_least, 10.5), true)
+# libSystem before 10.5 has no __stack_chk_fail/__stack_chk_guard
+FLACCONF += --disable-stack-smash-protection
 endif
 endif
 

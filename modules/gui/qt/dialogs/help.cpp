@@ -29,6 +29,7 @@
 #include "qt.hpp"
 #include "dialogs/help.hpp"
 #include "util/qt_dirs.hpp"
+#include "util/powervlc_links.hpp"
 
 #include <vlc_about.h>
 #include <vlc_intf_strings.h>
@@ -39,6 +40,7 @@
 
 #include <QTextBrowser>
 #include <QString>
+#include <QUrl>
 #include <QDialogButtonBox>
 #include <QEvent>
 #include <QDate>
@@ -56,7 +58,8 @@ HelpDialog::HelpDialog( intf_thread_t *_p_intf ) : QVLCFrame( _p_intf )
     QVBoxLayout *layout = new QVBoxLayout( this );
 
     QTextBrowser *helpBrowser = new QTextBrowser( this );
-    helpBrowser->setOpenExternalLinks( true );
+    helpBrowser->setOpenExternalLinks( false );
+    helpBrowser->setOpenLinks( false );
     helpBrowser->setHtml( qtr(I_LONGHELP) );
 
     QDialogButtonBox *closeButtonBox = new QDialogButtonBox( this );
@@ -68,12 +71,18 @@ HelpDialog::HelpDialog( intf_thread_t *_p_intf ) : QVLCFrame( _p_intf )
     layout->addWidget( closeButtonBox );
 
     CONNECT( closeButtonBox, rejected(), this, close() );
+    CONNECT( helpBrowser, anchorClicked(const QUrl&), this, onExternalLink(const QUrl&) );
     restoreWidgetPosition( "Help", QSize( 500, 450 ) );
 }
 
 HelpDialog::~HelpDialog()
 {
     saveWidgetPosition( "Help" );
+}
+
+void HelpDialog::onExternalLink( const QUrl &url )
+{
+    PowerVLCConfirmOpenExternal( this, url.toString() );
 }
 
 AboutDialog::AboutDialog( intf_thread_t *_p_intf)
@@ -96,12 +105,19 @@ AboutDialog::AboutDialog( intf_thread_t *_p_intf)
         linkColor = "#0057ae";
     }
 
+#ifdef POWERVLC_VERSION
+    ui.version->setText( qtr("Version ") + qfu( POWERVLC_VERSION ) + qtr(" — Forked from VLC ") + qfu( VERSION_MESSAGE ) );
+#else
     ui.version->setText(qfu( " " VERSION_MESSAGE ) );
-    ui.title->setText("<html><head/><body><p><span style=\" font-size:26pt;\"> " + qtr( "VLC media player" ) + " </span></p></body></html>");
+#endif
+    ui.title->setText("<html><head/><body><p><span style=\" font-size:26pt;\"> " + QStringLiteral("PowerVLC") + " </span></p></body></html>");
     QString translatedString = qtr( "<p>VLC media player is a free and open source media player, encoder, and streamer made by the volunteers of the <a href=\"http://www.videolan.org/\"><span style=\" text-decoration: underline; color:#0057ae;\">VideoLAN</span></a> community.</p><p>VLC uses its internal codecs, works on essentially every popular platform, and can read almost all files, CDs, DVDs, network streams, capture cards and other media formats!</p><p><a href=\"http://www.videolan.org/contribute/\"><span style=\" text-decoration: underline; color:#0057ae;\">Help and join us!</span></a>" );
     if ( var_InheritBool( p_intf, "qt-dark-palette" ) )
         translatedString.remove(QLatin1String("#0057ae"));
-    ui.MainBlabla->setText("<html><head/><body>" + translatedString + "</p></body> </html>");
+    QString attributionString = qtr( "PowerVLC Copyright © 2026 Olsro. PowerVLC is an unofficial fork of VLC, not affiliated with VideoLAN. PowerVLC could not have existed without all the contributors who have worked on VLC since its very beginning. A heartfelt thank you to each and every one of them." );
+    ui.MainBlabla->setText("<html><head/><body>" + translatedString + "</p><p>" + attributionString + "</p></body> </html>");
+    ui.MainBlabla->setOpenExternalLinks(false);
+    CONNECT( ui.MainBlabla, linkActivated(const QString &), this, onExternalLink(const QString &) );
 
 #if 0
     if( QDate::currentDate().dayOfYear() >= QT_XMAS_JOKE_DAY && var_InheritBool( p_intf, "qt-icon-change" ) )
@@ -137,6 +153,11 @@ AboutDialog::AboutDialog( intf_thread_t *_p_intf)
 							   .arg(linkColor, qtr("Credits")));
 	ui.creditsButton->installEventFilter(this);
     ui.version->installEventFilter( this );
+}
+
+void AboutDialog::onExternalLink( const QString &url )
+{
+    PowerVLCConfirmOpenExternal( this, url );
 }
 
 void AboutDialog::showLicense()

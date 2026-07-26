@@ -512,6 +512,20 @@ tc_common_update(const opengl_tex_converter_t *tc, GLuint *textures,
 {
     assert(pic->p_sys == NULL);
     int ret = VLC_SUCCESS;
+    /* The texture may be larger than the visible picture: on a GPU without
+     * NPOT support (e.g. the Radeon 9200 on a PowerPC Mac) tex_width/tex_height
+     * are rounded up to the next power of two, while the source picture buffer
+     * only holds i_visible_pitch x i_visible_lines. Uploading the full padded
+     * tex_width x tex_height would make glTexSubImage2D (and the memcpy path)
+     * read past the end of that buffer — a hard crash inside the GL driver's
+     * texture converter. Upload only the pixels the picture actually holds; the
+     * padding is never sampled because the vertex coords are scaled by the
+     * visible/texture ratio. When NPOT is supported tex_width already equals the
+     * visible width, so this is a no-op there. */
+    const vlc_chroma_description_t *dsc =
+        vlc_fourcc_GetChromaDescription(pic->format.i_chroma);
+    const unsigned pixel_size = (dsc != NULL && dsc->pixel_size != 0)
+                              ? dsc->pixel_size : 1;
     for (unsigned i = 0; i < tc->tex_count && ret == VLC_SUCCESS; i++)
     {
         assert(textures[i] != 0);
@@ -521,7 +535,12 @@ tc_common_update(const opengl_tex_converter_t *tc, GLuint *textures,
                              &pic->p[i].p_pixels[plane_offset[i]] :
                              pic->p[i].p_pixels;
 
-        ret = upload_plane(tc, i, tex_width[i], tex_height[i],
+        GLsizei up_width  = pic->p[i].i_visible_pitch / pixel_size;
+        GLsizei up_height = pic->p[i].i_visible_lines;
+        if (up_width  > tex_width[i])  up_width  = tex_width[i];
+        if (up_height > tex_height[i]) up_height = tex_height[i];
+
+        ret = upload_plane(tc, i, up_width, up_height,
                            pic->p[i].i_pitch, pic->p[i].i_visible_pitch, pixels);
     }
     return ret;
@@ -536,6 +555,12 @@ opengl_tex_converter_generic_init(opengl_tex_converter_t *tc, bool allow_dr)
 
     if (vlc_fourcc_IsYUV(tc->fmt.i_chroma))
     {
+        /* The fixed-function fallback has no shader to convert YUV planes to
+         * RGB; reject YUV so the caller falls back to an RGB chroma (converted
+         * on the CPU) that a single texture can carry. */
+        if (tc->fixed_function)
+            return VLC_EGENERIC;
+
         GLint max_texture_units = 0;
         tc->vt->GetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &max_texture_units);
         if (max_texture_units < 3)

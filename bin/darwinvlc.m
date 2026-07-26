@@ -34,6 +34,7 @@
 #include <locale.h>
 #include <signal.h>
 #include <string.h>
+#include <pthread.h>
 
 #import <CoreFoundation/CoreFoundation.h>
 #import <Cocoa/Cocoa.h>
@@ -44,42 +45,94 @@
 
 
 /**
+ * Helper used to hop onto the main thread without Grand Central Dispatch or
+ * blocks (both require Mac OS X 10.6): dispatch_get_main_queue()/
+ * dispatch_async() are replaced by the equally thread-safe, but much older,
+ * -performSelectorOnMainThread:withObject:waitUntilDone:.
+ */
+@interface VLCAppTerminator : NSObject
++ (void)stopRunLoop;
+@end
+
+@implementation VLCAppTerminator
++ (void)stopRunLoop
+{
+    /*
+     * Stop the main loop. When using the CoreFoundation mainloop, simply
+     * CFRunLoopStop can be used.
+     *
+     * But this does not work when having an interface.
+     * In this case, [NSApp stop:nil] needs to be used, but the used flag is only
+     * evaluated at the end of main loop event processing. This is always true
+     * in the case of code inside a action method. But here, this is
+     * not true and thus we need to send an dummy event to make sure the stop
+     * flag is actually processed by the main loop.
+     */
+    if (NSApp == nil) {
+        CFRunLoopStop(CFRunLoopGetCurrent());
+    } else {
+
+        [NSApp stop:nil];
+        NSEvent* event = [NSEvent otherEventWithType:NSApplicationDefined
+                                            location:NSMakePoint(0,0)
+                                       modifierFlags:0
+                                           timestamp:0.0
+                                        windowNumber:0
+                                             context:nil
+                                             subtype:0
+                                               data1:0
+                                               data2:0];
+        [NSApp postEvent:event atStart:YES];
+    }
+}
+@end
+
+/**
  * Handler called when VLC asks to terminate the program.
  */
 static void vlc_terminate(void *data)
 {
     (void)data;
 
-    dispatch_async(dispatch_get_main_queue(), ^{
-        /*
-         * Stop the main loop. When using the CoreFoundation mainloop, simply
-         * CFRunLoopStop can be used.
-         *
-         * But this does not work when having an interface.
-         * In this case, [NSApp stop:nil] needs to be used, but the used flag is only
-         * evaluated at the end of main loop event processing. This is always true
-         * in the case of code inside a action method. But here, this is
-         * not true and thus we need to send an dummy event to make sure the stop
-         * flag is actually processed by the main loop.
-         */
-        if (NSApp == nil) {
-            CFRunLoopStop(CFRunLoopGetCurrent());
-        } else {
+    [VLCAppTerminator performSelectorOnMainThread:@selector(stopRunLoop)
+                                        withObject:nil
+                                     waitUntilDone:NO];
+}
 
-            [NSApp stop:nil];
-            NSEvent* event = [NSEvent otherEventWithType:NSApplicationDefined
-                                                location:NSMakePoint(0,0)
-                                           modifierFlags:0
-                                               timestamp:0.0
-                                            windowNumber:0
-                                                 context:nil
-                                                 subtype:0
-                                                   data1:0
-                                                   data2:0];
-            [NSApp postEvent:event atStart:YES];
+/**
+ * Dequeues SIGINT/SIGTERM/SIGCHLD on a dedicated thread. These signals are
+ * blocked in every thread of the process (see main()), so sigwait() may be
+ * called from any of them. A dedicated thread is used, rather than calling
+ * sigwait() directly from main() like the generic Unix front-end does,
+ * because main() here must run the Cocoa/CoreFoundation run loop instead.
+ * This replaces the Grand Central Dispatch source-based signal handling
+ * used previously, which requires Mac OS X 10.6.
+ */
+static void *SignalThread(void *data)
+{
+    sigset_t *set = data;
+
+    for (;;) {
+        int signum;
+
+        if (sigwait(set, &signum) != 0)
+            continue;
+
+        switch (signum) {
+            case SIGINT:
+            case SIGTERM:
+                vlc_terminate(NULL);
+                break;
+            case SIGCHLD:
+            {
+                int status;
+                while (waitpid(-1, &status, WNOHANG) > 0)
+                    ;
+                break;
+            }
         }
-
-    });
+    }
+    return NULL;
 }
 
 #ifdef HAVE_BREAKPAD
@@ -157,9 +210,14 @@ int main(int i_argc, const char *ppsz_argv[])
 
     if (isatty(STDERR_FILENO))
         /* This message clutters error logs. It is printed only on a TTY.
-         * Fortunately, LibVLC prints version info with -vv anyway. */
-        fprintf(stderr, "VLC media player %s (revision %s)\n",
-                 libvlc_get_version(), libvlc_get_changeset());
+         * Fortunately, LibVLC prints version info with -vv anyway.
+         * Announce the product first, then the VLC release it is forked from —
+         * same convention as --version and --help (src/config/help.c).
+         * NOTE: this is the launcher macOS actually runs (bin_PROGRAMS =
+         * vlc-osx, from this file); bin/vlc.c serves the other platforms. */
+        fprintf(stderr, "PowerVLC %s (forked from VLC %s, revision %s)\n",
+                POWERVLC_VERSION, libvlc_get_version(),
+                libvlc_get_changeset());
 
     sigset_t set;
 
@@ -199,31 +257,10 @@ int main(int i_argc, const char *ppsz_argv[])
     /* Block all these signals */
     pthread_sigmask(SIG_SETMASK, &set, NULL);
 
-    /* Handle signals with GCD */
-    dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
-    dispatch_source_t sigIntSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGINT, 0, queue);
-    dispatch_source_t sigTermSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0, queue);
-    dispatch_source_t sigChldSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGCHLD, 0, queue);
-
-    if (!sigIntSource || !sigTermSource || !sigChldSource)
+    /* Handle signals on a dedicated thread (see SignalThread() above). */
+    pthread_t sigThread;
+    if (pthread_create(&sigThread, NULL, SignalThread, &set) != 0)
         abort();
-
-    dispatch_source_set_event_handler(sigIntSource, ^{
-        vlc_terminate(nil);
-    });
-    dispatch_source_set_event_handler(sigTermSource, ^{
-        vlc_terminate(nil);
-    });
-
-    dispatch_source_set_event_handler(sigChldSource, ^{
-        int status;
-        while(waitpid(-1, &status, WNOHANG) > 0)
-            ;
-    });
-
-    dispatch_resume(sigIntSource);
-    dispatch_resume(sigTermSource);
-    dispatch_resume(sigChldSource);
 
 
     /* Handle parameters */
@@ -299,7 +336,9 @@ int main(int i_argc, const char *ppsz_argv[])
      * runloop is used. Otherwise, [NSApp run] needs to be called, which setups more stuff
      * before actually starting the loop.
      */
-    @autoreleasepool {
+    /* explicit pool: @autoreleasepool is clang-only, this file is MRC */
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    {
         if(NSApp == nil) {
             CFRunLoopRun();
 
@@ -307,14 +346,11 @@ int main(int i_argc, const char *ppsz_argv[])
             [NSApp run];
         }
     }
+    [pool drain];
 
     ret = 0;
     /* Cleanup */
 out:
-    dispatch_release(sigIntSource);
-    dispatch_release(sigTermSource);
-    dispatch_release(sigChldSource);
-
     libvlc_release(vlc);
 
 #ifdef HAVE_BREAKPAD

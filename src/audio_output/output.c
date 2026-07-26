@@ -361,6 +361,14 @@ void aout_Destroy (audio_output_t *aout)
     aout_owner_t *owner = aout_owner (aout);
 
     aout_OutputLock (aout);
+    if (owner->b_dec_parked)
+    {   /* Never unload the output plugin with a started stream still
+         * rendering: tear the parked stream down first. */
+        if (owner->mixer_format.i_format)
+            aout_OutputFlush (aout, false);
+        aout_DecTeardownLocked (aout);
+        owner->b_dec_parked = false;
+    }
     module_unneed (aout, owner->module);
     /* Protect against late call from intf.c */
     aout->volume_set = NULL;

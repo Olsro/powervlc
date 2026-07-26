@@ -155,6 +155,46 @@ endif
 # Darwin
 ifdef HAVE_DARWIN_OS
 FFMPEGCONF += --arch=$(ARCH) --target-os=darwin --extra-cflags="$(CFLAGS)"
+ifneq ($(call darwin_min_os_at_least, 10.6), true)
+# The AudioToolbox decoders/encoders use constants introduced after the
+# 10.4/10.5 SDKs (kAudioFormatAMR, kAudioCodecBitRateControlMode_*...);
+# VLC has its own audio decoders, so simply drop them for old targets.
+FFMPEGCONF += --disable-audiotoolbox
+endif
+ifeq ($(ARCH),ppc)
+ifdef VLC_PPC_ALTIVEC
+# G4/G4e/G5 targets: AltiVec on (build.sh exports VLC_PPC_ALTIVEC and
+# passes -maltivec in EXTRA_CFLAGS)
+FFMPEGCONF += --enable-altivec
+else
+# G3 (ppc750) baseline: no AltiVec units on that CPU
+FFMPEGCONF += --disable-altivec
+endif
+# ffmpeg defaults to -mdynamic-no-pic on Darwin; its static archives are
+# linked into VLC plugin dylibs where ld64 rejects text relocations
+FFMPEGCONF += --enable-pic
+endif
+ifeq ($(ARCH),i386)
+ifdef HAVE_MACOSX
+# Re-enable the EXTERNAL (nasm) x86 asm — IDCT, motion-comp, and the whole DSP
+# for every codec — which is assembled position-independent with --enable-pic
+# and links cleanly.
+#
+# The GCC INLINE asm is kept ON as well, for the H.264 CABAC bitstream reader
+# (libavcodec/x86/cabac.h): it exists in no other form, and on a high-bitrate
+# stream CABAC dominates the decode. Measured on a Core 2 Duo 2.16 GHz with a
+# 21 Mbit/s 1080p Blu-ray remux: 21.7 -> 26.5 fps (+22 %), bit-exact output.
+# The cost is that ffmpeg detects HAVE_INLINE_ASM_DIRECT_SYMBOL_REFS=1 (its
+# probe only compiles a .o, so it never sees that ld64 later rejects the
+# absolute reference to ff_h264_cabac_tables from a dylib), which leaves a
+# handful of text relocations. build.sh answers that with
+# -Wl,-read_only_relocs,suppress on i386. The PIC-clean alternative — ffmpeg's
+# named-constraint fallback — does not build here: it needs one more operand
+# than the i386 register file has once %ebx is pinned as the PIC base
+# ("'asm' operand has impossible constraints" in cabac.h).
+FFMPEGCONF += --enable-pic
+endif
+endif
 ifdef USE_FFMPEG
 FFMPEGCONF += --disable-lzma
 endif
@@ -262,9 +302,20 @@ ifdef USE_FFMPEG
 	$(APPLY) $(SRC)/ffmpeg/0001-dxva2_hevc-don-t-use-frames-as-reference-if-they-are.patch
 	$(APPLY) $(SRC)/ffmpeg/0001-Replace-all-occurences-of-av_mallocz_array-by-av_cal.patch
 	$(APPLY) $(SRC)/ffmpeg/0002-compat-w32dlfcn.h-Remove-MAX_PATH-limit-and-replace-.patch
+	$(APPLY) $(SRC)/ffmpeg/0001-ppc-h264-add-AltiVec-qpel8-and-clz-based-CABAC-renorm.patch
+	$(APPLY) $(SRC)/ffmpeg/ffmpeg-ppc-hpeldsp-altivec.patch
 endif
 ifdef USE_LIBAV
 	$(APPLY) $(SRC)/ffmpeg/libav_gsm.patch
+endif
+ifdef HAVE_MACOSX
+	# The 10.4 SDK's mach/i386/thread_status.h defines a struct xmm_reg
+	# (and thread_status pulls in on every <mach/...> include); rename
+	# ffmpeg's private struct TAGS to avoid the clash — the typedef
+	# names stay, so no other source needs changes.
+	sed -i.orig -e 's/typedef struct xmm_reg/typedef struct ff_priv_xmm_reg/' \
+	            -e 's/typedef struct ymm_reg/typedef struct ff_priv_ymm_reg/' \
+	    $(UNPACK_DIR)/libavutil/x86/asm.h
 endif
 	$(MOVE)
 
@@ -272,5 +323,23 @@ endif
 	cd $< && $(HOSTVARS) ./configure \
 		--extra-ldflags="$(LDFLAGS)" $(FFMPEGCONF) \
 		--prefix="$(PREFIX)" --enable-static --disable-shared
+ifdef HAVE_MACOSX
+ifneq ($(call darwin_min_os_at_least, 10.6), true)
+	# posix_memalign is absent before Mac OS X 10.6; fall back to malloc,
+	# which is 16-byte aligned on macOS (enough for SSE-era CPUs)
+	cd $< && sed -i.orig -e 's/#define HAVE_POSIX_MEMALIGN 1/#define HAVE_POSIX_MEMALIGN 0/' config.h
+endif
+endif
 	$(MAKE) -C $< install-libs install-headers
+ifdef HAVE_MACOSX
+ifneq ($(call darwin_min_os_at_least, 10.7), true)
+	# CoreMedia does not exist before Mac OS X 10.7 (and no CM/CV symbol is
+	# actually used with videotoolbox disabled); a hard link makes every
+	# consumer plugin fail to dlopen on 10.5/10.6
+	sed -i.orig -e 's/-framework CoreVideo//g' -e 's/-framework CoreMedia//g' \
+		$(PREFIX)/lib/pkgconfig/libavutil.pc \
+		$(PREFIX)/lib/pkgconfig/libavcodec.pc \
+		$(PREFIX)/lib/pkgconfig/libavformat.pc
+endif
+endif
 	touch $@

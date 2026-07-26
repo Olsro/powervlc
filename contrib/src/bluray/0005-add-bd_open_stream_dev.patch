@@ -1,0 +1,83 @@
+Add bd_open_stream_dev(): application block reader plus a drive for libaacs
+
+bd_open_stream() lets the application supply the blocks, but passes NULL as the
+device path, which silently disables AACS: disc_open() forwards that path to
+dec_init() as the drive libaacs should talk to, and libaacs needs one to run the
+bus authentication. So today a player can either read the disc itself or decrypt
+it, not both.
+
+Both is exactly what Mac OS X 10.4 requires. Tiger has no Blu-ray storage family,
+so a BD-ROM is published as IOCDMedia with a 2352 byte block size: the volume
+never mounts and every read on /dev/[r]diskN returns EOF at any offset. Sending
+READ(10) over SCSITaskLib is the only way to get the bytes -- and SCSITaskLib
+grants exclusive access to a single owner, so the player that reads the disc is
+also the only one that can hold the channel libaacs needs. It hands that channel
+over separately (see libaacs' aacs_use_external_mmc); what is missing here is
+just a way to keep the device path alongside the callback.
+
+No behaviour changes for existing callers. disc_open() already prefers the
+callback for the data when one is given -- udf_image_open() only falls back to
+opening the path itself when read_blocks is NULL -- so passing both is
+unambiguous.
+
+--- a/src/libbluray/bluray.c
++++ b/src/libbluray/bluray.c
+@@ -1545,7 +1545,32 @@
+     fs_access fs = { read_blocks_handle, read_blocks, NULL, NULL };
+     return _bd_open(bd, NULL, NULL, &fs);
+ }
++
++int bd_open_stream_dev(BLURAY *bd,
++                       void *read_blocks_handle,
++                       int (*read_blocks)(void *handle, void *buf, int lba, int num_blocks),
++                       const char *device_path,
++                       const char *keyfile_path)
++{
++    if (!read_blocks) {
++        return 0;
++    }
+ 
++    /* Same as bd_open_stream(), except the device path is kept. bd_open_stream()
++     * drops it, which silently disables AACS: disc_open() hands it to dec_init()
++     * as the drive libaacs should talk to, and libaacs needs a drive to run the
++     * bus authentication. disc_open() prefers the callback for the data either
++     * way -- udf_image_open() only falls back to opening the path itself when no
++     * read_blocks was given -- so passing both is unambiguous.
++     *
++     * This exists for players that have to read the disc themselves and still
++     * want AACS, which on Mac OS X 10.4 is the only way a Blu-ray can be read at
++     * all: there BD media is misdetected as a CD, so it never mounts and the
++     * block device returns EOF. */
++    fs_access fs = { read_blocks_handle, read_blocks, NULL, NULL };
++    return _bd_open(bd, device_path, keyfile_path, &fs);
++}
++
+ int bd_open_files(BLURAY *bd,
+                   void *handle,
+                   struct bd_dir_s *(*open_dir)(void *handle, const char *rel_path),
+--- a/src/libbluray/bluray.h
++++ b/src/libbluray/bluray.h
+@@ -381,6 +381,23 @@
+                    int (*read_blocks)(void *handle, void *buf, int lba, int num_blocks));
+ 
+ /**
++ *  Open BluRay disc, reading the blocks through the application while still
++ *  letting libaacs talk to the drive
++ *
++ * @param bd  BLURAY object
++ * @param read_blocks_handle  opaque handle for read_blocks
++ * @param read_blocks  function used to read disc blocks
++ * @param device_path  drive to hand to libaacs, or NULL
++ * @param keyfile_path  optional AACS keyfile
++ * @return 1 on success, 0 if error
++ */
++BD_PUBLIC int bd_open_stream_dev(BLURAY *bd,
++                   void *read_blocks_handle,
++                   int (*read_blocks)(void *handle, void *buf, int lba, int num_blocks),
++                   const char *device_path,
++                   const char *keyfile_path);
++
++/**
+  *  Open BluRay disc
+  *
+  * @param bd  BLURAY object

@@ -31,7 +31,22 @@
 #endif
 
 #ifdef HAVE_TFIND
-static __thread struct
+/* Mac OS X 10.6 and earlier lack __thread support; serialize with a mutex
+ * instead of using thread-local state. */
+#if defined(__APPLE__) && defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) \
+    && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1070
+# include <pthread.h>
+# define VLC_COMPAT_TLS
+static pthread_mutex_t tdestroy_lock = PTHREAD_MUTEX_INITIALIZER;
+# define TDESTROY_LOCK()   pthread_mutex_lock(&tdestroy_lock)
+# define TDESTROY_UNLOCK() pthread_mutex_unlock(&tdestroy_lock)
+#else
+# define VLC_COMPAT_TLS __thread
+# define TDESTROY_LOCK()   (void)0
+# define TDESTROY_UNLOCK() (void)0
+#endif
+
+static VLC_COMPAT_TLS struct
 {
     const void **tab;
     size_t count;
@@ -53,7 +68,7 @@ static void list_nodes(const void *node, const VISIT which, const int depth)
     list.count++;
 }
 
-static __thread const void *smallest;
+static VLC_COMPAT_TLS const void *smallest;
 
 static int cmp_smallest(const void *a, const void *b)
 {
@@ -73,6 +88,8 @@ void tdestroy(void *root, void (*freenode)(void *))
 
     assert(freenode != NULL);
 
+    TDESTROY_LOCK();
+
     /* Enumerate nodes in order */
     assert(list.count == 0);
     twalk(root, list_nodes);
@@ -91,6 +108,8 @@ void tdestroy(void *root, void (*freenode)(void *))
          assert(node != NULL);
     }
     assert (root == NULL);
+
+    TDESTROY_UNLOCK();
 
     /* Destroy the nodes */
     for (size_t i = 0; i < count; i++)

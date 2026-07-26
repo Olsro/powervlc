@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Cuir ìomhaigheagan air an deasg airson grad-inntrigeadh"
 ${LangFileString} Desc_Section03 \
-    "Plugan VLC airson Mozilla is Firefox"
+    "Plugan ${PRODUCT_NAME} airson Mozilla is Firefox"
 ${LangFileString} Desc_Section04 \
     "Am plugan ActiveX"
 ${LangFileString} Desc_Section05 \
     "Clàradh airson cluich DVDan is CDan"
 ${LangFileString} Desc_Section06 \
-    "Suidhichidh seo cluicheadair mheadhanan VLC mar an aplacaid bhunaiteach airson a leithid ud a dh'fhaidhle."
+    "Suidhichidh seo cluicheadair mheadhanan ${PRODUCT_NAME} mar an aplacaid bhunaiteach airson a leithid ud a dh'fhaidhle."
 ${LangFileString} Desc_Section07 \
-    "Cuir buill cho-theacsail ris a' chlàr-taice ($\"Cluich le VLC$\" agus $\"Cuir ri liosta-chluiche VLC$\")"
+    "Cuir buill cho-theacsail ris a' chlàr-taice ($\"Cluich le ${PRODUCT_NAME}$\" agus $\"Cuir ri liosta-chluiche ${PRODUCT_NAME}$\")"
 ${LangFileString} Desc_Section08 \
-    "Sguabaidh seo às roghainnean is faidhlichean san tasgadan aig VLC a tha air fhàgail o stàlaidhean roimhe"
+    "Sguabaidh seo às roghainnean is faidhlichean san tasgadan aig ${PRODUCT_NAME} a tha air fhàgail o stàlaidhean roimhe"
 
 ${LangFileString} Name_Section91 "Dì-stàlaich"
 ${LangFileString} Name_Section92 "Sguab ås na roghainnean is an tasgadan"
 
 ${LangFileString} Desc_Section91 \
-"Dì-stàlaich cluicheadair mheadhanan VLC agus a h-uile co-phàirt aige"
+"Dì-stàlaich cluicheadair mheadhanan ${PRODUCT_NAME} agus a h-uile co-phàirt aige"
 ${LangFileString} Desc_Section92 \
-"Sguabaidh seo às na roghainnean aig VLC is faidhle sam bith san tasgadan aige"
+"Sguabaidh seo às na roghainnean aig ${PRODUCT_NAME} is faidhle sam bith san tasgadan aige"
 
 ${LangFileString} ShellAssociation_Play "Cluich"
-${LangFileString} ContextMenuEntry_PlayWith "Cluich le cluicheadair mheadhanan VLC"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Cuir ri liosta-chluiche cluicheadair mheadhanan VLC"
+${LangFileString} ContextMenuEntry_PlayWith "Cluich le cluicheadair mheadhanan ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Cuir ri liosta-chluiche cluicheadair mheadhanan ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "Tadhail air an làrach-lìn aig cluicheadair mheadhanan VLC le VideoLAN"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Cluich Blu-ray"
 ${LangFileString} License_NextText "Tha thu eòlach air do chòraichean a-nis. Briog air $\"Air adhart$\" airson leantainn air adhart."
 
 ${LangFileString} Detail_CheckProcesses "A' sgrùdadh an adhartais..."
-${LangFileString} MessageBox_VLCRunning "Tha coltas gu bheil VLC a' dol agus thèid a dhùnadh an-dràsta."
-${LangFileString} MessageBox_VLCUnableToClose "Cha b' urrainn dhan stàlaichear VLC a dhùnadh, feuch is dùin e thu fhèin."
+${LangFileString} MessageBox_VLCRunning "Tha coltas gu bheil ${PRODUCT_NAME} a' dol agus thèid a dhùnadh an-dràsta."
+${LangFileString} MessageBox_VLCUnableToClose "Cha b' urrainn dhan stàlaichear ${PRODUCT_NAME} a dhùnadh, feuch is dùin e thu fhèin."
 ${LangFileString} MessageBox_InstallAborted "Sguireadh dhen stàladh!"
 
 ${LangFileString} Reinstall_Headline "Air a stàladh mu thràth"
-${LangFileString} Reinstall_HeadlineInstall "Cuir romhad mar a stàlaichear VLC dhut."
+${LangFileString} Reinstall_HeadlineInstall "Cuir romhad mar a stàlaichear ${PRODUCT_NAME} dhut."
 ${LangFileString} Reinstall_HeadlineMaintenance "Tagh an obair-ghlèidhidh a tha ri dhèanamh."
-${LangFileString} Reinstall_MessageOlder "Tha tionndadh nas sine de VLC stàlaichte air an t-siostam agad. Tagh an gnìomh a bu toigh leat dèanamh is briog air $\"Air adhart$\" gus leantainn air adhart."
-${LangFileString} Reinstall_MessageNewer "Tha tionndadh nas ùire de VLC stàlaichte mu thràth! Cha mholamaid dhut tionndadh nas sine a chur 'na àite. Tagh an gnìomh a bu toigh leat dèanamh is briog air $\"Air adhart$\" gus leantainn air adhart."
-${LangFileString} Reinstall_MessageSame "Tha VLC ${VERSION} air a stàladh mu thràth. Tagh an gnìomh a bu toigh leat dèanamh is briog air $\"Air adhart$\" gus leantainn air adhart."
-${LangFileString} Reinstall_OptionUpgrade "Àrdaich VLC, a' cleachdadh nan seann-roghainnean (mholamaid seo)"
-${LangFileString} Reinstall_OptionDowngrade "Ìslich VLC a' cleachdadh nan seann-roghainnean (mholamaid seo)"
+${LangFileString} Reinstall_MessageOlder "Tha tionndadh nas sine de ${PRODUCT_NAME} stàlaichte air an t-siostam agad. Tagh an gnìomh a bu toigh leat dèanamh is briog air $\"Air adhart$\" gus leantainn air adhart."
+${LangFileString} Reinstall_MessageNewer "Tha tionndadh nas ùire de ${PRODUCT_NAME} stàlaichte mu thràth! Cha mholamaid dhut tionndadh nas sine a chur 'na àite. Tagh an gnìomh a bu toigh leat dèanamh is briog air $\"Air adhart$\" gus leantainn air adhart."
+${LangFileString} Reinstall_MessageSame "Tha ${PRODUCT_NAME} ${VERSION} air a stàladh mu thràth. Tagh an gnìomh a bu toigh leat dèanamh is briog air $\"Air adhart$\" gus leantainn air adhart."
+${LangFileString} Reinstall_OptionUpgrade "Àrdaich ${PRODUCT_NAME}, a' cleachdadh nan seann-roghainnean (mholamaid seo)"
+${LangFileString} Reinstall_OptionDowngrade "Ìslich ${PRODUCT_NAME} a' cleachdadh nan seann-roghainnean (mholamaid seo)"
 ${LangFileString} Reinstall_OptionComponents "Cuir ris/Thoir air falbh/Ath-stàlaich co-phàirtean"
 ${LangFileString} Reinstall_OptionAdvanced "Atharraich na roghainnean (adhartach)"
-${LangFileString} Reinstall_OptionUninstall "Dì-stàlaich VLC"
+${LangFileString} Reinstall_OptionUninstall "Dì-stàlaich ${PRODUCT_NAME}"

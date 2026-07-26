@@ -44,7 +44,7 @@
 
 - (void)windowDidLoad
 {
-    [[self window] setTitle:_NS("VLC media player Help")];
+    [[self window] setTitle:_NS("PowerVLC media player Help")];
     [forwardButton setToolTip:_NS("Next")];
     [backButton setToolTip:_NS("Previous")];
     [homeButton setToolTip:_NS("Index")];

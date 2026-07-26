@@ -1,0 +1,62 @@
+# PowerVLC — Windows cross-build environment.
+#
+# This image cross-compiles the Windows PowerVLC installers from Linux. It is
+# meant to be built for the HOST arch (linux/arm64 on an Apple-Silicon Mac), so
+# the cross toolchains run NATIVELY (fast) even though they emit Windows PE:
+#
+#   * win32 / win64  -> mingw-w64 GCC (msvcrt runtime). msvcrt keeps VLC 3.0's
+#                       floors: Windows XP SP3 (win32) / Vista (win64). These
+#                       apt packages exist for an arm64 host, so they run native.
+#   * winarm64       -> llvm-mingw (ucrt runtime). gcc-mingw-w64 cannot target
+#                       Windows-on-ARM64; llvm-mingw can. Only the *ucrt* arm64-
+#                       host build is published, but Windows-on-ARM64 is Win10+
+#                       (RS5) where ucrt is the correct/expected runtime anyway.
+#
+# The actual build is driven from the orchestrator (build-in-docker.sh), which
+# runs extras/package/win32/build.sh inside a container from this image.
+#
+# PowerVLC is an unofficial fork of VLC, not affiliated with VideoLAN.
+
+ARG BASE=ubuntu:22.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Pin the llvm-mingw release (aarch64 Linux host, ucrt). Bump as new releases
+# land: https://github.com/mstorsjo/llvm-mingw/releases
+ARG LLVM_MINGW_VER=20260616
+ARG LLVM_MINGW_DIR=llvm-mingw-${LLVM_MINGW_VER}-ucrt-ubuntu-22.04-aarch64
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential git ca-certificates curl xz-utils file rsync \
+      autoconf automake libtool libtool-bin libltdl-dev pkg-config \
+      gettext autopoint flex bison gperf \
+      cmake meson ninja-build nasm yasm \
+      python3 python3-setuptools \
+      protobuf-compiler help2man ant default-jdk-headless \
+      zip unzip p7zip-full dos2unix \
+      gcc-mingw-w64-i686 g++-mingw-w64-i686 \
+      gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
+      nsis \
+    && rm -rf /var/lib/apt/lists/*
+
+# mingw-w64 GCC defaults to the win32 threads model, which lacks std::thread /
+# std::mutex; Qt and some C++ contribs need them. Switch to the posix variant.
+RUN for t in i686-w64-mingw32 x86_64-w64-mingw32; do \
+      update-alternatives --set $t-gcc /usr/bin/$t-gcc-posix ; \
+      update-alternatives --set $t-g++ /usr/bin/$t-g++-posix ; \
+    done
+
+# llvm-mingw for the Windows-on-ARM64 target (native arm64-Linux toolchain).
+RUN curl -fL -o /tmp/llvm-mingw.tar.xz \
+      "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VER}/${LLVM_MINGW_DIR}.tar.xz" \
+    && mkdir -p /opt \
+    && tar -C /opt -xf /tmp/llvm-mingw.tar.xz \
+    && mv "/opt/${LLVM_MINGW_DIR}" /opt/llvm-mingw \
+    && rm /tmp/llvm-mingw.tar.xz
+
+# llvm-mingw is APPENDED to PATH so the apt gcc-mingw-w64 (i686/x86_64, msvcrt)
+# wins for those triplets, while aarch64-w64-mingw32-* resolves to llvm-mingw.
+ENV PATH="${PATH}:/opt/llvm-mingw/bin"
+
+WORKDIR /work

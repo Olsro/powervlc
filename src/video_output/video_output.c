@@ -343,6 +343,81 @@ bool vout_IsEmpty(vout_thread_t *vout)
     return !picture;
 }
 
+size_t vout_GetDecoderFifoCount(vout_thread_t *vout)
+{
+    return picture_fifo_Count(vout->p->decoder_fifo);
+}
+
+vlc_tick_t vout_GetDecoderFifoFirstDate(vout_thread_t *vout)
+{
+    picture_t *picture = picture_fifo_Peek(vout->p->decoder_fifo);
+    if (!picture)
+        return VLC_TICK_INVALID;
+
+    vlc_tick_t date = picture->date;
+    picture_Release(picture);
+    return date;
+}
+
+size_t vout_GetDecoderFifoPictureBytes(vout_thread_t *vout)
+{
+    picture_t *picture = picture_fifo_Peek(vout->p->decoder_fifo);
+    if (!picture)
+        return 0;
+
+    size_t bytes = 0;
+    for (int i = 0; i < picture->i_planes; i++)
+        bytes += (size_t)picture->p[i].i_pitch * picture->p[i].i_lines;
+
+    picture_Release(picture);
+    return bytes;
+}
+
+void vout_ChangeCacheHold(vout_thread_t *vout, bool hold)
+{
+    vout_control_PushBool(&vout->p->control, VOUT_CONTROL_CACHE_HOLD, hold);
+}
+
+bool vout_IsCacheHeld(vout_thread_t *vout)
+{
+    /* Racy by design (see vout_control.h): the flag belongs to the vout
+     * thread, a stale value merely delays the caller's re-arm by one
+     * picture. */
+    return vout->p->cache_hold;
+}
+
+void vout_OffsetCacheDates(vout_thread_t *vout, vlc_tick_t duration)
+{
+    /* Runs in the caller's thread on purpose: the caller must be able to
+     * re-base the held pictures before anything can pop them (the hold
+     * release above is asynchronous). The callee carries its own lock;
+     * displayed.* is left alone (vout-thread-owned, and only holds the
+     * already-shown first forced picture during a hold).
+     * Subtitles are deliberately NOT offset (unlike the pause path):
+     * SPUs already in the heap were dated before the episode and are
+     * correct as-is -- shifting them threw DVD menu highlights into the
+     * future (observed: no more selection highlight, every still/cell
+     * change opens an episode) -- and the SPU decoder parks in
+     * DecoderWaitUnblock BEFORE DecoderFixTs, so anything it held is
+     * dated against the already-shifted clock on release. */
+    picture_fifo_OffsetDate(vout->p->decoder_fifo, duration);
+}
+
+unsigned vout_GetCacheHeadroom(vout_thread_t *vout)
+{
+    return vout->p->cache_headroom;
+}
+
+/* Direct rendering: the decoder and display share one pool, so the
+ * look-ahead cache's queued pictures are the display buffers themselves.
+ * The cache target reserves against this pool differently than for the
+ * separate system-memory pool of indirect rendering (this pool's headroom
+ * already excludes the codec DPB) -- see DecoderVideoCacheTarget. */
+bool vout_CacheIsDirectRendering(vout_thread_t *vout)
+{
+    return vout->p->decoder_pool == vout->p->display_pool;
+}
+
 void vout_NextPicture(vout_thread_t *vout, vlc_tick_t *duration)
 {
     vout_control_cmd_t cmd;
@@ -847,7 +922,8 @@ static void ThreadChangeFilters(vout_thread_t *vout,
 /* */
 static int ThreadDisplayPreparePicture(vout_thread_t *vout, bool reuse, bool frame_by_frame)
 {
-    bool is_late_dropped = vout->p->is_late_dropped && !vout->p->pause.is_on && !frame_by_frame;
+    bool is_late_dropped = vout->p->is_late_dropped && !vout->p->pause.is_on
+                        && !vout->p->cache_hold && !frame_by_frame;
 
     vlc_mutex_lock(&vout->p->filter.lock);
 
@@ -863,10 +939,21 @@ static int ThreadDisplayPreparePicture(vout_thread_t *vout, bool reuse, bool fra
             if (decoded) {
                 if (is_late_dropped && !decoded->b_force) {
                     vlc_tick_t late_threshold;
+#if defined (__powerpc__) || defined (__POWERPC__)
+                    /* On PowerPC-era Macs every decoded+converted picture
+                     * costs a large chunk of the frame budget: dropping one
+                     * that is half a period late throws that work away and
+                     * digs the deficit deeper, while displaying it merely
+                     * shifts A/V sync by an imperceptible <40 ms. Tolerate a
+                     * full frame period before trashing. */
+                    const vlc_tick_t num = CLOCK_FREQ;
+#else
+                    const vlc_tick_t num = CLOCK_FREQ / 2;
+#endif
                     if (decoded->format.i_frame_rate && decoded->format.i_frame_rate_base)
-                        late_threshold = ((CLOCK_FREQ/2) * decoded->format.i_frame_rate_base) / decoded->format.i_frame_rate;
+                        late_threshold = (num * decoded->format.i_frame_rate_base) / decoded->format.i_frame_rate;
                     else
-                        late_threshold = VOUT_DISPLAY_LATE_THRESHOLD;
+                        late_threshold = VOUT_DISPLAY_LATE_THRESHOLD * (num / (CLOCK_FREQ/2));
                     const vlc_tick_t predicted = mdate() + 0; /* TODO improve */
                     const vlc_tick_t late = predicted - decoded->date;
                     if (late > late_threshold) {
@@ -1179,13 +1266,46 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
 
     vout_statistic_AddDisplayed(&vout->p->statistic, 1);
 
+    /* Punctuality telemetry: how late past its date the swap really ran.
+     * Scheduled pictures only -- pause refreshes and forced pictures
+     * have no meaningful deadline. Reported at debug verbosity every
+     * five seconds; the arithmetic itself is a handful of cycles. */
+    if (!is_forced) {
+        vlc_tick_t lateness = vout->p->displayed.date - todisplay->date;
+        vout->p->punctuality.count++;
+        vout->p->punctuality.sum += lateness;
+        if (lateness > vout->p->punctuality.worst)
+            vout->p->punctuality.worst = lateness;
+        if (lateness > 4000)
+            vout->p->punctuality.late++;
+        if (vout->p->punctuality.last_report == VLC_TICK_INVALID)
+            vout->p->punctuality.last_report = vout->p->displayed.date;
+        else if (vout->p->displayed.date - vout->p->punctuality.last_report
+                 >= 5 * CLOCK_FREQ) {
+            msg_Dbg(vout, "display punctuality: %u frames, avg %d us late, "
+                    "worst %d us, >4ms: %u",
+                    vout->p->punctuality.count,
+                    (int)(vout->p->punctuality.sum
+                          / __MAX(vout->p->punctuality.count, 1)),
+                    (int)vout->p->punctuality.worst,
+                    vout->p->punctuality.late);
+            vout->p->punctuality.count = 0;
+            vout->p->punctuality.late = 0;
+            vout->p->punctuality.worst = 0;
+            vout->p->punctuality.sum = 0;
+            vout->p->punctuality.last_report = vout->p->displayed.date;
+        }
+    }
+
     return VLC_SUCCESS;
 }
 
 static int ThreadDisplayPicture(vout_thread_t *vout, vlc_tick_t *deadline)
 {
     bool frame_by_frame = !deadline;
-    bool paused = vout->p->pause.is_on;
+    /* A decode-cache hold behaves like pause here: show the first (forced)
+     * picture, then stop popping so the fifo can fill. */
+    bool paused = vout->p->pause.is_on || vout->p->cache_hold;
     bool first = !vout->p->displayed.current;
 
     if (first)
@@ -1220,7 +1340,12 @@ static int ThreadDisplayPicture(vout_thread_t *vout, vlc_tick_t *deadline)
 
     vlc_tick_t date_refresh = VLC_TICK_INVALID;
     if (vout->p->displayed.date > VLC_TICK_INVALID) {
-        date_refresh = vout->p->displayed.date + VOUT_REDISPLAY_DELAY - render_delay;
+        /* A paused vout shows a static picture: redisplaying it every
+         * 80 ms only serves OSD/SPU updates, and those full renders
+         * cost real CPU time on the old GPUs this branch targets.
+         * Slow the refresh pump down while paused. */
+        vlc_tick_t redisplay_delay = vout->p->pause.is_on            ? VOUT_REDISPLAY_DELAY * 6 : VOUT_REDISPLAY_DELAY;
+        date_refresh = vout->p->displayed.date + redisplay_delay - render_delay;
         refresh = date_refresh <= date;
     }
     bool force_refresh = !drop_next_frame && refresh;
@@ -1289,6 +1414,15 @@ static void ThreadChangeSubMargin(vout_thread_t *vout, int margin)
 
 static void ThreadChangePause(vout_thread_t *vout, bool is_paused, vlc_tick_t date)
 {
+    /* De-dup same-state applications: the look-ahead cache release
+     * pushes the vout pause directly (so it lands BEFORE the unhold in
+     * the control queue -- an async-only pause let the unheld vout race
+     * through a fifo anchored at the pause date, dropping it whole) and
+     * the decoder-side application of the same pause follows a beat
+     * later. Without this guard that second application trips the
+     * assert below. */
+    if (vout->p->pause.is_on == is_paused)
+        return;
     assert(!vout->p->pause.is_on || !is_paused);
 
     if (vout->p->pause.is_on) {
@@ -1310,16 +1444,32 @@ static void ThreadChangePause(vout_thread_t *vout, bool is_paused, vlc_tick_t da
     }
     vout->p->pause.is_on = is_paused;
     vout->p->pause.date  = date;
+    msg_Dbg(vout, is_paused ? "paused: static frame redisplay throttled"
+                            : "resumed: normal redisplay interval");
 
     vout_window_t *window = vout->p->window;
     if (window != NULL)
         vout_window_SetInhibition(window, !is_paused);
 }
 
+static void ThreadChangeCacheHold(vout_thread_t *vout, bool hold)
+{
+    if (vout->p->cache_hold == hold)
+        return;
+    vout->p->cache_hold = hold;
+    msg_Dbg(vout, hold ? "decode cache fill: holding display"
+                       : "decode cache fill: hold released");
+}
+
 static void ThreadFlush(vout_thread_t *vout, bool below, vlc_tick_t date)
 {
     vout->p->step.timestamp = VLC_TICK_INVALID;
     vout->p->step.last      = VLC_TICK_INVALID;
+
+    /* A flush ends any decode-cache fill episode (seek, stop): the held
+     * pictures are dropped right below, holding further would wedge the
+     * next episode's display. */
+    ThreadChangeCacheHold(vout, false);
 
     ThreadFilterFlush(vout, false); /* FIXME too much */
 
@@ -1600,6 +1750,13 @@ static void ThreadInit(vout_thread_t *vout)
     vout->p->is_late_dropped = var_InheritBool(vout, "drop-late-frames");
     vout->p->pause.is_on     = false;
     vout->p->pause.date      = VLC_TICK_INVALID;
+    vout->p->cache_hold      = false;
+    vout->p->cache_headroom  = 0;
+    vout->p->punctuality.count = 0;
+    vout->p->punctuality.late = 0;
+    vout->p->punctuality.worst = 0;
+    vout->p->punctuality.sum = 0;
+    vout->p->punctuality.last_report = VLC_TICK_INVALID;
 
     vout_chrono_Init(&vout->p->render, 5, 10000); /* Arbitrary initial time */
 }
@@ -1640,6 +1797,19 @@ static int ThreadReinit(vout_thread_t *vout,
 
     vout_display_state_t state;
     memset(&state, 0, sizeof(state));
+
+    /* Look-ahead cache state belongs to the POOL, so it may only be
+     * dropped on the path that actually tears the pool down -- the two
+     * early returns above keep the existing pool and must keep its
+     * headroom with it. Clearing it at the top of the function instead
+     * silently killed the cache for the rest of the session on every
+     * decoder restart that reuses the vout (an input format change: a
+     * Blu-ray title started from a menu, a DVD domain switch), since
+     * nothing re-runs vout_InitWrapper to recompute it: the target
+     * clamps to a zero headroom, falls under the direct-rendering
+     * viability floor and the feature turns itself off. */
+    vout->p->cache_hold  = false;
+    vout->p->cache_headroom = 0;
 
     ThreadStop(vout, &state);
 
@@ -1733,6 +1903,9 @@ static int ThreadControl(vout_thread_t *vout, vout_control_cmd_t cmd)
         break;
     case VOUT_CONTROL_PAUSE:
         ThreadChangePause(vout, cmd.u.pause.is_on, cmd.u.pause.date);
+        break;
+    case VOUT_CONTROL_CACHE_HOLD:
+        ThreadChangeCacheHold(vout, cmd.u.boolean);
         break;
     case VOUT_CONTROL_FLUSH:
         ThreadFlush(vout, false, cmd.u.time);

@@ -53,8 +53,15 @@ extern "C" {
 
 /* Default fonts */
 #ifdef __APPLE__
-# define SYSTEM_DEFAULT_FONT_FILE "/System/Library/Fonts/HelveticaNeue.dfont"
-# define SYSTEM_DEFAULT_FAMILY "Helvetica Neue"
+# include <AvailabilityMacros.h>
+# if defined(MAC_OS_X_VERSION_MIN_REQUIRED) && MAC_OS_X_VERSION_MIN_REQUIRED < 1060
+/* HelveticaNeue.dfont only moved to /System/Library/Fonts in 10.6 */
+#  define SYSTEM_DEFAULT_FONT_FILE "/System/Library/Fonts/Helvetica.dfont"
+#  define SYSTEM_DEFAULT_FAMILY "Helvetica"
+# else
+#  define SYSTEM_DEFAULT_FONT_FILE "/System/Library/Fonts/HelveticaNeue.dfont"
+#  define SYSTEM_DEFAULT_FAMILY "Helvetica Neue"
+# endif
 # define SYSTEM_DEFAULT_MONOSPACE_FONT_FILE "/System/Library/Fonts/Monaco.dfont"
 # define SYSTEM_DEFAULT_MONOSPACE_FAMILY "Monaco"
 #elif defined( _WIN32 )

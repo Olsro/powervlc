@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "นำไอคอนไว้ตรงเดสก์ท็อปของคุณ เพื่อให้ง่ายต่อการเข้าใช้งาน"
 ${LangFileString} Desc_Section03 \
-    "ปลั๊กอินของ VLC Mozilla และ Mozilla Firefox"
+    "ปลั๊กอินของ ${PRODUCT_NAME} Mozilla และ Mozilla Firefox"
 ${LangFileString} Desc_Section04 \
-    "ปลั๊กอินของ VLC ActiveX"
+    "ปลั๊กอินของ ${PRODUCT_NAME} ActiveX"
 ${LangFileString} Desc_Section05 \
     "กำหนดการใช้งานการเล่น DVD และ CD"
 ${LangFileString} Desc_Section06 \
-    "ตั้งโปรแกรมเล่นสื่อ VLC ให้เป็นแอปพลิเคชันเริ่มต้นสำหรับชนิดไฟล์ที่ระบุ"
+    "ตั้งโปรแกรมเล่นสื่อ ${PRODUCT_NAME} ให้เป็นแอปพลิเคชันเริ่มต้นสำหรับชนิดไฟล์ที่ระบุ"
 ${LangFileString} Desc_Section07 \
-    "เพิ่มรายการเมนูบริบท ('เล่นด้วย VLC' และ 'เพิ่มลงในเพลย์ลิสต์ของ VLC')"
+    "เพิ่มรายการเมนูบริบท ('เล่นด้วย ${PRODUCT_NAME}' และ 'เพิ่มลงในเพลย์ลิสต์ของ ${PRODUCT_NAME}')"
 ${LangFileString} Desc_Section08 \
-    "ลบแฟ้มค่าปรับแต่งและแคช ของโปรแกรมเล่นสื่อ VLC ที่เหลือทิ้งไว้จากการติดตั้งในครั้งก่อน"
+    "ลบแฟ้มค่าปรับแต่งและแคช ของโปรแกรมเล่นสื่อ ${PRODUCT_NAME} ที่เหลือทิ้งไว้จากการติดตั้งในครั้งก่อน"
 
 ${LangFileString} Name_Section91 "ถอดถอน"
 ${LangFileString} Name_Section92 "ลบค่าปรับแต่งและแคช"
 
 ${LangFileString} Desc_Section91 \
-"ถอนการติดตั้งโปรแกรมเล่นสื่อ VLC รวมถึงส่วนประกอบทั้งหมด"
+"ถอนการติดตั้งโปรแกรมเล่นสื่อ ${PRODUCT_NAME} รวมถึงส่วนประกอบทั้งหมด"
 ${LangFileString} Desc_Section92 \
-"ลบไฟล์การตั้งค่าและแคชของโปรแกรมเล่นสื่อ VLC "
+"ลบไฟล์การตั้งค่าและแคชของโปรแกรมเล่นสื่อ ${PRODUCT_NAME} "
 
 ${LangFileString} ShellAssociation_Play "เล่น"
-${LangFileString} ContextMenuEntry_PlayWith "เล่นด้วยโปรแกรมเล่นสื่อ VLC"
-${LangFileString} ContextMenuEntry_AddToPlaylist "เพิ่มลงในเพลย์ลิสต์ของโปรแกรมเล่นสื่อ VLC"
+${LangFileString} ContextMenuEntry_PlayWith "เล่นด้วยโปรแกรมเล่นสื่อ ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "เพิ่มลงในเพลย์ลิสต์ของโปรแกรมเล่นสื่อ ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "เยี่ยมชมเว็บไซต์ VideoLAN ของโปรแกรมเล่นสื่อ VLC"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "เล่นบลูเรย์"
 ${LangFileString} License_NextText "คุณได้ตระหนักในสิทธิ์การใช้งานด้านต่างๆ แล้ว กด 'ถัดไป' เพื่อทำต่อ "
 
 ${LangFileString} Detail_CheckProcesses "กำลังตรวจสอบกระบวนการ..."
-${LangFileString} MessageBox_VLCRunning "ดูเหมือนว่า VLC กำลังทำงานอยู่ และจะถูกปิดในขณะนี้"
-${LangFileString} MessageBox_VLCUnableToClose "ตัวติดตั้งนี้ไม่สามารถปิด VLC ได้ กรุณาปิดด้วยตัวคุณเอง"
+${LangFileString} MessageBox_VLCRunning "ดูเหมือนว่า ${PRODUCT_NAME} กำลังทำงานอยู่ และจะถูกปิดในขณะนี้"
+${LangFileString} MessageBox_VLCUnableToClose "ตัวติดตั้งนี้ไม่สามารถปิด ${PRODUCT_NAME} ได้ กรุณาปิดด้วยตัวคุณเอง"
 ${LangFileString} MessageBox_InstallAborted "ยกเลิกการติดตั้งแล้ว!"
 
 ${LangFileString} Reinstall_Headline "ติดตั้งเรียบร้อยแล้ว"
-${LangFileString} Reinstall_HeadlineInstall "เลือกว่าคุณต้องการที่จะติดตั้ง VLC อย่างไร"
+${LangFileString} Reinstall_HeadlineInstall "เลือกว่าคุณต้องการที่จะติดตั้ง ${PRODUCT_NAME} อย่างไร"
 ${LangFileString} Reinstall_HeadlineMaintenance "เลือกตัวเลือกการบำรุงรักษาที่จะดำเนินการ"
-${LangFileString} Reinstall_MessageOlder "ระบบของคุณมี VLC เวอร์ชั่นเก่าติดตั้งไว้อยู่ก่อนแล้ว เลือกการดำเนินการที่คุณต้องการทำ และคลิก $\"ถัดไป$\" เพื่อทำต่อ"
-${LangFileString} Reinstall_MessageNewer "มี VLC เวอร์ชั่นที่ใหม่กว่าติดตั้งอยู่แล้ว! ไม่แนะนำให้คุณดาวน์เกรดเป็นเวอร์ชั่นที่เก่ากว่า เลือกการดำเนินการที่คุณต้องการทำ และคลิก $\"ถัดไป$\" เพื่อทำต่อ"
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} ถูกติดตั้งไว้อยู่แล้ว เลือกการดำเนินการที่คุณต้องการทำ และคลิก $\"ถัดไป$\" เพื่อทำต่อ"
-${LangFileString} Reinstall_OptionUpgrade "อัปเกรด VLC โดยใช้การตั้งค่าก่อนหน้านี้ (แนะนำ)"
-${LangFileString} Reinstall_OptionDowngrade "ดาวน์เกรด VLC โดยใช้การตั้งค่าก่อนหน้านี้ (แนะนำ)"
+${LangFileString} Reinstall_MessageOlder "ระบบของคุณมี ${PRODUCT_NAME} เวอร์ชั่นเก่าติดตั้งไว้อยู่ก่อนแล้ว เลือกการดำเนินการที่คุณต้องการทำ และคลิก $\"ถัดไป$\" เพื่อทำต่อ"
+${LangFileString} Reinstall_MessageNewer "มี ${PRODUCT_NAME} เวอร์ชั่นที่ใหม่กว่าติดตั้งอยู่แล้ว! ไม่แนะนำให้คุณดาวน์เกรดเป็นเวอร์ชั่นที่เก่ากว่า เลือกการดำเนินการที่คุณต้องการทำ และคลิก $\"ถัดไป$\" เพื่อทำต่อ"
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} ถูกติดตั้งไว้อยู่แล้ว เลือกการดำเนินการที่คุณต้องการทำ และคลิก $\"ถัดไป$\" เพื่อทำต่อ"
+${LangFileString} Reinstall_OptionUpgrade "อัปเกรด ${PRODUCT_NAME} โดยใช้การตั้งค่าก่อนหน้านี้ (แนะนำ)"
+${LangFileString} Reinstall_OptionDowngrade "ดาวน์เกรด ${PRODUCT_NAME} โดยใช้การตั้งค่าก่อนหน้านี้ (แนะนำ)"
 ${LangFileString} Reinstall_OptionComponents "เพิ่ม/ลบ/ติดตั้งส่วนประกอบใหม่"
 ${LangFileString} Reinstall_OptionAdvanced "เปลี่ยนการตั้งค่า (ขั้นสูง)"
-${LangFileString} Reinstall_OptionUninstall "ถอนการติดตั้ง VLC"
+${LangFileString} Reinstall_OptionUninstall "ถอนการติดตั้ง ${PRODUCT_NAME}"

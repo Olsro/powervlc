@@ -18,6 +18,14 @@ UPNP_CFLAGS := $(CFLAGS) -DUPNP_STATIC_LIB
 UPNP_CXXFLAGS := $(CXXFLAGS) -DUPNP_STATIC_LIB
 UPNP_CONF := --disable-samples --disable-device --disable-webserver
 
+ifdef HAVE_MACOSX
+# strndup()/strnlen() are only available since macOS 10.7; force the
+# built-in fallbacks (see the UpnpString compat patch)
+ifneq ($(call darwin_min_os_at_least, 10.7), true)
+UPNP_CONF += ac_cv_func_strndup=no ac_cv_func_strnlen=no
+endif
+endif
+
 ifdef HAVE_WIN32
 DEPS_upnp += pthreads $(DEPS_pthreads)
 endif
@@ -52,6 +60,7 @@ endif
 ifdef HAVE_ANDROID
 	$(APPLY) $(SRC)/upnp/revert-ifaddrs.patch
 endif
+	$(APPLY) $(SRC)/upnp/0001-UpnpString-compat-strndup-strnlen-for-old-macOS.patch
 	$(APPLY) $(SRC)/upnp/miniserver.patch
 ifdef HAVE_IOS
 	$(APPLY) $(SRC)/upnp/fix-reuseaddr-option.patch

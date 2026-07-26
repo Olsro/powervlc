@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "הוספת סמל לשולחן העבודה שלך לגישה נוחה"
 ${LangFileString} Desc_Section03 \
-    "תוסף VLC עבור Mozilla ו־Firefox מבית Mozilla"
+    "תוסף ${PRODUCT_NAME} עבור Mozilla ו־Firefox מבית Mozilla"
 ${LangFileString} Desc_Section04 \
-    "תוסף ה־ActiveX של VLC"
+    "תוסף ה־ActiveX של ${PRODUCT_NAME}"
 ${LangFileString} Desc_Section05 \
     "רישום בתור נגן לתקליטורי מסוג CD ו־DVD"
 ${LangFileString} Desc_Section06 \
     "הגדרת נגן המדיה כיישום בררת המחדל לטיפול בסוג הקובץ האמור"
 ${LangFileString} Desc_Section07 \
-    "הוספת פריטים לתפריט ההקשר ('נגינה עם VLC' ו־'הוספה לרשימת ההשמעה של VLC')"
+    "הוספת פריטים לתפריט ההקשר ('נגינה עם ${PRODUCT_NAME}' ו־'הוספה לרשימת ההשמעה של ${PRODUCT_NAME}')"
 ${LangFileString} Desc_Section08 \
-    "מחיקת ההעדפות וקובצי המטמון של נגן המדיה VLC שנשארו מהתקנות קודמות"
+    "מחיקת ההעדפות וקובצי המטמון של נגן המדיה ${PRODUCT_NAME} שנשארו מהתקנות קודמות"
 
 ${LangFileString} Name_Section91 "הסרה"
 ${LangFileString} Name_Section92 "מחיקת ההעדפות והמטמון"
 
 ${LangFileString} Desc_Section91 \
-"הסרת נגן המדיה VLC על כל רכיביו"
+"הסרת נגן המדיה ${PRODUCT_NAME} על כל רכיביו"
 ${LangFileString} Desc_Section92 \
-"מחיקת ההעדפות וקובצי המטמון של נגן המדיה VLC"
+"מחיקת ההעדפות וקובצי המטמון של נגן המדיה ${PRODUCT_NAME}"
 
 ${LangFileString} ShellAssociation_Play "נגינה"
-${LangFileString} ContextMenuEntry_PlayWith "נגינה עם נגן המדיה VLC"
-${LangFileString} ContextMenuEntry_AddToPlaylist "הוספה לרשימת ההשמעה של נגן המדיה VLC"
+${LangFileString} ContextMenuEntry_PlayWith "נגינה עם נגן המדיה ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "הוספה לרשימת ההשמעה של נגן המדיה ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "ביקור באתר של נגן המדיה VLC מבית VideoLAN"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "נגינת Blu-ray"
 ${LangFileString} License_NextText "זכויותיך ידועות לך החל מעכשיו. ניתן ללחוץ על הבא כדי להמשיך."
 
 ${LangFileString} Detail_CheckProcesses "התהליכים נבדקים…"
-${LangFileString} MessageBox_VLCRunning "נראה כי VLC פעיל וכעת הוא ייסגר."
-${LangFileString} MessageBox_VLCUnableToClose "תכנית התקנה זו לא הצליחה לסגור את VLC, נא לעשות זאת ידנית."
+${LangFileString} MessageBox_VLCRunning "נראה כי ${PRODUCT_NAME} פעיל וכעת הוא ייסגר."
+${LangFileString} MessageBox_VLCUnableToClose "תכנית התקנה זו לא הצליחה לסגור את ${PRODUCT_NAME}, נא לעשות זאת ידנית."
 ${LangFileString} MessageBox_InstallAborted "ההתקנה בוטלה!"
 
 ${LangFileString} Reinstall_Headline "התכנית כבר מותקנת"
-${LangFileString} Reinstall_HeadlineInstall "נא לבחור כיצד להתקין את VLC."
+${LangFileString} Reinstall_HeadlineInstall "נא לבחור כיצד להתקין את ${PRODUCT_NAME}."
 ${LangFileString} Reinstall_HeadlineMaintenance "נא לבחור את אפשרות התחזוקה לביצוע."
-${LangFileString} Reinstall_MessageOlder "גרסה קודמת של VLC מותקנת במחשבך. נא לבחור את הפעולה הרצויה וללחוץ על הבא כדי להמשיך."
-${LangFileString} Reinstall_MessageNewer "גרסה חדשה יותר של VLC כבר מותקנת! לא מומלץ לעבור לגרסה ישנה יותר. נא לבחור את הפעולה הרצויה וללחוץ על הבא כדי להמשיך."
-${LangFileString} Reinstall_MessageSame "גרסה ${VERSION} של VLC כבר מותקנת. נא לבחור את הפעולה הרצויה וללחוץ על הבא להמשך."
-${LangFileString} Reinstall_OptionUpgrade "שדרוג VLC באמצעות הגדרות קודמות (מומלץ)"
-${LangFileString} Reinstall_OptionDowngrade "מעבר לגרסה קודמת של VLC על ידי שימוש בהגדרות קודמות (מומלץ)"
+${LangFileString} Reinstall_MessageOlder "גרסה קודמת של ${PRODUCT_NAME} מותקנת במחשבך. נא לבחור את הפעולה הרצויה וללחוץ על הבא כדי להמשיך."
+${LangFileString} Reinstall_MessageNewer "גרסה חדשה יותר של ${PRODUCT_NAME} כבר מותקנת! לא מומלץ לעבור לגרסה ישנה יותר. נא לבחור את הפעולה הרצויה וללחוץ על הבא כדי להמשיך."
+${LangFileString} Reinstall_MessageSame "גרסה ${VERSION} של ${PRODUCT_NAME} כבר מותקנת. נא לבחור את הפעולה הרצויה וללחוץ על הבא להמשך."
+${LangFileString} Reinstall_OptionUpgrade "שדרוג ${PRODUCT_NAME} באמצעות הגדרות קודמות (מומלץ)"
+${LangFileString} Reinstall_OptionDowngrade "מעבר לגרסה קודמת של ${PRODUCT_NAME} על ידי שימוש בהגדרות קודמות (מומלץ)"
 ${LangFileString} Reinstall_OptionComponents "הוספה/הסרה/התקנה מחדש של רכיבים"
 ${LangFileString} Reinstall_OptionAdvanced "שינוי ההגדרות (מתקדם)"
-${LangFileString} Reinstall_OptionUninstall "הסרת VLC"
+${LangFileString} Reinstall_OptionUninstall "הסרת ${PRODUCT_NAME}"

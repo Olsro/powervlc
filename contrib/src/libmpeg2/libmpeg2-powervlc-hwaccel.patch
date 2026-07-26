@@ -1,0 +1,409 @@
+PowerVLC: macroblock-level capture hooks for hardware MPEG-2 decoding
+
+Adds the hooks the AppleVA / ATI DVDDriver hardware decoder needs from
+libmpeg2 (modules/codec/libmpeg2.c + dvddriver_backend.c):
+
+  - mpeg2_hwaccel_t + mpeg2_hwaccel()   register per-macroblock callbacks
+                                        (mb_begin / block / mb_end)
+  - mpeg2_set_hw_replace()              skip the CPU IDCT+MC on captured
+                                        pictures (replacement mode)
+  - mpeg2_pic_field_predicted()         header-level field/frame prediction
+                                        signal, reliable even when the
+                                        picture is later dropped by sync
+  - motion_t.hw_fsel[2]                 field-select bits of the two field
+                                        predictions, for the HW descriptors
+  - mb_begin gains "mv" and "field_select" arguments
+
+Until now these lived only as hand edits inside the per-triple contrib
+staging directories, so any contrib clean silently reverted the hardware
+decoder to a state where modules/codec/libmpeg2.c fails to compile
+("unknown type name 'mpeg2_hwaccel_t'").  Keeping them here makes every
+contrib prefix reproducible from a clean tree.
+
+--- a/include/mpeg2.h
++++ b/include/mpeg2.h
+@@ -153,6 +153,36 @@
+ void mpeg2_set_buf (mpeg2dec_t * mpeg2dec, uint8_t * buf[3], void * id);
+ void mpeg2_custom_fbuf (mpeg2dec_t * mpeg2dec, int custom_fbuf);
+ 
++/* PowerVLC : capture pour décodage MPEG-2 accéléré matériel (AppleVA).
++ * Enregistre des callbacks appelés par mpeg2_slice() au niveau macrobloc :
++ *   mb_begin(priv, macroblock_modes, cbp, mv, field_select)  au début du macrobloc
++ *   block(priv, dctblock, scan)            pour CHAQUE bloc codé, dans l'ordre
++ *   mb_end(priv)                           à la fin du macrobloc
++ * cbp est le coded_block_pattern de libmpeg2 (bit 1<<b = bloc b). mv = 8× int16
++ * {MV[fwd][0].xy, MV[bwd][0].xy, MV[fwd][1].xy, MV[bwd][1].xy} en demi-pel (pmv
++ * de libmpeg2, 0 pour l'intra) ; field_select = 4× uint8. Passer hw=NULL (ou des
++ * champs NULL) désactive la capture (décodage CPU normal). */
++typedef struct {
++    void * priv;
++    void (* mb_begin) (void * priv, int macroblock_modes, unsigned cbp,
++                       const int16_t * mv, const uint8_t * field_select);
++    void (* block) (void * priv, const int16_t * dctblock, const uint8_t * scan);
++    void (* mb_end) (void * priv);
++} mpeg2_hwaccel_t;
++void mpeg2_hwaccel (mpeg2dec_t * mpeg2dec, const mpeg2_hwaccel_t * hw);
++/* PowerVLC M4 : active/désactive le mode REMPLACEMENT (saute IDCT+MC CPU sur les
++ * pictures capturées par le GPU → baisse le CPU). Global au décodeur libmpeg2. */
++void mpeg2_set_hw_replace (int on);
++/* PowerVLC 2a (probe-then-commit) : renvoie non nul si la PICTURE COURANTE
++ * (celle dont le header vient d'être parsé, à STATE_PICTURE) utilise la
++ * prédiction/DCT par CHAMP — soit frame_pred_frame_dct=0, soit une field
++ * picture (picture_structure != FRAME). Signal DÉCODÉ AU HEADER, donc fiable
++ * même quand la picture est ensuite DROPPÉE par la synchro (contrairement au
++ * comptage macrobloc field_seen, jamais atteint sur une frame droppée). Sert à
++ * classer progressif vs entrelacé pendant la fenêtre d'observation sans ouvrir
++ * le décodeur HW ni soumettre au GPU. */
++int  mpeg2_pic_field_predicted (mpeg2dec_t * mpeg2dec);
++
+ #define MPEG2_ACCEL_X86_MMX 1
+ #define MPEG2_ACCEL_X86_3DNOW 2
+ #define MPEG2_ACCEL_X86_MMXEXT 4
+--- a/libmpeg2/mpeg2_internal.h
++++ b/libmpeg2/mpeg2_internal.h
+@@ -58,6 +58,9 @@
+     uint8_t ** ref2[2];
+     int pmv[2][2];
+     int f_code[2];
++    /* PowerVLC : bits field-select des 2 prédictions field (MC_FIELD en frame
++     * picture), posés par motion_fr_field, lus par la capture HW (desc[0x10..13]). */
++    int hw_fsel[2];
+ } motion_t;
+ 
+ typedef void motion_parser_t (mpeg2_decoder_t * decoder,
+@@ -152,6 +155,19 @@
+ 
+     /* XXX: stuff due to xine shit */
+     int8_t q_scale_type;
++
++    /* PowerVLC : hooks de capture pour le décodage MPEG-2 accéléré matériel
++     * (AppleVA). Posés via mpeg2_hwaccel(). Quand hw_mb_begin != NULL,
++     * mpeg2_slice() capture les macroblocs (EN PLUS de l'IDCT+MC CPU, additif).
++     * hw_capture : recalculé par picture dans mpeg2_slice() — vrai si CETTE
++     * picture doit être capturée (I, ou P frame-predicted en 4:2:0 frame). */
++    void * hw_priv;
++    int    hw_capture;
++    void (* hw_mb_begin) (void * priv, int macroblock_modes, unsigned cbp,
++			  const int16_t * mv, const uint8_t * field_select);
++    void (* hw_block) (void * priv, const int16_t * dctblock,
++		       const uint8_t * scan);
++    void (* hw_mb_end) (void * priv);
+ };
+ 
+ typedef struct {
+--- a/libmpeg2/slice.c
++++ b/libmpeg2/slice.c
+@@ -25,6 +25,9 @@
+ #include "config.h"
+ 
+ #include <inttypes.h>
++/* PowerVLC : memset() dans la capture HW ci-dessous (les toolchains GCC legacy
++ * toléraient la déclaration implicite, clang moderne en fait une erreur). */
++#include <string.h>
+ 
+ #include "mpeg2.h"
+ #include "attributes.h"
+@@ -36,6 +39,56 @@
+ 				uint8_t * dest, int stride);
+ extern void (* mpeg2_cpu_state_save) (cpu_state_t * state);
+ extern void (* mpeg2_cpu_state_restore) (cpu_state_t * state);
++
++/* PowerVLC : enregistre (ou retire, hw==NULL) les callbacks de capture pour le
++ * décodage MPEG-2 accéléré matériel (AppleVA). Cf. mpeg2.h / mpeg2_internal.h. */
++void mpeg2_hwaccel (mpeg2dec_t * mpeg2dec, const mpeg2_hwaccel_t * hw)
++{
++    mpeg2_decoder_t * const decoder = &(mpeg2dec->decoder);
++    if (hw != 0 && hw->mb_begin != 0) {
++	decoder->hw_priv = hw->priv;
++	decoder->hw_mb_begin = hw->mb_begin;
++	decoder->hw_block = hw->block;
++	decoder->hw_mb_end = hw->mb_end;
++    } else {
++	decoder->hw_priv = 0;
++	decoder->hw_mb_begin = 0;
++	decoder->hw_block = 0;
++	decoder->hw_mb_end = 0;
++    }
++}
++
++/* PowerVLC M4 — mode REMPLACEMENT. Quand actif ET la picture est capturée par le
++ * GPU (decoder->hw_capture), on SAUTE l'IDCT (mpeg2_idct_copy/add) et le MC pixel
++ * CPU : on conserve le VLD (get_*_block, position bitstream) et le calcul des pmv
++ * (nécessaires au descripteur HW), mais aucun pixel n'est produit côté logiciel —
++ * c'est le GPU qui décode l'image. Seul jalon qui BAISSE le CPU (M1-M3 = additif).
++ * Flag global (pas de champ struct → évite le piège de rebuild mpeg2_internal.h),
++ * posé par mpeg2_set_hw_replace() depuis libmpeg2.c. ⚠ N'est correct que si TOUTES
++ * les pictures sont capturées (une frame retombée sur CPU aurait des réfs logicielles
++ * corrompues) : réservé au chemin frame-predicted complet, sous option. */
++static int mpeg2_hw_replace = 0;
++void mpeg2_set_hw_replace (int on) { mpeg2_hw_replace = on; }
++
++/* PowerVLC 2a — classification progressif/entrelacé au niveau HEADER (voir
++ * mpeg2.h). frame_pred_frame_dct est posé par header.c au parse de la picture
++ * coding extension, AVANT tout décodage de slice → disponible et exact à
++ * STATE_PICTURE, y compris si la picture est ensuite droppée. */
++int mpeg2_pic_field_predicted (mpeg2dec_t * mpeg2dec)
++{
++    const mpeg2_decoder_t * decoder = &(mpeg2dec->decoder);
++    return (! decoder->frame_pred_frame_dct)
++        || (decoder->picture_structure != FRAME_PICTURE);
++}
++
++/* MC no-op : le parser calcule pmv (lit le bitstream) mais n'écrit aucun pixel. */
++static void mpeg2_mc_noop (uint8_t * d, const uint8_t * s, int stride, int height)
++{
++    (void) d; (void) s; (void) stride; (void) height;
++}
++static mpeg2_mc_fct * const mpeg2_hw_mc_noop[8] = {
++    mpeg2_mc_noop, mpeg2_mc_noop, mpeg2_mc_noop, mpeg2_mc_noop,
++    mpeg2_mc_noop, mpeg2_mc_noop, mpeg2_mc_noop, mpeg2_mc_noop };
+ 
+ #include "vlc.h"
+ 
+@@ -951,7 +1004,21 @@
+ 	get_intra_block_B15 (decoder, decoder->quantizer_matrix[cc ? 2 : 0]);
+     else
+ 	get_intra_block_B14 (decoder, decoder->quantizer_matrix[cc ? 2 : 0]);
+-    mpeg2_idct_copy (decoder->DCTblock, dest, stride);
++    /* PowerVLC (G3/ATI, additif) : capture matérielle (DVDDriver) EN PLUS de
++     * l'IDCT CPU. Limité aux images I (P/B nécessitent les MV, cf. spec §6). On
++     * capture DCTblock AVANT l'IDCT (qui le consomme + le remet à zéro). Additif
++     * = le CPU produit toujours des pixels corrects (playback OK) pendant que le
++     * GPU décode en parallèle (validation). Passer en mode « remplacement »
++     * (retirer mpeg2_idct_copy) quand le couplage vout/affichage sera prêt. */
++    if (decoder->hw_block != 0 && decoder->hw_capture)
++	decoder->hw_block (decoder->hw_priv, decoder->DCTblock, decoder->scan);
++    /* M4 remplacement : le GPU produit l'image → sauter l'IDCT. On DOIT quand même
++     * remettre DCTblock à zéro (get_*_block suppose le bloc pré-nettoyé, invariant
++     * normalement maintenu par l'IDCT lui-même). */
++    if (mpeg2_hw_replace && decoder->hw_capture)
++	memset (decoder->DCTblock, 0, 64 * sizeof (int16_t));
++    else
++	mpeg2_idct_copy (decoder->DCTblock, dest, stride);
+ #undef bit_buf
+ #undef bits
+ #undef bit_ptr
+@@ -968,7 +1035,17 @@
+     else
+ 	last = get_non_intra_block (decoder,
+ 				    decoder->quantizer_matrix[cc ? 3 : 1]);
+-    mpeg2_idct_add (last, decoder->DCTblock, dest, stride);
++    /* PowerVLC : capture matérielle du RÉSIDU inter (ADDITIF : le GPU décode P
++     * en parallèle ; le CPU garde l'IDCT+MC pour le vout logiciel et les frames
++     * de référence). hw_block lit DCTblock ; mpeg2_idct_add le consomme ensuite. */
++    if (decoder->hw_block != 0 && decoder->hw_capture)
++	decoder->hw_block (decoder->hw_priv, decoder->DCTblock, decoder->scan);
++    /* M4 remplacement : sauter l'IDCT+add (le GPU applique le résidu). Clear
++     * obligatoire du bloc pour le suivant (cf. slice_intra_DCT). */
++    if (mpeg2_hw_replace && decoder->hw_capture)
++	memset (decoder->DCTblock, 0, 64 * sizeof (int16_t));
++    else
++	mpeg2_idct_add (last, decoder->DCTblock, dest, stride);
+ }
+ 
+ #define MOTION_420(table,ref,motion_x,motion_y,size,y)			      \
+@@ -1326,6 +1403,7 @@
+     /* motion_y = bound_motion_vector (motion_y, motion->f_code[1]); */	      \
+     motion->pmv[0][1] = motion_y << 1;					      \
+ 									      \
++    motion->hw_fsel[0] = field;   /* PowerVLC : field-select prédiction 0 */ \
+     MOTION_FIELD (table, motion->ref[0], motion_x, motion_y, 0, & ~1, field); \
+ 									      \
+     NEEDBITS (bit_buf, bits, bit_ptr);					      \
+@@ -1343,6 +1421,7 @@
+     /* motion_y = bound_motion_vector (motion_y, motion->f_code[1]); */	      \
+     motion->pmv[1][1] = motion_y << 1;					      \
+ 									      \
++    motion->hw_fsel[1] = field;   /* PowerVLC : field-select prédiction 1 */ \
+     MOTION_FIELD (table, motion->ref[0], motion_x, motion_y, 1, & ~1, field); \
+ }									      \
+ 									      \
+@@ -1552,14 +1631,22 @@
+ #undef bits
+ #undef bit_ptr
+ 
++/* M4 remplacement : en mode capture GPU, la table MC est remplacée par des no-op
++ * → le parser calcule pmv (lit le bitstream, indispensable) sans copier de pixels. */
+ #define MOTION_CALL(routine,direction)				\
+ do {								\
++    mpeg2_mc_fct * const * const _mc_put =			\
++	(mpeg2_hw_replace && decoder->hw_capture) ?		\
++	    mpeg2_hw_mc_noop : mpeg2_mc.put;			\
++    mpeg2_mc_fct * const * const _mc_avg =			\
++	(mpeg2_hw_replace && decoder->hw_capture) ?		\
++	    mpeg2_hw_mc_noop : mpeg2_mc.avg;			\
+     if ((direction) & MACROBLOCK_MOTION_FORWARD)		\
+-	routine (decoder, &(decoder->f_motion), mpeg2_mc.put);	\
++	routine (decoder, &(decoder->f_motion), _mc_put);	\
+     if ((direction) & MACROBLOCK_MOTION_BACKWARD)		\
+ 	routine (decoder, &(decoder->b_motion),			\
+ 		 ((direction) & MACROBLOCK_MOTION_FORWARD ?	\
+-		  mpeg2_mc.avg : mpeg2_mc.put));		\
++		  _mc_avg : _mc_put));				\
+ } while (0)
+ 
+ #define NEXT_MACROBLOCK							\
+@@ -1784,6 +1871,10 @@
+ #undef bit_ptr
+ }
+ 
++/* PowerVLC : MV/field_select nuls pour l'intra et les macroblocs sautés. */
++static const int16_t hw_mv_zero[8]   = { 0, 0, 0, 0, 0, 0, 0, 0 };
++static const uint8_t hw_fsel_zero[4] = { 0, 0, 0, 0 };
++
+ void mpeg2_slice (mpeg2_decoder_t * const decoder, const int code,
+ 		  const uint8_t * const buffer)
+ {
+@@ -1797,6 +1888,18 @@
+     if (slice_init (decoder, code))
+ 	return;
+ 
++    /* PowerVLC : capture-t-on CETTE picture sur le GPU ? I/P/B en FRAME picture,
++     * 4:2:0. Phase 2 : on gère aussi les MB field-predicted (MC_FIELD, mb_type
++     * 5/6/7) → plus de gate frame_pred_frame_dct. Les MB MC_DMV (rares/absents en
++     * DVD) restent en frame-style : si présents la picture reste alignée mais leur
++     * MC GPU serait approx. (le CPU additif reste correct). field pictures = plus tard. */
++    decoder->hw_capture = (decoder->hw_mb_begin != 0)
++	&& (decoder->picture_structure == FRAME_PICTURE)
++	&& (decoder->chroma_format == 0)
++	&& (   decoder->coding_type == I_TYPE
++	    || decoder->coding_type == P_TYPE
++	    || decoder->coding_type == B_TYPE);
++
+     if (mpeg2_cpu_state_save)
+ 	mpeg2_cpu_state_save (&cpu_state);
+ 
+@@ -1819,6 +1922,11 @@
+ 	    int offset;
+ 	    uint8_t * dest_y;
+ 
++	    /* PowerVLC : début capture matérielle intra (CBP intra = 0x3f, MV nuls). */
++	    if (decoder->hw_capture)
++		decoder->hw_mb_begin (decoder->hw_priv, macroblock_modes, 0x3f,
++				      hw_mv_zero, hw_fsel_zero);
++
+ 	    if (decoder->concealment_motion_vectors) {
+ 		if (decoder->picture_structure == FRAME_PICTURE)
+ 		    motion_fr_conceal (decoder);
+@@ -1880,6 +1988,7 @@
+ 	} else {
+ 
+ 	    motion_parser_t * parser;
++	    int16_t hw_mv[8]; uint8_t hw_fsel[4] = {0,0,0,0};		/* PowerVLC : MV du MB pour la capture HW */
+ 
+ 	    if (   ((macroblock_modes >> MOTION_TYPE_SHIFT) < 0)
+                 || ((macroblock_modes >> MOTION_TYPE_SHIFT) >=
+@@ -1892,6 +2001,34 @@
+ 	    parser =
+ 		decoder->motion_parser[macroblock_modes >> MOTION_TYPE_SHIFT];
+ 	    MOTION_CALL (parser, macroblock_modes);
++
++	    /* PowerVLC : MV du MB courant (demi-pel ; pmv accumulé par MOTION_CALL).
++	     * Ordre driver : fwd0.xy, bwd0.xy, fwd1.xy, bwd1.xy. */
++	    if (decoder->hw_capture) {
++		int hw_field = ((macroblock_modes >> MOTION_TYPE_SHIFT) == MC_FIELD);
++		/* On transmet les pmv BRUTS (demi-pel FRAME : motion_fr_field fait déjà
++		 * `motion_y << 1` pour passer des lignes de champ aux lignes de trame).
++		 * La mise à l'échelle propre au chemin field du driver (>>2) est faite
++		 * côté backend, qui est seul à connaître le mode field retenu — il peut
++		 * ainsi soit alimenter le moteur field, soit convertir la prédiction en
++		 * prédiction FRAME équivalente (le moteur field du RV200 déchire sur le
++		 * mouvement rapide, cf. doc/pb-offload/phase2-field-findings.md). */
++		hw_mv[0] = decoder->f_motion.pmv[0][0];
++		hw_mv[1] = decoder->f_motion.pmv[0][1];
++		hw_mv[2] = decoder->b_motion.pmv[0][0];
++		hw_mv[3] = decoder->b_motion.pmv[0][1];
++		hw_mv[4] = decoder->f_motion.pmv[1][0];
++		hw_mv[5] = decoder->f_motion.pmv[1][1];
++		hw_mv[6] = decoder->b_motion.pmv[1][0];
++		hw_mv[7] = decoder->b_motion.pmv[1][1];
++		(void) hw_field;
++		if (hw_field) {
++		    hw_fsel[0] = (uint8_t) decoder->f_motion.hw_fsel[0];
++		    hw_fsel[1] = (uint8_t) decoder->b_motion.hw_fsel[0];
++		    hw_fsel[2] = (uint8_t) decoder->f_motion.hw_fsel[1];
++		    hw_fsel[3] = (uint8_t) decoder->b_motion.hw_fsel[1];
++		}
++	    }
+ 
+ 	    if (macroblock_modes & MACROBLOCK_PATTERN) {
+ 		int coded_block_pattern;
+@@ -1907,6 +2044,13 @@
+ 
+ 		coded_block_pattern = get_coded_block_pattern (decoder);
+ 
++		/* PowerVLC : mb_begin inter AVANT les blocs (cbp maintenant connu ;
++		 * 4:2:0 → 6 bits). Le walker du backend range les blocs via le CBP. */
++		if (decoder->hw_capture)
++		    decoder->hw_mb_begin (decoder->hw_priv, macroblock_modes,
++					  coded_block_pattern & 0x3f,
++					  hw_mv, hw_fsel);
++
+ 		if (likely (decoder->chroma_format == 0)) {
+ 		    int offset = decoder->offset;
+ 		    uint8_t * dest_y = decoder->dest[0] + offset;
+@@ -2021,11 +2165,21 @@
+ 					     DCT_stride);
+ 		}
+ 	    }
++	    else if (decoder->hw_capture) {
++		/* PowerVLC : MB inter SANS résidu (pas de MACROBLOCK_PATTERN) →
++		 * mb_begin cbp=0. Indispensable pour l'alignement raster HW. */
++		decoder->hw_mb_begin (decoder->hw_priv, macroblock_modes, 0,
++				      hw_mv, hw_fsel);
++	    }
+ 
+ 	    decoder->dc_dct_pred[0] = decoder->dc_dct_pred[1] =
+ 		decoder->dc_dct_pred[2] = 16384;
+ 	}
+ 
++	/* PowerVLC : fin du macrobloc capturé (I ou P). */
++	if (decoder->hw_capture)
++	    decoder->hw_mb_end (decoder->hw_priv);
++
+ 	NEXT_MACROBLOCK;
+ 
+ 	NEEDBITS (bit_buf, bits, bit_ptr);
+@@ -2062,11 +2216,42 @@
+ 		do {
+ 		    MOTION_CALL (decoder->motion_parser[0],
+ 				 MACROBLOCK_MOTION_FORWARD);
++		    /* PowerVLC : MB P sauté = copie de la réf à MV 0. Émettre un
++		     * descripteur (fwd, MV 0, sans résidu) pour l'alignement raster. */
++		    if (decoder->hw_capture) {
++			decoder->hw_mb_begin (decoder->hw_priv,
++					      MACROBLOCK_MOTION_FORWARD, 0,
++					      hw_mv_zero, hw_fsel_zero);
++			decoder->hw_mb_end (decoder->hw_priv);
++		    }
+ 		    NEXT_MACROBLOCK;
+ 		} while (--mba_inc);
+ 	    } else {
+ 		do {
+ 		    MOTION_CALL (decoder->motion_parser[4], macroblock_modes);
++		    /* PowerVLC : MB B sauté = réutilisation du MB précédent (mêmes
++		     * MV et même direction, cf. motion_reuse qui garde pmv[0]).
++		     * Émettre un descripteur (cbp 0, MV réutilisés) pour l'alignement
++		     * raster. macroblock_modes = modes du dernier MB codé → direction. */
++		    if (decoder->hw_capture) {
++			int16_t hw_mv_skip[8];
++			hw_mv_skip[0] = decoder->f_motion.pmv[0][0];
++			hw_mv_skip[1] = decoder->f_motion.pmv[0][1];
++			hw_mv_skip[2] = decoder->b_motion.pmv[0][0];
++			hw_mv_skip[3] = decoder->b_motion.pmv[0][1];
++			hw_mv_skip[4] = decoder->f_motion.pmv[1][0];
++			hw_mv_skip[5] = decoder->f_motion.pmv[1][1];
++			hw_mv_skip[6] = decoder->b_motion.pmv[1][0];
++			hw_mv_skip[7] = decoder->b_motion.pmv[1][1];
++			/* motion_reuse (parser[4]) fait un MC frame-style 16×16 sur pmv[0]
++			 * (comme le CPU). Forcer motion_type=MC_FRAME dans les modes pour
++			 * que le driver reste frame-style même si le MB précédent était field. */
++			int skip_modes = (macroblock_modes & ~(3 << MOTION_TYPE_SHIFT))
++					 | (MC_FRAME << MOTION_TYPE_SHIFT);
++			decoder->hw_mb_begin (decoder->hw_priv, skip_modes, 0,
++					      hw_mv_skip, hw_fsel_zero);
++			decoder->hw_mb_end (decoder->hw_priv);
++		    }
+ 		    NEXT_MACROBLOCK;
+ 		} while (--mba_inc);
+ 	    }

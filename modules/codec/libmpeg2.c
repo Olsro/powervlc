@@ -51,6 +51,12 @@
 
 #include <mpeg2.h>
 
+#ifdef __APPLE__
+# include "dvddriver_backend.h"  /* décodage MPEG-2 accéléré matériel (ATI DVDDriver, G3/G4) */
+# include "dvddriver_piccontext.h" /* U4 : contexte picture (present piloté par le vout) */
+# include "dvddriver_spu.h"      /* SP4 : sous-titres sur le plan subpicture matériel */
+#endif
+
 /*****************************************************************************
  * decoder_sys_t : libmpeg2 decoder descriptor
  *****************************************************************************/
@@ -106,7 +112,106 @@ struct decoder_sys_t
 #endif
     uint8_t        *p_gop_user_data;
     uint32_t        i_gop_user_data;
+
+#ifdef __APPLE__
+    /* Décodage MPEG-2 accéléré matériel (ATI DVDDriver). b_hwaccel : l'option est
+     * activée ET un décodeur HW existe. p_hw : contexte backend, créé au premier
+     * STATE_SEQUENCE (quand w×h est connu). b_hw_picture : la picture en cours de
+     * décodage est une I-frame capturée pour le GPU (→ soumise au STATE_SLICE). */
+    bool             b_hwaccel;
+    bool             b_hw_picture;
+    /* Nature du contenu entrelacé : film 25 fps codé en 2:2 (les deux champs
+     * viennent du MÊME instant → le tissage est correct, le bob n'apporterait
+     * rien et coûterait la moitié de la résolution verticale) ou vraie vidéo
+     * entrelacée (champs à 1/50 s d'écart → le bob double la fluidité).
+     * `progressive_frame` est justement le drapeau qui le dit. */
+    uint32_t         i_pic_prog, i_pic_inter, i_fields_2, i_fields_3;
+    dvddriver_ctx   *p_hw;
+    /* Dimensions pour lesquelles p_hw a été ouvert : un changement de résolution
+     * en cours de flux (chaînage de titres) exige de fermer/rouvrir le décodeur
+     * HW, sinon rect/surfaces/clamp gardent les anciennes dimensions. */
+    unsigned         i_hw_width, i_hw_height;
+    /* Fenêtre CGS à laquelle la surface a été liée à l'ouverture. Le passage
+     * en plein écran déplace la vidéo dans une AUTRE fenêtre : la surface
+     * resterait liée à une fenêtre invisible (écran noir). On rouvre alors le
+     * décodeur sur la nouvelle fenêtre. */
+    int              i_hw_wid;
+    /* U4 — present piloté par le VOUT (remplace M3/hw_surf_owner) : au submit on
+     * attache à la picture_t un picture_context_t {out_idx, génération} ; le vout,
+     * à l'affichage (ordre PTS), présente la surface si sa génération est à jour.
+     * Le pacing PTS du vout s'applique alors au present matériel → synchro A/V.
+     * i_probe_defers : nombre de fois où le commit a été différé en attendant que
+     * le vout publie son wid (chemin A-idéal, surface sur la fenêtre VLC) — borné
+     * pour retomber sur la fenêtre Carbon si le vout ne vient jamais. */
+    unsigned         i_probe_defers;
+    /* 2a — PROBE-THEN-COMMIT (gate de livraison entrelacé). Plutôt que de décider
+     * le mode à l'ouverture (une picture field refusée au submit en remplacement
+     * est perdue des DEUX côtés : CPU a sauté IDCT+MC, GPU refuse), on démarre
+     * TOUJOURS en CPU pur, on observe le type de prédiction des P/B pendant
+     * ~2 s, puis on décide UNE fois à une I-frame :
+     *   - flux progressif (prédiction frame) → ouvrir le HW en REMPLACEMENT
+     *     plein écran à cette I-frame (les réfs repartent de la I, pas besoin de
+     *     réfs « chaudes ») → gain CPU ;
+     *   - flux entrelacé (field-predicted) → NE PAS ouvrir le HW, rester 100 %
+     *     CPU (zéro corruption, comportement PowerVLC actuel sur DVD entrelacé).
+     * b_hw_probe : la sonde est active (mode par défaut ; contournée si le toggle
+     * /tmp/hw_replace force explicitement 0/1). b_hw_committed : décision prise.
+     * i_probe_pb / i_probe_field : P/B observées et, parmi elles, field-predicted.
+     * i_probe_pics : total de pictures observées (garde-fou flux tout-I). */
+    bool             b_hw_probe;
+    bool             b_hw_committed;
+    /* Le backend a abandonné le matériel (stalls répétés dans DVDDriverDecode →
+     * garde-fou anti-wedge) : on ne soumet plus rien et le CPU reprend tout. */
+    bool             b_hw_giveup;
+    /* Une picture de RÉFÉRENCE (I ou P) n'a pas pu être décodée par le GPU : la
+     * chaîne de références matérielle a divergé du flux. Tout ce qui suit prédit
+     * à partir d'une surface périmée — image juste par endroits, fausse là où ça
+     * bouge. On gèle l'affichage matériel jusqu'à la prochaine I décodée avec
+     * succès, qui repart d'une chaîne saine (une I ne référence rien). */
+    bool             b_hw_stale;
+    /* SP2b — images restant avant de rejouer UNE FOIS la séquence subpicture
+     * (0 = ne rien rejouer). Jamais sur le chemin de present, jamais par image. */
+    int              i_sp_replay;
+    int              i_sp_pulse, i_sp_tick;   /* réaffichage SP borné (SP2c) */
+    int              i_sp_dest_left, i_sp_dest_tick;   /* sonde ctx[0x204] (SP5b) */
+    /* Réouverture différée du décodeur matériel après un changement de fenêtre
+     * (bascule plein écran). On NE peut PAS fermer et rouvrir dans le même appel
+     * — ça gèle VLC (l'input ne s'arrête plus) — donc on ferme, on lève ce
+     * drapeau, et on rouvre à l'image I SUIVANTE. Le type de flux étant déjà
+     * connu, on saute la sonde : la reprise coûte un GOP au lieu de la sonde
+     * complète plus un GOP. */
+    bool             b_hw_reopen;
+    unsigned         i_probe_pb, i_probe_field, i_probe_pics;
+#endif
 };
+
+#ifdef __APPLE__
+/* 2a — nombre minimal de P/B à observer avant de trancher (assez pour voir la
+ * field-prediction d'un flux entrelacé), plafond de pictures (flux tout-I → on
+ * tranche quand même), et seuil de field-prediction (le VOB entrelacé en a
+ * ~100 %, un progressif propre 0 %). */
+#define HW_PROBE_MIN_PB   8u
+#define HW_PROBE_MAX_PICS 80u
+#define HW_PROBE_FIELD_PCT 5u
+/* U4 — nombre max de I-frames où le commit attend le wid du vout (chemin A-idéal)
+ * avant de retomber sur la fenêtre Carbon (cas sans vout). */
+#define HW_MAX_COMMIT_DEFERS 4u
+
+/* GATE DE RÉSOLUTION — plafond de ce que le décodeur ATI sait faire.
+ * Il a longtemps été fixé à CIF (384×288) parce que le 720×576 s'effondrait ; on
+ * croyait à un mur de débit GPU. C'était faux : le vrai coupable était le premier
+ * DVDDriverDecode (~865 ms de setup one-shot) qui mettait la synchro en retard,
+ * donc plus aucune picture affichée, donc plus aucun buffer MP rendu au driver,
+ * donc blocage (cf. doc/pb-offload/perf-720x576-plan.md). Une fois le décodeur
+ * pré-chauffé à l'ouverture et les buffers correctement recyclés, on mesure sur
+ * l'iBook G3 à 720×576 : Decode ~4,4 ms/picture + present ~0,5 ms, pour un budget
+ * de 40 ms — et en A/B sur le même clip, CPU ~29 % contre ~53 % en logiciel, avec
+ * 5 pictures en retard contre 78.
+ * Le plafond ne sert donc plus qu'à refuser ce que ce décodeur DVD n'a jamais été
+ * conçu pour traiter (MPEG-2 HD) : on couvre toutes les résolutions DVD (720×576
+ * PAL, 720×480 NTSC) avec un peu de marge. Override : /tmp/hw_force. */
+#define HW_MAX_PIXELS_REALTIME (768u * 576u)   /* ~442k px : tout le DVD, pas la HD */
+#endif
 
 /*****************************************************************************
  * Local prototypes
@@ -133,16 +238,95 @@ static picture_t *DpbNewPicture( decoder_t * );
 static void DpbUnlinkPicture( decoder_t *, picture_t * );
 static int DpbDisplayPicture( decoder_t *, picture_t * );
 
+#ifdef __APPLE__
+#define MPEG2_HWACCEL_TEXT N_("Utiliser l'accélération matérielle MPEG2 si disponible")
+#define MPEG2_HWACCEL_LONGTEXT N_( \
+    "Décode les flux MPEG-2 sur le GPU (pipeline AppleVA du lecteur DVD d'Apple) " \
+    "quand un décodeur matériel est présent (ATI, Intel GMA950, nVidia), avec " \
+    "repli automatique sur le décodage logiciel libmpeg2. Réduit fortement la " \
+    "charge CPU sur les vieux Mac." )
+#define MPEG2_HWACCEL_FIELD_TEXT N_("Mode field du décodage MPEG-2 matériel (avancé)")
+#define MPEG2_HWACCEL_FIELD_LONGTEXT N_( \
+    "Décodage matériel des macroblocs field-predicted (flux entrelacés, DVD). " \
+    "0 = désactivé (l'entrelacé retombe sur le processeur) ; 4 = prédiction " \
+    "frame équivalente (défaut : le moteur par champ du GPU déchire en " \
+    "mouvement) ; 1/2/3 = moteur par champ natif, réservés à la mise au point." )
+#define MPEG2_HWACCEL_SUBS_TEXT N_("Sous-titres et OSD par-dessus la vidéo accélérée")
+#define MPEG2_HWACCEL_SUBS_LONGTEXT N_( \
+    "Compose les sous-titres (SPU du DVD) et l'affichage à l'écran par-dessus " \
+    "l'image décodée par le GPU. Sans cette option, la sortie matérielle " \
+    "recouvre tout et les sous-titres restent invisibles. Ne concerne que la " \
+    "vidéo affichée dans la fenêtre de VLC." )
+#define MPEG2_HWSUBS_TEXT N_("Sous-titres DVD incrustés par le GPU")
+#define MPEG2_HWSUBS_LONGTEXT N_( \
+    "Confie les sous-titres du DVD au plan subpicture du décodeur matériel ATI : " \
+    "le GPU les compose lui-même sur l'image, sans aucun coût par image, là où " \
+    "l'incrustation par fenêtre coûte 15 à 50 ms sur ce matériel. Sans effet si " \
+    "le décodage matériel n'est pas actif — le rendu logiciel prend alors le relais." )
+#endif
+
 /*****************************************************************************
  * Module descriptor
  *****************************************************************************/
 vlc_module_begin ()
     set_description( N_("MPEG I/II video decoder (using libmpeg2)") )
+#if (defined (__powerpc__) || defined (__POWERPC__)) && !defined (__ALTIVEC__)
+    /* Pure-C libmpeg2 profiled ~30% lighter than avcodec's mpeg2 decoder
+     * on a G3, the difference between a black screen and watchable DVD
+     * playback; avcodec (70) stays preferred everywhere else. */
+    set_capability( "video decoder", 80 )
+#else
     set_capability( "video decoder", 50 )
+#endif
     set_category( CAT_INPUT )
     set_subcategory( SUBCAT_INPUT_VCODEC )
     set_callbacks( OpenDecoder, CloseDecoder )
     add_shortcut( "libmpeg2" )
+#ifdef __APPLE__
+    add_bool( "mpeg2-hwaccel", true, MPEG2_HWACCEL_TEXT, MPEG2_HWACCEL_LONGTEXT, false )
+    /* Chantier S — remplace l'ancien gate fichier /tmp/hw_subs. Décidé ICI (le
+     * décodeur ouvre la surface) et publié sur le bus pour le vout : un seul
+     * point de décision, sinon vout et backend peuvent diverger (cf.
+     * DVDDRIVER_VAR_SUBS dans dvddriver_piccontext.h). */
+    add_bool( "mpeg2-hwaccel-subs", true, MPEG2_HWACCEL_SUBS_TEXT,
+              MPEG2_HWACCEL_SUBS_LONGTEXT, false )
+    /* Option AVANCÉE (privée, non affichée) : mode de déblocage du décodage HW des
+     * MB field-predicted (flux entrelacés). 0 = field NON soumis au GPU → repli CPU ;
+     * 1 = brut (A/B) ; 2 = clamp MV vertical field ; 3 = clamp + full-pel vertical.
+     * **DÉFAUT = 1 (moteur field natif, vecteur vertical à l'échelle correcte).**
+     * Le mode 4 (conversion en prédiction frame) est une IMPASSE : mesuré sur un
+     * vrai DVD, seuls 10 997 macroblocs field sur 669 561 (1,6 %) ont leurs deux
+     * prédictions de champ identiques, donc convertibles exactement — pour les
+     * 98,4 % restants aucun vecteur frame n'est équivalent. C'est bien le moteur
+     * field du GPU qu'il faut alimenter correctement (le lecteur DVD d'Apple lit
+     * ces disques proprement sur ce même matériel : le moteur fonctionne).
+     * Voir doc/pb-offload/phase2-field-findings.md. */
+    add_integer( "mpeg2-hwaccel-field", 1, MPEG2_HWACCEL_FIELD_TEXT,
+                 MPEG2_HWACCEL_FIELD_LONGTEXT, true )
+        change_integer_range( 0, 4 )
+        change_private()
+    /* SP4/SP10 — sous-titres DVD incrustés par le plan subpicture MATÉRIEL.
+     * Défaut ON depuis la validation sur iBook G3 : incrustation fiable
+     * (0 échec sur plusieurs dizaines), calage à 0–12 ms de la date visée,
+     * seek et changement de piste tenus, aucun plantage.
+     * ⚠ Quand ce module prend la piste, il REMPLACE `spudec` : si le décodage
+     * matériel n'est finalement pas actif, les sous-titres sont perdus plutôt
+     * que rendus en logiciel (un avertissement est émis une fois). Mettre
+     * l'option à 0 rétablit le rendu logiciel. */
+    add_bool( "mpeg2-hwaccel-hwsubs", true, MPEG2_HWSUBS_TEXT,
+              MPEG2_HWSUBS_LONGTEXT, false )
+
+    /* Sous-module « spu decoder » : consomme les paquets SPU bruts du disque et
+     * les remet au plan subpicture matériel au lieu d'en faire un subpicture_t.
+     * Priorité au-dessus de `spudec` (75) ; il décline quand le décodeur
+     * matériel n'est pas ouvert, et spudec reprend alors la main. */
+    add_submodule ()
+    set_description( N_("DVD subtitles on the ATI hardware subpicture plane") )
+    set_capability( "spu decoder", 100 )
+    set_category( CAT_INPUT )
+    set_subcategory( SUBCAT_INPUT_SCODEC )
+    set_callbacks( dvddriver_spu_Open, dvddriver_spu_Close )
+#endif
 vlc_module_end ()
 
 /*****************************************************************************
@@ -202,6 +386,37 @@ static int OpenDecoder( vlc_object_t *p_this )
     p_sys->p_gop_user_data = NULL;
     p_sys->i_gop_user_data = 0;
 
+#ifdef __APPLE__
+    /* Accélération matérielle MPEG-2 (AppleVA) : gate = option activée + un
+     * décodeur GPU présent sur l'écran principal. Le contexte est créé plus
+     * tard (STATE_SEQUENCE, quand les dimensions + la surface du vout sont
+     * connues) ; ici on ne fait que décider si on tentera le chemin HW. */
+    p_sys->p_hw = NULL;
+    p_sys->b_hw_picture = false;
+    p_sys->b_hw_probe = false;
+    p_sys->b_hw_committed = false;
+    p_sys->b_hw_giveup = false;
+    p_sys->b_hw_stale = false;
+    p_sys->b_hw_reopen = false;
+    p_sys->i_probe_pb = p_sys->i_probe_field = p_sys->i_probe_pics = 0;
+    p_sys->i_probe_defers = 0;
+    p_sys->b_hwaccel = var_InheritBool( p_dec, "mpeg2-hwaccel" )
+                       && dvddriver_available();
+    /* U4 — bus libvlc : le vout lit le device HW (DVDDRIVER_VAR_CTX) + le callback
+     * de present (DVDDRIVER_VAR_PRESENT) à chaque display pour présenter les
+     * surfaces (jamais en cache → NULL au close = plus de present). Créés ici,
+     * posés à l'ouverture du contexte, remis NULL au close. */
+    var_Create( p_dec->obj.libvlc, DVDDRIVER_VAR_CTX,     VLC_VAR_ADDRESS );
+    var_Create( p_dec->obj.libvlc, DVDDRIVER_VAR_PRESENT, VLC_VAR_ADDRESS );
+    /* Chantier S — valeur RÉELLE posée par HwOpenContext (elle dépend aussi du
+     * chemin d'affichage retenu) ; le vout ne la lit qu'au premier present
+     * matériel, donc toujours après. Ici, seulement l'existence + un défaut sûr. */
+    var_Create( p_dec->obj.libvlc, DVDDRIVER_VAR_SUBS,    VLC_VAR_BOOL );
+    var_SetBool( p_dec->obj.libvlc, DVDDRIVER_VAR_SUBS,   false );
+    msg_Dbg( p_dec, "décodage MPEG-2 matériel (ATI DVDDriver) : %s",
+             p_sys->b_hwaccel ? "disponible, sera tenté" : "non (repli libmpeg2 CPU)" );
+#endif
+
 #if defined( __i386__ ) || defined( __x86_64__ )
     if( vlc_CPU_MMX() )
         i_accel |= MPEG2_ACCEL_X86_MMX;
@@ -253,6 +468,323 @@ static int OpenDecoder( vlc_object_t *p_this )
 /*****************************************************************************
  * RunDecoder: the libmpeg2 decoder
  *****************************************************************************/
+#ifdef __APPLE__
+/* Callbacks de capture macrobloc appelés par mpeg2_slice() (libmpeg2 patché).
+ * priv = le contexte backend DVDDriver. Images I/P/B frame-predicted capturées
+ * (gate dans slice.c) → mb_type dérivé de macroblock_modes ci-dessous. */
+static void HwMbBegin( void *priv, int macroblock_modes, unsigned cbp,
+                       const int16_t *mv, const uint8_t *field_select )
+{
+    /* mb_type depuis macroblock_modes (constantes libmpeg2 : INTRA=1,
+     * MOTION_BACKWARD=4, MOTION_FORWARD=8, MOTION_TYPE_SHIFT=6, MC_FIELD=1) :
+     * intra→0 ; sinon fwd/bwd/bidir=1/2/3 (+4 si field-predicted). En phase 1
+     * (MC_FRAME uniquement, cf. slice.c hw_capture) le +4 field ne survient pas. */
+    int i_mb_type;
+    if( macroblock_modes & 1 )
+        i_mb_type = 0;                                   /* intra */
+    else
+    {
+        int b_fwd = macroblock_modes & 8;
+        int b_bwd = macroblock_modes & 4;
+        i_mb_type = ( b_fwd && b_bwd ) ? 3 : b_fwd ? 1 : b_bwd ? 2 : 4;
+        if( ( macroblock_modes >> 6 ) == 1 )            /* MC_FIELD */
+            i_mb_type += 4;
+    }
+    /* Bit DCT_TYPE_INTERLACED (=32) → field-DCT (desc[0x15]) : sinon artefact
+     * « peigne » sur le détail fin. */
+    int i_dct_type = ( macroblock_modes & 32 ) ? 1 : 0;
+    dvddriver_picture_mb_begin( priv, i_mb_type, i_dct_type,
+                                dvddriver_cbp_from_libmpeg2( cbp ),
+                                mv, field_select );
+}
+static void HwBlock( void *priv, const int16_t *dctblock, const uint8_t *scan )
+{
+    dvddriver_picture_mb_block( priv, dctblock, scan );
+}
+static void HwMbEnd( void *priv )
+{
+    dvddriver_picture_mb_end( priv );
+}
+
+/* U4 — CONTEXTE PICTURE (privé au décodeur). Attaché à chaque picture décodée sur
+ * le GPU : identifie sa surface (out_idx) + la génération de cette surface au
+ * submit. Le vout le présente via le callback HwPresentCallback (posté sur le bus
+ * libvlc), sans jamais introspecter cette structure (opaque côté vout). */
+#define HW_PIC_MAGIC 0x44564431u   /* 'DVD1' */
+typedef struct
+{
+    picture_context_t ctx;      /* base VLC (destroy/copy) — DOIT être en 1er */
+    uint32_t          magic;
+    dvddriver_ctx    *hw;        /* indicatif ; le present utilise le device du bus */
+    int               out_idx;
+    unsigned          generation;
+} hw_pic_context_t;
+
+/* La surface GPU est RÉSERVÉE tant qu'un contexte la référence : VLC détruit le
+ * contexte que la picture ait été affichée ou droppée, c'est donc le signal fiable
+ * « le vout n'a plus besoin de cette surface ». */
+static void HwPicCtxDestroy( picture_context_t *p )
+{
+    hw_pic_context_t *c = (hw_pic_context_t *)p;
+    if( c->magic == HW_PIC_MAGIC && c->out_idx >= 0 )
+        dvddriver_surface_release( c->hw, c->out_idx );
+    free( p );
+}
+static picture_context_t *HwPicCtxCopy( picture_context_t *p )
+{
+    hw_pic_context_t *n = malloc( sizeof(*n) );
+    if( n ) {
+        *n = *(hw_pic_context_t *)p;
+        if( n->out_idx >= 0 )
+            dvddriver_surface_hold( n->hw, n->out_idx );  /* une réservation par copie */
+    }
+    return (picture_context_t *)n;
+}
+static picture_context_t *HwPicContextNew( dvddriver_ctx *hw, int out_idx )
+{
+    hw_pic_context_t *c = malloc( sizeof(*c) );
+    if( c == NULL )
+        return NULL;
+    c->ctx.destroy = HwPicCtxDestroy;
+    c->ctx.copy    = HwPicCtxCopy;
+    c->magic       = HW_PIC_MAGIC;
+    c->hw          = hw;
+    c->out_idx     = out_idx;
+    /* out_idx < 0 = contexte INVALIDE : picture que le GPU n'a pas décodée et
+     * qu'il ne faut pas afficher (ses références logicielles sont vides en mode
+     * remplacement). Aucune surface à réserver ni à présenter. */
+    c->generation  = ( out_idx >= 0 ) ? dvddriver_surf_generation( hw, out_idx ) : 0;
+    if( out_idx >= 0 )
+        dvddriver_surface_hold( hw, out_idx );   /* libérée par HwPicCtxDestroy */
+    return (picture_context_t *)c;
+}
+/* Callback posté sur DVDDRIVER_VAR_PRESENT : le vout l'appelle avec {device courant
+ * (bus libvlc), picture->context}. Présente la surface si le contexte est un des
+ * nôtres et sa génération est à jour. Renvoie true si c'était une picture HW. */
+unsigned g_hw_cb_calls = 0;
+static bool HwPresentCallback( dvddriver_ctx *hw, picture_context_t *pctx,
+                               int wid, int x, int y, int w, int h )
+{
+    if( hw == NULL || pctx == NULL )
+        return false;
+    hw_pic_context_t *c = (hw_pic_context_t *)pctx;
+    if( c->magic != HW_PIC_MAGIC )
+        return false;
+    /* Diagnostic : distingue « le vout n'appelle pas » de « on refuse ». */
+    extern unsigned g_hw_cb_calls;
+    g_hw_cb_calls++;
+    (void) wid;   /* le suivi de fenêtre se fait par RÉOUVERTURE du décodeur
+                   * (STATE_SEQUENCE) : ré-attacher la surface à chaud cassait
+                   * définitivement la liaison décodeur→surface (écran noir même
+                   * après retour en fenêtré). */
+    if( c->out_idx < 0 )
+        return true;   /* picture invalide : rien à présenter, on garde l'image */
+    dvddriver_set_present_rect( hw, x, y, w, h );   /* suit la fenêtre VLC (no-op Carbon) */
+    dvddriver_present_index_gen( hw, c->out_idx, c->generation );
+    return true;
+}
+
+/* U4 — chemin A-idéal PAR DÉFAUT : lier la sortie HW à la FENÊTRE VLC (wid publié
+ * par le vout en U1) plutôt qu'à une fenêtre Carbon séparée (validé en U2). On
+ * peut forcer l'ancien chemin Carbon avec /tmp/hw_carbon=1 (A/B, debug). */
+static bool HwForceCarbon( void )
+{
+    FILE *fw = fopen( "/tmp/hw_carbon", "r" );
+    if( !fw )
+        return false;
+    int on = 0;
+    if( fscanf( fw, "%d", &on ) != 1 )
+        on = 0;
+    fclose( fw );
+    return on != 0;
+}
+/* Chantier PERF — le gate de résolution (HW_MAX_PIXELS_REALTIME) refuse le HW en
+ * remplacement au-delà d'une résolution où le GPU tient le temps réel. /tmp/hw_force
+ * (présent, quel que soit le contenu) le contourne pour les runs de bench / RE GPU. */
+static bool HwForceResolution( void )
+{
+    FILE *fw = fopen( "/tmp/hw_force", "r" );
+    if( !fw )
+        return false;
+    fclose( fw );
+    return true;
+}
+/* Garde-fou fichier pour les expériences du chantier SP (absent = inactif). */
+static bool HwGate( const char *path )
+{
+    FILE *f = fopen( path, "r" );
+    if( !f )
+        return false;
+    fclose( f );
+    return true;
+}
+
+/* wid de la fenêtre vout publié en U1 (0 si le vout n'a pas encore reshapé). */
+static int HwVoutWid( decoder_t *p_dec )
+{
+    return (int) var_InheritInteger( p_dec, "dvddriver-vout-wid" );
+}
+
+/* Ouvre le contexte HW ATI aux dimensions du flux courant, branche les hooks de
+ * capture de libmpeg2, et fixe le mode de décodage (i_replace : 0=additif/CPU
+ * complet + capture GPU en //, 1=REMPLACEMENT = saute IDCT+MC CPU + fenêtre HW
+ * plein écran). Échec → repli CPU silencieux (b_hwaccel désactivé). Retourne true
+ * si le contexte HW est ouvert. Partagé par l'ouverture directe (toggle forcé) et
+ * la validation de la sonde 2a. */
+static bool HwOpenContext( decoder_t *p_dec, int i_replace )
+{
+    decoder_sys_t *p_sys = p_dec->p_sys;
+    const mpeg2_sequence_t *p_seq = p_sys->p_info->sequence;
+
+    /* U4 — A-idéal par défaut : lier la surface à la fenêtre VLC (wid U1), sauf si
+     * /tmp/hw_carbon force l'ancien chemin. 0 → fenêtre Carbon séparée. */
+    int i_ext_wid = HwForceCarbon() ? 0 : HwVoutWid( p_dec );
+    /* Chantier 3 : mode field (option privée avancée, remplace /tmp/field_exp). */
+    int i_field = (int) var_InheritInteger( p_dec, "mpeg2-hwaccel-field" );
+    /* Chantier S — sous-titres/OSD par-dessus la surface HW. Possible UNIQUEMENT
+     * sur le chemin U4 (surface liée à la fenêtre VLC) : la vue GL de VLC ne
+     * recouvre pas la fenêtre Carbon séparée, elle ne peut donc rien y dessiner. */
+    bool b_subs = var_InheritBool( p_dec, "mpeg2-hwaccel-subs" ) && i_ext_wid != 0;
+
+    p_sys->p_hw = dvddriver_open( p_seq->width, p_seq->height,
+                                  i_replace /* display_mode plein écran */,
+                                  i_ext_wid /* wid fenêtre VLC (0=fenêtre Carbon) */,
+                                  i_field   /* mode field (0=off/repli CPU) */,
+                                  b_subs    /* sous-titres/OSD superposés */ );
+    if( p_sys->p_hw == NULL )
+    {
+        p_sys->b_hwaccel = false;
+        msg_Dbg( p_dec, "ouverture décodeur HW ATI KO → repli CPU" );
+        return false;
+    }
+    p_sys->i_hw_width  = p_seq->width;
+    p_sys->i_hw_height = p_seq->height;
+    p_sys->i_hw_wid    = i_ext_wid;
+    mpeg2_hwaccel_t hw = { p_sys->p_hw, HwMbBegin, HwBlock, HwMbEnd };
+    mpeg2_hwaccel( p_sys->p_mpeg2dec, &hw );
+    mpeg2_set_hw_replace( i_replace );
+    /* U4 — publier le device + le callback de present sur le bus libvlc → le vout
+     * présentera les surfaces (present piloté par le vout, ordre PTS). */
+    /* Chantier S — publier AVANT le device/callback : le vout lit cette variable
+     * au premier present matériel, qui ne peut avoir lieu qu'après ces deux-là. */
+    var_SetBool( p_dec->obj.libvlc, DVDDRIVER_VAR_SUBS, b_subs );
+    var_SetAddress( p_dec->obj.libvlc, DVDDRIVER_VAR_CTX,     p_sys->p_hw );
+    var_SetAddress( p_dec->obj.libvlc, DVDDRIVER_VAR_PRESENT, (void *)HwPresentCallback );
+    msg_Info( p_dec, "décodage MPEG-2 matériel ATI actif (%ux%u)%s%s%s",
+              p_seq->width, p_seq->height,
+              i_replace ? " — mode REMPLACEMENT" : " — mode additif",
+              i_ext_wid ? " (surface sur la fenêtre VLC)"
+                        : " (fenêtre Carbon séparée)",
+              b_subs ? ", sous-titres/OSD superposés" : "" );
+    /* Chantier SP — reconnaissance du plan subpicture matériel (lecture seule).
+     * Objectif : savoir si les descripteurs renvoyés par DVDDriverGetSPBuffer
+     * sont des adresses exploitables côté CPU ou des poignées GPU. */
+    {
+        uint32_t probe[16], keycolor = 0;
+        if( dvddriver_sp_probe( p_sys->p_hw, probe, &keycolor ) )
+        {
+            msg_Info( p_dec, "plan subpicture matériel PRÉSENT — couleur-clé 0x%08x",
+                      keycolor );
+            msg_Info( p_dec, "  descripteurs SP [0x2F4] : %08x %08x %08x %08x "
+                             "%08x %08x %08x %08x", probe[0], probe[1], probe[2],
+                      probe[3], probe[4], probe[5], probe[6], probe[7] );
+            msg_Info( p_dec, "  descripteurs SP [0x2D4] : %08x %08x %08x %08x "
+                             "%08x %08x %08x %08x", probe[8], probe[9], probe[10],
+                      probe[11], probe[12], probe[13], probe[14], probe[15] );
+            uint32_t words[8];
+            if( dvddriver_sp_first_words( p_sys->p_hw, words ) )
+                msg_Info( p_dec, "  premier mot de chaque tampon : %08x %08x %08x "
+                          "%08x %08x %08x %08x %08x", words[0], words[1], words[2],
+                          words[3], words[4], words[5], words[6], words[7] );
+
+            uint32_t oo[7];
+            if( dvddriver_open_outputs( p_sys->p_hw, oo ) )
+                msg_Info( p_dec, "  sorties OpenDevice : caps=%08x (bit1 %s) "
+                          "dims=%08x,%08x,%08x,%08x five=%u eight=%u",
+                          oo[0], (oo[0] & 2) ? "ARMÉ" : "absent",
+                          oo[1], oo[2], oo[3], oo[4], oo[5], oo[6] );
+
+            uint32_t st[5];
+            if( dvddriver_sp_state( p_sys->p_hw, st ) )
+                msg_Info( p_dec, "  état SP : mode[0x1FC]=%08x capacités[0x20]=%08x "
+                          "(bit1 %s) ctx[0]=%08x tampon[0x1B0]=%08x enable[0x1C8]=%08x",
+                          st[0], st[4], (st[4] & 2) ? "ARMÉ" : "absent",
+                          st[1], st[2], st[3] );
+
+            /* SP1 — accès en écriture. Fait ICI, avant le premier Decode. */
+            if( HwGate( "/tmp/hw_sp_write" ) )
+            {
+                uint32_t back[2] = { 0, 0 };
+                if( dvddriver_sp_write_test( p_sys->p_hw, 0, back ) )
+                    msg_Info( p_dec, "SP1 écriture tampon 0 : relu %08x %08x "
+                              "(attendu a5a5f00d 12345678)", back[0], back[1] );
+                else
+                    msg_Warn( p_dec, "SP1 : écriture impossible" );
+            }
+            /* SP2b — la séquence SP posée AVANT le premier Decode est peut-être
+             * effacée par le décodage qui suit. On la rejoue alors une seule
+             * fois, plus tard (compteur d'images), jamais par image. */
+            p_sys->i_sp_replay = HwGate( "/tmp/hw_sp_late" ) ? 100 : 0;
+            p_sys->i_sp_pulse  = HwGate( "/tmp/hw_sp_pulse" ) ? 20 : 0;
+            p_sys->i_sp_tick   = 0;
+            p_sys->i_sp_dest_left = 6;   /* six relevés espacés, lecture seule */
+            p_sys->i_sp_dest_tick = 0;
+            /* SP2 — premier affichage : bande pleine en bas de l'image. */
+            if( HwGate( "/tmp/hw_sp_show" ) )
+            {
+                int rc[6] = { 0, 0, 0, 0, 0, 0 };
+                if( dvddriver_sp_show_test( p_sys->p_hw, p_seq->width,
+                                            p_seq->height, rc ) )
+                {
+                    msg_Info( p_dec, "SP2 affichage test : EnableSP=%d SetPalette=%d "
+                              "ApplyDCSQ=%d SetSPBuffer=%d ShowSPBuffer=%d "
+                              "(paquet %d octets)", rc[0], rc[1], rc[2], rc[3],
+                              rc[4], rc[5] );
+                    /* SP7 — contrôle de la géométrie effectivement posée dans le
+                     * driver. Le pas de ligne DOIT être l'arrondi à 64 de la
+                     * LARGEUR (768 en 720×576) ; s'il vaut la hauteur, le rect
+                     * Mac { top, left, bottom, right } est encore transposé. */
+                    uint32_t g[4];
+                    if( dvddriver_sp_geometry( p_sys->p_hw, g ) )
+                        msg_Info( p_dec, "  SP7 géométrie : destination=%08x "
+                                  "largeur[0x410]=%u pas[0x414]=%u hauteur[0x418]=%u "
+                                  "→ %s", g[0], g[1], g[2], g[3],
+                                  ( g[2] == ( ( p_seq->width + 63 ) & ~63u ) )
+                                      ? "COHÉRENT" : "TRANSPOSÉ" );
+                    /* SP7b — quelle étape reste muette ? Empreintes = (mots non
+                     * nuls << 16) | hachage, sur la source (bitmap 2 bits/px) et
+                     * sur la destination (plan ARGB). */
+                    uint32_t sg[6];
+                    if( dvddriver_sp_stage_probes( p_sys->p_hw, sg ) )
+                    {
+                        msg_Info( p_dec, "  SP7b source  : avant ApplyDCSQ %08x → "
+                                  "après %08x → RLE %s", sg[0], sg[1],
+                                  sg[0] == sg[1] ? "NON DÉCODÉ" : "DÉCODÉ" );
+                        msg_Info( p_dec, "  SP7b dest.   : avant SetSPBuffer %08x → "
+                                  "après %08x → après ShowSPBuffer %08x → blit %s "
+                                  "(drapeau[0x1D0] après SetSPBuffer = %u)",
+                                  sg[2], sg[3], sg[4],
+                                  ( sg[2] == sg[3] && sg[2] == sg[4] )
+                                      ? "MUET" : "ÉCRIT", sg[5] );
+                    }
+                }
+                else
+                    msg_Warn( p_dec, "SP2 : préparation impossible" );
+            }
+        }
+        else
+            msg_Dbg( p_dec, "plan subpicture matériel indisponible" );
+    }
+
+    /* S5 — limitation documentée : sur le repli fenêtre Carbon, rien ne peut être
+     * superposé. Prévenir explicitement plutôt que de laisser croire à un bug. */
+    if( !i_ext_wid && var_InheritBool( p_dec, "mpeg2-hwaccel-subs" ) )
+        msg_Warn( p_dec, "sortie matérielle en fenêtre Carbon séparée : "
+                         "sous-titres et OSD NE SERONT PAS affichés" );
+    return true;
+}
+#endif
+
 static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
 {
     decoder_sys_t   *p_sys = p_dec->p_sys;
@@ -291,6 +823,66 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                 decoder_SynchroInit( p_dec, (uint32_t)(UINT64_C(1001000000) *
                                 27 / p_sys->p_info->sequence->frame_period) );
             p_sys->b_after_sequence_header = true;
+
+#ifdef __APPLE__
+            /* Décodage matériel : décider comment le chemin HW s'engage maintenant
+             * que les dimensions sont connues. Trois régimes (cf. 2a) :
+             *   - toggle /tmp/hw_replace présent (0 ou 1) → mode FORCÉ hérité
+             *     (ouverture directe, additif ou remplacement) pour l'A/B et le debug ;
+             *   - absent → PROBE-THEN-COMMIT : on n'ouvre PAS le HW ici, on démarre en
+             *     CPU pur et on observe le type de prédiction des P/B ; la décision
+             *     (remplacement plein écran / CPU pur) est prise plus bas à une I-frame.
+             * Changement de résolution en cours de flux (chaînage de titres) : le
+             * contexte HW garde les dimensions d'ouverture → fermer, purger, et
+             * RELANCER la sonde (le nouveau flux peut être d'un autre type). */
+            int i_wid_now = HwVoutWid( p_dec );
+            bool b_wid_changed = ( p_sys->p_hw != NULL && p_sys->i_hw_wid > 0
+                                && i_wid_now > 0 && i_wid_now != p_sys->i_hw_wid );
+            if( p_sys->p_hw != NULL
+             && ( b_wid_changed
+               || p_sys->p_info->sequence->width  != p_sys->i_hw_width
+               || p_sys->p_info->sequence->height != p_sys->i_hw_height ) )
+            {
+                if( b_wid_changed )
+                    msg_Dbg( p_dec, "fenêtre vidéo %d → %d (plein écran ?) : "
+                             "réouverture du décodeur matériel",
+                             p_sys->i_hw_wid, i_wid_now );
+                else
+                msg_Dbg( p_dec, "résolution HW %ux%u → %ux%u : réouverture décodeur",
+                         p_sys->i_hw_width, p_sys->i_hw_height,
+                         p_sys->p_info->sequence->width,
+                         p_sys->p_info->sequence->height );
+                mpeg2_hwaccel( p_sys->p_mpeg2dec, NULL );   /* décrocher les hooks */
+                mpeg2_set_hw_replace( 0 );
+                /* NULLer le bus AVANT close pour que le vout cesse de présenter. */
+                var_SetAddress( p_dec->obj.libvlc, DVDDRIVER_VAR_CTX, NULL );
+                { uint32_t iv[8], n = 0;
+          dvddriver_present_intervals( p_sys->p_hw, iv, &n );
+          if( n > 0 )
+              msg_Info( p_dec, "cadence de présentation (%u images) : <25ms=%u "
+                        "<33=%u <37=%u <43=%u <50=%u <60=%u <100=%u >=100=%u",
+                        n, iv[0], iv[1], iv[2], iv[3], iv[4], iv[5], iv[6], iv[7] ); }
+        dvddriver_close( p_sys->p_hw );
+                p_sys->p_hw = NULL;
+                p_sys->b_hw_picture = false;
+                p_sys->b_hw_committed = false;   /* relancer la sonde sur le nouveau flux */
+                p_sys->i_probe_pb = p_sys->i_probe_field = p_sys->i_probe_pics = 0;
+                p_sys->i_probe_defers = 0;
+            }
+            if( p_sys->b_hwaccel && p_sys->p_hw == NULL && !p_sys->b_hw_committed )
+            {
+                /* U5 : plus de toggle /tmp/hw_replace — le probe-then-commit (2a)
+                 * est le SEUL chemin. On démarre en CPU pur et on décide à une
+                 * I-frame (STATE_PICTURE) : progressif → HW remplacement sur la
+                 * fenêtre VLC ; entrelacé → 100 % CPU. L'activation globale se fait
+                 * par l'option mpeg2-hwaccel (déjà lue à l'OpenDecoder). */
+                p_sys->b_hw_probe = true;
+                p_sys->i_probe_pb = p_sys->i_probe_field = p_sys->i_probe_pics = 0;
+                msg_Dbg( p_dec, "décodage matériel : sonde progressif/entrelacé "
+                                "(CPU pur, décision à la prochaine I après ~%u P/B)",
+                         HW_PROBE_MIN_PB );
+            }
+#endif
 
             /* Set the first 2 reference frames */
             GetAR( p_dec );
@@ -343,6 +935,206 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                 p_sys->b_slice_i = true;
             }
             p_sys->b_after_sequence_header = false;
+
+#ifdef __APPLE__
+            /* ★ SUIVI DE LA FENÊTRE D'AFFICHAGE (bascule plein écran ⇄ fenêtré).
+             * L'interface legacy déplace la vue vidéo dans une AUTRE fenêtre ; la
+             * surface, elle, reste liée à celle capturée à l'ouverture → écran
+             * noir. La ré-attache à chaud de la surface a été essayée et casse
+             * DÉFINITIVEMENT la liaison décodeur→surface (cf. dvddriver_bind_window)
+             * : le seul moyen fiable est de ROUVRIR le décodeur sur la nouvelle
+             * fenêtre. On le fait à une image I, qui ne référence rien — aucune
+             * référence matérielle à reconstituer.
+             * ⚠ Ce test était auparavant placé au STATE_SEQUENCE : il n'y était
+             * JAMAIS atteint en cours de lecture, car libmpeg2 signale les en-têtes
+             * de séquence identiques par STATE_SEQUENCE_REPEATED (non traité ici) —
+             * d'où un plein écran toujours noir. */
+            /* Réouverture différée demandée au changement de fenêtre : on la fait
+             * à l'image I suivante (ce test est AVANT la détection ci-dessous,
+             * sinon il se déclencherait sur l'image même où l'on vient de fermer). */
+            if( p_sys->b_hw_reopen && p_sys->p_hw == NULL
+             && (p_current->flags & PIC_MASK_CODING_TYPE) == PIC_FLAG_CODING_TYPE_I )
+            {
+                p_sys->b_hw_reopen = false;
+                HwOpenContext( p_dec, 1 /*remplacement*/ );
+            }
+            if( p_sys->p_hw != NULL
+             && (p_current->flags & PIC_MASK_CODING_TYPE) == PIC_FLAG_CODING_TYPE_I )
+            {
+                int i_wid_now = HwVoutWid( p_dec );
+                if( i_wid_now > 0 && p_sys->i_hw_wid > 0
+                 && i_wid_now != p_sys->i_hw_wid )
+                {
+                    msg_Dbg( p_dec, "fenêtre vidéo %d → %d : réouverture du "
+                             "décodeur matériel sur la nouvelle fenêtre",
+                             p_sys->i_hw_wid, i_wid_now );
+                    mpeg2_hwaccel( p_sys->p_mpeg2dec, NULL );
+                    mpeg2_set_hw_replace( 0 );
+                    var_SetAddress( p_dec->obj.libvlc, DVDDRIVER_VAR_CTX, NULL );
+                    dvddriver_close( p_sys->p_hw );
+                    p_sys->p_hw = NULL;
+                    p_sys->b_hw_picture = false;
+                    p_sys->b_hw_stale = false;
+                    /* ⚠ NE PAS rouvrir ICI. Fermer puis rouvrir le device dans le
+                     * MÊME appel (DVDTerminateLibrary suivi d'un DVDInitializeLibrary,
+                     * pendant que le vout tient encore des surfaces) GÈLE VLC :
+                     * l'input ne s'arrête plus (« stopping current input » en
+                     * boucle), process en état S, quit impossible. On repasse donc
+                     * par le chemin NORMAL, déjà éprouvé : relancer la sonde, qui
+                     * rouvrira le décodeur à une prochaine image I — quelques
+                     * dixièmes de seconde de décodage logiciel, puis le matériel
+                     * reprend sur la bonne fenêtre. */
+                    /* Le type de flux est déjà connu : pas de nouvelle sonde, on
+                     * rouvre simplement à l'image I suivante (cf. b_hw_reopen).
+                     * ⚠ Ne pas repasser par la sonde en remettant b_hw_committed à
+                     * false : elle n'est armée qu'au STATE_SEQUENCE, jamais atteint
+                     * en cours de lecture (STATE_SEQUENCE_REPEATED) — le décodeur
+                     * restait alors en CPU pur définitivement (CPU à 100 %). */
+                    p_sys->b_hw_reopen = true;
+                }
+            }
+#endif
+
+#ifdef __APPLE__
+            /* 2a — SONDE progressif/entrelacé. On observe le type de prédiction de
+             * la picture COURANTE au niveau header (mpeg2_pic_field_predicted, fiable
+             * même si la picture est ensuite droppée). À une I-frame, une fois assez
+             * de P/B observées, on tranche UNE fois :
+             *   - < seuil de field-prediction → progressif → ouvrir le HW en
+             *     REMPLACEMENT plein écran DÈS CETTE I (elle devient la 1re réf HW) ;
+             *   - >= seuil → entrelacé → NE PAS ouvrir le HW, rester 100 % CPU. */
+            if( p_sys->b_hw_probe && !p_sys->b_hw_committed )
+            {
+                int i_ct = p_current->flags & PIC_MASK_CODING_TYPE;
+                bool b_is_i = ( i_ct == PIC_FLAG_CODING_TYPE_I );
+                if( i_ct == PIC_FLAG_CODING_TYPE_P ||
+                    i_ct == PIC_FLAG_CODING_TYPE_B )
+                {
+                    p_sys->i_probe_pb++;
+                    if( mpeg2_pic_field_predicted( p_sys->p_mpeg2dec ) )
+                        p_sys->i_probe_field++;
+                }
+                p_sys->i_probe_pics++;
+
+                /* Décider TOUJOURS à une I (frontière de GOP = réfs propres, et le
+                 * HW démarre forcément sur une I) : soit on a vu assez de P/B pour
+                 * juger la field-prediction, soit le plafond de pictures est atteint
+                 * (flux tout-I : i_probe_pb=0 → pct=0 → progressif). Un flux sans
+                 * aucune I reste en sonde/CPU (correct) — le HW ne pourrait pas
+                 * démarrer sans I de toute façon. */
+                bool b_enough = b_is_i
+                             && ( p_sys->i_probe_pb  >= HW_PROBE_MIN_PB
+                               || p_sys->i_probe_pics >= HW_PROBE_MAX_PICS );
+                /* U4/A-idéal : on veut lier la surface à la fenêtre VLC (défaut).
+                 * Course réelle : le commit décodeur peut précéder le 1er reshape
+                 * du vout → wid pas encore publié. DIFFÉRER le commit (rester en
+                 * sonde/CPU, lecture correcte) jusqu'à ce que le wid soit dispo —
+                 * borné par HW_MAX_COMMIT_DEFERS pour retomber sur la fenêtre Carbon
+                 * si le vout ne vient jamais (cas sans affichage). */
+                if( b_enough && !HwForceCarbon() && HwVoutWid( p_dec ) == 0
+                 && p_sys->i_probe_defers < HW_MAX_COMMIT_DEFERS )
+                {
+                    p_sys->i_probe_defers++;
+                    msg_Dbg( p_dec, "U4 : vout wid pas encore publié → commit différé "
+                                    "(%u/%u)", p_sys->i_probe_defers, HW_MAX_COMMIT_DEFERS );
+                    b_enough = false;
+                }
+                if( b_enough )
+                {
+                    unsigned pct = p_sys->i_probe_pb
+                        ? ( p_sys->i_probe_field * 100u ) / p_sys->i_probe_pb : 0;
+                    bool b_field = ( pct >= HW_PROBE_FIELD_PCT );
+                    msg_Info( p_dec, "décodage matériel : sonde terminée — %u/%u P/B "
+                              "field-predicted (%u%%) → flux %s",
+                              p_sys->i_probe_field, p_sys->i_probe_pb, pct,
+                              b_field ? "ENTRELACÉ" : "PROGRESSIF" );
+                    p_sys->b_hw_probe = false;
+                    p_sys->b_hw_committed = true;
+                    /* GATE DE RÉSOLUTION : le décodeur ATI est un décodeur DVD ; on
+                     * refuse ce qui dépasse (MPEG-2 HD) et on reste 100 % CPU.
+                     * /tmp/hw_force contourne (bench / RE GPU). */
+                    unsigned i_px = p_sys->p_info->sequence->width
+                                  * p_sys->p_info->sequence->height;
+                    if( i_px > HW_MAX_PIXELS_REALTIME && !HwForceResolution() )
+                    {
+                        msg_Info( p_dec, "décodage matériel : résolution %ux%u "
+                                  "(%u px) > seuil temps réel GPU (%u px) → repli "
+                                  "100 %% CPU (le HW droppe à cette résolution ; "
+                                  "/tmp/hw_force pour forcer)",
+                                  p_sys->p_info->sequence->width,
+                                  p_sys->p_info->sequence->height, i_px,
+                                  HW_MAX_PIXELS_REALTIME );
+                        p_sys->b_hwaccel = false;
+                    }
+                    else if( b_field )
+                    {
+                        /* Entrelacé (le cas du DVD réel). mpeg2-hwaccel-field>0
+                         * (défaut 2) → on ouvre le HW en remplacement sur cette I ;
+                         * le mode field est passé au backend par HwOpenContext.
+                         * Validé sur DVD PAL entrelacé : image propre à 5,4 ms/pic.
+                         * =0 → l'entrelacé reste 100 % CPU (échappatoire si une
+                         * source à vrai mouvement par champ déchire). */
+                        int i_field = (int)
+                            var_InheritInteger( p_dec, "mpeg2-hwaccel-field" );
+                        if( i_field > 0 && b_is_i )
+                        {
+                            msg_Info( p_dec, "décodage matériel : entrelacé accéléré "
+                                      "(mode field %d) — mode REMPLACEMENT", i_field );
+                            HwOpenContext( p_dec, 1 /*remplacement*/ );
+                        }
+                        else if( !b_is_i )
+                            ;   /* attendre la prochaine I pour ouvrir */
+                        else
+                        {
+                            msg_Info( p_dec, "décodage matériel : flux entrelacé et "
+                                      "mpeg2-hwaccel-field=0 → décodage 100 %% CPU" );
+                            p_sys->b_hwaccel = false;
+                        }
+                    }
+                    else if( b_is_i )
+                    {
+                        /* Progressif : ouvrir en remplacement plein écran. Cette I
+                         * est capturée dès maintenant (begin ci-dessous) et devient
+                         * la 1re référence HW. Échec d'open → repli CPU (dans le
+                         * helper). */
+                        HwOpenContext( p_dec, 1 /*remplacement*/ );
+                    }
+                }
+            }
+
+            /* Décodage matériel : démarrer l'assemblage d'une picture (I, P ou B
+             * frame-predicted ; le gate final est dans slice.c). Les macroblocs
+             * seront accumulés par les hooks pendant le mpeg2_parse suivant, puis
+             * soumis au STATE_SLICE. */
+            if( p_current->flags & PIC_FLAG_PROGRESSIVE_FRAME )
+                p_sys->i_pic_prog++;
+            else
+                p_sys->i_pic_inter++;
+            if( p_current->nb_fields == 2 )      p_sys->i_fields_2++;
+            else if( p_current->nb_fields == 3 ) p_sys->i_fields_3++;
+
+            p_sys->b_hw_picture = false;
+            if( p_sys->p_hw != NULL && !p_sys->b_hw_giveup )
+            {
+                int i_ct = p_current->flags & PIC_MASK_CODING_TYPE;
+                int i_coding = ( i_ct == PIC_FLAG_CODING_TYPE_I ) ? 1
+                             : ( i_ct == PIC_FLAG_CODING_TYPE_P ) ? 2
+                             : ( i_ct == PIC_FLAG_CODING_TYPE_B ) ? 3
+                             : 0;   /* seuls I/P/B capturés (frame-predicted) */
+                if( i_coding != 0 )
+                {
+                    const mpeg2_sequence_t *p_seq = p_sys->p_info->sequence;
+                    unsigned nb_mbs = ((p_seq->width  + 15) / 16)
+                                    * ((p_seq->height + 15) / 16);
+                    /* begin pour I et P ; si la picture n'est finalement pas
+                     * capturée par slice.c (P non frame-predicted, field), submit
+                     * détecte mb_index != nb_mbs et saute proprement. */
+                    if( dvddriver_picture_begin( p_sys->p_hw, i_coding, 3 /*frame*/,
+                                                 nb_mbs ) == 0 )
+                        p_sys->b_hw_picture = true;
+                }
+            }
+#endif
 
 #ifdef PIC_FLAG_PTS
             i_pts = p_current->flags & PIC_FLAG_PTS ?
@@ -546,10 +1338,170 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
         {
             picture_t *p_pic = NULL;
 
+#ifdef __APPLE__
+            /* SP5b — la destination du blit subpicture se renseigne-t-elle en
+             * cours de lecture ? Simple lecture, quelques fois, espacées. */
+            if( p_sys->i_sp_dest_left > 0 && ++p_sys->i_sp_dest_tick >= 25 )
+            {
+                p_sys->i_sp_dest_tick = 0;
+                p_sys->i_sp_dest_left--;
+                uint32_t pr[3][8];
+                int np = dvddriver_sp_dest_probes( p_sys->p_hw, pr );
+                msg_Info( p_dec, "SP5b destination ctx[0x204] = %08x (%d relevés)",
+                          dvddriver_sp_dest( p_sys->p_hw ), np );
+                for( int k = 0; k < np; k++ )
+                    msg_Info( p_dec, "  Show #%d : empreinte 64 Ko avant %08x "
+                              "après %08x → %s", k, pr[k][0], pr[k][4],
+                              pr[k][0] == pr[k][4] ? "INCHANGÉ (le blit ne "
+                              "s'exécute pas)" : "MODIFIÉ (le blit écrit)" );
+            }
+            /* SP2c — l'incrustation n'est peut-être visible que le temps d'une
+             * image (comme le plan vidéo, qu'il faut réafficher). On la
+             * réaffiche à cadence BORNÉE : une fois par seconde, vingt fois au
+             * plus — jamais par image, la règle qui a coûté un gel. */
+            if( p_sys->i_sp_pulse > 0 && ++p_sys->i_sp_tick >= 25 )
+            {
+                p_sys->i_sp_tick = 0;
+                p_sys->i_sp_pulse--;
+                dvddriver_sp_reshow( p_sys->p_hw );
+            }
+            /* SP2b — rejeu UNIQUE de la séquence subpicture après quelques
+             * dizaines d'images : elle est peut-être effacée par le décodage
+             * qui suit son installation à l'ouverture. */
+            if( p_sys->i_sp_replay > 0 && --p_sys->i_sp_replay == 0
+             && p_sys->p_hw != NULL && p_sys->p_info->sequence != NULL )
+            {
+                int rc[6] = { 0, 0, 0, 0, 0, 0 };
+                const mpeg2_sequence_t *sq = p_sys->p_info->sequence;
+                if( dvddriver_sp_show_test( p_sys->p_hw, sq->width, sq->height, rc ) )
+                    msg_Info( p_dec, "SP2b rejoué en cours de lecture : EnableSP=%d "
+                              "SetPalette=%d ApplyDCSQ=%d SetSPBuffer=%d "
+                              "ShowSPBuffer=%d", rc[0], rc[1], rc[2], rc[3], rc[4] );
+            }
+            /* Décodage matériel : la picture I vient d'être entièrement parsée
+             * (macroblocs capturés par les hooks) → construire pic_desc et la
+             * soumettre au GPU (DVDDriverDecode). Une seule fois par picture. */
+            if( p_sys->b_hw_picture )
+            {
+                int i_hw_rc = dvddriver_picture_submit( p_sys->p_hw );
+                if( i_hw_rc == -4 && !p_sys->b_hw_giveup )
+                {
+                    /* Garde-fou anti-wedge déclenché côté backend : DVDDriverDecode
+                     * s'est bloqué plusieurs secondes à répétition. On rend la main
+                     * au CPU (fin du mode remplacement) plutôt que de continuer
+                     * vers un wedge GPU qui exigerait d'éteindre la machine. */
+                    msg_Warn( p_dec, "décodage matériel ABANDONNÉ (blocages répétés "
+                              "dans DVDDriverDecode) → retour 100 %% CPU" );
+                    mpeg2_set_hw_replace( 0 );
+                    p_sys->b_hw_giveup = true;
+                }
+                /* Type de la picture qu'on vient de soumettre. */
+                int i_ct_sub = p_sys->p_info->current_picture ?
+                    (p_sys->p_info->current_picture->flags & PIC_MASK_CODING_TYPE) : 0;
+                bool b_is_ref = ( i_ct_sub == PIC_FLAG_CODING_TYPE_I
+                               || i_ct_sub == PIC_FLAG_CODING_TYPE_P );
+                if( i_hw_rc != 0 && b_is_ref )
+                    p_sys->b_hw_stale = true;   /* chaîne de références rompue */
+                else if( i_hw_rc == 0 && i_ct_sub == PIC_FLAG_CODING_TYPE_I )
+                    p_sys->b_hw_stale = false;  /* une I repart d'une chaîne saine */
+
+                if( i_hw_rc == 0 && !p_sys->b_hw_stale )
+                {
+                    /* U4 : la picture vient d'être décodée dans la surface out_idx.
+                     * On attache à la picture_t un contexte {surface, génération}
+                     * → le VOUT présentera cette surface au moment d'AFFICHER la
+                     * picture (ordre PTS, thread vout). PAS de present ici (décodage
+                     * ≠ affichage ; et le pacing PTS du vout donne la synchro A/V). */
+                    int i_out = dvddriver_out_index( p_sys->p_hw );
+                    picture_t *p_hwpic = ( p_sys->p_info->current_fbuf ) ?
+                                         p_sys->p_info->current_fbuf->id : NULL;
+                    if( i_out >= 0 && p_hwpic != NULL )
+                    {
+                        if( p_hwpic->context != NULL )
+                        {   /* défensif : libérer un contexte résiduel */
+                            p_hwpic->context->destroy( p_hwpic->context );
+                            p_hwpic->context = NULL;
+                        }
+                        p_hwpic->context =
+                            HwPicContextNew( p_sys->p_hw, i_out );
+                    }
+                }
+                else
+                {
+                    /* ★ PICTURE À NE PAS AFFICHER, EN MODE REMPLACEMENT.
+                     * Deux cas : (a) le GPU ne l'a pas décodée ; (b) il l'a
+                     * décodée mais à partir d'une chaîne de références rompue
+                     * (b_hw_stale) — son contenu est faux là où ça bouge.
+                     * Ne SURTOUT pas la laisser s'afficher : en remplacement, la
+                     * reconstruction logicielle des références a été sautée (slice.c
+                     * n'a fait ni iDCT ni motion-comp), donc les plans logiciels des
+                     * références sont VIDES. Une picture retombée sur le CPU est donc
+                     * prédite à partir de rien → pavés de bouillie à l'écran, sur les
+                     * seules zones en mouvement (les zones fixes n'ont pas de
+                     * résidu). C'est ce qui restait visible en lecture : ~13 pictures
+                     * par lecture, soit un artefact toutes les quelques secondes.
+                     * On lui attache donc un contexte matériel INVALIDE : le vout le
+                     * reconnaît comme une picture HW (il saute le rendu GL) mais rien
+                     * n'est présenté → la dernière image correcte reste affichée. */
+                    picture_t *p_hwpic = ( p_sys->p_info->current_fbuf ) ?
+                                         p_sys->p_info->current_fbuf->id : NULL;
+                    if( p_hwpic != NULL && !p_sys->b_hw_giveup )
+                    {
+                        if( p_hwpic->context != NULL )
+                        {
+                            p_hwpic->context->destroy( p_hwpic->context );
+                            p_hwpic->context = NULL;
+                        }
+                        p_hwpic->context = HwPicContextNew( p_sys->p_hw, -1 );
+                    }
+                }
+                int i_ct2 = p_sys->p_info->current_picture ?
+                    (p_sys->p_info->current_picture->flags & PIC_MASK_CODING_TYPE) : 0;
+                char c_type = i_ct2 == PIC_FLAG_CODING_TYPE_I ? 'I'
+                            : i_ct2 == PIC_FLAG_CODING_TYPE_P ? 'P'
+                            : i_ct2 == PIC_FLAG_CODING_TYPE_B ? 'B' : '?';
+                unsigned u_cap = 0, u_tot = 0;
+                dvddriver_last_progress( p_sys->p_hw, &u_cap, &u_tot );
+                msg_Dbg( p_dec, "DVDDriverDecode (matériel %c) rc=%d [%u/%u mb]%s%d",
+                         c_type, i_hw_rc, u_cap, u_tot,
+                         i_hw_rc == 0 ? " → surface " : " (rc≠0) ",
+                         i_hw_rc == 0 ? dvddriver_out_index( p_sys->p_hw ) : -1 );
+                /* PERF (chantier 720×576, temporaire) : attribution du budget par
+                 * picture entre Decode (GPU) et present (ShowMPBuffer + CGS).
+                 * Logué tous les 50 submits → un run court suffit, et le log
+                 * survit à une sortie non propre. */
+                static unsigned s_perf_n = 0;
+                if( ++s_perf_n % 50 == 0 )
+                {
+                    unsigned n_d = 0, n_p = 0, n_st = 0;
+                    unsigned long us_d = 0, us_p = 0;
+                    dvddriver_perf_get( p_sys->p_hw, &n_d, &us_d, &n_p, &us_p,
+                                        &n_st );
+                    msg_Dbg( p_dec, "PERF HW : Decode %u appels, %lu us total, "
+                              "%lu us/appel | present %u appels, %lu us total, "
+                              "%lu us/appel | present périmés %u",
+                              n_d, us_d, n_d ? us_d / n_d : 0,
+                              n_p, us_p, n_p ? us_p / n_p : 0, n_st );
+                    msg_Dbg( p_dec, "PERF HW : rappels de present reçus du vout=%u",
+                             g_hw_cb_calls );
+                    unsigned mb8[8] = {0}, dct2[2] = {0}, cvt2[2] = {0};
+                    dvddriver_mb_stats( p_sys->p_hw, mb8, dct2, cvt2 );
+                    msg_Dbg( p_dec, "STAT MB : intra=%u fwd=%u bwd=%u bidir=%u "
+                             "skip=%u ffwd=%u fbwd=%u fbidir=%u | dct frame=%u "
+                             "champ=%u", mb8[0], mb8[1], mb8[2], mb8[3], mb8[4],
+                             mb8[5], mb8[6], mb8[7], dct2[0], dct2[1] );
+                    msg_Dbg( p_dec, "STAT FIELD : convertis exactement=%u, "
+                             "laissés au moteur field=%u", cvt2[0], cvt2[1] );
+                }
+                p_sys->b_hw_picture = false;
+            }
+#endif
+
             if( p_sys->p_info->display_fbuf &&
                 p_sys->p_info->display_fbuf->id )
             {
                 p_pic = p_sys->p_info->display_fbuf->id;
+
                 if( DpbDisplayPicture( p_dec, p_pic ) )
                     p_pic = NULL;
 
@@ -635,6 +1587,35 @@ static void CloseDecoder( vlc_object_t *p_this )
     if( p_sys->p_synchro ) decoder_SynchroRelease( p_sys->p_synchro );
 
     if( p_sys->p_mpeg2dec ) mpeg2_close( p_sys->p_mpeg2dec );
+
+#ifdef __APPLE__
+    /* U4 : retirer le contexte du bus AVANT close → le vout cesse de présenter
+     * (il lit dvddriver-ctx à chaque display, jamais en cache). Puis close ferme
+     * le device (sous mutex : couvre un present déjà entré). */
+    var_SetAddress( p_dec->obj.libvlc, DVDDRIVER_VAR_CTX, NULL );
+    var_SetBool( p_dec->obj.libvlc, DVDDRIVER_VAR_SUBS, false );
+    if( p_sys->p_hw )
+    {
+        msg_Info( p_dec, "nature du contenu : %u images progressive_frame, "
+                  "%u entrelacées ; nb_fields 2=%u 3=%u",
+                  p_sys->i_pic_prog, p_sys->i_pic_inter,
+                  p_sys->i_fields_2, p_sys->i_fields_3 );
+        uint32_t iv[8], n = 0;
+        dvddriver_present_intervals( p_sys->p_hw, iv, &n );
+        if( n > 0 )
+            msg_Info( p_dec, "cadence de présentation (%u images) : <25ms=%u "
+                      "<33=%u <37=%u <43=%u <50=%u <60=%u <100=%u >=100=%u",
+                      n, iv[0], iv[1], iv[2], iv[3], iv[4], iv[5], iv[6], iv[7] );
+        dvddriver_close( p_sys->p_hw );
+    }
+    var_Destroy( p_dec->obj.libvlc, DVDDRIVER_VAR_CTX );
+    var_Destroy( p_dec->obj.libvlc, DVDDRIVER_VAR_PRESENT );
+    var_Destroy( p_dec->obj.libvlc, DVDDRIVER_VAR_SUBS );
+    /* Le flag REMPLACEMENT est un global libmpeg2 (partagé entre instances de
+     * décodeur). Le remettre à 0 pour qu'une instance suivante en CPU pur (flux
+     * entrelacé) ne l'hérite pas actif. Inoffensif si déjà 0. */
+    mpeg2_set_hw_replace( 0 );
+#endif
 
     free( p_sys );
 }

@@ -11451,7 +11451,7 @@ msgid ""
 "%s.\n"
 "If you don't know how to fix this, ask for support from your distribution.\n"
 "\n"
-"This is not an error inside VLC media player.\n"
+"This is not an error inside PowerVLC media player.\n"
 "Do not contact the VideoLAN project about this issue.\n"
 msgstr ""
 
@@ -14275,7 +14275,8 @@ msgstr ""
 #: modules/video_output/wayland/shell.c:348
 #: modules/video_output/wayland/xdg-shell.c:291
 #: modules/video_output/xcb/window.c:464
-msgid "VLC media player"
+#: modules/notify/osx_notifications.m:317
+msgid "PowerVLC media player"
 msgstr ""
 
 #: modules/control/dummy.c:38 modules/control/oldrc.c:175
@@ -16202,7 +16203,7 @@ msgstr ""
 
 #: modules/gui/macosx/VLCAboutWindowController.m:94
 #: modules/gui/macosx/VLCMainMenu.m:339
-msgid "About VLC media player"
+msgid "About PowerVLC media player"
 msgstr ""
 
 #: modules/gui/macosx/VLCAboutWindowController.m:97
@@ -16889,7 +16890,7 @@ msgid "Volume: %i %%"
 msgstr ""
 
 #: modules/gui/macosx/VLCHelpWindowController.m:47
-msgid "VLC media player Help"
+msgid "PowerVLC media player Help"
 msgstr ""
 
 #: modules/gui/macosx/VLCHelpWindowController.m:50
@@ -16996,7 +16997,7 @@ msgid "Services"
 msgstr ""
 
 #: modules/gui/macosx/VLCMainMenu.m:349
-msgid "Hide VLC"
+msgid "Hide PowerVLC"
 msgstr ""
 
 #: modules/gui/macosx/VLCMainMenu.m:350
@@ -17009,7 +17010,7 @@ msgid "Show All"
 msgstr ""
 
 #: modules/gui/macosx/VLCMainMenu.m:352
-msgid "Quit VLC"
+msgid "Quit PowerVLC"
 msgstr ""
 
 #: modules/gui/macosx/VLCMainMenu.m:354
@@ -17273,7 +17274,7 @@ msgid "Help"
 msgstr ""
 
 #: modules/gui/macosx/VLCMainMenu.m:489
-msgid "VLC media player Help..."
+msgid "PowerVLC media player Help..."
 msgstr ""
 
 #: modules/gui/macosx/VLCMainMenu.m:491
@@ -18164,11 +18165,11 @@ msgstr ""
 
 #: modules/gui/macosx/VLCSimplePrefsController.m:838
 msgid ""
-"This will reset VLC media player's preferences.\n"
+"This will reset PowerVLC media player's preferences.\n"
 "\n"
-"Note that VLC will restart during the process, so your current playlist will "
-"be emptied and eventual playback, streaming or transcoding activities will "
-"stop immediately.\n"
+"Note that PowerVLC will restart during the process, so your current playlist "
+"will be emptied and eventual playback, streaming or transcoding activities "
+"will stop immediately.\n"
 "\n"
 "The Media Library will not be affected.\n"
 "\n"
@@ -20214,14 +20215,15 @@ msgstr ""
 
 #: modules/gui/qt/dialogs/firstrun.cpp:69
 msgid ""
-"<p>In order to protect your privacy, <i>VLC media player</i> does <b>not</b> "
-"collect personal data or transmit them, not even in anonymized form, to "
-"anyone.</p>\n"
-"<p>Nevertheless, <i>VLC</i> is able to automatically retrieve information "
-"about the media in your playlist from third party Internet-based services. "
-"This includes cover art, track names, artist names and other meta-data.</p>\n"
+"<p>In order to protect your privacy, <i>PowerVLC media player</i> does "
+"<b>not</b> collect personal data or transmit them, not even in anonymized "
+"form, to anyone.</p>\n"
+"<p>Nevertheless, <i>PowerVLC</i> is able to automatically retrieve "
+"information about the media in your playlist from third party Internet-based "
+"services. This includes cover art, track names, artist names and other meta-"
+"data.</p>\n"
 "<p>Consequently, this may entail identifying some of your media files to "
-"third party entities. Therefore the <i>VLC</i> developers require your "
+"third party entities. Therefore the <i>PowerVLC</i> developers require your "
 "express consent for the media player to access the Internet automatically.</"
 "p>\n"
 msgstr ""
@@ -20570,7 +20572,7 @@ msgid "Preferences file could not be saved"
 msgstr ""
 
 #: modules/gui/qt/dialogs/preferences.cpp:337
-msgid "Are you sure you want to reset your VLC media player preferences?"
+msgid "Are you sure you want to reset your PowerVLC media player preferences?"
 msgstr ""
 
 #: modules/gui/qt/dialogs/sout.cpp:43 modules/gui/qt/ui/sout.h:198
@@ -21151,12 +21153,13 @@ msgid "&Playback"
 msgstr "Ri&produtzione"
 
 #: modules/gui/qt/menus.cpp:1180
-msgid "&Hide VLC media player in taskbar"
-msgstr "&Cua su leghidore multimediale VLC in sa barra de sas aplicatziones"
+msgid "&Hide PowerVLC media player in taskbar"
+msgstr ""
+"&Cua su leghidore multimediale PowerVLC in sa barra de sas aplicatziones"
 
 #: modules/gui/qt/menus.cpp:1186
-msgid "Sho&w VLC media player"
-msgstr "A&mmustra su leghidore multimediale VLC"
+msgid "Sho&w PowerVLC media player"
+msgstr "A&mmustra su leghidore multimediale PowerVLC"
 
 #: modules/gui/qt/menus.cpp:1197
 msgid "&Open Media"
@@ -21194,8 +21197,8 @@ msgstr ""
 
 #: modules/gui/qt/qt.cpp:87
 msgid ""
-"Show an icon in the systray allowing you to control VLC media player for "
-"basic actions."
+"Show an icon in the systray allowing you to control PowerVLC media player "
+"for basic actions."
 msgstr ""
 
 #: modules/gui/qt/qt.cpp:91
@@ -27308,7 +27311,7 @@ msgstr ""
 #. For other scripts, you will need to transliterate into Latin.
 #: modules/video_output/xcb/window.c:433
 msgctxt "ASCII"
-msgid "VLC media player"
+msgid "PowerVLC media player"
 msgstr ""
 
 #. xgettext: This is a plain ASCII spelling of "VLC"
@@ -28047,7 +28050,7 @@ msgstr ""
 
 #: share/lua/http/index.html:25 share/lua/http/mobile_browse.html:24
 #: share/lua/http/mobile_equalizer.html:24 share/lua/http/mobile_view.html:24
-msgid "VLC media player - Web Interface"
+msgid "PowerVLC media player - Web Interface"
 msgstr ""
 
 #: share/lua/http/index.html:233
@@ -28100,10 +28103,10 @@ msgstr ""
 
 #: share/lua/http/index.html:281
 msgid ""
-"VLC can display a QR code linking to the mobile version of the web "
-"interface; the web address of the web interface of your VLC media player "
-"instance will be transmitted over the internet to the Google Image Charts "
-"web service to generate this QR code."
+"PowerVLC can display a QR code linking to the mobile version of the web "
+"interface; the web address of the web interface of your PowerVLC media "
+"player instance will be transmitted over the internet to the Google Image "
+"Charts web service to generate this QR code."
 msgstr ""
 
 #: share/lua/http/index.html:284
@@ -29015,4 +29018,183 @@ msgstr ""
 
 #: modules/gui/qt/ui/vlm.h:299
 msgid "Media Manager List"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m
+msgid "Switch to the modern interface"
+msgstr ""
+
+#: modules/gui/macosx/VLCMainMenu.m
+msgid "Switch to the legacy interface"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m
+msgid "Change the interface?"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m
+msgid "VLC needs to restart to switch interfaces. Do you want to continue?"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m
+msgid "Enable this service?"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m
+msgid ""
+"This service uses a Lua script. Loading it can be slow and may affect the "
+"performance of this machine. Do you want to continue?"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m
+msgid "This setting requires the modern interface."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m
+msgid "Look-ahead decode cache"
+msgstr ""
+
+msgid "GPU planar YUV rendering"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m
+msgid "Cache size (MB, 0 = off)"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m
+msgid "Fill threshold before playback (%)"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m
+msgid "Cache limit (seconds, 0 = none)"
+msgstr ""
+
+# PowerVLC strings (fork attribution + VideoLAN redirect confirmation)
+msgid "Warning!"
+msgstr ""
+
+msgid ""
+"You are currently using PowerVLC, an open source fork with no ads and no "
+"tracking, created independently by Olsro for the community and distributed "
+"freely. This derivative version would not exist without VLC itself, so out "
+"of respect I have chosen to keep all the links and buttons referring to "
+"VideoLAN, as well as the list of contributors.\n"
+"\n"
+"To support me, I have a Patreon ( https://www.patreon.com/Olsro/ ) where I "
+"accept your donations. You can find me on GitHub ( https://github.com/"
+"Olsro ) and I invite you to share PowerVLC and to leave positive and/or "
+"constructive feedback if this project matters to you in your life.\n"
+"\n"
+"Please do not bother VideoLAN with bug reports and support requests, as this "
+"fork is absolutely unofficial and not supported by VideoLAN.\n"
+"\n"
+"By clicking \"Yes\", you will be redirected to the requested link."
+msgstr ""
+
+msgid ""
+"PowerVLC Copyright © 2026 Olsro. PowerVLC is an unofficial fork of VLC, not "
+"affiliated with VideoLAN. PowerVLC could not have existed without all the "
+"contributors who have worked on VLC since its very beginning. A heartfelt "
+"thank you to each and every one of them."
+msgstr ""
+
+#: modules/gui/legacy_macosx/macosx.c
+msgid "Good quality"
+msgstr ""
+
+#: modules/gui/legacy_macosx/macosx.c
+msgid "Optimal quality"
+msgstr ""
+
+#: modules/gui/legacy_macosx/macosx.c
+msgid "Best quality"
+msgstr ""
+
+#: modules/gui/legacy_macosx/macosx.c
+msgid ""
+"Removes the interlacing combing from interlaced video such as most PAL DVDs. "
+"Higher settings look better but use more CPU. \"Best quality\" is offered "
+"only on Macs fast enough for it (G5, Intel, Apple Silicon), exactly as "
+"Apple's DVD Player greys it out on slower models."
+msgstr ""
+
+#: src/interface/interface.c
+msgid ""
+"Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
+"without interface."
+msgstr ""
+
+#: src/config/help.c
+msgid "PowerVLC version %s\n"
+msgstr ""
+
+#: src/config/help.c
+msgid "Forked from VLC %s (%s)\n"
+msgstr ""
+
+#: src/config/help.c
+msgid ""
+"PowerVLC %s (forked from VLC %s)\n"
+"\n"
+msgstr ""
+
+# PowerVLC strings (AACS key database import, modules/demux/keydb.c)
+#: modules/demux/keydb.c
+msgid "AACS keys"
+msgstr ""
+
+#: modules/demux/keydb.c
+msgid "AACS key database importer"
+msgstr ""
+
+#: modules/demux/keydb.c
+msgid "Blu-ray key database detected"
+msgstr ""
+
+#: modules/demux/keydb.c
+msgid ""
+"A keydb.cfg file was detected. This file contains the keys used to decrypt "
+"Blu-ray discs. Do you want to import it automatically?"
+msgstr ""
+
+#: modules/demux/keydb.c
+msgid "A key database is already installed and will be replaced."
+msgstr ""
+
+#: modules/demux/keydb.c
+msgid "Key database imported"
+msgstr ""
+
+#: modules/demux/keydb.c
+#, c-format
+msgid ""
+"The key database was installed in %s.\n"
+"\n"
+"Encrypted Blu-ray discs can now be played."
+msgstr ""
+
+#: modules/demux/keydb.c
+msgid "Key database import failed"
+msgstr ""
+
+#: modules/demux/keydb.c
+#, c-format
+msgid "The folder %s could not be created: %s"
+msgstr ""
+
+#: modules/demux/keydb.c
+#, c-format
+msgid "The key database could not be copied to %s: %s"
+msgstr ""
+
+#: modules/access/bluray.c
+msgid ""
+"The AACS decoding library could not be loaded, so this Blu-ray Disc cannot "
+"be read."
+msgstr ""
+
+#: modules/access/bluray.c
+msgid ""
+"No AACS key database was found. Open a keydb.cfg file with this player to "
+"install one."
 msgstr ""

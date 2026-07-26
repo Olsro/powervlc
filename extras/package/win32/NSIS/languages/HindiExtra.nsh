@@ -20,23 +20,23 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "सरल पहुँच के लिए अपने डेस्कटॉप पर आइकन जोड़ता है"
 ${LangFileString} Desc_Section03 \
-    "VLC मोज़िला तथा मोज़िला फ़ायरफ़ॉक्स प्लगइन"
+    "${PRODUCT_NAME} मोज़िला तथा मोज़िला फ़ायरफ़ॉक्स प्लगइन"
 ${LangFileString} Desc_Section04 \
-    "VLC ActiveX प्लगइन"
+    "${PRODUCT_NAME} ActiveX प्लगइन"
 ${LangFileString} Desc_Section05 \
     "डीवीडी और सीडी प्लेबैक पंजीकरण"
 ${LangFileString} Desc_Section06 \
-    "निर्दिष्ट फ़ाइल प्रकार के लिए डिफ़ॉल्ट ऐप्लिकेशन के रूप में VLC मीडिया प्लेयर सेट करता है"
+    "निर्दिष्ट फ़ाइल प्रकार के लिए डिफ़ॉल्ट ऐप्लिकेशन के रूप में ${PRODUCT_NAME} मीडिया प्लेयर सेट करता है"
 ${LangFileString} Desc_Section07 \
-    "संदर्भ मेनू पंक्तियाँ जोड़ें ('VLC के साथ बजाएं' और 'VLC की प्लेलिस्ट में जोड़ें')"
+    "संदर्भ मेनू पंक्तियाँ जोड़ें ('${PRODUCT_NAME} के साथ बजाएं' और '${PRODUCT_NAME} की प्लेलिस्ट में जोड़ें')"
 ${LangFileString} Desc_Section08 \
-    "पिछले स्थापना में बची VLC मीडिया प्लेयर की प्राथमिकताएँ और कैश फ़ाइलें हटाएं"
+    "पिछले स्थापना में बची ${PRODUCT_NAME} मीडिया प्लेयर की प्राथमिकताएँ और कैश फ़ाइलें हटाएं"
 
 ${LangFileString} Name_Section91 "स्थापना रद्द करें"
 ${LangFileString} Name_Section92 "प्राथमिकताएं एवं कैश हटाएं"
 
 ${LangFileString} Desc_Section91 \
-"VLC मीडिया प्लेयर और उसके सभी घटकों को अनइंस्टॉल करें"
+"${PRODUCT_NAME} मीडिया प्लेयर और उसके सभी घटकों को अनइंस्टॉल करें"
 ${LangFileString} Desc_Section92 \
 "वीएलसी मीडिया प्लेयर वरीयताओं और कैश फ़ाइलों को हटाता है"
 
@@ -63,17 +63,17 @@ ${LangFileString} License_NextText "अब आप अपने अधिका�
 
 ${LangFileString} Detail_CheckProcesses "जाँच प्रक्रियाएँ..."
 ${LangFileString} MessageBox_VLCRunning "वीएलसी अभी चल रहा है और अब बंद किया जाएगा."
-${LangFileString} MessageBox_VLCUnableToClose "यह इंस्टॉलर VLC को बंद करने में असमर्थ था, कृपया इसे आप बंद करें."
+${LangFileString} MessageBox_VLCUnableToClose "यह इंस्टॉलर ${PRODUCT_NAME} को बंद करने में असमर्थ था, कृपया इसे आप बंद करें."
 ${LangFileString} MessageBox_InstallAborted "स्थापना निरस्त किया गया!"
 
 ${LangFileString} Reinstall_Headline "पहले से स्थापित है"
-${LangFileString} Reinstall_HeadlineInstall "चुनें कि आप VLC को कैसे स्थापित करना चाहते हैं."
+${LangFileString} Reinstall_HeadlineInstall "चुनें कि आप ${PRODUCT_NAME} को कैसे स्थापित करना चाहते हैं."
 ${LangFileString} Reinstall_HeadlineMaintenance "प्रदर्शन करने के लिए रख-रखाव विकल्प चुनें."
-${LangFileString} Reinstall_MessageOlder "आपके सिस्टम पर VLC का पुराना संस्करण स्थापित है. वह प्रक्रिया चुनें जिसे आप निष्पादित करना चाहते हैं और जारी रखने के लिए 'अगला' क्लिक करें."
-${LangFileString} Reinstall_MessageNewer "VLC का एक नया संस्करण पहले से स्थापित है! आपको पुराने संस्करण में डाउनग्रेड करने की अनुशंसा नहीं की जाती है. वह प्रक्रिया चुनें जिसे आप निष्पादित करना चाहते हैं और जारी रखने के लिए 'अगला' क्लिक करें. "
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} पहले से स्थापित है. वह प्रक्रिया चुनें जिसे आप निष्पादित करना चाहते हैं और जारी रखने के लिए 'अगला' क्लिक करें."
-${LangFileString} Reinstall_OptionUpgrade "पिछली सेटिंग्स का उपयोग करके VLC अपग्रेड करें (अनुशंसित) "
-${LangFileString} Reinstall_OptionDowngrade "पिछली सेटिंग्स का उपयोग करके VLC को डाउनग्रेड करें (अनुशंसित) "
+${LangFileString} Reinstall_MessageOlder "आपके सिस्टम पर ${PRODUCT_NAME} का पुराना संस्करण स्थापित है. वह प्रक्रिया चुनें जिसे आप निष्पादित करना चाहते हैं और जारी रखने के लिए 'अगला' क्लिक करें."
+${LangFileString} Reinstall_MessageNewer "${PRODUCT_NAME} का एक नया संस्करण पहले से स्थापित है! आपको पुराने संस्करण में डाउनग्रेड करने की अनुशंसा नहीं की जाती है. वह प्रक्रिया चुनें जिसे आप निष्पादित करना चाहते हैं और जारी रखने के लिए 'अगला' क्लिक करें. "
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} पहले से स्थापित है. वह प्रक्रिया चुनें जिसे आप निष्पादित करना चाहते हैं और जारी रखने के लिए 'अगला' क्लिक करें."
+${LangFileString} Reinstall_OptionUpgrade "पिछली सेटिंग्स का उपयोग करके ${PRODUCT_NAME} अपग्रेड करें (अनुशंसित) "
+${LangFileString} Reinstall_OptionDowngrade "पिछली सेटिंग्स का उपयोग करके ${PRODUCT_NAME} को डाउनग्रेड करें (अनुशंसित) "
 ${LangFileString} Reinstall_OptionComponents "घटकों को जोड़ें/निकालें/पुनर्स्थापित करें"
 ${LangFileString} Reinstall_OptionAdvanced "सेटिंग्स बदलें (उन्नत)"
-${LangFileString} Reinstall_OptionUninstall "VLC की स्थापना रद्द करें"
+${LangFileString} Reinstall_OptionUninstall "${PRODUCT_NAME} की स्थापना रद्द करें"

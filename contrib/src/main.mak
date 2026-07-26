@@ -50,7 +50,19 @@ endif
 ifdef HAVE_CROSS_COMPILE
 need_pkg = 1
 else
+ifdef HAVE_DARWIN_OS
+# PowerVLC: never let the host satisfy a contrib dependency on macOS, exactly as
+# a cross build already does. The bundle we ship must not depend on anything
+# outside $(PREFIX), and asking the host pkg-config makes the package selection
+# depend on which brew formulae happen to be installed: a Homebrew nettle marked
+# nettle "distribution-provided", contrib skipped it, and asdcplib then failed on
+# a missing <nettle/aes.h> because contrib only ever passes -I$(PREFIX)/include.
+# Exporting PKG_CONFIG_LIBDIR (below) is not enough on its own: the make shipped
+# with Xcode is 3.81, which does not pass exported variables to $(shell).
+need_pkg = 1
+else
 need_pkg = $(shell $(PKG_CONFIG) $(1) || echo 1)
+endif
 endif
 
 #
@@ -120,7 +132,13 @@ endif
 get_version2_num =$(shell echo $(1) | awk -F. '{ printf("%d%02d\n", $$1,$$2); }')
 ifdef HAVE_DARWIN_OS
 # the CI currently has 14.5 (macos-xcode15), 12.3 (monterey), 10.13/10.15 (old-macmini)
-darwin_sdk_at_most  = $(shell [ $(call get_version2_num, $(shell xcrun --sdk $(SDKROOT) -show-sdk-version)) -le $(call get_version2_num, $(1)) ] && echo true)
+# xcrun cannot inspect pre-10.9 SDKs (no SDKSettings info); fall back to
+# parsing the version out of the SDK directory name (MacOSX10.4u.sdk -> 10.4).
+MACOSX_SDK_VERSION := $(shell xcrun --sdk $(SDKROOT) -show-sdk-version 2>/dev/null)
+ifeq ($(MACOSX_SDK_VERSION),)
+MACOSX_SDK_VERSION := $(shell basename "$(SDKROOT)" | sed -E 's/^MacOSX([0-9]+\.[0-9]+).*$$/\1/')
+endif
+darwin_sdk_at_most  = $(shell [ $(call get_version2_num, $(MACOSX_SDK_VERSION)) -le $(call get_version2_num, $(1)) ] && echo true)
 
 ifdef VLC_DEPLOYMENT_TARGET
 darwin_min_os_at_least  = $(shell [ $(call get_version2_num, $(VLC_DEPLOYMENT_TARGET)) -ge $(call get_version2_num, $(1)) ] && echo true)
@@ -137,7 +155,11 @@ XCODE_FLAGS += OTHER_CFLAGS=-fno-stack-check
 endif
 
 ifdef HAVE_MACOSX
+# -stdlib is clang-only; the legacy ppc/i386 cross builds use FSF g++
+# (libstdc++, statically linked at the app level).
+ifneq ($(findstring clang, $(shell $(CC) --version 2>/dev/null)),)
 EXTRA_CXXFLAGS += -stdlib=libc++
+endif
 ifeq ($(ARCH),aarch64)
 XCODE_FLAGS += -arch arm64
 else
@@ -184,6 +206,9 @@ endif
 
 ifneq ($(findstring clang, $(shell $(CC) --version)),)
 HAVE_CLANG := 1
+# clang-only diagnostic override some darwin contribs need; empty for GCC,
+# which errors out on -Wno-error=<unknown warning>.
+WNO_PARTIAL_AVAILABILITY := -Wno-error=partial-availability
 CLANG_VERSION := $(shell $(CC) --version | head -1 | grep -o '[0-9]\+\.' | head -1 | cut -d '.' -f 1)
 clang_at_least = $(shell [ $(CLANG_VERSION) -ge $(1) ] && echo true)
 else
@@ -197,6 +222,19 @@ CPPFLAGS := $(CPPFLAGS) $(EXTRA_CFLAGS)
 CFLAGS := $(CFLAGS) $(EXTRA_CFLAGS)
 CXXFLAGS := $(CXXFLAGS) $(EXTRA_CFLAGS) $(EXTRA_CXXFLAGS)
 LDFLAGS := $(LDFLAGS) -L$(PREFIX)/lib $(EXTRA_LDFLAGS)
+ifdef HAVE_DARWIN_OS
+ifdef HAVE_CLANG
+# PowerVLC: libcxx-legacy installs a libc++/libc++abi whose install name is
+# @rpath/libc++.1.dylib, so anything linked with -stdlib=libc++ against
+# $(PREFIX)/lib picks it up. Configure scripts that RUN a test program then get
+# "Library not loaded: @rpath/libc++.1.dylib - no LC_RPATH's found" -- and when
+# the target is x86_64 on an Apple Silicon build machine, that dyld failure does
+# not just exit: the translated process wedges in an unkillable state and the
+# configure hangs forever (seen in gettext's C++ check). It only ever worked by
+# accident, when a package happened to configure before libcxx-legacy installed.
+LDFLAGS += -Wl,-rpath,$(PREFIX)/lib
+endif
+endif
 
 # Do not export those! Use HOSTVARS.
 
@@ -232,6 +270,20 @@ PKG_CONFIG ?= pkg-config
 ifdef HAVE_CROSS_COMPILE
 # This inhibits .pc file from within the cross-compilation toolchain sysroot.
 # Hopefully, nobody ever needs that.
+PKG_CONFIG_ISOLATED := 1
+endif
+ifdef HAVE_DARWIN_OS
+# PowerVLC: isolate a NATIVE macOS build too. Without this pkg-config falls back
+# to its built-in search path, which on a Homebrew machine includes
+# /opt/homebrew/lib/pkgconfig. need_pkg then reports host libraries as already
+# "found", contrib skips building them, and every package depending on them
+# fails to compile, because contrib only ever passes -I$(PREFIX)/include:
+# nettle -> asdcplib, glib -> fluid, pangocairo -> tiger. It also made the
+# result depend on which brew formulae happen to be installed, and left the
+# native slice inconsistent with the six cross-built ones.
+PKG_CONFIG_ISOLATED := 1
+endif
+ifdef PKG_CONFIG_ISOLATED
 PKG_CONFIG_PATH := /usr/share/pkgconfig
 PKG_CONFIG_LIBDIR := /usr/$(HOST)/lib/pkgconfig
 export PKG_CONFIG_LIBDIR
@@ -474,6 +526,12 @@ ifeq ($(V),1)
 MESONCOMPILEFLAGS += -v
 endif
 
+# Extra environment variables for the "meson setup" step of a single package.
+# Set it as a target-specific variable (".foo: MESON_EXTRA_ENV = BAR=baz") when
+# a package needs a tool that must not be picked up from the ambient PATH.
+# Needed because the cross-compilation branch below runs meson under "env -i".
+MESON_EXTRA_ENV =
+
 ifdef HAVE_CROSS_COMPILE
 # When cross-compiling meson uses the env vars like
 # CC, CXX, etc. and CFLAGS, CXXFLAGS, etc. for the
@@ -486,13 +544,17 @@ ifdef HAVE_CROSS_COMPILE
 # generated crossfile, so everything should work as
 # expected.
 MESONFLAGS += --cross-file $(abspath crossfile.meson)
+# Command-line -Dc_args & co would otherwise also apply to the BUILD
+# machine's native helper programs; force those back to empty.
+MESONFLAGS += -Dbuild.c_args= -Dbuild.c_link_args= -Dbuild.cpp_args= -Dbuild.cpp_link_args=
 MESON = env -i PATH="$(PREFIX)/bin:$(PATH)" PKG_CONFIG_LIBDIR="$(PKG_CONFIG_LIBDIR)" \
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" \
+	$(MESON_EXTRA_ENV) \
 	meson -Dpkg_config_path="$(PKG_CONFIG_PATH)" \
 	$(MESONFLAGS)
 
 else
-MESON = $(HOSTTOOLS) meson setup $(MESONFLAGS)
+MESON = $(HOSTTOOLS) $(MESON_EXTRA_ENV) meson setup $(MESONFLAGS)
 endif
 MESONCLEAN = rm -rf $</build
 MESONBUILD = meson compile -C $</build $(MESON_BUILD) $(MESONCOMPILEFLAGS) && meson install -C $</build
@@ -656,6 +718,11 @@ ifdef HAVE_DARWIN_OS
 	echo "set(CMAKE_CXX_FLAGS \"$(CXXFLAGS)\")" >> $@
 	echo "set(CMAKE_LD_FLAGS \"$(LDFLAGS)\")" >> $@
 	echo "set(CMAKE_AR ar CACHE FILEPATH \"Archiver\")" >> $@
+# The Xcode install_name_tool refuses the Mach-O layout produced by the
+# legacy (xtools) linker; make CMake use the matching xtools binary.
+	if test -n "$(INSTALL_NAME_TOOL)"; then \
+		echo "set(CMAKE_INSTALL_NAME_TOOL $(INSTALL_NAME_TOOL) CACHE FILEPATH \"install_name_tool\")" >> $@; \
+	fi;
 ifdef HAVE_IOS
 	echo "set(CMAKE_OSX_SYSROOT $(IOS_SDK))" >> $@
 else
@@ -737,9 +804,33 @@ $(patsubst %,.dep-%,$(PKGS_FOUND)): .dep-%:
 $(patsubst %,.dep-%,$(filter-out $(PKGS_FOUND),$(PKGS_ALL))): .dep-%: .%
 	touch -r $< $@
 
+# PowerVLC: <Availability.h> first shipped with the 10.5 SDK, but sources that
+# guard code with nothing more than #ifdef __APPLE__ include it unconditionally
+# (gnutls' lib/system/certs.c, libgcrypt's random/rndoldlinux.c, ...). Building
+# against the 10.4u SDK therefore dies on "Availability.h: No such file or
+# directory". Drop a shim into $(PREFIX)/include, which is on every package's
+# include path, when the SDK does not provide the header itself.
+# This used to be a file placed in the prefix by hand, so it silently vanished
+# whenever the prefix was recreated -- and took the whole PowerPC/Intel-32 build
+# down with it.
+darwin-compat-headers:
+ifdef HAVE_DARWIN_OS
+	@if test -n "$(MACOSX_SDK)" && test ! -f "$(MACOSX_SDK)/usr/include/Availability.h"; then \
+		if test ! -f "$(PREFIX)/include/Availability.h"; then \
+			echo "  SHIM     Availability.h (SDK predates 10.5)" ; \
+			mkdir -p "$(PREFIX)/include" ; \
+			cp "$(SRC)/darwin-compat/Availability.h" "$(PREFIX)/include/Availability.h" ; \
+		fi ; \
+	fi
+endif
+.PHONY: darwin-compat-headers
+
 .SECONDEXPANSION:
 
 # Dependency propagation (convert 'DEPS_foo = bar' to '.foo: .bar')
-$(foreach p,$(PKGS_ALL),.$(p)): .%: $$(foreach d,$$(DEPS_$$*),.dep-$$(d))
+# darwin-compat-headers is ORDER-ONLY (after the |): it runs before any package
+# is built, but being phony it must not make every package stamp look outdated,
+# which a normal prerequisite would.
+$(foreach p,$(PKGS_ALL),.$(p)): .%: $$(foreach d,$$(DEPS_$$*),.dep-$$(d)) | darwin-compat-headers
 
 .DELETE_ON_ERROR:

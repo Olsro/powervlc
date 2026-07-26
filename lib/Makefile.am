@@ -28,9 +28,9 @@ nodist_pkginclude_HEADERS = ../include/vlc/libvlc_version.h
 	$(AM_V_GEN)cd "$(top_builddir)" && \
 	$(SHELL) ./config.status --file="src/$@"
 
-lib_LTLIBRARIES = libvlc.la
+lib_LTLIBRARIES = libpowervlc.la
 
-libvlc_la_SOURCES = \
+libpowervlc_la_SOURCES = \
 	libvlc_internal.h \
 	media_internal.h \
 	media_list_internal.h \
@@ -55,23 +55,23 @@ libvlc_la_SOURCES = \
 	media_discoverer.c
 EXTRA_DIST = libvlc.pc.in libvlc.sym ../include/vlc/libvlc_version.h.in
 
-libvlc_la_LIBADD = \
-	../src/libvlccore.la ../compat/libcompat.la $(LIBPTHREAD) $(LIBM)
-libvlc_la_LDFLAGS = \
+libpowervlc_la_LIBADD = \
+	../src/libpowervlccore.la ../compat/libcompat.la $(LIBPTHREAD) $(LIBM)
+libpowervlc_la_LDFLAGS = \
 	$(LDFLAGS_libvlc) \
 	-no-undefined \
 	-version-info 11:1:6 \
 	-export-symbols $(srcdir)/libvlc.sym
-libvlc_la_DEPENDENCIES = libvlc.sym
+libpowervlc_la_DEPENDENCIES = libvlc.sym
 if HAVE_WIN32
-libvlc_la_DEPENDENCIES += ../src/libvlc_win32_rc.$(OBJEXT)
-libvlc_la_LDFLAGS += -Wl,../src/libvlc_win32_rc.$(OBJEXT) -avoid-version -Wc,-static
+libpowervlc_la_DEPENDENCIES += ../src/libvlc_win32_rc.$(OBJEXT)
+libpowervlc_la_LDFLAGS += -Wl,../src/libvlc_win32_rc.$(OBJEXT) -avoid-version -Wc,-static
 endif
 if HAVE_OS2
-libvlc_la_LDFLAGS += -avoid-version
+libpowervlc_la_LDFLAGS += -avoid-version
 endif
 if HAVE_DARWIN
-libvlc_la_LDFLAGS += -Xlinker -install_name -Xlinker @rpath/libvlc.dylib
+libpowervlc_la_LDFLAGS += -Xlinker -install_name -Xlinker @rpath/libpowervlc.dylib
 endif
 
 pkgconfig_DATA = libvlc.pc

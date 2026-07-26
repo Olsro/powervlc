@@ -1,7 +1,7 @@
 #!/bin/sh
 
 OPTIONS="
-      --enable-update-check
+      --disable-update-check
       --enable-lua
       --enable-faad
       --enable-flac

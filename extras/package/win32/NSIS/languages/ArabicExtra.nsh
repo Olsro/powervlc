@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "يضيف أيقونة على سطح المكتب لوصول أيسر"
 ${LangFileString} Desc_Section03 \
-    "ملحقة VLC لموزيلا وموزيلا فَيَرفُكس"
+    "ملحقة ${PRODUCT_NAME} لموزيلا وموزيلا فَيَرفُكس"
 ${LangFileString} Desc_Section04 \
-    "ملحقة VLC لِ‍ ActiveX"
+    "ملحقة ${PRODUCT_NAME} لِ‍ ActiveX"
 ${LangFileString} Desc_Section05 \
     "تسجيل تشغيل CD و DVD"
 ${LangFileString} Desc_Section06 \
-    "يضبط مشغّل الوسائط VLC ليكون التطبيق المبدئي لنوع الملفات المحدد"
+    "يضبط مشغّل الوسائط ${PRODUCT_NAME} ليكون التطبيق المبدئي لنوع الملفات المحدد"
 ${LangFileString} Desc_Section07 \
-    "أضِف عناصر إلى قائمة السياق (’شغّل بِ‍ VLC‘ و’أضِف إلى قائمة تشغيل VLC‘)"
+    "أضِف عناصر إلى قائمة السياق (’شغّل بِ‍ ${PRODUCT_NAME}‘ و’أضِف إلى قائمة تشغيل ${PRODUCT_NAME}‘)"
 ${LangFileString} Desc_Section08 \
-    "يحذف التفضيلات والخبيئة لمشغّل الوسائط VLC التي بقت من النسخ السابقة"
+    "يحذف التفضيلات والخبيئة لمشغّل الوسائط ${PRODUCT_NAME} التي بقت من النسخ السابقة"
 
 ${LangFileString} Name_Section91 "أزِل التثبيت"
 ${LangFileString} Name_Section92 "احذف التفضيلات و ذاكرة تخزين مؤقت"
 
 ${LangFileString} Desc_Section91 \
-"أزِل تثبيت مشغّل الوسائط VLC وكلّ مكوّناته"
+"أزِل تثبيت مشغّل الوسائط ${PRODUCT_NAME} وكلّ مكوّناته"
 ${LangFileString} Desc_Section92 \
-"احذف تفضيلات مشغّل الوسائط VLC وملفات الخبيئة"
+"احذف تفضيلات مشغّل الوسائط ${PRODUCT_NAME} وملفات الخبيئة"
 
 ${LangFileString} ShellAssociation_Play "شغّل"
-${LangFileString} ContextMenuEntry_PlayWith "شغّل بمشغّل الوسائط VLC"
-${LangFileString} ContextMenuEntry_AddToPlaylist "أضِف إلى قائمة مشغّل الوسائط VLC"
+${LangFileString} ContextMenuEntry_PlayWith "شغّل بمشغّل الوسائط ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "أضِف إلى قائمة مشغّل الوسائط ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "زُر موقع مشغّل الوسائط VLC من VideoLAN"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "تشغيل بلو-ري"
 ${LangFileString} License_NextText "أصبحت على علم بحقوقك. انقر ”التالي“ للمتابعة."
 
 ${LangFileString} Detail_CheckProcesses "يتحقق من العمليات..."
-${LangFileString} MessageBox_VLCRunning "يبدو أن VLC يعمل وسيُغلق الآن."
-${LangFileString} MessageBox_VLCUnableToClose "تعذر على المثبّت إغلاق VLC، رجاءً أغلقه يدويا."
+${LangFileString} MessageBox_VLCRunning "يبدو أن ${PRODUCT_NAME} يعمل وسيُغلق الآن."
+${LangFileString} MessageBox_VLCUnableToClose "تعذر على المثبّت إغلاق ${PRODUCT_NAME}، رجاءً أغلقه يدويا."
 ${LangFileString} MessageBox_InstallAborted "تم الإحباط التثبيت"
 
 ${LangFileString} Reinstall_Headline "مثبًّت مسبقا"
-${LangFileString} Reinstall_HeadlineInstall "اختر طريقة تثبيت VLC."
+${LangFileString} Reinstall_HeadlineInstall "اختر طريقة تثبيت ${PRODUCT_NAME}."
 ${LangFileString} Reinstall_HeadlineMaintenance "اختر نوع الصيانة التي تريد القيام بها."
-${LangFileString} Reinstall_MessageOlder "ثمة نسخة أقدم من VLC مثبّتة في النظام. اختر العملية التي تريد إجراءها وانقر ”التالي“ للمتابعة."
-${LangFileString} Reinstall_MessageNewer "ثمة نسخة أحدث من VLC مثبّتة! ليس مستحسنا العودة إلى نسخة أقدم. اختر العملية التي تريد إجراءها وانقر ”التالي“ للمتابعة."
-${LangFileString} Reinstall_MessageSame "النسخة ${VERSION} من VLC مثبتة بالفعل. اختر العملية التي تريد إجراءها وانقر ”التالي“ للمتابعة."
-${LangFileString} Reinstall_OptionUpgrade "رقِّ VLC مستخدما الإعدادات السابقة (مستحسن)"
-${LangFileString} Reinstall_OptionDowngrade "أنزِل نسخة VLC مستخدماً الإعدادات السابقة (مستحسن)"
+${LangFileString} Reinstall_MessageOlder "ثمة نسخة أقدم من ${PRODUCT_NAME} مثبّتة في النظام. اختر العملية التي تريد إجراءها وانقر ”التالي“ للمتابعة."
+${LangFileString} Reinstall_MessageNewer "ثمة نسخة أحدث من ${PRODUCT_NAME} مثبّتة! ليس مستحسنا العودة إلى نسخة أقدم. اختر العملية التي تريد إجراءها وانقر ”التالي“ للمتابعة."
+${LangFileString} Reinstall_MessageSame "النسخة ${VERSION} من ${PRODUCT_NAME} مثبتة بالفعل. اختر العملية التي تريد إجراءها وانقر ”التالي“ للمتابعة."
+${LangFileString} Reinstall_OptionUpgrade "رقِّ ${PRODUCT_NAME} مستخدما الإعدادات السابقة (مستحسن)"
+${LangFileString} Reinstall_OptionDowngrade "أنزِل نسخة ${PRODUCT_NAME} مستخدماً الإعدادات السابقة (مستحسن)"
 ${LangFileString} Reinstall_OptionComponents "أضِف/أزِل/أعِد تثبيت المكوّنات"
 ${LangFileString} Reinstall_OptionAdvanced "غيّر الإعدادات (متقدم)"
-${LangFileString} Reinstall_OptionUninstall "أزِل تثبيت VLC"
+${LangFileString} Reinstall_OptionUninstall "أزِل تثبيت ${PRODUCT_NAME}"

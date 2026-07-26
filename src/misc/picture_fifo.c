@@ -41,18 +41,21 @@ struct picture_fifo_t {
     vlc_mutex_t lock;
     picture_t   *first;
     picture_t   **last_ptr;
+    size_t      count;
 };
 
 static void PictureFifoReset(picture_fifo_t *fifo)
 {
     fifo->first    = NULL;
     fifo->last_ptr = &fifo->first;
+    fifo->count    = 0;
 }
 static void PictureFifoPush(picture_fifo_t *fifo, picture_t *picture)
 {
     assert(!picture->p_next);
     *fifo->last_ptr = picture;
     fifo->last_ptr  = &picture->p_next;
+    fifo->count++;
 }
 static picture_t *PictureFifoPop(picture_fifo_t *fifo)
 {
@@ -63,6 +66,7 @@ static picture_t *PictureFifoPop(picture_fifo_t *fifo)
         if (!fifo->first)
             fifo->last_ptr = &fifo->first;
         picture->p_next = NULL;
+        fifo->count--;
     }
     return picture;
 }
@@ -91,6 +95,14 @@ picture_t *picture_fifo_Pop(picture_fifo_t *fifo)
     vlc_mutex_unlock(&fifo->lock);
 
     return picture;
+}
+size_t picture_fifo_Count(picture_fifo_t *fifo)
+{
+    vlc_mutex_lock(&fifo->lock);
+    size_t count = fifo->count;
+    vlc_mutex_unlock(&fifo->lock);
+
+    return count;
 }
 picture_t *picture_fifo_Peek(picture_fifo_t *fifo)
 {

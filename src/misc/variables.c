@@ -1378,7 +1378,35 @@ void DumpVariables(vlc_object_t *obj)
     vlc_mutex_unlock(&vlc_internals(obj)->var_lock);
 }
 
+#ifdef thread_local
 static thread_local void *twalk_ctx;
+#else
+/* No compiler TLS (e.g. Mac OS X < 10.7): emulate it with pthread keys. */
+# include <pthread.h>
+static pthread_key_t twalk_ctx_key;
+static pthread_once_t twalk_ctx_key_once = PTHREAD_ONCE_INIT;
+
+static void twalk_ctx_key_create(void)
+{
+    if (pthread_key_create(&twalk_ctx_key, free))
+        abort();
+}
+
+static void **twalk_ctx_slot(void)
+{
+    pthread_once(&twalk_ctx_key_once, twalk_ctx_key_create);
+
+    void **slot = pthread_getspecific(twalk_ctx_key);
+    if (slot == NULL)
+    {
+        slot = calloc(1, sizeof (*slot));
+        if (slot == NULL || pthread_setspecific(twalk_ctx_key, slot))
+            abort();
+    }
+    return slot;
+}
+# define twalk_ctx (*twalk_ctx_slot())
+#endif
 
 static void TwalkGetNames(const void *data, const VISIT which, const int depth)
 {

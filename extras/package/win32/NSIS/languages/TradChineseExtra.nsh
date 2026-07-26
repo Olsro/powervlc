@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "在桌面新增圖示以利存取"
 ${LangFileString} Desc_Section03 \
-    "VLC Mozilla 與 Mozilla Firefox 外掛"
+    "${PRODUCT_NAME} Mozilla 與 Mozilla Firefox 外掛"
 ${LangFileString} Desc_Section04 \
-    "VLC ActiveX 外掛"
+    "${PRODUCT_NAME} ActiveX 外掛"
 ${LangFileString} Desc_Section05 \
     "註冊 DVD 與 CD 播放"
 ${LangFileString} Desc_Section06 \
-    "設定 VLC 媒體播放器為特定檔案類型的預設程式"
+    "設定 ${PRODUCT_NAME} 媒體播放器為特定檔案類型的預設程式"
 ${LangFileString} Desc_Section07 \
-    "新增右鍵選單項目 (「以 VLC 播放」與「新增至 VLC 播放清單」)"
+    "新增右鍵選單項目 (「以 ${PRODUCT_NAME} 播放」與「新增至 ${PRODUCT_NAME} 播放清單」)"
 ${LangFileString} Desc_Section08 \
-    "刪除上一個 VLC 媒體播放器安裝留下來的偏好設定與快取"
+    "刪除上一個 ${PRODUCT_NAME} 媒體播放器安裝留下來的偏好設定與快取"
 
 ${LangFileString} Name_Section91 "移除"
 ${LangFileString} Name_Section92 "刪除偏好設定與快取"
 
 ${LangFileString} Desc_Section91 \
-"移除 VLC 媒體播放器與所有元件"
+"移除 ${PRODUCT_NAME} 媒體播放器與所有元件"
 ${LangFileString} Desc_Section92 \
-"刪除 VLC 媒體播放器偏好設定與快取"
+"刪除 ${PRODUCT_NAME} 媒體播放器偏好設定與快取"
 
 ${LangFileString} ShellAssociation_Play "播放"
-${LangFileString} ContextMenuEntry_PlayWith "以 VLC 媒體播放器播放"
-${LangFileString} ContextMenuEntry_AddToPlaylist "新增至 VLC 媒體播放器的播放清單"
+${LangFileString} ContextMenuEntry_PlayWith "以 ${PRODUCT_NAME} 媒體播放器播放"
+${LangFileString} ContextMenuEntry_AddToPlaylist "新增至 ${PRODUCT_NAME} 媒體播放器的播放清單"
 
 ${LangFileString} Link_VisitWebsite "前往 the VideoLAN VLC 媒體播放器網站"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "播放藍光"
 ${LangFileString} License_NextText "您已經被告知您的權利了，請按下一步以繼續"
 
 ${LangFileString} Detail_CheckProcesses "執行檢查中..."
-${LangFileString} MessageBox_VLCRunning "VLC 似乎正在執行中且將被關閉"
-${LangFileString} MessageBox_VLCUnableToClose "安裝程式無法順利關閉 VLC，請手動關閉。"
+${LangFileString} MessageBox_VLCRunning "${PRODUCT_NAME} 似乎正在執行中且將被關閉"
+${LangFileString} MessageBox_VLCUnableToClose "安裝程式無法順利關閉 ${PRODUCT_NAME}，請手動關閉。"
 ${LangFileString} MessageBox_InstallAborted "中止安裝！"
 
 ${LangFileString} Reinstall_Headline "已安裝"
-${LangFileString} Reinstall_HeadlineInstall "請選擇您要如何安裝 VLC。"
+${LangFileString} Reinstall_HeadlineInstall "請選擇您要如何安裝 ${PRODUCT_NAME}。"
 ${LangFileString} Reinstall_HeadlineMaintenance "請選擇要執行的維護選項。"
 ${LangFileString} Reinstall_MessageOlder "您的系統上已安裝了舊的版本，請選擇一個您要執行的動作並按下一步以繼續。"
-${LangFileString} Reinstall_MessageNewer "新版的 VLC 已經安裝！我們不建議您降級到舊版，請選擇一個您要執行的動作並按下一步以繼續。"
-${LangFileString} Reinstall_MessageSame "VLC 版號 ${VERSION} 已安裝，請選擇一個您要執行的動作並按下一步以繼續。"
-${LangFileString} Reinstall_OptionUpgrade "使用之前的設定值更新 VLC (建議選項)"
-${LangFileString} Reinstall_OptionDowngrade "使用之前的設定值降級 VLC (建議選項)"
+${LangFileString} Reinstall_MessageNewer "新版的 ${PRODUCT_NAME} 已經安裝！我們不建議您降級到舊版，請選擇一個您要執行的動作並按下一步以繼續。"
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} 版號 ${VERSION} 已安裝，請選擇一個您要執行的動作並按下一步以繼續。"
+${LangFileString} Reinstall_OptionUpgrade "使用之前的設定值更新 ${PRODUCT_NAME} (建議選項)"
+${LangFileString} Reinstall_OptionDowngrade "使用之前的設定值降級 ${PRODUCT_NAME} (建議選項)"
 ${LangFileString} Reinstall_OptionComponents "新增/移除/重新安裝 元件"
 ${LangFileString} Reinstall_OptionAdvanced "修改設定 (進階)"
-${LangFileString} Reinstall_OptionUninstall "移除 VLC"
+${LangFileString} Reinstall_OptionUninstall "移除 ${PRODUCT_NAME}"

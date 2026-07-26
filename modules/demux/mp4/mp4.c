@@ -37,6 +37,7 @@
 #include <vlc_dialog.h>
 #include <assert.h>
 #include <limits.h>
+#include <inttypes.h>
 #include "../codec/cc.h"
 #include "../av1_unpack.h"
 
@@ -122,6 +123,11 @@ struct demux_sys_t
         int es_cat_filters;
     } hacks;
 
+    /* Gapless (PowerVLC): iTunSMPB encoder priming/valid length, in media
+     * samples. 0/0 means absent. */
+    uint32_t     i_itun_priming;
+    uint64_t     i_itun_length;
+
     mp4_fragments_index_t *p_fragsindex;
 };
 
@@ -144,6 +150,7 @@ const char *psz_meta_roots[] = { "/moov/udta/meta/ilst",
  * Declaration of local function
  *****************************************************************************/
 static void MP4_TrackSetup( demux_t *, mp4_track_t *, MP4_Box_t  *, bool, bool );
+static void MP4_ParseITunSMPB( demux_t * );
 static void MP4_TrackInit( mp4_track_t * );
 static void MP4_TrackClean( es_out_t *, mp4_track_t * );
 
@@ -1029,6 +1036,10 @@ static int Open( vlc_object_t * p_this )
     /* Set and store metadata */
     if( (p_sys->p_meta = vlc_meta_New()) )
         MP4_LoadMeta( p_sys, p_sys->p_meta );
+
+    /* Gapless (PowerVLC): read the iTunes encoder delay/padding tag before
+     * setting the tracks up, so the audio track can publish it. */
+    MP4_ParseITunSMPB( p_demux );
 
     /* now process each track and extract all useful information */
     for( unsigned i = 0; i < p_sys->i_tracks; i++ )
@@ -3339,6 +3350,70 @@ static void MP4_TrackRestart( demux_t *p_demux, mp4_track_t *p_track,
 }
 #endif
 /****************************************************************************
+ * MP4_ParseITunSMPB: (PowerVLC, gapless)
+ ****************************************************************************
+ * Reads the "iTunSMPB" iTunes tag, which gives the AAC encoder priming, the
+ * trailing padding and the exact number of valid samples of the track.
+ ****************************************************************************/
+static void MP4_ParseITunSMPB( demux_t *p_demux )
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+
+    p_sys->i_itun_priming = 0;
+    p_sys->i_itun_length = 0;
+
+    MP4_Box_t *p_ilst = MP4_BoxGet( p_sys->p_root, "/moov/udta/meta/ilst" );
+    if( p_ilst == NULL )
+        p_ilst = MP4_BoxGet( p_sys->p_root, "/moov/meta/ilst" );
+    if( p_ilst == NULL )
+        return;
+
+    for( MP4_Box_t *p_box = p_ilst->p_first; p_box; p_box = p_box->p_next )
+    {
+        if( p_box->i_type != ATOM_ITUN )
+            continue;
+
+        MP4_Box_t *p_mean = MP4_BoxGet( p_box, "mean" );
+        MP4_Box_t *p_name = MP4_BoxGet( p_box, "name" );
+        MP4_Box_t *p_data = MP4_BoxGet( p_box, "data" );
+
+        /* mean/name are binary blobs starting with a 4 byte version+flags */
+        if( !p_mean || !p_mean->data.p_binary
+         || p_mean->data.p_binary->i_blob < 4 + 16
+         || !p_name || !p_name->data.p_binary
+         || p_name->data.p_binary->i_blob < 4 + 8
+         || !p_data || !BOXDATA(p_data) || !BOXDATA(p_data)->i_blob )
+            continue;
+
+        if( strncmp( &((char*)p_mean->data.p_binary->p_blob)[4],
+                     "com.apple.iTunes", 16 ) )
+            continue;
+        if( strncmp( &((char*)p_name->data.p_binary->p_blob)[4],
+                     "iTunSMPB", 8 ) )
+            continue;
+
+        char *psz = strndup( (const char *)BOXDATA(p_data)->p_blob,
+                             BOXDATA(p_data)->i_blob );
+        if( unlikely(psz == NULL) )
+            return;
+
+        unsigned int i_priming = 0, i_padding = 0;
+        uint64_t i_length = 0;
+        if( sscanf( psz, " %*x %x %x %"SCNx64,
+                    &i_priming, &i_padding, &i_length ) == 3
+         && i_length != 0 )
+        {
+            p_sys->i_itun_priming = i_priming;
+            p_sys->i_itun_length = i_length;
+            msg_Dbg( p_demux, "iTunSMPB: priming %u, padding %u, "
+                     "valid samples %"PRIu64, i_priming, i_padding, i_length );
+        }
+        free( psz );
+        return;
+    }
+}
+
+/****************************************************************************
  * MP4_TrackSetup:
  ****************************************************************************
  * Parse track information and create all needed data to run a track
@@ -3603,6 +3678,31 @@ static void MP4_TrackSetup( demux_t *p_demux, mp4_track_t *p_track,
 
     if( !p_track->b_enable || p_track->b_chapters_source )
         p_track->fmt.i_priority = ES_PRIORITY_NOT_DEFAULTABLE;
+
+    /* Gapless (PowerVLC): publish the iTunes encoder delay/padding on the
+     * first audio track only. The iTunSMPB priming already includes the AAC
+     * decoder delay, so nothing must be added to it. */
+    if( p_track->fmt.i_cat == AUDIO_ES && p_sys->i_itun_length != 0
+     && !p_track->b_chapters_source )
+    {
+        bool b_first_audio = true;
+        for( unsigned i = 0; i < p_sys->i_tracks; i++ )
+        {
+            if( &p_sys->track[i] == p_track )
+                break;
+            if( p_sys->track[i].b_ok && p_sys->track[i].fmt.i_cat == AUDIO_ES
+             && !p_sys->track[i].b_chapters_source )
+            {
+                b_first_audio = false;
+                break;
+            }
+        }
+        if( b_first_audio )
+        {
+            p_track->fmt.audio.i_gapless_priming = p_sys->i_itun_priming;
+            p_track->fmt.audio.i_gapless_length = p_sys->i_itun_length;
+        }
+    }
 
     if( TrackCreateES( p_demux,
                        p_track, p_track->i_chunk,

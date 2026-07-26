@@ -7,7 +7,7 @@
 
 #TODO: change on Max OS X
 if test ".`uname -s`" = ".Darwin"; then
-  VLC="./VLC.app/Contents/MacOS/VLC --quiet --color "
+  VLC="./PowerVLC.app/Contents/MacOS/PowerVLC --quiet --color "
 else
   VLC="./vlc --quiet --color "
 fi

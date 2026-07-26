@@ -32,8 +32,57 @@
 
 #import <AudioUnit/AudioUnit.h>
 #import <AudioToolbox/AudioToolbox.h>
-#import <os/lock.h>
+#if defined(__has_include) && !__has_include(<os/lock.h>)
+/* Building against a pre-10.12 SDK (e.g. the 10.4u one): keep the union
+ * layout compiling; the weak-symbol runtime checks in coreaudio_common.c
+ * then always take the pthread mutex path (the symbol resolves to NULL
+ * at build time below, and would anyway on such an old OS). */
+typedef struct { uint32_t _os_unfair_lock_opaque; } os_unfair_lock;
+# define OS_UNFAIR_LOCK_INIT ((os_unfair_lock){0})
+# define VLC_CA_NO_UNFAIR_LOCK 1
+#else
+# import <os/lock.h>
+#endif
 #import <mach/mach_time.h>
+
+#if !defined(MAC_OS_X_VERSION_MAX_ALLOWED) || MAC_OS_X_VERSION_MAX_ALLOWED < 1060
+/* Pre-10.6 SDK: the AudioComponent API does not exist yet; map it onto the
+ * Component Manager, of which it is a deliberate drop-in replacement
+ * (identical struct field names and semantics). AudioDeviceIOProcID (10.5)
+ * likewise degrades to the plain IOProc pointer. */
+#import <CoreServices/CoreServices.h>
+typedef ComponentDescription AudioComponentDescription;
+typedef Component            AudioComponent;
+typedef ComponentInstance    AudioComponentInstance;
+typedef UInt32               AudioFormatID;
+typedef AudioDeviceIOProc    AudioDeviceIOProcID;
+#define AudioComponentFindNext(comp, desc) \
+    FindNextComponent((comp), (ComponentDescription *)(desc))
+#define AudioComponentInstanceNew(comp, outInst) \
+    OpenAComponent((comp), (outInst))
+#define AudioComponentInstanceDispose(inst) \
+    CloseComponent(inst)
+static inline OSStatus
+AudioDeviceCreateIOProcID(AudioDeviceID dev, AudioDeviceIOProc proc,
+                          void *data, AudioDeviceIOProcID *out)
+{
+    OSStatus err = AudioDeviceAddIOProc(dev, proc, data);
+    if (err == noErr && out != NULL)
+        *out = proc;
+    return err;
+}
+static inline OSStatus
+AudioDeviceDestroyIOProcID(AudioDeviceID dev, AudioDeviceIOProcID proc)
+{
+    return AudioDeviceRemoveIOProc(dev, proc);
+}
+#ifndef kAudioObjectPropertyScopeOutput /* 10.5+; same 'outp' FourCC */
+# define kAudioObjectPropertyScopeOutput kAudioDevicePropertyScopeOutput
+#endif
+#ifndef kAudioFormatEnhancedAC3 /* 10.9+ header constant, FourCC 'ec-3' */
+# define kAudioFormatEnhancedAC3 ((AudioFormatID)0x65632D33)
+#endif
+#endif /* SDK < 10.6 */
 
 #define STREAM_FORMAT_MSG(pre, sfm) \
     pre "[%f][%4.4s][%u][%u][%u][%u][%u][%u]", \
@@ -110,6 +159,8 @@ void ca_SetAliveState(audio_output_t *p_aout, bool alive);
 void ca_SetDeviceLatency(audio_output_t *p_aout, vlc_tick_t i_dev_latency_us);
 
 AudioUnit au_NewOutputInstance(audio_output_t *p_aout, OSType comp_sub_type);
+
+void au_DisposeOutputInstance(AudioUnit au);
 
 int  au_Initialize(audio_output_t *p_aout, AudioUnit au,
                    audio_sample_format_t *fmt,

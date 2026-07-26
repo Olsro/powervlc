@@ -84,6 +84,13 @@ libstream_out_chromecast_plugin_la_SOURCES = stream_out/chromecast/cast.cpp stre
 nodist_libstream_out_chromecast_plugin_la_SOURCES = stream_out/chromecast/cast_channel.pb.cc
 libstream_out_chromecast_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) -Istream_out/chromecast $(CHROMECAST_CFLAGS)
 libstream_out_chromecast_plugin_la_LIBADD = $(CHROMECAST_LIBS) $(SOCKET_LIBS)
+if HAVE_DARWIN
+# protobuf uses __thread, which macOS supports from 10.7 only: raise the
+# minimum for this plugin alone (below 10.7 it simply fails to load,
+# and Chromecast makes no sense there anyway).
+libstream_out_chromecast_plugin_la_CXXFLAGS = $(AM_CXXFLAGS) -mmacosx-version-min=10.7
+libdemux_chromecast_plugin_la_CXXFLAGS = $(AM_CXXFLAGS) -mmacosx-version-min=10.7
+endif
 CLEANFILES += $(nodist_libstream_out_chromecast_plugin_la_SOURCES)
 
 if ENABLE_SOUT

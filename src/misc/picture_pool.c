@@ -34,7 +34,23 @@
 #include <vlc_atomic.h>
 #include "picture.h"
 
-#define POOL_MAX (CHAR_BIT * sizeof (unsigned long long))
+/* The pool used to be limited to the 64 bits of one unsigned long long.
+ * The look-ahead video cache (video-cache-mb) sizes the indirect-rendering
+ * decoder pool from a RAM budget, and a DVD-sized budget wants hundreds of
+ * pictures. This bitmap is now the HARD ceiling on how deep that cache can
+ * grow: the plain-memory staging that used to spill decoded pictures past
+ * the pool was dropped (one full-frame memcpy per picture, ~11% of the Mini
+ * G4 during DVD playback -- see DecoderPlayVideo), so the pool must be sized
+ * to the whole budget. A multi-word bitmap (16 * 64 = 1024) covers the
+ * RAM-scaled pool the larger-memory PPC machines can afford (see
+ * vout_wrapper.c). The array cost is trivial (one pointer word per slot);
+ * the picture BUFFERS are allocated separately, so this width is not itself
+ * a RAM commitment. The pool address is aligned on POOL_MAX so a clone can
+ * pack pool+offset into one uintptr_t (see picture_pool_ClonePicture) --
+ * POOL_MAX must stay a power of two, so POOL_WORDS must too. */
+#define POOL_WORD_BITS (CHAR_BIT * sizeof (unsigned long long))
+#define POOL_WORDS 16
+#define POOL_MAX (POOL_WORD_BITS * POOL_WORDS)
 
 static_assert ((POOL_MAX & (POOL_MAX - 1)) == 0, "Not a power of two");
 
@@ -45,11 +61,56 @@ struct picture_pool_t {
     vlc_cond_t  wait;
 
     bool               canceled;
-    unsigned long long available;
+    unsigned long long available[POOL_WORDS];
     atomic_ushort      refs;
     unsigned short     picture_count;
     picture_t  *picture[];
 };
+
+static inline void pool_avail_set(picture_pool_t *pool, unsigned offset)
+{
+    pool->available[offset / POOL_WORD_BITS] |=
+        1ULL << (offset % POOL_WORD_BITS);
+}
+
+static inline void pool_avail_clear(picture_pool_t *pool, unsigned offset)
+{
+    pool->available[offset / POOL_WORD_BITS] &=
+        ~(1ULL << (offset % POOL_WORD_BITS));
+}
+
+static inline bool pool_avail_test(const picture_pool_t *pool, unsigned offset)
+{
+    return (pool->available[offset / POOL_WORD_BITS]
+            >> (offset % POOL_WORD_BITS)) & 1;
+}
+
+static bool pool_avail_empty(const picture_pool_t *pool)
+{
+    for (unsigned w = 0; w < POOL_WORDS; w++)
+        if (pool->available[w] != 0)
+            return false;
+    return true;
+}
+
+/* First available offset at or above `from` (0-based), as 1-based index;
+ * 0 when none — the multi-word generalization of ffsll/fnsll. */
+static unsigned pool_avail_next(const picture_pool_t *pool, unsigned from)
+{
+    unsigned w = from / POOL_WORD_BITS;
+    if (w >= POOL_WORDS)
+        return 0;
+
+    unsigned long long x = pool->available[w]
+        & ~((1ULL << (from % POOL_WORD_BITS)) - 1);
+    for (;;) {
+        if (x != 0)
+            return w * POOL_WORD_BITS + ffsll(x);
+        if (++w >= POOL_WORDS)
+            return 0;
+        x = pool->available[w];
+    }
+}
 
 static void picture_pool_Destroy(picture_pool_t *pool)
 {
@@ -83,8 +144,8 @@ static void picture_pool_ReleasePicture(picture_t *clone)
     picture_Release(picture);
 
     vlc_mutex_lock(&pool->lock);
-    assert(!(pool->available & (1ULL << offset)));
-    pool->available |= 1ULL << offset;
+    assert(!pool_avail_test(pool, offset));
+    pool_avail_set(pool, offset);
     vlc_cond_signal(&pool->wait);
     vlc_mutex_unlock(&pool->lock);
 
@@ -132,10 +193,15 @@ picture_pool_t *picture_pool_NewExtended(const picture_pool_configuration_t *cfg
     pool->pic_unlock = cfg->unlock;
     vlc_mutex_init(&pool->lock);
     vlc_cond_init(&pool->wait);
-    if (cfg->picture_count == POOL_MAX)
-        pool->available = ~0ULL;
-    else
-        pool->available = (1ULL << cfg->picture_count) - 1;
+    for (unsigned w = 0, n = cfg->picture_count; w < POOL_WORDS; w++) {
+        if (n >= POOL_WORD_BITS) {
+            pool->available[w] = ~0ULL;
+            n -= POOL_WORD_BITS;
+        } else {
+            pool->available[w] = n ? (1ULL << n) - 1 : 0;
+            n = 0;
+        }
+    }
     atomic_init(&pool->refs,  1);
     pool->picture_count = cfg->picture_count;
     memcpy(pool->picture, cfg->picture,
@@ -201,14 +267,6 @@ error:
     return NULL;
 }
 
-/** Find next (bit) set */
-static int fnsll(unsigned long long x, unsigned i)
-{
-    if (i >= CHAR_BIT * sizeof (x))
-        return 0;
-    return ffsll(x & ~((1ULL << i) - 1));
-}
-
 picture_t *picture_pool_Get(picture_pool_t *pool)
 {
     vlc_mutex_lock(&pool->lock);
@@ -220,16 +278,17 @@ picture_t *picture_pool_Get(picture_pool_t *pool)
         return NULL;
     }
 
-    for (unsigned i = ffsll(pool->available); i; i = fnsll(pool->available, i))
+    for (unsigned i = pool_avail_next(pool, 0); i;
+         i = pool_avail_next(pool, i))
     {
-        pool->available &= ~(1ULL << (i - 1));
+        pool_avail_clear(pool, i - 1);
         vlc_mutex_unlock(&pool->lock);
 
         picture_t *picture = pool->picture[i - 1];
 
         if (pool->pic_lock != NULL && pool->pic_lock(picture) != VLC_SUCCESS) {
             vlc_mutex_lock(&pool->lock);
-            pool->available |= 1ULL << (i - 1);
+            pool_avail_set(pool, i - 1);
             continue;
         }
 
@@ -252,7 +311,7 @@ picture_t *picture_pool_Wait(picture_pool_t *pool)
     vlc_mutex_lock(&pool->lock);
     assert(pool->refs > 0);
 
-    while (pool->available == 0)
+    while (pool_avail_empty(pool))
     {
         if (pool->canceled)
         {
@@ -262,16 +321,16 @@ picture_t *picture_pool_Wait(picture_pool_t *pool)
         vlc_cond_wait(&pool->wait, &pool->lock);
     }
 
-    i = ffsll(pool->available);
+    i = pool_avail_next(pool, 0);
     assert(i > 0);
-    pool->available &= ~(1ULL << (i - 1));
+    pool_avail_clear(pool, i - 1);
     vlc_mutex_unlock(&pool->lock);
 
     picture_t *picture = pool->picture[i - 1];
 
     if (pool->pic_lock != NULL && pool->pic_lock(picture) != VLC_SUCCESS) {
         vlc_mutex_lock(&pool->lock);
-        pool->available |= 1ULL << (i - 1);
+        pool_avail_set(pool, i - 1);
         vlc_cond_signal(&pool->wait);
         vlc_mutex_unlock(&pool->lock);
         return NULL;

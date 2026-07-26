@@ -70,7 +70,7 @@
      transform="translate(-384,-1004.3622)"
      style="display:inline">
     <path
-       style="color:#000000;display:inline;overflow:visible;visibility:visible;opacity:1;fill:#ff950d;fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:4;stroke-linecap:butt;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:4.19999981;stroke-opacity:1;marker:none;enable-background:accumulate"
+       style="color:#000000;display:inline;overflow:visible;visibility:visible;opacity:1;fill:#ff210d;fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:4;stroke-linecap:butt;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:4.19999981;stroke-opacity:1;marker:none;enable-background:accumulate"
        d="M 11 28 A 4 3.9999981 0 0 0 7 32 L 7 44 L 11 44 L 11 40 L 15 40 L 15 44 L 19 44 L 19 32 A 3.9999981 4 0 0 0 15 28 L 11 28 z M 29 28 L 29 44 L 38 44 C 39.65685 44 41 42.6569 41 41 L 41 39 C 41 37.3432 39.65685 36 38 36 L 37 36 A 3 2.9999986 0 0 0 40 33 L 40 31 C 40 29.3432 38.65685 28 37 28 L 29 28 z M 12 31 L 14 31 A 0.9999995 1 0 0 1 15 32 L 15 37 L 11 37 L 11 32 A 1 0.9999995 0 0 1 12 31 z M 33 31 L 35 31 C 35.55228 31 36 31.4477 36 32 L 36 33.5 C 36 34.0523 35.55228 34.5 35 34.5 L 33 34.5 L 33 31 z M 33 37.5 L 36 37.5 C 36.55228 37.5 37 37.9477 37 38.5 L 37 40 C 37 40.5523 36.55228 41 36 41 L 33 41 L 33 37.5 z "
        transform="translate(384,1004.3622)"
        id="rect6881" />

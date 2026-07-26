@@ -1,0 +1,68 @@
+From: PowerVLC <powervlc@localhost>
+Date: Sat, 18 Jul 2026 18:45:00 +0200
+Subject: [PATCH] read_cache: page-align chunk buffers and pre-fault them (Tiger raw-device physio bug)
+
+Mac OS X 10.4 (xnu-792) physio silently short-transfers >MAXPHYS reads
+from raw disk devices into non-page-aligned, unfaulted user buffers
+while returning the full requested size; the untransferred tail reads
+back as zero-fill pages. Mounted DVD images (data path = /dev/rdiskN)
+hit this as soon as the read-ahead exceeds 63 blocks: zeroed sectors,
+'Expected NAV packet' and a dead input when entering a title. Align
+the cache chunks to the 4 KiB page size and touch every page after
+(re)allocation. Verified on a PowerPC G4 Mac mini.
+---
+--- a/src/read_cache.c	2026-07-18 18:23:09
++++ b/src/read_cache.c	2026-07-18 18:40:44
+@@ -43,9 +43,32 @@
+ 
+ #define READ_CACHE_CHUNKS 10
+ 
+-/* all cache chunks must be memory aligned to allow use of raw devices */
+-#define ALIGNMENT 2048
++/* All cache chunks must be memory aligned to allow use of raw devices.
++ * PowerVLC: PAGE-align them (4096) instead of merely 2048: the Mac OS X
++ * 10.4 kernel (xnu-792) physio path silently SHORT-TRANSFERS reads
++ * larger than MAXPHYS (128 KiB) from a raw disk device when the user
++ * buffer is not page-aligned and its pages are not yet faulted in --
++ * read() still returns the full requested size, but only the first
++ * (MAXPHYS - misalignment) bytes are filled; the remaining pages read
++ * back as untouched zero-fill. With 2048-alignment the chunk buffer
++ * ends up page+2048, so every read-ahead beyond 63 blocks returned a
++ * zero tail ("demux error! 00 00 00", dead input on mounted DVD
++ * images, whose data path is the raw /dev/rdiskN device). Verified on
++ * a G4 Mini: page-aligned buffers transfer fully even when unfaulted.
++ * The buffers are also touched once after (re)allocation (see
++ * PRE_FAULT below) as belt-and-braces for the unfaulted half of the
++ * kernel trigger. */
++#define ALIGNMENT 4096
+ 
++/* Touch every page of a freshly (re)allocated cache buffer so the
++ * pages are resident before the first raw-device read into them. */
++#define PRE_FAULT( p, size ) \
++  do { \
++    size_t off_; \
++    for( off_ = 0; off_ < (size); off_ += 4096 ) \
++      ((volatile uint8_t *)(p))[off_] = 0; \
++  } while( 0 )
++
+ #define READ_AHEAD_SIZE_MIN 4
+ #define READ_AHEAD_SIZE_MAX 512
+ 
+@@ -186,6 +209,8 @@
+         (uint8_t *)(((uintptr_t)self->chunk[use].cache_buffer_base & ~((uintptr_t)(ALIGNMENT - 1))) + ALIGNMENT);
+       dprintf("pre_cache DVD read realloc happened\n");
+       self->chunk[use].cache_malloc_size = block_count;
++      PRE_FAULT( self->chunk[use].cache_buffer,
++                 block_count * DVD_VIDEO_LB_LEN );
+     } else {
+       /* we still haven't found a cache chunk, let's allocate a new one */
+       for (i = 0; i < READ_CACHE_CHUNKS; i++)
+@@ -205,6 +230,8 @@
+         self->chunk[i].cache_malloc_size = block_count > 500 ? block_count : 500;
+         dprintf("pre_cache DVD read malloc %d blocks\n",
+           (block_count > 500 ? block_count : 500 ));
++        PRE_FAULT( self->chunk[i].cache_buffer,
++                   self->chunk[i].cache_malloc_size * DVD_VIDEO_LB_LEN );
+       }
+     }
+   }

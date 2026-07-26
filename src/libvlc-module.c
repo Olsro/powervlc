@@ -167,6 +167,15 @@ static const char *ppsz_roles_text[] = {
 #define AUDIO_RESAMPLER_LONGTEXT N_( \
     "This selects which plugin to use for audio resampling." )
 
+#define AUDIO_EFFICIENT_RESAMPLER_TEXT N_("Efficient resampling")
+#define AUDIO_EFFICIENT_RESAMPLER_LONGTEXT N_( \
+    "Use the lightweight band-limited Speex resampler for audio/video " \
+    "clock-drift correction instead of libsamplerate's costlier SINC. " \
+    "The drift ratio stays close to 1.0, so SINC buys no audible quality " \
+    "but eats several percent of a CPU core on older Macs. This only " \
+    "affects drift correction; fixed sample-rate conversion for music " \
+    "(e.g. 44.1 to 48 kHz) is left untouched." )
+
 #define MULTICHA_LONGTEXT N_( \
     "Sets the audio output channels mode that will be used by default " \
     "if your hardware and the audio stream are compatible.")
@@ -474,6 +483,44 @@ static const char *const ppsz_pos_descriptions[] =
 #define DROP_LATE_FRAMES_LONGTEXT N_( \
     "This drops frames that are late (arrive to the video output after " \
     "their intended display date)." )
+
+#define VIDEO_CACHE_MB_TEXT N_("Video look-ahead cache (MB)")
+#define VIDEO_CACHE_MB_LONGTEXT N_( \
+    "Maximum amount of memory, in megabytes, that VLC may use to decode " \
+    "video pictures ahead of the display clock. This absorbs transient " \
+    "decoding slowdowns (a busy scene, a bitrate spike) by briefly " \
+    "re-buffering instead of dropping frames, at the cost of that much " \
+    "memory -- allocated up front when playback starts -- and, if the " \
+    "fill threshold below is non-zero, a longer wait before playback " \
+    "begins. The effective cache is hard-capped by the video output's " \
+    "picture pool, which is sized to a fraction of installed RAM (about a " \
+    "third) and to a picture-count ceiling; its depth in SECONDS therefore " \
+    "falls with resolution and rises with installed memory (very roughly " \
+    "20 s of standard definition or 10 s of 720p per gigabyte of RAM). " \
+    "Raising this value beyond that ceiling has no effect. Read when " \
+    "playback of an item starts, so changes apply to the next item. " \
+    "0 disables the feature (default behaviour)." )
+
+#define VIDEO_CACHE_FILL_TEXT N_("Fill threshold before playback starts (%)")
+#define VIDEO_CACHE_FILL_LONGTEXT N_( \
+    "Playback (and any seek) will not resume until the look-ahead cache " \
+    "above is filled to this percentage of its effective size, or the " \
+    "end of the stream is reached first. Because that size is bounded by " \
+    "the picture pool, on a decoder that cannot keep up a high percentage " \
+    "gives fewer but longer re-buffering pauses and a low percentage more " \
+    "frequent but shorter ones. 0 starts playback immediately, same as " \
+    "when the cache is disabled; the Play/Pause key skips the wait at any " \
+    "time." )
+
+#define VIDEO_CACHE_MAX_SECONDS_TEXT N_("Video look-ahead cache limit (s)")
+#define VIDEO_CACHE_MAX_SECONDS_LONGTEXT N_( \
+    "Caps the look-ahead cache to this many seconds of video regardless " \
+    "of the memory budget above, so that low-bitrate or low-resolution " \
+    "content (where the memory budget alone would translate into minutes " \
+    "of pictures) does not needlessly inflate memory use or the fill-in " \
+    "wait. This is additionally bounded by the picture pool (see the " \
+    "memory budget above), so it cannot exceed what the pool can hold. " \
+    "0 leaves the memory budget as the only limit." )
 
 #define QUIET_SYNCHRO_TEXT N_("Quiet synchro")
 #define QUIET_SYNCHRO_LONGTEXT N_( \
@@ -1543,6 +1590,9 @@ vlc_module_begin ()
     set_subcategory( SUBCAT_AUDIO_RESAMPLER )
     add_module( "audio-resampler", "audio resampler", NULL,
                 AUDIO_RESAMPLER_TEXT, AUDIO_RESAMPLER_LONGTEXT, true )
+    add_bool( "audio-efficient-resampler", true,
+              AUDIO_EFFICIENT_RESAMPLER_TEXT, AUDIO_EFFICIENT_RESAMPLER_LONGTEXT,
+              true )
 
 
 /* Video options */
@@ -1563,6 +1613,15 @@ vlc_module_begin ()
         change_private ()
     add_bool( "drop-late-frames", 1, DROP_LATE_FRAMES_TEXT,
               DROP_LATE_FRAMES_LONGTEXT, true )
+    add_integer( "video-cache-mb", 0, VIDEO_CACHE_MB_TEXT,
+                 VIDEO_CACHE_MB_LONGTEXT, false )
+        change_integer_range( 0, 4096 )
+    add_integer( "video-cache-fill-percent", 50, VIDEO_CACHE_FILL_TEXT,
+                 VIDEO_CACHE_FILL_LONGTEXT, false )
+        change_integer_range( 0, 100 )
+    add_integer( "video-cache-max-seconds", 15, VIDEO_CACHE_MAX_SECONDS_TEXT,
+                 VIDEO_CACHE_MAX_SECONDS_LONGTEXT, false )
+        change_integer_range( 0, 3600 )
     /* Used in vout_synchro */
     add_bool( "skip-frames", 1, SKIP_FRAMES_TEXT,
               SKIP_FRAMES_LONGTEXT, true )
@@ -1644,8 +1703,17 @@ vlc_module_begin ()
         change_integer_list( pi_align_values, ppsz_align_descriptions )
     add_float( "zoom", 1., ZOOM_TEXT, ZOOM_LONGTEXT, true )
         change_safe()
+#if (defined (__powerpc__) || defined (__POWERPC__)) && !defined (__ALTIVEC__)
+    /* Auto-deinterlacing costs a fifth of a G3 core (RenderX rewrites the
+     * whole frame, doubling the memory pressure of the display path) and
+     * SD MPEG-2 barely fits that CPU as it is: default to off there, the
+     * user can still enable it explicitly. */
+    add_integer( "deinterlace", 0,
+                 DEINTERLACE_TEXT, DEINTERLACE_LONGTEXT, false )
+#else
     add_integer( "deinterlace", -1,
                  DEINTERLACE_TEXT, DEINTERLACE_LONGTEXT, false )
+#endif
         change_integer_list( pi_deinterlace, ppsz_deinterlace_text )
         change_safe()
     add_string( "deinterlace-mode", "auto",

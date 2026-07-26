@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Добавя иконка за бърз достъп на работния Ви плот"
 ${LangFileString} Desc_Section03 \
-    "Разширението на VLC за Mozilla и Mozilla Firefox"
+    "Разширението на ${PRODUCT_NAME} за Mozilla и Mozilla Firefox"
 ${LangFileString} Desc_Section04 \
-    "Разширението на VLC от тип „ActiveX“"
+    "Разширението на ${PRODUCT_NAME} от тип „ActiveX“"
 ${LangFileString} Desc_Section05 \
     "Регистрация за изпълнение на CD и DVD дискове"
 ${LangFileString} Desc_Section06 \
-    "Задава VLC като приложението по подразбиране за избрания тип файлове"
+    "Задава ${PRODUCT_NAME} като приложението по подразбиране за избрания тип файлове"
 ${LangFileString} Desc_Section07 \
-    "Добавяне на елементи на контекстното меню ('Възпроизвеждане с VLC' и 'Добави към VLC лист за възпроизвеждане')"
+    "Добавяне на елементи на контекстното меню ('Възпроизвеждане с ${PRODUCT_NAME}' и 'Добави към ${PRODUCT_NAME} лист за възпроизвеждане')"
 ${LangFileString} Desc_Section08 \
-    "Изтриване на настройки и кеш файлове останали от предишна инсталация на VLC"
+    "Изтриване на настройки и кеш файлове останали от предишна инсталация на ${PRODUCT_NAME}"
 
 ${LangFileString} Name_Section91 "Деинсталиране"
 ${LangFileString} Name_Section92 "Изтриване на настройките и временните файлове"
 
 ${LangFileString} Desc_Section91 \
-"Деинсталирайте VLC и всичките му компоненти"
+"Деинсталирайте ${PRODUCT_NAME} и всичките му компоненти"
 ${LangFileString} Desc_Section92 \
-"Изтрива VLC настройки и кеш файлове"
+"Изтрива ${PRODUCT_NAME} настройки и кеш файлове"
 
 ${LangFileString} ShellAssociation_Play "Възпроизведи"
-${LangFileString} ContextMenuEntry_PlayWith "Пусни с VLC media player"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Добави към плейлиста на VLC media player"
+${LangFileString} ContextMenuEntry_PlayWith "Пусни с ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Добави към плейлиста на ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "Посещение на сайта на VideoLAN VLC Media Player"
 
@@ -60,18 +60,18 @@ ${LangFileString} Action_OnArrivalDVDAudio "Възпроизведи аудио 
 ${LangFileString} License_NextText "Вече сте наясно с вашите права. Натиснете $\"Напред$\" за да продължите."
 
 ${LangFileString} Detail_CheckProcesses "Проверяване на процеси..."
-${LangFileString} MessageBox_VLCRunning "VLC работи и сега ще бъде затворен"
-${LangFileString} MessageBox_VLCUnableToClose "Инсталаторът не може да затвори VLC, моля направете го ръчно"
+${LangFileString} MessageBox_VLCRunning "${PRODUCT_NAME} работи и сега ще бъде затворен"
+${LangFileString} MessageBox_VLCUnableToClose "Инсталаторът не може да затвори ${PRODUCT_NAME}, моля направете го ръчно"
 ${LangFileString} MessageBox_InstallAborted "Инсталацията е прекратена!"
 
 ${LangFileString} Reinstall_Headline "Вече е инсталиран"
-${LangFileString} Reinstall_HeadlineInstall "Изберете как да инсталирате VLC"
+${LangFileString} Reinstall_HeadlineInstall "Изберете как да инсталирате ${PRODUCT_NAME}"
 ${LangFileString} Reinstall_HeadlineMaintenance "Изберете опции за изпълнение на профилактика."
-${LangFileString} Reinstall_MessageOlder "По-стара версия на VLC е инсталирана във вашата система. Изберете операция. която искате да изпълните и натиснете $\"Напред$\" за да продължите."
-${LangFileString} Reinstall_MessageNewer "По-нова версия на VLC вече е инсталирана! Не се препоръчва да сменята с по-стара. Изберете операция, която желаете да изпълните и натиснете $\"Напред$\" за да продължите."
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} е вече инсталирана. Изберете операция, която желаете да изпълните и натиснете $\"Напред$\" за да продължите."
-${LangFileString} Reinstall_OptionUpgrade "Обновете VLC използвайки предишните настройки (препоръчително)"
-${LangFileString} Reinstall_OptionDowngrade "Върнете стара версия на VLC използвайки предишните настройки (препоръчително)"
+${LangFileString} Reinstall_MessageOlder "По-стара версия на ${PRODUCT_NAME} е инсталирана във вашата система. Изберете операция. която искате да изпълните и натиснете $\"Напред$\" за да продължите."
+${LangFileString} Reinstall_MessageNewer "По-нова версия на ${PRODUCT_NAME} вече е инсталирана! Не се препоръчва да сменята с по-стара. Изберете операция, която желаете да изпълните и натиснете $\"Напред$\" за да продължите."
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} е вече инсталирана. Изберете операция, която желаете да изпълните и натиснете $\"Напред$\" за да продължите."
+${LangFileString} Reinstall_OptionUpgrade "Обновете ${PRODUCT_NAME} използвайки предишните настройки (препоръчително)"
+${LangFileString} Reinstall_OptionDowngrade "Върнете стара версия на ${PRODUCT_NAME} използвайки предишните настройки (препоръчително)"
 ${LangFileString} Reinstall_OptionComponents "Добавете,премахнете или преинсталирайте компоненти"
 ${LangFileString} Reinstall_OptionAdvanced "Промени настройки (разширени)"
-${LangFileString} Reinstall_OptionUninstall "Деинсталиране на VLC"
+${LangFileString} Reinstall_OptionUninstall "Деинсталиране на ${PRODUCT_NAME}"

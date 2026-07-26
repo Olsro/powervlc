@@ -399,6 +399,25 @@ audio_output_t *input_resource_HoldAout( input_resource_t *p_resource )
     return p_aout;
 }
 
+void input_resource_StopParkedAout( input_resource_t *p_resource, bool b_wait )
+{
+    audio_output_t *p_aout = NULL;
+
+    vlc_mutex_lock( &p_resource->lock_hold );
+    if( p_resource->p_aout != NULL && !p_resource->b_aout_busy )
+    {
+        p_aout = p_resource->p_aout;
+        vlc_object_hold( p_aout );
+    }
+    vlc_mutex_unlock( &p_resource->lock_hold );
+
+    if( p_aout != NULL )
+    {
+        aout_DecStopParked( p_aout, b_wait );
+        vlc_object_release( p_aout );
+    }
+}
+
 void input_resource_ResetAout( input_resource_t *p_resource )
 {
     audio_output_t *p_aout = NULL;

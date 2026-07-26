@@ -1,7 +1,15 @@
 SUFFIXES += .xib
 
-libmacosx_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -fobjc-exceptions -fobjc-arc
-libmacosx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(guidir)' \
+# This plugin gets its own deployment target, higher than the build's
+# global one (10.5 for the legacy build): ARC and several APIs used here
+# require Mac OS X 10.7. The resulting dylib simply fails to dlopen() on
+# older releases (their dyld rejects its newer load commands), and VLC
+# falls back to the lower-scored legacy_macosx interface; on 10.7+ this
+# interface wins by score. The -mmacosx-version-min appended here
+# overrides the global one (last flag wins), for compiling and linking.
+libmacosx_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -fobjc-exceptions -fobjc-arc \
+	-mmacosx-version-min=10.7 -Wno-partial-availability
+libmacosx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -mmacosx-version-min=10.7 -rpath '$(guidir)' \
 	-Wl,-framework,Cocoa -Wl,-framework,CoreServices \
 	-Wl,-framework,AVFoundation -Wl,-framework,CoreMedia -Wl,-framework,IOKit \
 	-Wl,-framework,AddressBook -Wl,-framework,WebKit -Wl,-framework,CoreAudio \

@@ -15,7 +15,9 @@ endif
 endif
 
 ifdef CAN_BUILD_SPARKLE
+ifdef HAVE_CLANG
 PKGS += sparkle
+endif
 endif
 
 $(TARBALLS)/Sparkle-$(SPARKLE_VERSION).zip:

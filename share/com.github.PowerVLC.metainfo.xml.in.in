@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2016-2017 Jean-Baptiste Kempf CC-0 -->
+
+<component type="desktop-application">
+    <id>com.github.PowerVLC</id>
+    <launchable type="desktop-id">vlc.desktop</launchable>
+    <metadata_license>CC0-1.0</metadata_license>
+    <name>PowerVLC</name>
+    <summary>PowerVLC media player, an unofficial open-source fork of VLC</summary>
+    <description>
+        <p>
+            PowerVLC is an unofficial fork of VLC, not affiliated with VideoLAN.
+            It is a free and open source cross-platform multimedia player and
+            framework that plays most multimedia files as well as DVDs, Audio CDs,
+            VCDs, and various streaming protocols.
+        </p>
+    </description>
+    <url type="homepage">https://www.videolan.org/vlc/</url>
+    <url type="bugtracker">https://trac.videolan.org/vlc/</url>
+    <url type="donation">https://www.videolan.org/contribute.html</url>
+    <releases>
+        <release version="@VERSION@" />
+    </releases>
+    <provides>
+        <library>libpowervlc.so.5</library>
+    </provides>
+    <project_group>VideoLAN</project_group>
+    <project_license>GPL-2.0+</project_license>
+    <developer_name>Olsro (PowerVLC, unofficial VLC fork)</developer_name>
+    <update_contact>https://github.com/Olsro</update_contact>
+    <screenshots>
+        <screenshot type="default">
+            <image>http://images.videolan.org/vlc/screenshots/2.0.0/vlc-2.0-poney.jpg</image>
+        </screenshot>
+        <screenshot>
+            <image>http://images.videolan.org/vlc/screenshots/2.0.0/vlc-2.0-gnome3-open.jpg</image>
+        </screenshot>
+        <screenshot>
+            <image>http://images.videolan.org/vlc/screenshots/2.0.0/vlc-2.0-gnome3-debian.jpg</image>
+        </screenshot>
+    </screenshots>
+    <content_rating type="oars-1.1" />
+</component>

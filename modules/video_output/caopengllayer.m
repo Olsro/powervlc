@@ -724,8 +724,13 @@ shouldInheritContentsScale:(CGFloat)newScale
         // Convert window-coordinate point to view space
         NSPoint pointInView = [self convertPoint:event.locationInWindow fromView:nil];
 
-        // Convert to pixels
-        NSPoint pointInBacking = [self convertPointToBacking:pointInView];
+        // Convert to pixels (no HiDPI on Mac OS X 10.6: points equal pixels)
+        NSPoint pointInBacking = pointInView;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpartial-availability"
+        if ([self respondsToSelector:@selector(convertPointToBacking:)])
+            pointInBacking = [self convertPointToBacking:pointInView];
+#pragma clang diagnostic pop
 
         vout_display_SendMouseMovedDisplayCoordinates(_vlc_vd, ORIENT_VFLIPPED,
                                                       pointInBacking.x, pointInBacking.y,
@@ -850,7 +855,12 @@ shouldInheritContentsScale:(CGFloat)newScale
 
 - (void)reportCurrentLayerSize
 {
-    CGFloat scale = self.contentsScale;
+    CGFloat scale = 1.0;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpartial-availability"
+    if ([self respondsToSelector:@selector(contentsScale)])
+        scale = self.contentsScale;
+#pragma clang diagnostic pop
     [self reportCurrentLayerSizeWithScale:scale];
 }
 
@@ -912,7 +922,12 @@ shouldInheritContentsScale:(CGFloat)newScale
 
         if (NSEqualSizes(newSize, NSZeroSize)) {
             newSize = self.bounds.size;
-            CGFloat scale = self.contentsScale;
+            CGFloat scale = 1.0;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpartial-availability"
+            if ([self respondsToSelector:@selector(contentsScale)])
+                scale = self.contentsScale;
+#pragma clang diagnostic pop
             newSize.width *= scale;
             newSize.height *= scale;
         }

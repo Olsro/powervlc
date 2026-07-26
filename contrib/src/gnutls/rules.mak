@@ -41,6 +41,9 @@ gnutls: gnutls-$(GNUTLS_VERSION).tar.xz .sum-gnutls
 	# disable __faccessat usage on Darwin as it's not available on our minimum target
 	$(APPLY) $(SRC)/gnutls/__faccessat-darwin.patch
 
+	# emulate _Thread_local with pthread keys when targeting Mac OS X < 10.7
+	$(APPLY) $(SRC)/gnutls/0001-emulate-thread-local-with-pthread-keys-on-old-macOS.patch
+
 	# replace HANDLE_FLAG_INHERIT which may not be available in older UWP
 	sed -i.orig -e s/HANDLE_FLAG_INHERIT/0x1/g $(UNPACK_DIR)/gl/fcntl.c
 
@@ -77,10 +80,30 @@ endif
 ifdef HAVE_ANDROID
 GNUTLS_ENV := gl_cv_header_working_stdint_h=yes
 endif
+ifdef HAVE_MACOSX
+# strnlen() and memmem() are only available since macOS 10.7. Force the
+# gnulib replacements and demote the availability diagnostic: the SDK
+# declarations keep their 10.7 availability attribute even though the linked
+# implementations are gnulib's. Without this the symbols are weak-linked,
+# resolve to NULL on 10.6 and crash on the first TLS handshake.
+ifneq ($(call darwin_min_os_at_least, 10.7), true)
+GNUTLS_CONF += ac_cv_func_strnlen=no \
+	ac_cv_func_memmem=no \
+	CFLAGS="$(CFLAGS) $(WNO_PARTIAL_AVAILABILITY)"
+endif
+endif
 ifdef HAVE_WIN32
 	GNUTLS_CONF += --without-idn
 ifeq ($(ARCH),aarch64)
 	# Gnutls' aarch64 assembly unconditionally uses ELF specific directives
+	GNUTLS_CONF += --disable-hardware-acceleration
+endif
+endif
+ifdef HAVE_MACOSX
+ifeq ($(ARCH),i386)
+	# The x86 "accelerated" objects (AES-NI/PCLMUL) fail to assemble with
+	# the legacy cctools as targeting Tiger, and no supported 32-bit Mac
+	# has those instructions anyway (Core Duo / Core 2 Duo at best).
 	GNUTLS_CONF += --disable-hardware-acceleration
 endif
 endif

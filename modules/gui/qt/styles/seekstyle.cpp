@@ -168,7 +168,7 @@ void SeekStyle::drawComplexControl( ComplexControl cc, const QStyleOptionComplex
                     int width = groove.width() - groove.width() / 6;
                     QRect innerRect = groove.adjusted( slideroptions->animationloading * width + 1, 1,
                             width * ( -1.0 + slideroptions->animationloading ) - 1, 0);
-                    QColor overlayColor = QColor( "Orange" );
+                    QColor overlayColor = QColor( "#ff1900" ); /* PowerVLC red */
                     overlayColor.setAlpha( 128 );
                     painter->setBrush( overlayColor );
                     painter->drawRoundedRect( innerRect, RADIUS, RADIUS );
@@ -179,7 +179,7 @@ void SeekStyle::drawComplexControl( ComplexControl cc, const QStyleOptionComplex
                 {
                     QRect innerRect = groove.adjusted( 1, 1,
                                         groove.width() * ( -1.0 + slideroptions->buffering ) - 1, 0 );
-                    QColor overlayColor = QColor( "Orange" );
+                    QColor overlayColor = QColor( "#ff1900" ); /* PowerVLC red */
                     overlayColor.setAlpha( 128 );
                     painter->setBrush( overlayColor );
                     painter->drawRoundedRect( innerRect, RADIUS, RADIUS );

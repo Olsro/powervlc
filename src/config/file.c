@@ -404,7 +404,7 @@ int config_SaveConfigFile (vlc_object_t *p_this)
 
     fprintf( file,
         "\xEF\xBB\xBF###\n"
-        "###  "PACKAGE_NAME" "PACKAGE_VERSION"\n"
+        "###  PowerVLC "PACKAGE_VERSION"\n"
         "###\n"
         "\n"
         "###\n"

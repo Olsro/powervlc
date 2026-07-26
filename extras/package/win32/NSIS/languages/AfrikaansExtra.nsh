@@ -22,27 +22,27 @@ ${LangFileString} Desc_Section02b \
 ${LangFileString} Desc_Section03 \
     "Die VLc Mozilla- en Mozilla Firefox-inprop"
 ${LangFileString} Desc_Section04 \
-    "Die VLC ActiveX-inprop"
+    "Die ${PRODUCT_NAME} ActiveX-inprop"
 ${LangFileString} Desc_Section05 \
     "DVD en CD afspeelregistrasie"
 ${LangFileString} Desc_Section06 \
-    "Stel VLC-mediaspeler in as die verstektoepassing vir die gespesifiseerde lêertipe"
+    "Stel ${PRODUCT_NAME}-mediaspeler in as die verstektoepassing vir die gespesifiseerde lêertipe"
 ${LangFileString} Desc_Section07 \
-    "Voeg kontekskieslysitems toe (‘Speel af met VLC’ en ‘Voeg toe tot VLC se afspeellys’)"
+    "Voeg kontekskieslysitems toe (‘Speel af met ${PRODUCT_NAME}’ en ‘Voeg toe tot ${PRODUCT_NAME} se afspeellys’)"
 ${LangFileString} Desc_Section08 \
-    "Skrap VLC-mediaspelervoorkeure en kaslêers wat van vorige installasies oorgebly het"
+    "Skrap ${PRODUCT_NAME}-mediaspelervoorkeure en kaslêers wat van vorige installasies oorgebly het"
 
 ${LangFileString} Name_Section91 "Deïnstalleer"
 ${LangFileString} Name_Section92 "Skrap voorkeure en kas"
 
 ${LangFileString} Desc_Section91 \
-"Deïnstalleer VLC-mediaspeler en al sy komponente"
+"Deïnstalleer ${PRODUCT_NAME}-mediaspeler en al sy komponente"
 ${LangFileString} Desc_Section92 \
-"Skrap VLC-mediaspelervoorkeure en kaslêers"
+"Skrap ${PRODUCT_NAME}-mediaspelervoorkeure en kaslêers"
 
 ${LangFileString} ShellAssociation_Play "Speel"
-${LangFileString} ContextMenuEntry_PlayWith "Speel af met VLC-mediaspeler"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Voeg toe tot VLC-mediaspeler se afspeellys"
+${LangFileString} ContextMenuEntry_PlayWith "Speel af met ${PRODUCT_NAME}-mediaspeler"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Voeg toe tot ${PRODUCT_NAME}-mediaspeler se afspeellys"
 
 ${LangFileString} Link_VisitWebsite "Besoek die VideoLAN VLC-mediaspelerwebblad"
 
@@ -60,18 +60,18 @@ ${LangFileString} Action_OnArrivalDVDAudio "Speel oudio DVD"
 ${LangFileString} License_NextText "U is nou bewus van u regte. Klik Volgende om aan te gaan."
 
 ${LangFileString} Detail_CheckProcesses "Gaan prosesse na…"
-${LangFileString} MessageBox_VLCRunning "Dit wol voorkom of VLC loop en dit sal nou afgesluit word."
-${LangFileString} MessageBox_VLCUnableToClose "Die installeerder kon VLC nie afsluit nie, doen dit asb. handmatig."
+${LangFileString} MessageBox_VLCRunning "Dit wol voorkom of ${PRODUCT_NAME} loop en dit sal nou afgesluit word."
+${LangFileString} MessageBox_VLCUnableToClose "Die installeerder kon ${PRODUCT_NAME} nie afsluit nie, doen dit asb. handmatig."
 ${LangFileString} MessageBox_InstallAborted "Installasie is laat vaar"
 
 ${LangFileString} Reinstall_Headline "Reeds geïnstalleer"
-${LangFileString} Reinstall_HeadlineInstall "Kies hoe u VLC wil installeer."
+${LangFileString} Reinstall_HeadlineInstall "Kies hoe u ${PRODUCT_NAME} wil installeer."
 ${LangFileString} Reinstall_HeadlineMaintenance "Kies die onderhoudopsie om uit te voer."
-${LangFileString} Reinstall_MessageOlder "’n Ouer weergawe van VLC is op u stelsel geïnstalleer. Kies die operasie wat u wil uitvoer en klik Volgende om aan te gaan."
-${LangFileString} Reinstall_MessageNewer "’n Nuwer weergawe van VLC is reeds geïnstalleer. Dit word nie aanbeveel om af te gradeer na ’n ouer weergawe nie. Kies die operasie wat u wil uitvoer en klik Volgende om aan te gaan."
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} is reeds geïnstalleer. Kies die operasie wat u wil uitvoer en klik Volgende om aan te gaan."
-${LangFileString} Reinstall_OptionUpgrade "Gradeer VLC op deur vorige instellings te gebruik (aanbeveel)"
-${LangFileString} Reinstall_OptionDowngrade "Gradeer VLC af deur vorige instellings te gebruik (aanbeveel)"
+${LangFileString} Reinstall_MessageOlder "’n Ouer weergawe van ${PRODUCT_NAME} is op u stelsel geïnstalleer. Kies die operasie wat u wil uitvoer en klik Volgende om aan te gaan."
+${LangFileString} Reinstall_MessageNewer "’n Nuwer weergawe van ${PRODUCT_NAME} is reeds geïnstalleer. Dit word nie aanbeveel om af te gradeer na ’n ouer weergawe nie. Kies die operasie wat u wil uitvoer en klik Volgende om aan te gaan."
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} is reeds geïnstalleer. Kies die operasie wat u wil uitvoer en klik Volgende om aan te gaan."
+${LangFileString} Reinstall_OptionUpgrade "Gradeer ${PRODUCT_NAME} op deur vorige instellings te gebruik (aanbeveel)"
+${LangFileString} Reinstall_OptionDowngrade "Gradeer ${PRODUCT_NAME} af deur vorige instellings te gebruik (aanbeveel)"
 ${LangFileString} Reinstall_OptionComponents "Voeg komponente toe/Verwyder dit/Installeer dit"
 ${LangFileString} Reinstall_OptionAdvanced "Verander instellings (gevorderd)"
-${LangFileString} Reinstall_OptionUninstall "Deïnstalleer VLC"
+${LangFileString} Reinstall_OptionUninstall "Deïnstalleer ${PRODUCT_NAME}"

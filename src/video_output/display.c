@@ -37,6 +37,9 @@
 #include <vlc_modules.h>
 #include <vlc_filter.h>
 #include <vlc_picture_pool.h>
+#ifdef __APPLE__
+# include <sys/sysctl.h>
+#endif
 
 #include <libvlc.h>
 
@@ -1539,4 +1542,78 @@ void vout_SendDisplayEventMouse(vout_thread_t *vout, const vlc_mouse_t *m)
     if (m->b_double_click)
         vout_SendEventMouseDoubleClick(vout);
     vout->p->mouse = *m;
+}
+
+/*****************************************************************************
+ * Look-ahead decode cache sizing for direct-rendering displays
+ *****************************************************************************/
+/* Kept deliberately in step with two other places, all three implementing the
+ * same policy for the same budget:
+ *   - VoutCacheExtraPictures() in vout_wrapper.c, for the indirect path (plain
+ *     system memory, so no ceiling beyond the budget);
+ *   - Pool() in modules/video_output/macosx_gl1.m, which predates this helper
+ *     and additionally clamps to the AGP aperture it can map.
+ * The viability floor and the RAM bound below must match DecoderVideoCacheTarget()
+ * in src/input/decoder.c (VIDEO_CACHE_DR_MIN_VIABLE / VIDEO_CACHE_DR_POOL_MARGIN):
+ * a display that allocates just under the floor pays for pictures the cache
+ * then refuses to use. */
+unsigned vout_display_CacheExtraPictures(vout_display_t *vd, size_t pic_bytes)
+{
+    int64_t cache_mb = var_InheritInteger(vd, "video-cache-mb");
+    if (cache_mb <= 0)
+        return 0;
+
+    if (pic_bytes == 0) {
+        picture_t *probe = picture_NewFromFormat(&vd->fmt);
+        if (probe == NULL)
+            return 0;
+        for (int i = 0; i < probe->i_planes; i++)
+            pic_bytes += (size_t)probe->p[i].i_pitch * probe->p[i].i_lines;
+        picture_Release(probe);
+    }
+    if (pic_bytes == 0)
+        return 0;
+
+    size_t want = ((size_t)cache_mb << 20) / pic_bytes;
+
+    int64_t max_s = var_InheritInteger(vd, "video-cache-max-seconds");
+    if (max_s > 0 && vd->fmt.i_frame_rate > 0 && vd->fmt.i_frame_rate_base > 0) {
+        size_t seconds_want = (size_t)((double)vd->fmt.i_frame_rate
+                            / vd->fmt.i_frame_rate_base * max_s);
+        if (seconds_want < want)
+            want = seconds_want;
+    }
+
+    /* Eager allocation bound: about a third of installed RAM, capped -- the
+     * same one the indirect path uses. A display pool is not swappable, so
+     * being generous here is how a machine ends up thrashing. */
+    size_t cap_bytes = (size_t)320 << 20;
+    uint64_t physmem = 0;
+    size_t len = sizeof(physmem);
+#ifdef __APPLE__
+    if (sysctlbyname("hw.memsize", &physmem, &len, NULL, 0) == 0 && physmem > 0)
+#else
+    if (0)
+#endif
+    {
+        uint64_t third = physmem / 3;
+        cap_bytes = (size_t)(third > ((uint64_t)768 << 20)
+                             ? ((uint64_t)768 << 20) : third);
+    }
+    if (want > cap_bytes / pic_bytes)
+        want = cap_bytes / pic_bytes;
+
+    /* +2 because the clamp in DecoderVideoCacheTarget() keeps
+     * VIDEO_CACHE_DR_POOL_MARGIN of the headroom in reserve. */
+    want += 2;
+
+    /* Below the floor the cache is switched off anyway: do not pay for the
+     * pictures then. */
+    if (want < 26)
+        return 0;
+
+    /* Deliberately not logged here: the caller is the one that knows what it
+     * finally allocates (a display ceiling may cut this down), and a message
+     * announcing a count that never materialised would be worse than none. */
+    return (unsigned)want;
 }

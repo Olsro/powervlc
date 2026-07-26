@@ -1,21 +1,44 @@
-name: vlc
+# PowerVLC snap recipe.
+#
+# This is a rebrand of the stock upstream VLC snap so that PowerVLC can be
+# published without colliding with the official "vlc" snap in the Snap Store
+# and can be installed side by side with it (see name/common-id below).
+#
+# core18 -> core22 migration TODOs (this recipe has NOT been test-built on
+# core22 from macOS; a maintainer with a Linux build host must verify):
+#   * Qt5/KDE runtime + desktop integration now comes from the "kde-neon"
+#     extension declared on the app, replacing the old
+#     snapcraft-desktop-helpers "desktop-launch" wrapper part.
+#   * "version-script" is a core18-era key; on core22 (snapcraft 7+) prefer
+#     "adopt-info" + "craftctl set-version" from an override step.
+#   * The build-packages/stage-packages lists below name Ubuntu 18.04 (core18)
+#     packages; several names differ on Ubuntu 22.04 (core22) and must be
+#     reviewed (e.g. libgcc1 -> libgcc-s1, libfreerdp-*1.1, i965-va-driver,
+#     libidn11-dev, openjdk-8-jdk).
+name: powervlc
 version-script: cat $SNAPCRAFT_STAGE/version
 version: "daily"
 grade: stable
-base: core18
-summary: Read, capture, broadcast your multimedia streams
+base: core22
+summary: Read, capture, broadcast your multimedia streams (PowerVLC)
 description: |
-  VLC is a free and open source cross-platform multimedia player and
+  PowerVLC is an unofficial fork of VLC, not affiliated with VideoLAN.
+  It is a free and open source cross-platform multimedia player and
   framework that plays most multimedia files as well as DVDs, Audio CDs,
   VCDs, and various streaming protocols.
-  NOTE. This snap contains an untested daily build of VLC
+  NOTE. This snap contains an unofficial community build of PowerVLC.
 confinement: strict
 
 apps:
-  vlc:
+  powervlc:
+    # On core22 the Qt5/KDE runtime and desktop integration are provided by the
+    # kde-neon extension (the correct extension for a Qt5 app on core22). The
+    # extension installs its own command-chain, so the command no longer needs
+    # the core18 "desktop-launch" prefix.
+    extensions: [kde-neon]
     desktop: usr/share/applications/vlc.desktop
-    command: desktop-launch $SNAP/bin/vlc-snap-wrapper.sh
-    common-id: org.videolan.vlc
+    command: bin/vlc-snap-wrapper.sh
+    common-id: com.github.PowerVLC
     plugs:
       - unity7
       - network
@@ -40,27 +63,11 @@ apps:
       - mpris
 
 parts:
-  desktop-qt5-vlc:
-    source: https://github.com/ubuntu/snapcraft-desktop-helpers.git
-    source-commit: 622e2aa7a840b3a7dbb6ea4d432d687d5cc2e8ef
-    source-subdir: qt/
-    plugin: make
-    make-parameters: ["FLAVOR=qt5"]
-    build-packages:
-      - qtbase5-dev
-      - dpkg-dev
-    stage-packages:
-      - libxkbcommon0
-      - ttf-ubuntu-font-family
-      - dmz-cursor-theme
-      - light-themes
-      - shared-mime-info
-      - libqt5gui5
-      - libgdk-pixbuf2.0-0
-      - libqt5svg5
-      - locales-all
+  # NOTE (core18 -> core22 migration): the old "desktop-qt5-vlc" part pulled
+  # ubuntu/snapcraft-desktop-helpers and its "desktop-launch" script to set up
+  # the Qt5/KDE runtime on core18. On core22 that job is done by the kde-neon
+  # extension declared on the app above, so this helper part has been removed.
   vlc:
-    after: [desktop-qt5-vlc]
     source: ../../../
     source-type: git
     plugin: autotools
@@ -96,7 +103,9 @@ parts:
       echo $(git describe --always HEAD) > $SNAPCRAFT_STAGE/version
       make install
       sed -i 's|Icon=vlc|Icon=/usr/share/icons/hicolor/256x256/apps/vlc\.png|' $SNAPCRAFT_PART_INSTALL/usr/share/applications/vlc.desktop
-      sed -i 's|TryExec=.*|TryExec=/snap/bin/vlc|' $SNAPCRAFT_PART_INSTALL/usr/share/applications/vlc.desktop
+      sed -i 's|TryExec=.*|TryExec=/snap/bin/powervlc|' $SNAPCRAFT_PART_INSTALL/usr/share/applications/vlc.desktop
+    # TODO(core22): the build-packages/stage-packages below target Ubuntu 18.04
+    # (core18). Review the names for Ubuntu 22.04 before building on core22.
     build-packages:
       - ant
       - git

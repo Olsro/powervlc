@@ -75,8 +75,9 @@ access_LTLIBRARIES += libpulsesrc_plugin.la
 endif
 
 libavaudiocapture_plugin_la_SOURCES = access/avaudiocapture.m
-libavaudiocapture_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -fobjc-arc
-libavaudiocapture_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(accessdir)' -Wl,-framework,Foundation -Wl,-framework,AVFoundation -Wl,-framework,CoreMedia
+# ARC and AVFoundation need 10.7+ (see libavcapture above)
+libavaudiocapture_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -fobjc-arc -mmacosx-version-min=10.7
+libavaudiocapture_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(accessdir)' -Wl,-framework,Foundation -Wl,-weak_framework,AVFoundation -Wl,-weak_framework,CoreMedia
 if HAVE_AVFOUNDATION
 access_LTLIBRARIES += libavaudiocapture_plugin.la
 endif
@@ -93,8 +94,13 @@ endif
 ### Video capture ###
 
 libavcapture_plugin_la_SOURCES = access/avcapture.m
-libavcapture_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -fobjc-arc
-libavcapture_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(accessdir)' -Wl,-framework,Foundation -Wl,-framework,AVFoundation -Wl,-framework,CoreMedia,  -Wl,-framework,CoreVideo
+# ARC (and AVFoundation itself) needs 10.7+: raise the minimum for this
+# plugin alone; on older releases dyld skips it and VLC degrades cleanly.
+libavcapture_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -fobjc-arc -mmacosx-version-min=10.7
+# AVFoundation/CoreMedia are weak-linked: the plugin must stay loadable
+# on releases (10.5/10.6) that predate them; the probe then finds no
+# capture class and bails out cleanly.
+libavcapture_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(accessdir)' -Wl,-framework,Foundation -Wl,-weak_framework,AVFoundation -Wl,-weak_framework,CoreMedia,  -Wl,-weak_framework,CoreVideo
 if HAVE_AVFOUNDATION
 access_LTLIBRARIES += libavcapture_plugin.la
 endif
@@ -252,10 +258,16 @@ endif
 access_LTLIBRARIES += $(LTLIBdvdread)
 EXTRA_LTLIBRARIES += libdvdread_plugin.la
 
-liblibbluray_plugin_la_SOURCES = access/bluray.c demux/mpeg/timestamps.h
+liblibbluray_plugin_la_SOURCES = access/bluray.c demux/mpeg/timestamps.h \
+	access/bluray_darwin_disc.c access/bluray_darwin_disc.h
 liblibbluray_plugin_la_CFLAGS = $(AM_CFLAGS) $(BLURAY_CFLAGS)
 liblibbluray_plugin_la_LIBADD = $(BLURAY_LIBS)
 liblibbluray_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(accessdir)'
+if HAVE_DARWIN
+# access/bluray_darwin_disc.c drives the disc over SCSITaskLib where the OS
+# cannot read it (10.4); see its header.
+liblibbluray_plugin_la_LDFLAGS += -Wl,-framework,IOKit,-framework,CoreFoundation
+endif
 access_LTLIBRARIES += $(LTLIBlibbluray)
 EXTRA_LTLIBRARIES += liblibbluray_plugin.la
 
@@ -431,6 +443,10 @@ libaccess_srt_plugin_la_CFLAGS = $(AM_CFLAGS) $(SRT_CFLAGS)
 libaccess_srt_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) $(SRT_CPPFLAGS)
 libaccess_srt_plugin_la_LIBADD = $(SRT_LIBS)
 libaccess_srt_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(accessdir)'
+if HAVE_OSX
+# memmem() only exists since macOS 10.7 (see misc/darwin_memmem.c)
+libaccess_srt_plugin_la_SOURCES += misc/darwin_memmem.c
+endif
 access_LTLIBRARIES += $(LTLIBaccess_srt)
 EXTRA_LTLIBRARIES += libaccess_srt_plugin.la
 

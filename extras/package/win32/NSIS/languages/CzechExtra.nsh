@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Přidá ikonu na plochu pro snažší přístup"
 ${LangFileString} Desc_Section03 \
-    "Modul VLC pro prohlížeče Mozilla a Mozilla Firefox"
+    "Modul ${PRODUCT_NAME} pro prohlížeče Mozilla a Mozilla Firefox"
 ${LangFileString} Desc_Section04 \
-    "Modul VLC ActiveX"
+    "Modul ${PRODUCT_NAME} ActiveX"
 ${LangFileString} Desc_Section05 \
     "Registrace přehrávání CD a DVD"
 ${LangFileString} Desc_Section06 \
-    "Nastaví přehrávač VLC jako výchozí aplikaci pro daný typ souborů"
+    "Nastaví přehrávač ${PRODUCT_NAME} jako výchozí aplikaci pro daný typ souborů"
 ${LangFileString} Desc_Section07 \
-    "Přidá položky kontextové nabídky ($\"Přehrát s VLC$\" a $\"Přidat do seznamu skladeb VLC$\")"
+    "Přidá položky kontextové nabídky ($\"Přehrát s ${PRODUCT_NAME}$\" a $\"Přidat do seznamu skladeb ${PRODUCT_NAME}$\")"
 ${LangFileString} Desc_Section08 \
-    "Smaže nastavení a mezipaměť přehrávače VLC, které jsou pozůstatkem z předchozích instalací"
+    "Smaže nastavení a mezipaměť přehrávače ${PRODUCT_NAME}, které jsou pozůstatkem z předchozích instalací"
 
 ${LangFileString} Name_Section91 "Odinstalovat"
 ${LangFileString} Name_Section92 "Smazat nastavení a mezipaměť"
 
 ${LangFileString} Desc_Section91 \
-"Odinstalovat přehrávač VLC a všechny jeho součásti"
+"Odinstalovat přehrávač ${PRODUCT_NAME} a všechny jeho součásti"
 ${LangFileString} Desc_Section92 \
-"Smaže nastavení a mezipaměť přehrávače VLC"
+"Smaže nastavení a mezipaměť přehrávače ${PRODUCT_NAME}"
 
 ${LangFileString} ShellAssociation_Play "Přehrát"
-${LangFileString} ContextMenuEntry_PlayWith "Přehrát s VLC"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Přidat do seznamu skladeb VLC"
+${LangFileString} ContextMenuEntry_PlayWith "Přehrát s ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Přidat do seznamu skladeb ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "Navštivte webové stránky přehrávače VideoLAN VLC"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Přehrát Blu-ray"
 ${LangFileString} License_NextText "Nyní znáte svá práva. Pro pokračování klikněte na Další."
 
 ${LangFileString} Detail_CheckProcesses "Kontroluji procesy..."
-${LangFileString} MessageBox_VLCRunning "Vypadá to že přehrávač VLC je spuštěn na pozadí. Bude tedy ukončen."
-${LangFileString} MessageBox_VLCUnableToClose "Instalátoru se nezdařilo ukončení přehrávače VLC. Prosím ukončete jej ručně."
+${LangFileString} MessageBox_VLCRunning "Vypadá to že přehrávač ${PRODUCT_NAME} je spuštěn na pozadí. Bude tedy ukončen."
+${LangFileString} MessageBox_VLCUnableToClose "Instalátoru se nezdařilo ukončení přehrávače ${PRODUCT_NAME}. Prosím ukončete jej ručně."
 ${LangFileString} MessageBox_InstallAborted "Instalace přerušena."
 
 ${LangFileString} Reinstall_Headline "Již nainstalováno"
-${LangFileString} Reinstall_HeadlineInstall "Vyberte jak si přejete VLC nainstalovat."
+${LangFileString} Reinstall_HeadlineInstall "Vyberte jak si přejete ${PRODUCT_NAME} nainstalovat."
 ${LangFileString} Reinstall_HeadlineMaintenance "Vyberte volbu údržby pro vykonání."
-${LangFileString} Reinstall_MessageOlder "Již máte nainstalovánu starší verzi VLC. Vyberte činnost k provedení a pro pokračování klikněte na Další."
-${LangFileString} Reinstall_MessageNewer "Již je nainstalována novější verze VLC. Není doporučeno navracet se ke starší verzi. Vyberte činnost k provedení a pro pokračování klikněte na Další."
-${LangFileString} Reinstall_MessageSame "Přehrávač VLC verze ${VERSION} je již nainstalován. Vyberte činnost k provedení a pro pokračování klikněte na Další."
-${LangFileString} Reinstall_OptionUpgrade "Aktualizovat VLC pomocí předchozího nastavení (doporučeno)"
-${LangFileString} Reinstall_OptionDowngrade "Snížit verzi VLC s použitím předchozího nastavení (doporučeno)"
+${LangFileString} Reinstall_MessageOlder "Již máte nainstalovánu starší verzi ${PRODUCT_NAME}. Vyberte činnost k provedení a pro pokračování klikněte na Další."
+${LangFileString} Reinstall_MessageNewer "Již je nainstalována novější verze ${PRODUCT_NAME}. Není doporučeno navracet se ke starší verzi. Vyberte činnost k provedení a pro pokračování klikněte na Další."
+${LangFileString} Reinstall_MessageSame "Přehrávač ${PRODUCT_NAME} verze ${VERSION} je již nainstalován. Vyberte činnost k provedení a pro pokračování klikněte na Další."
+${LangFileString} Reinstall_OptionUpgrade "Aktualizovat ${PRODUCT_NAME} pomocí předchozího nastavení (doporučeno)"
+${LangFileString} Reinstall_OptionDowngrade "Snížit verzi ${PRODUCT_NAME} s použitím předchozího nastavení (doporučeno)"
 ${LangFileString} Reinstall_OptionComponents "Přidat/Odebrat/Přeinstalovat komponenty"
 ${LangFileString} Reinstall_OptionAdvanced "Změnit nastavení (pokročilé)"
-${LangFileString} Reinstall_OptionUninstall "Odinstalovat VLC"
+${LangFileString} Reinstall_OptionUninstall "Odinstalovat ${PRODUCT_NAME}"

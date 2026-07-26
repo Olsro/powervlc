@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Ouzhpennañ un arlun d'ho purev evit ur moned aes"
 ${LangFileString} Desc_Section03 \
-    "Lugant VLC Mozilla ha Mozilla Firefox"
+    "Lugant ${PRODUCT_NAME} Mozilla ha Mozilla Firefox"
 ${LangFileString} Desc_Section04 \
-    "Lugant VLC ActiveX"
+    "Lugant ${PRODUCT_NAME} ActiveX"
 ${LangFileString} Desc_Section05 \
     "Enrollañ al lenn ar pladennoù DVD ha CD"
 ${LangFileString} Desc_Section06 \
-    "Termeniñ al lenner liesvedia VLC evel arload dre ziouer evit an doare restr spisaet"
+    "Termeniñ al lenner liesvedia ${PRODUCT_NAME} evel arload dre ziouer evit an doare restr spisaet"
 ${LangFileString} Desc_Section07 \
-    "Ouzhpennañ elfennoù lañser kemperzhel ('Lenn gant VLC' ha 'Ouzhpennañ da roll-lenn VLC')"
+    "Ouzhpennañ elfennoù lañser kemperzhel ('Lenn gant ${PRODUCT_NAME}' ha 'Ouzhpennañ da roll-lenn ${PRODUCT_NAME}')"
 ${LangFileString} Desc_Section08 \
-    "Dilemel gwellvezioù VLC media player ha restroù krubuilh ar staliadurioù kent"
+    "Dilemel gwellvezioù ${PRODUCT_NAME} ha restroù krubuilh ar staliadurioù kent"
 
 ${LangFileString} Name_Section91 "Distaliañ"
 ${LangFileString} Name_Section92 "Lemel ar gwellvezioù hag ar grubuilh"
 
 ${LangFileString} Desc_Section91 \
-"Distaliañ lenner media VLC hag e holl barzhioù"
+"Distaliañ lenner media ${PRODUCT_NAME} hag e holl barzhioù"
 ${LangFileString} Desc_Section92 \
-"Lemel gwellvezioù al lenner media VLC ha restroù ar grubuilh"
+"Lemel gwellvezioù al lenner media ${PRODUCT_NAME} ha restroù ar grubuilh"
 
 ${LangFileString} ShellAssociation_Play "Lenn"
-${LangFileString} ContextMenuEntry_PlayWith "Lenn gant VLC media player"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Ouzhpennañ da roll-lenn al lenner media VLC"
+${LangFileString} ContextMenuEntry_PlayWith "Lenn gant ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Ouzhpennañ da roll-lenn al lenner media ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "Mont da welet lec’hienn al lenner media VideoLAN VLC"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Lenn Blu-ray"
 ${LangFileString} License_NextText "Kelaouet oc’h bremañ diwar-benn ho kwirioù. Klikit war Da-Heul evit kenderc’hel."
 
 ${LangFileString} Detail_CheckProcesses "O wiriañ an argerzhoù..."
-${LangFileString} MessageBox_VLCRunning "VLC a seblant mont en-dro hag e vo serret bremañ."
-${LangFileString} MessageBox_VLCUnableToClose "Ne oa ket gouest ar stalier da serriñ VLC, grit gant an dorn mar plij."
+${LangFileString} MessageBox_VLCRunning "${PRODUCT_NAME} a seblant mont en-dro hag e vo serret bremañ."
+${LangFileString} MessageBox_VLCUnableToClose "Ne oa ket gouest ar stalier da serriñ ${PRODUCT_NAME}, grit gant an dorn mar plij."
 ${LangFileString} MessageBox_InstallAborted "Staliadur dilezet!"
 
 ${LangFileString} Reinstall_Headline "Staliet dija"
-${LangFileString} Reinstall_HeadlineInstall "Dibabit penaos e fell deoc’h staliañ VLC."
+${LangFileString} Reinstall_HeadlineInstall "Dibabit penaos e fell deoc’h staliañ ${PRODUCT_NAME}."
 ${LangFileString} Reinstall_HeadlineMaintenance "Dibabit an dibarzh trezalc’h da ober."
-${LangFileString} Reinstall_MessageOlder "Ur stumm koshoc’h eus VLC a zo staliet war ho reizhiad. Dibabit an oberiadenn a fell deoc’h lañsañ anezhi ha klikit war Da Heul evit kenderc’hel."
-${LangFileString} Reinstall_MessageNewer "Ur stumm nevesoc’h eus VLC a zo staliet dija! N'eo ket erbedet ec'h argilfec'h betek ur stumm koshoc’h. Dibabit an oberiadenn a fell deoc’h lañsañ ha klikit war Da Heul evit kenderc’hel."
-${LangFileString} Reinstall_MessageSame "Staliet eo VLC ${VERSION} dija. Dibabit an oberiadenn a fell deoc’h lañsañ ha klikit war Da Heul evit kenderc’hel."
-${LangFileString} Reinstall_OptionUpgrade "Hizivaat VLC en ur ober gant an arventennoù kent (erbedet)"
-${LangFileString} Reinstall_OptionDowngrade "Argilañ VLC en ur ober gant an arventennoù kent (erbedet)"
+${LangFileString} Reinstall_MessageOlder "Ur stumm koshoc’h eus ${PRODUCT_NAME} a zo staliet war ho reizhiad. Dibabit an oberiadenn a fell deoc’h lañsañ anezhi ha klikit war Da Heul evit kenderc’hel."
+${LangFileString} Reinstall_MessageNewer "Ur stumm nevesoc’h eus ${PRODUCT_NAME} a zo staliet dija! N'eo ket erbedet ec'h argilfec'h betek ur stumm koshoc’h. Dibabit an oberiadenn a fell deoc’h lañsañ ha klikit war Da Heul evit kenderc’hel."
+${LangFileString} Reinstall_MessageSame "Staliet eo ${PRODUCT_NAME} ${VERSION} dija. Dibabit an oberiadenn a fell deoc’h lañsañ ha klikit war Da Heul evit kenderc’hel."
+${LangFileString} Reinstall_OptionUpgrade "Hizivaat ${PRODUCT_NAME} en ur ober gant an arventennoù kent (erbedet)"
+${LangFileString} Reinstall_OptionDowngrade "Argilañ ${PRODUCT_NAME} en ur ober gant an arventennoù kent (erbedet)"
 ${LangFileString} Reinstall_OptionComponents "Ouzhpennañ/Lemel/Adstaliañ parzhioù"
 ${LangFileString} Reinstall_OptionAdvanced "Kemm an arventennoù (araokaet)"
-${LangFileString} Reinstall_OptionUninstall "Distaliañ VLC"
+${LangFileString} Reinstall_OptionUninstall "Distaliañ ${PRODUCT_NAME}"

@@ -440,6 +440,31 @@ static inline bool vout_display_IsWindowed(vout_display_t *vd)
  */
 VLC_API void vout_display_GetDefaultDisplaySize(unsigned *width, unsigned *height, const video_format_t *source, const vout_display_cfg_t *);
 
+/**
+ * How many extra pictures a display should allocate for the look-ahead
+ * decode cache (video-cache-mb).
+ *
+ * Only useful to displays that hand their pool to the decoder (direct
+ * rendering): there the cache IS that pool's headroom, and the core cannot
+ * size it -- vout_wrapper.c asks for a fixed count and only the display knows
+ * what it can afford. Displays that keep a pool of their own get the cache for
+ * free through the indirect path and must not call this.
+ *
+ * Returns 0 when the cache is off, when the picture size is unknown, or when
+ * the budget lands under the viability floor decoder.c enforces
+ * (VIDEO_CACHE_DR_MIN_VIABLE) -- below it a cushion measurably hurts more than
+ * having none, so the pool should stay at its base size rather than pay for
+ * pictures the cache will refuse to use.
+ *
+ * The result is already bounded by installed RAM. A display with a tighter
+ * constraint of its own (mapped aperture, VRAM...) must clamp further.
+ *
+ * \param vd display
+ * \param pic_bytes size of one pool picture in bytes, or 0 to have it measured
+ *                  from the display format
+ */
+VLC_API unsigned vout_display_CacheExtraPictures(vout_display_t *vd, size_t pic_bytes);
+
 
 /**
  * Structure used to store the result of a vout_display_PlacePicture.

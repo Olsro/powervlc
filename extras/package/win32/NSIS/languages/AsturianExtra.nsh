@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Amiesta iconos al Escritoriu pa un accesu fácil"
 ${LangFileString} Desc_Section03 \
-    "El complementu VLC de Mozilla y Mozilla Firefox"
+    "El complementu ${PRODUCT_NAME} de Mozilla y Mozilla Firefox"
 ${LangFileString} Desc_Section04 \
-    "El complementu VLC d'ActiveX"
+    "El complementu ${PRODUCT_NAME} d'ActiveX"
 ${LangFileString} Desc_Section05 \
     "Rexistru de reproducción DVD y CD"
 ${LangFileString} Desc_Section06 \
-    "Afitar el Reproductor multimedia VLC como aplicación predefinida pa la triba de ficheru especificada"
+    "Afitar el Reproductor multimedia ${PRODUCT_NAME} como aplicación predefinida pa la triba de ficheru especificada"
 ${LangFileString} Desc_Section07 \
-    "Amiesta opciones nel menú contestual («Reproducir con VLC» y «Amestar a la llista de VLC»)"
+    "Amiesta opciones nel menú contestual («Reproducir con ${PRODUCT_NAME}» y «Amestar a la llista de ${PRODUCT_NAME}»)"
 ${LangFileString} Desc_Section08 \
-    "Desanicia los ficheros de caché y preferencies del reproductor multimedia VLC d'instalaciones anteriores"
+    "Desanicia los ficheros de caché y preferencies del reproductor multimedia ${PRODUCT_NAME} d'instalaciones anteriores"
 
 ${LangFileString} Name_Section91 "Desinstalar"
 ${LangFileString} Name_Section92 "Desaniciar caché y preferencies"
 
 ${LangFileString} Desc_Section91 \
-"Desinstalar reproductor VLC y tolos componentes"
+"Desinstalar reproductor ${PRODUCT_NAME} y tolos componentes"
 ${LangFileString} Desc_Section92 \
-"Desanicia los ficheros de caché y preferencies de VLC"
+"Desanicia los ficheros de caché y preferencies de ${PRODUCT_NAME}"
 
 ${LangFileString} ShellAssociation_Play "Reproducir"
-${LangFileString} ContextMenuEntry_PlayWith "Reproducir con VLC"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Amestar a la llista de VLC"
+${LangFileString} ContextMenuEntry_PlayWith "Reproducir con ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Amestar a la llista de ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "Visita'l sitiu VideoLAN VLC"
 
@@ -60,18 +60,18 @@ ${LangFileString} Action_OnArrivalDVDAudio "Reproducir DVD d'audiu"
 ${LangFileString} License_NextText "Agora que yes consciente de los tos drechos, calca Siguiente pa siguir."
 
 ${LangFileString} Detail_CheckProcesses "Comprobando procesos..."
-${LangFileString} MessageBox_VLCRunning "VLC entá ta executándose y va zarrase agora"
-${LangFileString} MessageBox_VLCUnableToClose "Esti instalador nun pudo zarrar VLC, por favor, failo tu."
+${LangFileString} MessageBox_VLCRunning "${PRODUCT_NAME} entá ta executándose y va zarrase agora"
+${LangFileString} MessageBox_VLCUnableToClose "Esti instalador nun pudo zarrar ${PRODUCT_NAME}, por favor, failo tu."
 ${LangFileString} MessageBox_InstallAborted "Instalación encaboxada"
 
 ${LangFileString} Reinstall_Headline "Yá ta instaláu"
-${LangFileString} Reinstall_HeadlineInstall "Seleiciona cómo quies instalar VLC"
+${LangFileString} Reinstall_HeadlineInstall "Seleiciona cómo quies instalar ${PRODUCT_NAME}"
 ${LangFileString} Reinstall_HeadlineMaintenance "Seleiciona la opción de caltenmientu a facer"
-${LangFileString} Reinstall_MessageOlder "Hai instalada una versión más antigua de VLC nel sistema. Seleiciona la operación que quies facer y primi Siguiente pa continuar"
-${LangFileString} Reinstall_MessageNewer "Hai instalada una versión más nueva de VLC nel sistema. Nun se recomienda qu'instales una versión más vieya. Seleiciona la operación que quies facer y primi Siguiente pa continuar."
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} yá ta instaláu. Seleiciona la operación que quies facer, y primi Siguiente pa continuar."
-${LangFileString} Reinstall_OptionUpgrade "Anovar VLC usando les siguientes preferencies (recomiéndase)"
-${LangFileString} Reinstall_OptionDowngrade "Baxar VLC de versión usando les preferencies anteriores (recomiéndase)"
+${LangFileString} Reinstall_MessageOlder "Hai instalada una versión más antigua de ${PRODUCT_NAME} nel sistema. Seleiciona la operación que quies facer y primi Siguiente pa continuar"
+${LangFileString} Reinstall_MessageNewer "Hai instalada una versión más nueva de ${PRODUCT_NAME} nel sistema. Nun se recomienda qu'instales una versión más vieya. Seleiciona la operación que quies facer y primi Siguiente pa continuar."
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} yá ta instaláu. Seleiciona la operación que quies facer, y primi Siguiente pa continuar."
+${LangFileString} Reinstall_OptionUpgrade "Anovar ${PRODUCT_NAME} usando les siguientes preferencies (recomiéndase)"
+${LangFileString} Reinstall_OptionDowngrade "Baxar ${PRODUCT_NAME} de versión usando les preferencies anteriores (recomiéndase)"
 ${LangFileString} Reinstall_OptionComponents "Amestar/Desaniciar/Reinstalar componentes"
 ${LangFileString} Reinstall_OptionAdvanced "Camudar preferencies (avanzáu)"
-${LangFileString} Reinstall_OptionUninstall "Desinstalar VLC"
+${LangFileString} Reinstall_OptionUninstall "Desinstalar ${PRODUCT_NAME}"

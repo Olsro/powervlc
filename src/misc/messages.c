@@ -337,8 +337,10 @@ int vlc_LogPreinit(libvlc_int_t *vlc)
         return -1;
     }
 
-    /* Announce who we are */
-    msg_Dbg(vlc, "VLC media player - %s", VERSION_MESSAGE);
+    /* Announce who we are: the product first, then the VLC release it is
+     * forked from (same convention as --version / bin/vlc.c). */
+    msg_Dbg(vlc, "PowerVLC %s - forked from VLC media player %s",
+            POWERVLC_VERSION, VERSION_MESSAGE);
     msg_Dbg(vlc, "%s", COPYRIGHT_MESSAGE);
     msg_Dbg(vlc, "revision %s", psz_vlc_changeset);
     msg_Dbg(vlc, "configured with %s", CONFIGURE_LINE);

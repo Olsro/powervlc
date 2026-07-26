@@ -46,7 +46,11 @@
 /* apple stuff */
 #ifdef __APPLE__
 # undef HAVE_FONTCONFIG
-# define HAVE_GET_FONT_BY_FAMILY_NAME
+/* family-name resolution needs the CoreText backend (10.5+); without it
+ * the default style must carry a font file path, not a family name */
+# ifdef HAVE_CORETEXT
+#  define HAVE_GET_FONT_BY_FAMILY_NAME
+# endif
 #endif
 
 /* Win32 */
@@ -1439,7 +1443,7 @@ static int Create( vlc_object_t *p_this )
     if( FontConfig_Prepare( p_filter ) )
         goto error;
 
-#elif defined( __APPLE__ )
+#elif defined( __APPLE__ ) && defined( HAVE_CORETEXT )
     p_sys->pf_select = Generic_Select;
     p_sys->pf_get_family = CoreText_GetFamily;
     p_sys->pf_get_fallbacks = CoreText_GetFallbacks;

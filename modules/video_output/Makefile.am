@@ -36,17 +36,35 @@ libvout_macosx_plugin_la_LIBADD = $(OPENGL_COMMONLIBS)
 libvout_macosx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \
 	-Wl,-framework,OpenGL,-framework,Cocoa
 
+libmacosx_gl1_plugin_la_SOURCES = video_output/macosx_gl1.m
+libmacosx_gl1_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \
+	-Wl,-framework,OpenGL,-framework,Cocoa
+
+libmacosx_qt_plugin_la_SOURCES = video_output/macosx_qt.m
+libmacosx_qt_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \
+	-Wl,-framework,QuickTime,-framework,Carbon,-framework,Cocoa
+
 libcaopengllayer_plugin_la_SOURCES = video_output/caopengllayer.m $(OPENGL_COMMONSOURCES)
 libcaopengllayer_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCLFAGS) -DHAVE_GL_CORE_SYMBOLS
 libcaopengllayer_plugin_la_LIBADD = $(OPENGL_COMMONLIBS)
 libcaopengllayer_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \
 	-Wl,-framework,OpenGL,-framework,Cocoa,-framework,QuartzCore
 
-vout_LTLIBRARIES += libvout_macosx_plugin.la libcaopengllayer_plugin.la \
-	libglconv_cvpx_plugin.la
+vout_LTLIBRARIES += libvout_macosx_plugin.la libmacosx_gl1_plugin.la
+if HAVE_QUICKTIME_FRAMEWORK
+vout_LTLIBRARIES += libmacosx_qt_plugin.la
+endif
+if HAVE_VT_FRAMEWORK
+vout_LTLIBRARIES += libglconv_cvpx_plugin.la
+endif
+if HAVE_OSX_GCD
+# caopengllayer relies on Grand Central Dispatch (Mac OS X 10.6+)
+vout_LTLIBRARIES += libcaopengllayer_plugin.la
+endif
 endif
 if HAVE_OSX
-libglconv_cvpx_plugin_la_CFLAGS = $(AM_CFLAGS)
+# vt_utils.c uses CoreVideo APIs requiring Mac OS X 10.6.
+libglconv_cvpx_plugin_la_CFLAGS = $(AM_CFLAGS) -mmacosx-version-min=10.6
 libglconv_cvpx_plugin_la_LDFLAGS += -Wl,-framework,OpenGL
 else
 libglconv_cvpx_plugin_la_CFLAGS = $(AM_CFLAGS) -DUSE_OPENGL_ES2

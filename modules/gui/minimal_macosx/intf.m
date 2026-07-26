@@ -88,13 +88,18 @@ extern OSErr    CPSSetFrontProcess(CPSProcessSerNum *psn);
 static void Run(intf_thread_t *p_intf)
 {
     CPSProcessSerNum PSN;
-    @autoreleasepool {
-        [NSApplication sharedApplication];
-        if (!CPSGetCurrentProcess(&PSN))
-            if (!CPSEnableForegroundOperation(&PSN,0x03,0x3C,0x2C,0x1103))
-                if (!CPSSetFrontProcess(&PSN))
-                    [NSApplication sharedApplication];
-    }
+    /* Manual autorelease pool: @autoreleasepool lowers to runtime calls
+     * (objc_autoreleasePoolPush) missing before Mac OS X 10.7, and this
+     * module is only built when targeting releases without them. Same
+     * reasoning for the manual retain/release throughout this file: ARC
+     * requires the 10.6 runtime. */
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    [NSApplication sharedApplication];
+    if (!CPSGetCurrentProcess(&PSN))
+        if (!CPSEnableForegroundOperation(&PSN,0x03,0x3C,0x2C,0x1103))
+            if (!CPSSetFrontProcess(&PSN))
+                [NSApplication sharedApplication];
+    [pool release];
 }
 
 /*****************************************************************************
@@ -102,29 +107,56 @@ static void Run(intf_thread_t *p_intf)
  *****************************************************************************/
 static int WindowControl(vout_window_t *, int i_query, va_list);
 
+/* AppKit windows must be created and torn down on the main thread; blocks
+ * and GCD being unavailable, marshal through performSelectorOnMainThread. */
+@interface VLCMinimalWindowFactory : NSObject
+{
+@public
+    NSRect rect;
+    VLCMinimalVoutWindow *window;
+}
+- (void)createWindow;
+@end
+
+@implementation VLCMinimalWindowFactory
+- (void)createWindow
+{
+    window = [[VLCMinimalVoutWindow alloc] initWithContentRect:rect];
+    [window makeKeyAndOrderFront:nil];
+}
+@end
+
 int WindowOpen(vout_window_t *p_wnd, const vout_window_cfg_t *cfg)
 {
     if (cfg->type != VOUT_WINDOW_TYPE_INVALID
      && cfg->type != VOUT_WINDOW_TYPE_NSOBJECT)
         return VLC_EGENERIC;
 
-    @autoreleasepool {
-        NSRect proposedVideoViewPosition = NSMakeRect(cfg->x, cfg->y, cfg->width, cfg->height);
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
-        VLCMinimalVoutWindow *o_window = [[VLCMinimalVoutWindow alloc] initWithContentRect:proposedVideoViewPosition];
-        [o_window makeKeyAndOrderFront:nil];
+    VLCMinimalWindowFactory *factory = [[VLCMinimalWindowFactory alloc] init];
+    factory->rect = NSMakeRect(cfg->x, cfg->y, cfg->width, cfg->height);
+    [factory performSelectorOnMainThread:@selector(createWindow)
+                              withObject:nil
+                           waitUntilDone:YES];
+    VLCMinimalVoutWindow *o_window = factory->window;
+    [factory release];
 
-        if (!o_window) {
-            msg_Err(p_wnd, "window creation failed");
-            return VLC_EGENERIC;
-        }
-
-        msg_Dbg(p_wnd, "returning video window with proposed position x=%i, y=%i, width=%i, height=%i", cfg->x, cfg->y, cfg->width, cfg->height);
-        p_wnd->handle.nsobject = (void *)CFBridgingRetain([o_window contentView]);
-
-        p_wnd->type = VOUT_WINDOW_TYPE_NSOBJECT;
-        p_wnd->control = WindowControl;
+    if (!o_window) {
+        msg_Err(p_wnd, "window creation failed");
+        [pool release];
+        return VLC_EGENERIC;
     }
+
+    msg_Dbg(p_wnd, "returning video window with proposed position x=%i, y=%i, width=%i, height=%i", cfg->x, cfg->y, cfg->width, cfg->height);
+    /* The window (created with a +1 retain above, released when closed) is
+     * recovered from this view in WindowControl()/WindowClose(). */
+    p_wnd->handle.nsobject = (void *)[[o_window contentView] retain];
+
+    p_wnd->type = VOUT_WINDOW_TYPE_NSOBJECT;
+    p_wnd->control = WindowControl;
+
+    [pool release];
 
     vout_window_SetFullScreen(p_wnd, cfg->is_fullscreen);
     return VLC_SUCCESS;
@@ -132,12 +164,15 @@ int WindowOpen(vout_window_t *p_wnd, const vout_window_cfg_t *cfg)
 
 static int WindowControl(vout_window_t *p_wnd, int i_query, va_list args)
 {
-    NSWindow* o_window = [(__bridge id)p_wnd->handle.nsobject window];
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    NSWindow* o_window = [(id)p_wnd->handle.nsobject window];
     if (!o_window) {
         msg_Err(p_wnd, "failed to recover cocoa window");
+        [pool release];
         return VLC_EGENERIC;
     }
 
+    int i_ret;
     switch (i_query) {
         case VOUT_WINDOW_SET_STATE:
         {
@@ -145,46 +180,57 @@ static int WindowControl(vout_window_t *p_wnd, int i_query, va_list args)
 
             [o_window setLevel:i_state];
 
-            return VLC_SUCCESS;
+            i_ret = VLC_SUCCESS;
+            break;
         }
         case VOUT_WINDOW_SET_SIZE:
         {
             unsigned int i_width  = va_arg(args, unsigned int);
             unsigned int i_height = va_arg(args, unsigned int);
-            @autoreleasepool {
-                dispatch_sync(dispatch_get_main_queue(), ^{
-                    NSRect theFrame = [o_window frame];
-                    theFrame.size.width = i_width;
-                    theFrame.size.height = i_height;
-                    [o_window setFrame:theFrame display:YES animate:YES];
-                });
-            }
-            return VLC_SUCCESS;
+            NSValue *size = [NSValue valueWithSize:NSMakeSize(i_width, i_height)];
+            [(VLCMinimalVoutWindow*)o_window
+                performSelectorOnMainThread:@selector(setSizeFromValue:)
+                                 withObject:size
+                              waitUntilDone:NO];
+            i_ret = VLC_SUCCESS;
+            break;
         }
         case VOUT_WINDOW_SET_FULLSCREEN:
         {
             int i_full = va_arg(args, int);
-            @autoreleasepool {
-                dispatch_sync(dispatch_get_main_queue(), ^{
-                    if (i_full)
-                        [(VLCMinimalVoutWindow*)o_window enterFullscreen];
-                    else
-                        [(VLCMinimalVoutWindow*)o_window leaveFullscreen];
-                });
-            }
-            return VLC_SUCCESS;
+            [(VLCMinimalVoutWindow*)o_window
+                performSelectorOnMainThread:(i_full ? @selector(enterFullscreen)
+                                                    : @selector(leaveFullscreen))
+                                 withObject:nil
+                              waitUntilDone:NO];
+            i_ret = VLC_SUCCESS;
+            break;
         }
         default:
             msg_Warn(p_wnd, "unsupported control query");
-            return VLC_EGENERIC;
+            i_ret = VLC_EGENERIC;
+            break;
     }
+
+    [pool release];
+    return i_ret;
 }
 
 void WindowClose(vout_window_t *p_wnd)
 {
-    @autoreleasepool {
-        NSWindow * o_window = [(__bridge id)p_wnd->handle.nsobject window];
-        if (o_window)
-            o_window = nil;
-    }
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    NSView *o_view = (id)p_wnd->handle.nsobject;
+    NSWindow *o_window = [o_view window];
+    if (o_window)
+        /* -close releases the window (releasedWhenClosed defaults to YES
+         * for windows created programmatically). */
+        [o_window performSelectorOnMainThread:@selector(close)
+                                   withObject:nil
+                                waitUntilDone:NO];
+    /* Balances the retain in WindowOpen(); deferred to the main thread so
+     * the view outlives the pending close above. */
+    [o_view performSelectorOnMainThread:@selector(release)
+                             withObject:nil
+                          waitUntilDone:NO];
+    [pool release];
 }

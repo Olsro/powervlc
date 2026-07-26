@@ -45,8 +45,12 @@ _add_environ_val('pkg_config_libdir', 'PKG_CONFIG_LIBDIR')
 args.file.write("\n[host_machine]\n")
 _add_environ_val('system', 'HOST_SYSTEM')
 _add_environ_val('cpu_family', 'HOST_ARCH')
-args.file.write("endian = 'little'\n")
 
 # Get first part of triplet
 cpu = os.environ.get('HOST', '').split('-')[0]
+
+big_endian_cpus = ('powerpc', 'powerpc64', 'ppc', 'ppc64', 'sparc',
+                   'sparc64', 'mips', 'mips64', 'm68k', 's390x', 'hppa')
+endian = 'big' if cpu in big_endian_cpus else 'little'
+args.file.write("endian = '{}'\n".format(endian))
 args.file.write("cpu = '{}'\n".format(cpu))

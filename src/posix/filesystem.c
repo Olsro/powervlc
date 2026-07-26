@@ -72,7 +72,7 @@ int vlc_open (const char *filename, int flags, ...)
     int fd = open(filename, flags, mode);
     if (fd != -1)
         vlc_cloexec(fd);
-    return -1;
+    return fd;
 #endif
 }
 
@@ -213,7 +213,7 @@ int vlc_dup (int oldfd)
 #else
     int newfd = dup (oldfd);
     if (newfd != -1)
-        vlc_cloexec(oldfd);
+        vlc_cloexec(newfd);
     return newfd;
 #endif
 }

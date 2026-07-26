@@ -25,8 +25,28 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <errno.h>
-#if !defined (HAVE_POSIX_MEMALIGN)
+#include <stdint.h>
+#if !defined (HAVE_POSIX_MEMALIGN) && defined (HAVE_MEMALIGN)
 # include <malloc.h>
+#endif
+
+#if !defined (HAVE_POSIX_MEMALIGN) && !defined (HAVE_MEMALIGN) \
+ && !(defined (_WIN32) && (defined (__MINGW32__) || defined (_MSC_VER)))
+/* No native aligned allocator at all (e.g. Mac OS X before 10.6):
+ * over-allocate and align manually, stashing the real malloc()'d
+ * pointer just before the block returned to the caller so that
+ * vlc_aligned_free() can recover and release it. */
+# define VLC_ALIGNED_ALLOC_FALLBACK 1
+#endif
+
+/* Same rename as vlc_fixups.h applies to the CALLERS: on Apple targets the
+ * SDK always declares aligned_alloc() with __OSX_AVAILABLE(10.15), so a
+ * deployment target below that cannot name it -- the header points callers
+ * at vlc_aligned_alloc() instead. The definition has to follow, or every
+ * pre-10.15 build links against a symbol nothing provides. Placed after the
+ * system headers on purpose, so the SDK's own declaration is left alone. */
+#if defined (__APPLE__) && defined (__clang__)
+# define aligned_alloc vlc_aligned_alloc
 #endif
 
 void *aligned_alloc(size_t align, size_t size)
@@ -58,6 +78,18 @@ void *aligned_alloc(size_t align, size_t size)
     return __mingw_aligned_malloc(size, align);
 #elif defined (_WIN32) && defined(_MSC_VER)
     return _aligned_malloc(size, align);
+#elif defined (VLC_ALIGNED_ALLOC_FALLBACK)
+    if (align < sizeof (void *))
+        align = sizeof (void *);
+
+    void *base = malloc(size + align - 1 + sizeof (void *));
+    if (base == NULL)
+        return NULL;
+
+    uintptr_t aligned = ((uintptr_t)base + sizeof (void *) + align - 1)
+                       & ~(uintptr_t)(align - 1);
+    ((void **)aligned)[-1] = base;
+    return (void *)aligned;
 #else
 #warning unsupported aligned allocation!
     if (size > 0)
@@ -65,3 +97,11 @@ void *aligned_alloc(size_t align, size_t size)
     return NULL;
 #endif
 }
+
+#ifdef VLC_ALIGNED_ALLOC_FALLBACK
+void vlc_aligned_free(void *ptr)
+{
+    if (ptr != NULL)
+        free(((void **)ptr)[-1]);
+}
+#endif

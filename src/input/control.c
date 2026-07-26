@@ -37,6 +37,7 @@
 #include "event.h"
 #include "resource.h"
 #include "es_out.h"
+#include "../libvlc.h" /* stats_ComputeInputStats */
 
 
 static void UpdateBookmarksOption( input_thread_t * );
@@ -573,6 +574,29 @@ int input_vaControl( input_thread_t *p_input, int i_query, va_list args )
             vlc_tick_t i_system = va_arg( args, vlc_tick_t );
             return es_out_ControlModifyPcrSystem( priv->p_es_out_display, b_absolute, i_system );
         }
+
+        case INPUT_SET_VIDEO_CACHE_SKIP:
+            return es_out_Control( priv->p_es_out_display,
+                                   ES_OUT_SET_VIDEO_CACHE_SKIP );
+
+        case INPUT_GET_VIDEO_CACHE_STATE:
+        {
+            size_t *pi_count = va_arg( args, size_t * );
+            size_t *pi_target = va_arg( args, size_t * );
+            size_t *pi_bytes = va_arg( args, size_t * );
+            return es_out_Control( priv->p_es_out_display,
+                                   ES_OUT_GET_VIDEO_CACHE_STATE,
+                                   pi_count, pi_target, pi_bytes );
+        }
+
+        case INPUT_UPDATE_STATS:
+            if( priv->p_item->p_stats == NULL )
+                return VLC_EGENERIC;
+            /* Thread-safe: stats_ComputeInputStats only reads under the
+             * counters lock and writes under the stats lock, and queries
+             * es_out (own lock) before taking either. */
+            stats_ComputeInputStats( p_input, priv->p_item->p_stats );
+            return VLC_SUCCESS;
 
         case INPUT_SET_RENDERER:
         {

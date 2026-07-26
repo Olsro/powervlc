@@ -570,8 +570,31 @@ static int OpenClient (vlc_tls_creds_t *crd)
     {
         val = gnutls_certificate_set_x509_system_trust(x509);
         if (val < 0)
-            msg_Err(crd, "cannot load trusted Certificate Authorities "
+        {
+            msg_Dbg(crd, "cannot load trusted Certificate Authorities "
                     "from %s: %s", "system", gnutls_strerror(val));
+            /* Mac OS X before 10.6 (and any OS without a trust store gnutls
+             * can read) reports the system trust as unimplemented. Fall
+             * back to the CA bundle shipped in the application data dir. */
+            char *datadir = config_GetDataDir();
+            if (datadir != NULL)
+            {
+                char *bundle;
+                if (asprintf(&bundle, "%s/ca-certificates.crt", datadir) >= 0)
+                {
+                    val = gnutls_certificate_set_x509_trust_file(
+                            x509, bundle, GNUTLS_X509_FMT_PEM);
+                    if (val < 0)
+                        msg_Err(crd, "cannot load bundled CAs from %s: %s",
+                                bundle, gnutls_strerror(val));
+                    else
+                        msg_Dbg(crd, "loaded %d trusted CAs from bundle",
+                                val);
+                    free(bundle);
+                }
+                free(datadir);
+            }
+        }
         else
             msg_Dbg(crd, "loaded %d trusted CAs from %s", val, "system");
     }

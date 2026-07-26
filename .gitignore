@@ -53,3 +53,10 @@ build*/
 contrib-*
 install-*
 !extras/package/apple/build.sh
+
+# Ignore AI Stuff
+scratchpad
+HANDOFF*
+
+# Collected release archives (collect-zips.sh)
+zips/

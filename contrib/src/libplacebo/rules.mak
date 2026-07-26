@@ -27,6 +27,7 @@ $(TARBALLS)/$(PLACEBO_ARCHIVE):
 libplacebo: $(PLACEBO_ARCHIVE) .sum-libplacebo
 	$(UNPACK)
 	$(APPLY) $(SRC)/libplacebo/0001-build-use-a-Makefile.patch
+	$(APPLY) $(SRC)/libplacebo/0001-ta_utils-avoid-strnlen-for-old-macOS.patch
 	$(MOVE)
 
 .libplacebo: libplacebo

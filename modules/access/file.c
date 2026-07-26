@@ -281,8 +281,21 @@ static ssize_t Read (stream_t *p_access, void *p_buffer, size_t i_len)
 {
     access_sys_t *p_sys = p_access->p_sys;
     int fd = p_sys->fd;
+    ssize_t val;
 
-    ssize_t val = vlc_read_i11e (fd, p_buffer, i_len);
+#if defined(__APPLE__) && defined(MAC_OS_X_VERSION_MIN_REQUIRED) \
+    && MAC_OS_X_VERSION_MIN_REQUIRED < 1060
+    /* Tiger's poll() is broken on regular files (it never reports
+     * readiness on network filesystems like AFP), which leaves the
+     * interruptible read of vlc_read_i11e stuck forever in poll() while
+     * the interface shows an endless "opening" state. Regular files are
+     * always "ready" per POSIX, and a plain read() on them cannot block
+     * indefinitely: skip the poll for seekable files there. */
+    if (p_sys->b_pace_control)
+        val = read (fd, p_buffer, i_len);
+    else
+#endif
+    val = vlc_read_i11e (fd, p_buffer, i_len);
     if (val < 0)
     {
         switch (errno)

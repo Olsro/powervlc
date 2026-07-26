@@ -1,0 +1,59 @@
+macOS: load Apple's Java 6 through the JavaVM umbrella framework
+
+On Mac OS X 10.5 and 10.6 the only JRE available is Apple's own Java 6, which
+is also what the community PowerPC port descends from. None of the paths tried
+by _load_jvm() find it:
+
+  - it has no libjli.dylib at all (it predates the jli launcher split), so
+    _load_jli_macos() always fails;
+  - /usr/libexec/java_home does exist and answers
+    /System/Library/Java/JavaVirtualMachines/1.6.0.jdk/Contents/Home, but there
+    is no lib/server or jre/lib/server underneath it: the VM libraries sit in
+    ../Libraries;
+  - and those libraries export only JNI_CreateJavaVM_Impl, so pointing dlopen()
+    straight at them would not help either.
+
+The JavaVM umbrella framework is what exports JNI_CreateJavaVM and dispatches to
+the VM matching the process architecture, which also side-steps libjvm.dylib
+being i386-only. Verified on 10.6.8 with Apple Java 1.6.0_65: dlopen() of the
+framework followed by JNI_CreateJavaVM starts a VM in both i386 and x86_64.
+
+Tried last, so a modern Oracle/OpenJDK install still wins where one exists.
+
+--- a/src/libbluray/bdj/bdj.c
++++ b/src/libbluray/bdj/bdj.c
+@@ -233,9 +233,20 @@
+ #endif
+ 
+ #ifdef __APPLE__
++#include <dlfcn.h>
+ // The current official JRE is installed by Oracle's Java Applet internet plugin:
+ #define MACOS_JRE_HOME "/Library/Internet Plug-Ins/JavaAppletPlugin.plugin/Contents/Home"
+ static const char *jre_plugin_path = MACOS_JRE_HOME;
++// Apple's own Java 6, the last JRE available on Mac OS X 10.5 and 10.6 (and the
++// base of the community PowerPC port), predates both the jli launcher and the
++// jre/lib/server layout, so every path tried above misses it. Its VM libraries
++// live in <jdk>/Contents/Libraries and export only JNI_CreateJavaVM_Impl: the
++// umbrella framework is what exports JNI_CreateJavaVM and dispatches to the VM
++// matching the process architecture (libjvm.dylib is i386-only, libserver.dylib
++// is universal). Opened with dlopen() rather than dl_dlopen(), which would
++// append a .dylib suffix the framework binary does not have.
++#define MACOS_JAVAVM_FRAMEWORK \
++    "/System/Library/Frameworks/JavaVM.framework/Versions/A/JavaVM"
+ #endif
+ 
+ #if defined(__APPLE__) && !defined(HAVE_BDJ_J2ME)
+@@ -480,6 +491,13 @@
+     handle = _jvm_dlopen(jre_plugin_path, "lib/server", jvm_lib);
+     if (handle) {
+         *p_java_home = jre_plugin_path;
++        return handle;
++    }
++    // Apple's Java 6 (10.5 / 10.6): load the umbrella framework directly.
++    BD_DEBUG(DBG_BDJ, "Opening %s ...\n", MACOS_JAVAVM_FRAMEWORK);
++    handle = dlopen(MACOS_JAVAVM_FRAMEWORK, RTLD_NOW | RTLD_LOCAL);
++    if (handle) {
++        *p_java_home = java_home ? java_home : MACOS_JRE_HOME;
+         return handle;
+     }
+ #endif

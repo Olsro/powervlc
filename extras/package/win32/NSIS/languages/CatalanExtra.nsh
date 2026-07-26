@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Afegeix una icona a l'escriptori per a un accés fàcil"
 ${LangFileString} Desc_Section03 \
-    "El connector VLC Mozilla i Mozilla Firefox"
+    "El connector ${PRODUCT_NAME} Mozilla i Mozilla Firefox"
 ${LangFileString} Desc_Section04 \
-    "El connector VLC ActiveX"
+    "El connector ${PRODUCT_NAME} ActiveX"
 ${LangFileString} Desc_Section05 \
     "Registre de reproducció CD i DVD"
 ${LangFileString} Desc_Section06 \
-    "Estableix el reproductor multimèdia VLC com a aplicació per defecte per al tipus de fitxer especificat"
+    "Estableix el reproductor multimèdia ${PRODUCT_NAME} com a aplicació per defecte per al tipus de fitxer especificat"
 ${LangFileString} Desc_Section07 \
-    "Afegeix elements al menú contextual («Reprodueix amb el VLC» i «Afegeix a la llista de reproducció del VLC»)"
+    "Afegeix elements al menú contextual («Reprodueix amb el ${PRODUCT_NAME}» i «Afegeix a la llista de reproducció del ${PRODUCT_NAME}»)"
 ${LangFileString} Desc_Section08 \
-    "Esborra les preferències i la memòria cau d'instal·lacions anteriors del reproductor multimèdia VLC"
+    "Esborra les preferències i la memòria cau d'instal·lacions anteriors del reproductor multimèdia ${PRODUCT_NAME}"
 
 ${LangFileString} Name_Section91 "Desinstal·la"
 ${LangFileString} Name_Section92 "Esborra les preferències i la memòria cau"
 
 ${LangFileString} Desc_Section91 \
-"Desinstal·la el reproductor multimèdia VLC i tots els seus components"
+"Desinstal·la el reproductor multimèdia ${PRODUCT_NAME} i tots els seus components"
 ${LangFileString} Desc_Section92 \
-"Esborra totes les preferències i fitxers de memòria cau del reproductor multimèdia VLC"
+"Esborra totes les preferències i fitxers de memòria cau del reproductor multimèdia ${PRODUCT_NAME}"
 
 ${LangFileString} ShellAssociation_Play "Reprodueix"
-${LangFileString} ContextMenuEntry_PlayWith "Reprodueix amb el reproductor multimèdia VLC"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Afegeix a la llista de reproducció del reproductor multimèdia VLC"
+${LangFileString} ContextMenuEntry_PlayWith "Reprodueix amb el reproductor multimèdia ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Afegeix a la llista de reproducció del reproductor multimèdia ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "Visita el lloc web del reproductor multimèdia VideoLAN VLC"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Reprodueix Blu-ray"
 ${LangFileString} License_NextText "Ara esteu al corrent dels vostres drets. Feu clic a «Següent» per continuar."
 
 ${LangFileString} Detail_CheckProcesses "S'estan comprovant els processos..."
-${LangFileString} MessageBox_VLCRunning "El VLC s'està executant i es tancarà."
-${LangFileString} MessageBox_VLCUnableToClose "L'instal·lador no ha pogut tancar el VLC, feu-ho manualment."
+${LangFileString} MessageBox_VLCRunning "El ${PRODUCT_NAME} s'està executant i es tancarà."
+${LangFileString} MessageBox_VLCUnableToClose "L'instal·lador no ha pogut tancar el ${PRODUCT_NAME}, feu-ho manualment."
 ${LangFileString} MessageBox_InstallAborted "S'ha interromput la instal·lació"
 
 ${LangFileString} Reinstall_Headline "Ja s'ha instal·lat"
-${LangFileString} Reinstall_HeadlineInstall "Trieu com voleu instal·lar el VLC."
+${LangFileString} Reinstall_HeadlineInstall "Trieu com voleu instal·lar el ${PRODUCT_NAME}."
 ${LangFileString} Reinstall_HeadlineMaintenance "Trieu l'opció de manteniment que s'ha de dur a terme."
-${LangFileString} Reinstall_MessageOlder "Existeix una versió més antiga del VLC instal·lada al sistema. Seleccioneu l'operació amb la qual voleu procedir i feu clic a «Següent» per continuar."
-${LangFileString} Reinstall_MessageNewer "Existeix una versió més nova del VLC instal·lada al sistema. No es recomana instal·lar una versió més antiga. Seleccioneu l'operació amb la qual voleu procedir i feu clic a «Següent» per continuar."
-${LangFileString} Reinstall_MessageSame "La versió ${VERSION} del VLC ja es troba instal·lada. Seleccioneu l'operació que voleu dur a terme i feu clic a «Següent» per continuar."
-${LangFileString} Reinstall_OptionUpgrade "Actualitza el VLC fent servir els paràmetres existents (recomanat)"
+${LangFileString} Reinstall_MessageOlder "Existeix una versió més antiga del ${PRODUCT_NAME} instal·lada al sistema. Seleccioneu l'operació amb la qual voleu procedir i feu clic a «Següent» per continuar."
+${LangFileString} Reinstall_MessageNewer "Existeix una versió més nova del ${PRODUCT_NAME} instal·lada al sistema. No es recomana instal·lar una versió més antiga. Seleccioneu l'operació amb la qual voleu procedir i feu clic a «Següent» per continuar."
+${LangFileString} Reinstall_MessageSame "La versió ${VERSION} del ${PRODUCT_NAME} ja es troba instal·lada. Seleccioneu l'operació que voleu dur a terme i feu clic a «Següent» per continuar."
+${LangFileString} Reinstall_OptionUpgrade "Actualitza el ${PRODUCT_NAME} fent servir els paràmetres existents (recomanat)"
 ${LangFileString} Reinstall_OptionDowngrade "Instal·la la versió més antiga fent servir els paràmetres existents (recomanat)"
 ${LangFileString} Reinstall_OptionComponents "Afegeix/Elimina/Torna a instal·lar components"
 ${LangFileString} Reinstall_OptionAdvanced "Canvia els paràmetres (avançat)"
-${LangFileString} Reinstall_OptionUninstall "Desinstal·la el VLC"
+${LangFileString} Reinstall_OptionUninstall "Desinstal·la el ${PRODUCT_NAME}"

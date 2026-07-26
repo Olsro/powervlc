@@ -1,0 +1,395 @@
+PowerVLC: drop the libdispatch dependency from the Darwin MMC backend
+
+src/file/mmc_device_darwin.c drives its DiskArbitration session from a serial
+dispatch queue and synchronises with a dispatch semaphore. That needs:
+
+  - DASessionSetDispatchQueue  -> Mac OS X 10.7
+  - dispatch_semaphore_*, dispatch_time, dispatch_sync, dispatch_release -> 10.6
+  - a block (^{ ... }) for dispatch_sync -> clang only
+
+PowerVLC's 64-bit Intel slice is built with a 10.5 deployment target and the
+contribs are compiled with -Werror=partial-availability, so libaacs simply did
+not build for it -- which meant no AACS, i.e. no retail Blu-ray, on that slice.
+
+Replaced with facilities that all predate 10.4:
+
+  - a dedicated thread running a CFRunLoop, with the session attached through
+    DASessionScheduleWithRunLoop(); the session is scheduled and the approval
+    callback registered on that same thread, so callbacks stay serialised
+    exactly as the serial queue guaranteed;
+  - a counting semaphore built from a pthread mutex + condition variable,
+    with pthread_cond_timedwait() for the 20 second re-appear timeout;
+  - the dispatch_sync() block replaced by taking the callback mutex around the
+    disk_state check. iokit_da_destroy() is deliberately called after dropping
+    that mutex: it joins the event thread, which would deadlock against a
+    callback blocked on the mutex.
+
+Note this only makes libaacs buildable where the SDK has a Blu-ray device
+class at all. The PowerPC and Intel-32 slices build against the 10.4u/10.5
+SDKs, and neither ships IOKit/storage/IOBDMediaBSDClient.h, so libaacs stays
+out of those (see contrib/src/aacs/rules.mak).
+
+--- a/src/file/mmc_device_darwin.c
++++ b/src/file/mmc_device_darwin.c
+@@ -31,6 +31,8 @@
+ 
+ #include <stdlib.h>
+ #include <string.h>
++#include <pthread.h>
++#include <sys/time.h>
+ 
+ #include <IOKit/IOKitLib.h>
+ #include <IOKit/IOBSD.h>
+@@ -90,10 +92,76 @@
+     DADiskRef disk;
+     DASessionRef session;
+     enum disk_state_e disk_state;
+-    dispatch_semaphore_t sync_sem;
+-    dispatch_queue_t background_queue;
++
++    /* Disc arbitration events are delivered on a dedicated thread running a
++     * CFRunLoop (see da_event_thread). libdispatch is deliberately not used:
++     * DASessionSetDispatchQueue needs Mac OS X 10.7, dispatch itself 10.6, and
++     * blocks need clang -- while PowerVLC targets 10.4 and builds the PowerPC
++     * and Intel-32 slices with FSF GCC. CFRunLoop and the run-loop flavour of
++     * the DiskArbitration API have both been available since 10.4.
++     */
++    pthread_t       event_thread;
++    int             event_thread_valid;
++    CFRunLoopRef    event_loop;
++
++    /* Guards the run-loop handshake (event_loop being published) and, at
++     * teardown, serialises the disk_state check against the DA callbacks --
++     * the role dispatch_sync() on the serial queue used to play. */
++    pthread_mutex_t cb_lock;
++    pthread_cond_t  cb_cond;
++
++    /* dispatch_semaphore_t replacement: a plain counting semaphore. */
++    pthread_mutex_t sem_lock;
++    pthread_cond_t  sem_cond;
++    int             sem_count;
++    int             sem_ready;
+ };
+ 
++/*
++ * Counting semaphore, replacing dispatch_semaphore_t.
++ */
++
++static void mmc_sem_signal(MMCDEV *mmc)
++{
++    pthread_mutex_lock(&mmc->sem_lock);
++    mmc->sem_count++;
++    pthread_cond_signal(&mmc->sem_cond);
++    pthread_mutex_unlock(&mmc->sem_lock);
++}
++
++/* Waits for a signal. timeout_sec < 0 waits forever (DISPATCH_TIME_FOREVER).
++ * Returns 0 if the semaphore was signalled, -1 on timeout.
++ */
++static int mmc_sem_wait(MMCDEV *mmc, int timeout_sec)
++{
++    int result = 0;
++    struct timespec deadline;
++
++    if (timeout_sec >= 0) {
++        struct timeval now;
++        gettimeofday(&now, NULL);
++        deadline.tv_sec  = now.tv_sec + timeout_sec;
++        deadline.tv_nsec = now.tv_usec * 1000;
++    }
++
++    pthread_mutex_lock(&mmc->sem_lock);
++    while (mmc->sem_count == 0) {
++        if (timeout_sec < 0) {
++            pthread_cond_wait(&mmc->sem_cond, &mmc->sem_lock);
++        } else if (pthread_cond_timedwait(&mmc->sem_cond, &mmc->sem_lock,
++                                          &deadline) != 0) {
++            result = -1; /* timed out */
++            break;
++        }
++    }
++    if (result == 0) {
++        mmc->sem_count--;
++    }
++    pthread_mutex_unlock(&mmc->sem_lock);
++
++    return result;
++}
++
+ int device_send_cmd(MMCDEV *mmc, const uint8_t *cmd, uint8_t *buf, size_t tx, size_t rx)
+ {
+     SCSITaskInterface **task = NULL;
+@@ -197,13 +265,15 @@
+     (void)disk; /* suppress warning */
+     MMCDEV *mmc = context;
+ 
++    pthread_mutex_lock(&mmc->cb_lock);
+     if (dissenter) {
+         BD_DEBUG(DBG_MMC, "Could not unmount the disc\n");
+     } else {
+         BD_DEBUG(DBG_MMC, "Disc unmounted\n");
+         mmc->disk_state = disk_unmounted;
+     }
+-    dispatch_semaphore_signal(mmc->sync_sem);
++    pthread_mutex_unlock(&mmc->cb_lock);
++    mmc_sem_signal(mmc);
+ }
+ 
+ static void iokit_mount_complete(DADiskRef disk, DADissenterRef dissenter,
+@@ -211,6 +281,7 @@
+     (void) disk; /* suppress warning */
+     MMCDEV *mmc = context;
+ 
++    pthread_mutex_lock(&mmc->cb_lock);
+     if (dissenter) {
+         DAReturn code = DADissenterGetStatus(dissenter);
+         BD_DEBUG(DBG_MMC, "Could not mount the disc (%8X)\n", code);
+@@ -219,7 +290,8 @@
+         BD_DEBUG(DBG_MMC, "Disc mounted\n");
+         mmc->disk_state = disk_mounted;
+     }
+-    dispatch_semaphore_signal(mmc->sync_sem);
++    pthread_mutex_unlock(&mmc->cb_lock);
++    mmc_sem_signal(mmc);
+ }
+ 
+ /* Unmount the disk at mmc->disk
+@@ -234,7 +306,7 @@
+     BD_DEBUG(DBG_MMC, "Unmounting disk\n");
+ 
+     DADiskUnmount(mmc->disk, kDADiskUnmountOptionForce, iokit_unmount_complete, mmc);
+-    dispatch_semaphore_wait(mmc->sync_sem, DISPATCH_TIME_FOREVER);
++    mmc_sem_wait(mmc, -1);
+ 
+     return (mmc->disk_state == disk_unmounted) ? 0 : -1;
+ }
+@@ -248,7 +320,7 @@
+         if (mmc->disk && mmc->session) {
+             mmc->disk_state = disk_mounting;
+             DADiskMount(mmc->disk, NULL, kDADiskMountOptionDefault, iokit_mount_complete, mmc);
+-            dispatch_semaphore_wait(mmc->sync_sem, DISPATCH_TIME_FOREVER);
++            mmc_sem_wait(mmc, -1);
+         }
+     }
+     return (mmc->disk_state == disk_unmounted) ? 0 : -1;
+@@ -338,9 +410,16 @@
+ static DADissenterRef iokit_mount_approval_cb(DADiskRef disk, void *context)
+ {
+     MMCDEV *mmc = context;
++    enum disk_state_e state;
+ 
++    /* disk_state is also read by the teardown path in mmc_close(); cb_lock is
++     * what serialises the two now that there is no serial dispatch queue. */
++    pthread_mutex_lock(&mmc->cb_lock);
++    state = mmc->disk_state;
++    pthread_mutex_unlock(&mmc->cb_lock);
++
+     /* If the disk state is mounted, there is nothing to do here. */
+-    if (disk_mounted == mmc->disk_state) {
++    if (disk_mounted == state) {
+         return NULL;
+     }
+ 
+@@ -356,18 +435,53 @@
+     /* When we are trying to mount, the mount approval callback is
+      * called too, so we need to allow mounting for ourselves here.
+      */
+-    if (disk_mounting == mmc->disk_state) {
++    if (disk_mounting == state) {
+         BD_DEBUG(DBG_MMC, "Allowing ourselves to mount\n");
+         return NULL;
+     }
+ 
++    pthread_mutex_lock(&mmc->cb_lock);
+     mmc->disk_state = disk_appeared;
+-    dispatch_semaphore_signal(mmc->sync_sem);
++    pthread_mutex_unlock(&mmc->cb_lock);
++    mmc_sem_signal(mmc);
+ 
+     CFStringRef reason = CFSTR("Disk is going to be mounted libaacs");
+     return DADissenterCreate(kCFAllocatorDefault, kDAReturnBusy, reason);
+ }
+ 
++/* Runs the CFRunLoop the disc arbitration session is scheduled on. Everything
++ * that talks to the run loop (scheduling the session, registering and
++ * unregistering the approval callback) is done here, on this one thread, so the
++ * DA callbacks are serialised exactly as they were by the old serial dispatch
++ * queue.
++ */
++static void *da_event_thread(void *context)
++{
++    MMCDEV *mmc = context;
++
++    /* Publish the run loop, then let iokit_da_init() continue. */
++    pthread_mutex_lock(&mmc->cb_lock);
++    mmc->event_loop = CFRunLoopGetCurrent();
++    DASessionScheduleWithRunLoop(mmc->session, mmc->event_loop,
++                                 kCFRunLoopDefaultMode);
++    DARegisterDiskMountApprovalCallback(mmc->session, NULL,
++                                        iokit_mount_approval_cb, mmc);
++    pthread_cond_signal(&mmc->cb_cond);
++    pthread_mutex_unlock(&mmc->cb_lock);
++
++    /* CFRunLoopRun() would return as soon as the last source goes away, which
++     * happens while tearing down. Loop until CFRunLoopStop() is what ended it.
++     */
++    while (1) {
++        SInt32 reason = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0e10, FALSE);
++        if (reason == kCFRunLoopRunStopped || reason == kCFRunLoopRunFinished) {
++            break;
++        }
++    }
++
++    return NULL;
++}
++
+ static int iokit_da_init(MMCDEV *mmc) {
+     mmc->session = DASessionCreate(kCFAllocatorDefault);
+     if (NULL == mmc->session) {
+@@ -383,14 +497,38 @@
+         return -1;
+     }
+ 
+-    mmc->background_queue = dispatch_queue_create("org.videolan.libaacs", DISPATCH_QUEUE_SERIAL);
+-    DASessionSetDispatchQueue(mmc->session, mmc->background_queue);
++    pthread_mutex_init(&mmc->cb_lock, NULL);
++    pthread_cond_init(&mmc->cb_cond, NULL);
++    pthread_mutex_init(&mmc->sem_lock, NULL);
++    pthread_cond_init(&mmc->sem_cond, NULL);
++    mmc->sem_count = 0;
++    mmc->event_loop = NULL;
++    mmc->event_thread_valid = 0;
+ 
+-    // Register event callbacks
+-    DARegisterDiskMountApprovalCallback(mmc->session, NULL, iokit_mount_approval_cb, mmc);
++    /* The event thread schedules the session and registers the callback, then
++     * signals; wait for that so the caller can rely on events being live. */
++    if (pthread_create(&mmc->event_thread, NULL, da_event_thread, mmc) != 0) {
++        BD_DEBUG(DBG_MMC | DBG_CRIT, "Could not start the disc arbitration event thread\n");
++        pthread_mutex_destroy(&mmc->cb_lock);
++        pthread_cond_destroy(&mmc->cb_cond);
++        pthread_mutex_destroy(&mmc->sem_lock);
++        pthread_cond_destroy(&mmc->sem_cond);
++        CFRelease(mmc->disk);
++        mmc->disk = NULL;
++        CFRelease(mmc->session);
++        mmc->session = NULL;
++        return -1;
++    }
++    mmc->event_thread_valid = 1;
+ 
+-    mmc->sync_sem = dispatch_semaphore_create(0);
++    pthread_mutex_lock(&mmc->cb_lock);
++    while (NULL == mmc->event_loop) {
++        pthread_cond_wait(&mmc->cb_cond, &mmc->cb_lock);
++    }
++    pthread_mutex_unlock(&mmc->cb_lock);
+ 
++    mmc->sem_ready = 1;
++
+     return 0;
+ }
+ 
+@@ -402,7 +540,24 @@
+          * can mount it.
+          */
+         DAUnregisterApprovalCallback(mmc->session, iokit_mount_approval_cb, mmc);
+-        DASessionSetDispatchQueue(mmc->session, NULL);
++        if (mmc->event_loop) {
++            DASessionUnscheduleFromRunLoop(mmc->session, mmc->event_loop,
++                                           kCFRunLoopDefaultMode);
++        }
++    }
++
++    /* Stop the run loop and reap the thread before releasing anything the
++     * callbacks touch. */
++    if (mmc->event_thread_valid) {
++        if (mmc->event_loop) {
++            CFRunLoopStop(mmc->event_loop);
++        }
++        pthread_join(mmc->event_thread, NULL);
++        mmc->event_thread_valid = 0;
++        mmc->event_loop = NULL;
++    }
++
++    if (mmc->session) {
+         CFRelease(mmc->session);
+         mmc->session = NULL;
+     }
+@@ -412,7 +567,13 @@
+         mmc->disk = NULL;
+     }
+ 
+-    dispatch_release(mmc->sync_sem);
++    if (mmc->sem_ready) {
++        pthread_mutex_destroy(&mmc->cb_lock);
++        pthread_cond_destroy(&mmc->cb_cond);
++        pthread_mutex_destroy(&mmc->sem_lock);
++        pthread_cond_destroy(&mmc->sem_cond);
++        mmc->sem_ready = 0;
++    }
+ }
+ 
+ static int mmc_open_iokit(const char *path, MMCDEV *mmc) {
+@@ -498,7 +659,11 @@
+ 
+ void device_close(MMCDEV **pp)
+ {
+-    __block int rc = 0;
++    /* Not a __block variable any more: the dispatch_sync() block that needed
++     * the qualifier is gone with the rest of libdispatch, and __block is a
++     * clang extension the FSF GCC used for the PowerPC and Intel-32 slices
++     * rejects outright. */
++    int rc = 0;
+     if (pp && *pp) {
+         MMCDEV *mmc = *pp;
+ 
+@@ -537,7 +702,7 @@
+             IODestroyPlugInInterface(mmc->plugInInterface);
+         }
+ 
+-        if (!mmc->sync_sem) {
++        if (!mmc->sem_ready) {
+             /* open failed before iokit_da_init() */
+             X_FREE(*pp);
+             return;
+@@ -551,22 +716,26 @@
+          * so the long timeout shouldn't do much harm for thse
+          * cases.
+          */
+-        dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, 20 * 1E+9);
+-        dispatch_semaphore_wait(mmc->sync_sem, timeout);
++        mmc_sem_wait(mmc, 20);
+ 
+-        /* It is crucial that this is done on the event handling queue
+-         * else callbacks could be received while this code runs.
++        /* The disk_state check must not race with a DA callback. The callbacks
++         * take cb_lock, so holding it here gives the mutual exclusion the old
++         * dispatch_sync() onto the serial queue provided. iokit_da_destroy()
++         * itself is called after releasing the lock: it joins the event thread,
++         * which would deadlock against a callback waiting for cb_lock. A
++         * callback arriving in that window is harmless -- it only assigns
++         * disk_state and signals the semaphore, and the first thing destroy
++         * does is unregister it.
+          */
+-        dispatch_sync(mmc->background_queue, ^{
+-            if (disk_appeared != mmc->disk_state) {
+-                BD_DEBUG(DBG_MMC | DBG_CRIT, "Timeout waiting for the disc to appear again!\n");
+-                iokit_da_destroy(mmc);
+-                rc = -1;
+-                return;
+-            }
+-            rc = 0;
+-        });
++        pthread_mutex_lock(&mmc->cb_lock);
++        rc = (disk_appeared == mmc->disk_state) ? 0 : -1;
++        pthread_mutex_unlock(&mmc->cb_lock);
+ 
++        if (rc != 0) {
++            BD_DEBUG(DBG_MMC | DBG_CRIT, "Timeout waiting for the disc to appear again!\n");
++            iokit_da_destroy(mmc);
++        }
++
+         if (rc == 0) {
+             /* Disk appeared successfully, mount it.
+              * Return value is ignored as logging of success or

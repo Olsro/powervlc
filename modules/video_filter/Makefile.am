@@ -113,7 +113,12 @@ libci_filters_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(video_filterdir)' \
 	-Wl,-framework,Foundation -Wl,-framework,CoreGraphics -Wl,-framework,CoreImage \
 	-Wl,-framework,CoreVideo
 if HAVE_OSX
+# vt_utils.c uses CoreVideo APIs requiring Mac OS X 10.6.
+libci_filters_plugin_la_CFLAGS = $(AM_CFLAGS) -mmacosx-version-min=10.6
+libci_filters_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -mmacosx-version-min=10.6
+if HAVE_VT_FRAMEWORK
 video_filter_LTLIBRARIES += libci_filters_plugin.la
+endif
 endif
 
 if HAVE_IOS

@@ -425,12 +425,12 @@ static int Open (vout_window_t *wnd, const vout_window_cfg_t *cfg)
     /* ICCCM
      * No cut&paste nor drag&drop, only Window Manager communication. */
     set_ascii_prop (conn, window, XA_WM_NAME,
-    /* xgettext: This is a plain ASCII spelling of "VLC media player"
+    /* xgettext: This is a plain ASCII spelling of "PowerVLC media player"
        for the ICCCM window name. This must be pure ASCII.
        The limitation is partially with ICCCM and partially with VLC.
        For Latin script languages, you may need to strip accents.
        For other scripts, you will need to transliterate into Latin. */
-                    vlc_pgettext ("ASCII", "VLC media player"));
+                    vlc_pgettext ("ASCII", "PowerVLC media player"));
 
     set_ascii_prop (conn, window, XA_WM_ICON_NAME,
     /* xgettext: This is a plain ASCII spelling of "VLC"
@@ -461,7 +461,7 @@ static int Open (vout_window_t *wnd, const vout_window_cfg_t *cfg)
         free (title);
     }
     else
-        set_string (conn, window, utf8, net_wm_name, _("VLC media player"));
+        set_string (conn, window, utf8, net_wm_name, _("PowerVLC media player"));
 
     xcb_atom_t net_wm_icon_name = get_atom (conn, net_wm_icon_name_ck);
     set_string (conn, window, utf8, net_wm_icon_name, _("VLC"));

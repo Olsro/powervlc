@@ -82,8 +82,8 @@ samples/meta.sample:
 
 AM_CFLAGS = -DSRCDIR=\"$(srcdir)\"
 AM_LDFLAGS = -no-install
-LIBVLCCORE = -L../src/ -lvlccore
-LIBVLC = -L../lib -lvlc
+LIBVLCCORE = -L../src/ -lpowervlccore
+LIBVLC = -L../lib -lpowervlc
 
 test_libvlc_core_SOURCES = libvlc/core.c
 test_libvlc_core_LDADD = $(LIBVLC)
@@ -154,7 +154,7 @@ libvlc_demux_run_la_CPPFLAGS = $(AM_CPPFLAGS) \
 	-DTOP_SRCDIR=\"$$(cd "$(top_srcdir)"; pwd)\"
 libvlc_demux_run_la_LDFLAGS = -no-install -static
 libvlc_demux_run_la_LIBADD = \
-	../lib/libvlc.la ../src/libvlccore.la ../compat/libcompat.la
+	../lib/libpowervlc.la ../src/libpowervlccore.la ../compat/libcompat.la
 if !HAVE_DYNAMIC_PLUGINS
 libvlc_demux_run_la_CPPFLAGS += -DHAVE_STATIC_MODULES
 libvlc_demux_run_la_LIBADD += \
@@ -262,7 +262,7 @@ vlccoreios_SOURCES = iosvlc.m
 vlccoreios_LDFLAGS = $(LDFLAGS_vlc) -Wl,-framework,Foundation,-framework,UIKit
 vlccoreios_LDFLAGS += -Xlinker -rpath -Xlinker "@executable_path/Frameworks/"
 vlccoreios_OBJCFLAGS = -fobjc-arc
-vlccoreios_LDADD = ../lib/libvlc.la ../src/libvlccore.la
+vlccoreios_LDADD = ../lib/libpowervlc.la ../src/libpowervlccore.la
 if HAVE_DARWIN
 if !HAVE_OSX
 noinst_PROGRAMS += vlccoreios

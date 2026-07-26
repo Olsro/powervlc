@@ -2,7 +2,19 @@
 PROTOBUF_VERSION := 3.1.0
 PROTOBUF_URL := $(GITHUB)/google/protobuf/releases/download/v$(PROTOBUF_VERSION)/protobuf-cpp-$(PROTOBUF_VERSION).tar.gz
 
+ifdef HAVE_MACOSX
+# protobuf requires __thread thread-local storage, only available since
+# macOS 10.7 (it is only needed by the chromecast module anyway)
+ifeq ($(call darwin_min_os_at_least, 10.7), true)
+CAN_BUILD_PROTOBUF := 1
+endif
+else
+CAN_BUILD_PROTOBUF := 1
+endif
+
+ifdef CAN_BUILD_PROTOBUF
 PKGS += protobuf
+endif
 ifeq ($(call need_pkg, "protobuf-lite >= 3.1.0 protobuf-lite < 3.2.0"),)
 PKGS_FOUND += protobuf
 endif

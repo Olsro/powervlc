@@ -24,12 +24,13 @@
 
 #import <Cocoa/Cocoa.h>
 
-@interface VLCAboutWindowController : NSWindowController<NSWindowDelegate>
+@interface VLCAboutWindowController : NSWindowController<NSWindowDelegate, NSTextViewDelegate>
 {
     /* main about panel and stuff related to its views */
     IBOutlet id o_name_version_field;
     IBOutlet id o_revision_field;
     IBOutlet id o_copyright_field;
+    IBOutlet id o_powervlc_field;
     IBOutlet id o_credits_textview;
     IBOutlet id o_credits_scrollview;
     IBOutlet id o_gpl_btn;

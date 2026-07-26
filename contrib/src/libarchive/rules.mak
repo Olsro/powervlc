@@ -34,6 +34,12 @@ ifdef HAVE_MACOSX
 # the minimum supported value is 10.7, in each case missing the functions falls
 # back to an alternative
 LIBARCHIVE_CONF += -DHAVE_FDOPENDIR:INTERNAL= -DHAVE_OPENAT:INTERNAL= -DHAVE_FSTATAT:INTERNAL= -DHAVE_LINKAT:INTERNAL=
+
+# these are only available since macOS 10.7; missing them falls back to an
+# alternative as well
+ifneq ($(call darwin_min_os_at_least, 10.7), true)
+LIBARCHIVE_CONF += -DHAVE_STRNLEN:INTERNAL= -DHAVE_ARC4RANDOM_BUF:INTERNAL=
+endif
 endif
 
 $(TARBALLS)/libarchive-$(LIBARCHIVE_VERSION).tar.gz:
@@ -46,6 +52,7 @@ libarchive: libarchive-$(LIBARCHIVE_VERSION).tar.gz .sum-libarchive
 	$(APPLY) $(SRC)/libarchive/0001-zstd-use-GetNativeSystemInfo-to-get-the-number-of-th.patch
 	$(APPLY) $(SRC)/libarchive/0001-cmake-add-uuid-library-when-using-xmllite.patch
 	$(APPLY) $(SRC)/libarchive/38ac49553d430f1b28c7624e5e9788125fdad187.patch
+	$(APPLY) $(SRC)/libarchive/0001-cryptor-require-deployment-target-10.7-for-CommonCrypto.patch
 	$(call pkg_static,"build/pkgconfig/libarchive.pc.in")
 	$(MOVE)
 

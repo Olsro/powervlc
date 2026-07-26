@@ -1,0 +1,25 @@
+--- a/src/ta/ta_utils.c	2026-07-14 09:05:38
++++ b/src/ta/ta_utils.c	2026-07-14 09:05:38
+@@ -89,6 +89,13 @@
+ 
+ // *str = *str[0..at] + append[0..append_len]
+ // (append_len being a maximum length; shorter if embedded \0s are encountered)
++/* strnlen() is not available on Mac OS X < 10.7; use a local equivalent */
++static size_t ta_strnlen_compat(const char *s, size_t n)
++{
++    const char *p = memchr(s, 0, n);
++    return p ? (size_t)(p - s) : n;
++}
++
+ static bool strndup_append_at(char **str, size_t at, const char *append,
+                               size_t append_len)
+ {
+@@ -97,7 +104,7 @@
+     if (!*str && !append)
+         return true; // stays NULL, but not an OOM condition
+ 
+-    size_t real_len = append ? strnlen(append, append_len) : 0;
++    size_t real_len = append ? ta_strnlen_compat(append, append_len) : 0;
+     if (append_len > real_len)
+         append_len = real_len;
+ 

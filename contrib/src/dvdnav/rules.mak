@@ -26,6 +26,8 @@ dvdnav: libdvdnav-$(LIBDVDNAV_VERSION).tar.bz2 .sum-dvdnav
 	# fix some bogus accesses
 	$(APPLY) $(SRC)/dvdnav/0001-Check-the-the-title-parts-read-are-available.patch
 	$(APPLY) $(SRC)/dvdnav/0002-Fix-access-to-title-not-found-in-array.patch
+	# PowerVLC: Tiger raw-device physio bug (mounted DVD images, round 88)
+	$(APPLY) $(SRC)/dvdnav/0003-read_cache-page-align-and-pre-fault-chunk-buffers.patch
 	$(call pkg_static,"misc/dvdnav.pc.in")
 	$(MOVE)
 

@@ -36,6 +36,11 @@ srt: srt-$(SRT_VERSION).tar.gz .sum-srt
 	$(UNPACK)
 	$(APPLY) $(SRC)/srt/0001-build-fix-implicit-libraries-set-using-Wl-l-libname..patch
 	$(call pkg_static,"scripts/srt.pc.in")
+ifdef HAVE_MACOSX
+	# The 10.4 SDK's <sys/param.h> defines a BSD isset() macro that
+	# clashes with LogDispatcher::isset(); rename the method.
+	sed -i.orig -e 's/isset(/isSetFlag(/g' $(UNPACK_DIR)/srtcore/logging.h $(UNPACK_DIR)/srtcore/common.cpp
+endif
 	$(MOVE)
 
 SRT_CONF := -DENABLE_SHARED=OFF -DUSE_ENCLIB=gnutls -DENABLE_CXX11=OFF

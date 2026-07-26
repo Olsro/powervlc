@@ -81,7 +81,11 @@ typedef struct
         unsigned resamp_start_drift; /**< Resampler drift absolute value */
         int resamp_type; /**< Resampler mode (FIXME: redundant / resampling) */
         bool discontinuity;
+        vlc_tick_t gapless_offset; /**< PTS offset of the adopted stream */
+        bool b_gapless_pending; /**< Offset to be computed on the next block */
     } sync;
+
+    bool b_dec_parked; /**< Stream still alive with no decoder attached */
 
     int initial_stereo_mode; /**< Initial stereo mode set by options */
 
@@ -151,8 +155,13 @@ bool aout_ChangeFilterString( vlc_object_t *manager, vlc_object_t *aout,
 #define AOUT_DEC_FAILED VLC_EGENERIC
 
 int aout_DecNew(audio_output_t *, const audio_sample_format_t *,
-                const audio_replay_gain_t *, const aout_request_vout_t *);
+                const audio_replay_gain_t *, const aout_request_vout_t *,
+                bool b_gapless_ok);
 void aout_DecDelete(audio_output_t *);
+void aout_DecDrainAsync(audio_output_t *);
+void aout_DecPark(audio_output_t *);
+void aout_DecStopParked(audio_output_t *, bool b_wait);
+void aout_DecTeardownLocked(audio_output_t *);
 int aout_DecPlay(audio_output_t *, block_t *, int i_input_rate);
 void aout_DecGetResetStats(audio_output_t *, unsigned *, unsigned *);
 void aout_DecChangePause(audio_output_t *, bool b_paused, vlc_tick_t i_date);

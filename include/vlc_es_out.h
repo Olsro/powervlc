@@ -98,6 +98,41 @@ enum es_out_query_e
 
     ES_OUT_POST_SUBNODE, /* arg1=input_item_node_t *, res=can fail */
 
+    /* DEPRECATED: the video-cache-mb fill wait is not user-skippable
+     * anymore (playback must never start before the look-ahead cache
+     * reached its threshold); the handler refuses unconditionally. The
+     * internal skip flag survives solely as the stall-timeout safety
+     * valve (see VIDEO_CACHE_STALL_TIMEOUT in es_out.c). */
+    ES_OUT_SET_VIDEO_CACHE_SKIP, /* no arg, res=always fails */
+
+    /* Re-evaluates the video-cache-mb fill wait; no-op if not currently
+     * buffering. ES_OUT_SET_(GROUP_)PCR already does this on every call,
+     * but PCR is driven by demux progress, not decode progress: for a
+     * local file the demuxer can push far more data than the decoder
+     * has caught up on before going idle, so nothing re-triggers the
+     * check as the decoder (not the demuxer) fills the cache. The input
+     * thread's main loop calls this on its own periodic tick instead,
+     * decode-progress or not. */
+    ES_OUT_RECHECK_VIDEO_CACHE, /* no arg, res=cannot fail */
+
+    /* Live state of the video-cache-mb look-ahead cache, for the
+     * statistics panel: how many decoded pictures are queued ahead and
+     * what the current fill target is (0/0 when the feature is off or
+     * no video decoder exists). */
+    ES_OUT_GET_VIDEO_CACHE_STATE, /* arg1=size_t* count, arg2=size_t* target, arg3=size_t* bytes (can be NULL), res=cannot fail */
+
+    /* Demux-driven inhibition of the video-cache-mb look-ahead cache.
+     * Menu-capable disc demuxers (dvdnav, bluray) fire ES_OUT_RESET_PCR
+     * on menu loops and navigation hops; each reset would open a fill
+     * episode that parks the SPU decoder for seconds (no menu highlight
+     * meanwhile). Instead of blacklisting whole disc sources by URI in
+     * the core -- which also killed the cache for TITLE playback, where
+     * slow machines (MPEG-2 on a G3) genuinely need it -- the demuxer
+     * declares when caching makes no sense: inhibited in menu domains,
+     * re-allowed in title domains. State is sticky until the next call;
+     * a new input starts uninhibited. */
+    ES_OUT_SET_VIDEO_CACHE_INHIBIT, /* arg1=int (bool), res=cannot fail */
+
     /* First value usable for private control */
     ES_OUT_PRIVATE_START = 0x10000,
 };

@@ -14,7 +14,10 @@ AC_SUBST(PKGDIR)
 
 CONFIGURE_LINE="`echo "$0 $ac_configure_args" | sed -e 's/\\\/\\\\\\\/g'`"
 CODENAME="Vetinari"
-COPYRIGHT_YEARS="1996-2025"
+dnl PowerVLC product version, distinct from the VLC core version above
+POWERVLC_VERSION="1.0.0"
+AC_SUBST(POWERVLC_VERSION)
+COPYRIGHT_YEARS="1996-2026"
 
 AC_CONFIG_SRCDIR(src/libvlc.c)
 AC_CONFIG_AUX_DIR(autotools)
@@ -67,6 +70,32 @@ AC_PROG_INSTALL
 AM_PROG_AS
 AC_PROG_LEX([noyywrap])
 AC_PROG_YACC
+
+dnl PowerVLC: make SDKROOT a precious variable.
+dnl
+dnl On the modern (clang) macOS targets extras/package/macosx/build.sh
+dnl carries the SDK ONLY in the SDKROOT environment variable -- the Apple
+dnl driver honours it, so CFLAGS/LDFLAGS legitimately carry no -isysroot
+dnl (see the recheck line recorded in any build tree's config.status:
+dnl CC, CFLAGS, LDFLAGS, CXX, OBJC and --with-macosx-sdk are all there,
+dnl SDKROOT is not).
+dnl
+dnl That mattered because automake's config.status rebuild rule is NOT
+dnl maintainer-mode guarded: any make run in a tree whose config.status
+dnl predates configure -- which happens to every OTHER tree as soon as
+dnl configure.ac is touched and bootstrap re-run -- fires
+dnl "config.status --recheck". Without SDKROOT the replayed configure
+dnl could not link at all ("ld: library 'System' not found" ->
+dnl "C compiler cannot create executables"), leaving what looks like a
+dnl wrecked build tree (hit on buildx64, 2026-07-25).
+dnl
+dnl Declaring it precious makes configure record SDKROOT=... alongside
+dnl CC/CFLAGS in config.status and re-export it on --recheck, so the
+dnl automatic reconfigure simply works instead of exploding. The legacy
+dnl PowerPC/i386 cross builds are unaffected: build.sh deliberately keeps
+dnl SDKROOT out of the environment there (it would poison the native
+dnl build helpers) and their toolchain wrappers carry the sysroot.
+AC_ARG_VAR([SDKROOT], [macOS SDK path honoured by the Apple compiler driver])
 
 AC_ARG_VAR([DESKTOP_FILE_VALIDATE], [Validator for desktop entry files])
 AC_CHECK_PROGS(DESKTOP_FILE_VALIDATE, [${DESKTOP_FILE_VALIDATE} desktop-file-validate], :)
@@ -164,11 +193,36 @@ case "${host_os}" in
     esac
 
     SYS=darwin
+    dnl Catch calls to APIs newer than the deployment target in C code too
+    dnl (upstream only does this for Objective-C)
+    dnl -Werror=partial-availability is clang-only; FSF GCC (legacy ppc/i386
+    dnl cross builds) rejects it, and there the old SDK itself is the gate.
+    AX_APPEND_COMPILE_FLAGS([-Werror=partial-availability], [CFLAGS])
     CFLAGS="${CFLAGS} -D_INTL_REDIRECT_MACROS -std=gnu11 ${ARCH_flag}"
-    CXX="${CXX} -stdlib=libc++ -std=c++11"
+    dnl @synchronized/@try need this with GCC (clang enables ObjC
+    dnl exceptions by default on Darwin)
+    OBJCFLAGS="${OBJCFLAGS} -fobjc-exceptions"
+    dnl The SDK's own libc++.dylib only exists starting Mac OS X 10.9; for
+    dnl an older deployment target, contrib/src/libcxx-legacy provides a
+    dnl replacement (wired in below, once CONTRIB_DIR is known) instead of
+    dnl -stdlib=libc++, which would otherwise link every C++ plugin against
+    dnl a library that is not there at runtime.
+    macosx_min_has_sdk_libcxx="yes"
+    AS_IF([test -n "${with_macosx_version_min}"], [
+        AS_VERSION_COMPARE([${with_macosx_version_min}], [10.9],
+            [macosx_min_has_sdk_libcxx="no"], [], [])
+    ])
+    AS_IF([test "${macosx_min_has_sdk_libcxx}" = "yes"], [
+        CXX="${CXX} -stdlib=libc++ -std=c++11"
+    ], [
+        CXX="${CXX} -std=c++11"
+    ])
     CXXFLAGS="${CXXFLAGS} -D_INTL_REDIRECT_MACROS ${ARCH_flag}"
     CPPFLAGS="${CPPFLAGS} ${ARCH_flag}"
-    OBJCFLAGS="${OBJCFLAGS} -D_INTL_REDIRECT_MACROS -std=gnu11 ${ARCH_flag} -Werror=partial-availability"
+    AS_IF([test -n "`echo ${CFLAGS} | grep partial-availability`"], [
+        OBJCFLAGS="${OBJCFLAGS} -Werror=partial-availability"
+    ])
+    OBJCFLAGS="${OBJCFLAGS} -D_INTL_REDIRECT_MACROS -std=gnu11 ${ARCH_flag}"
     LDFLAGS="${LDFLAGS} -Wl,-headerpad_max_install_names ${ARCH_flag}"
     VLC_ADD_LIBS([libvlc vlc],[-Wl,-undefined,dynamic_lookup,-framework,AppKit])
     VLC_ADD_LIBS([libvlccore],[-Wl,-framework,CoreFoundation,-framework,CoreServices])
@@ -217,6 +271,11 @@ case "${host_os}" in
         CCAS="${CCAS} -mmacosx-version-min=${with_macosx_version_min}"
         LD="${LD} -mmacosx_version_min=${with_macosx_version_min}"
     fi
+    dnl LaunchServices refuses to launch a bundle on releases older than its
+    dnl LSMinimumSystemVersion (error -10825): track the deployment target.
+    MACOSX_LSMINIMUM_VERSION="${with_macosx_version_min}"
+    AS_IF([test -z "${MACOSX_LSMINIMUM_VERSION}"], [MACOSX_LSMINIMUM_VERSION="10.5.8"])
+    AC_SUBST([MACOSX_LSMINIMUM_VERSION])
     ;;
   *mingw32* | *cygwin* | *wince* | *mingwce*)
     dnl Force libtool to not link to (shared) libgcc_s when detecting C++ dependencies
@@ -403,6 +462,123 @@ AM_CONDITIONAL(HAVE_OS2,     test "${SYS}" = "os2")
 AM_CONDITIONAL(HAVE_DARWIN,  test "${SYS}" = "darwin")
 AM_CONDITIONAL(HAVE_IOS,     test "${HAVE_IOS}" = "1")
 AM_CONDITIONAL(HAVE_OSX,     test "${HAVE_OSX}" = "1")
+dnl Grand Central Dispatch and the blocks runtime require Mac OS X 10.6;
+dnl modules relying on them are excluded when targeting older releases.
+macosx_min_has_gcd="yes"
+AS_IF([test "${HAVE_OSX}" = "1" -a -n "${with_macosx_version_min}"], [
+    AS_VERSION_COMPARE([${with_macosx_version_min}], [10.6],
+        [macosx_min_has_gcd="no"], [], [])
+])
+AM_CONDITIONAL(HAVE_OSX_GCD, [test "${HAVE_OSX}" = "1" -a "${macosx_min_has_gcd}" = "yes"])
+dnl dyld only understands LC_RPATH/@rpath starting Mac OS X 10.5; on older
+dnl targets the executable cannot carry rpath entries, and install names
+dnl are rewritten to @executable_path at packaging time instead.
+macosx_min_has_rpath="yes"
+AS_IF([test "${HAVE_OSX}" = "1" -a -n "${with_macosx_version_min}"], [
+    AS_VERSION_COMPARE([${with_macosx_version_min}], [10.5],
+        [macosx_min_has_rpath="no"], [], [])
+])
+AM_CONDITIONAL(HAVE_DYLD_RPATH, [test "${SYS}" != "darwin" -o "${macosx_min_has_rpath}" = "yes"])
+dnl VideoDecodeAcceleration.framework does not exist in the 10.4u SDK;
+dnl only build the vda plugin when the SDK actually provides it.
+have_vda_framework="no"
+AS_IF([test "${HAVE_OSX}" = "1"], [
+    vda_sdk_root="${with_macosx_sdk}"
+    AS_IF([test -z "${vda_sdk_root}"], [vda_sdk_root=`xcrun --show-sdk-path 2>/dev/null`])
+    AS_IF([test -d "${vda_sdk_root}/System/Library/Frameworks/VideoDecodeAcceleration.framework"], [
+        have_vda_framework="yes"
+    ])
+])
+AM_CONDITIONAL(HAVE_VDA_FRAMEWORK, [test "${have_vda_framework}" = "yes"])
+dnl The securetransport plugin needs SecureTransport API additions from the
+dnl 10.6 SDK (SecPolicyCreateSSL, kSSLSessionOptionBreakOnServerAuth...);
+dnl skip it when the SDK predates them (gnutls provides TLS instead).
+have_securetransport="no"
+AS_IF([test "${HAVE_OSX}" = "1"], [
+    st_sdk_root="${with_macosx_sdk}"
+    AS_IF([test -z "${st_sdk_root}"], [st_sdk_root=`xcrun --show-sdk-path 2>/dev/null`])
+    AS_IF([grep -qs SecPolicyCreateSSL "${st_sdk_root}/System/Library/Frameworks/Security.framework/Headers/SecPolicy.h"], [
+        have_securetransport="yes"
+    ])
+])
+AM_CONDITIONAL(HAVE_SECURETRANSPORT, [test "${have_securetransport}" = "yes"])
+dnl Objective-C ARC is clang-only; the legacy FSF GCC cross builds
+dnl (ppc/i386) must skip the few plugins written with ARC.
+have_objc_arc="no"
+AS_IF([test "${SYS}" = "darwin"], [
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
+#ifndef __clang__
+# error ARC requires clang
+#endif
+]])], [have_objc_arc="yes"])
+])
+AM_CONDITIONAL(HAVE_OBJC_ARC, [test "${have_objc_arc}" = "yes"])
+dnl VideoToolbox.framework does not exist in SDKs before 10.8 (and neither
+dnl do the CVPixelBuffer helpers vt_utils.c relies on); skip the plugins
+dnl built on it when the SDK does not provide it.
+have_vt_framework="no"
+AS_IF([test "${SYS}" = "darwin"], [
+    vt_sdk_root="${with_macosx_sdk}"
+    AS_IF([test -z "${vt_sdk_root}"], [vt_sdk_root=`xcrun --show-sdk-path 2>/dev/null`])
+    AS_IF([test -d "${vt_sdk_root}/System/Library/Frameworks/VideoToolbox.framework"], [
+        have_vt_framework="yes"
+    ])
+])
+AM_CONDITIONAL(HAVE_VT_FRAMEWORK, [test "${have_vt_framework}" = "yes"])
+dnl CoreText appeared in Mac OS X 10.5 (as an ApplicationServices
+dnl subframework; standalone starting 10.8). The freetype plugin's Darwin
+dnl font discovery needs its headers; without them it falls back to the
+dnl default face only.
+have_coretext="no"
+AS_IF([test "${SYS}" = "darwin"], [
+    ct_sdk_root="${with_macosx_sdk}"
+    AS_IF([test -z "${ct_sdk_root}"], [ct_sdk_root=`xcrun --show-sdk-path 2>/dev/null`])
+    dnl 10.4's ApplicationServices ships a header-less CoreText SPI stub,
+    dnl so require the actual header, not just the framework directory.
+    AS_IF([test -f "${ct_sdk_root}/System/Library/Frameworks/CoreText.framework/Headers/CoreText.h" \
+           -o -f "${ct_sdk_root}/System/Library/Frameworks/ApplicationServices.framework/Versions/A/Frameworks/CoreText.framework/Headers/CoreText.h"], [
+        have_coretext="yes"
+    ])
+])
+AM_CONDITIONAL(HAVE_CORETEXT, [test "${have_coretext}" = "yes"])
+dnl The QuickTime/QuickDraw video output (accelerated ICM blit on PowerPC)
+dnl needs the QuickTime framework headers, removed from modern SDKs.
+have_quicktime="no"
+AS_IF([test "${HAVE_OSX}" = "1"], [
+    qt_sdk_root="${with_macosx_sdk}"
+    AS_IF([test -z "${qt_sdk_root}"], [qt_sdk_root=`xcrun --show-sdk-path 2>/dev/null`])
+    AS_IF([test -f "${qt_sdk_root}/System/Library/Frameworks/QuickTime.framework/Headers/QuickTime.h"], [
+        have_quicktime="yes"
+    ])
+])
+AM_CONDITIONAL(HAVE_QUICKTIME_FRAMEWORK, [test "${have_quicktime}" = "yes"])
+dnl __builtin_available()/@available themselves compile into compiler-rt
+dnl helpers that rely on GCD; substitute a sysctl-based implementation
+dnl (compat/osversioncheck.c) when targeting releases without it.
+AS_IF([test "${HAVE_OSX}" = "1" -a "${macosx_min_has_gcd}" = "no"], [
+    AC_LIBOBJ([osversioncheck])
+])
+
+dnl AC_CHECK_FUNCS()/AC_REPLACE_FUNCS() only check that these functions can
+dnl be linked, which the macOS SDK always allows regardless of the
+dnl -mmacosx-version-min value. That makes the tests below report these
+dnl functions as available even when the deployment target predates them,
+dnl and the compiler then rejects the (correct) unguarded calls to them
+dnl with -Werror=partial-availability. Force the cache variables so that
+dnl configure falls back to VLC's own compat/ implementations instead.
+AS_IF([test "${HAVE_OSX}" = "1" -a -n "${with_macosx_version_min}"], [
+    AS_VERSION_COMPARE([${with_macosx_version_min}], [10.6],
+        [ac_cv_func_posix_memalign="no"], [], [])
+    AS_VERSION_COMPARE([${with_macosx_version_min}], [10.7],
+        [ac_cv_func_strndup="no"
+         ac_cv_func_strnlen="no"
+         ac_cv_func_getdelim="no"], [], [])
+    AS_VERSION_COMPARE([${with_macosx_version_min}], [10.13],
+        [ac_cv_func_open_memstream="no"], [], [])
+    AS_VERSION_COMPARE([${with_macosx_version_min}], [10.15],
+        [ac_cv_func_timespec_get="no"
+         ac_cv_func_aligned_alloc="no"], [], [])
+])
 AM_CONDITIONAL(HAVE_TVOS,    test "${HAVE_TVOS}" = "1")
 
 AM_CONDITIONAL(HAVE_NACL,    test "${SYS}" = "nacl")
@@ -412,6 +588,21 @@ AM_CONDITIONAL(HAVE_WIN32,   test "${SYS}" = "mingw32")
 AM_CONDITIONAL(HAVE_WIN64,   test "${HAVE_WIN64}" = "1") dnl Only used for the packaging
 AM_CONDITIONAL([HAVE_WINSTORE], [test "$vlc_winstore_app" = "1"])
 AM_CONDITIONAL([HAVE_WIN32_DESKTOP], [test "${SYS}" = "mingw32" -a "$vlc_winstore_app" = "0"])
+
+dnl PowerVLC (Tiger/Leopard legacy toolchain): the app bundles a newer FSF
+dnl libstdc++/libgcc that must not coexist as a *shared* library with the
+dnl system one -- two libstdc++.6.dylib in one process corrupt the C++ locale
+dnl at plugin load (std::ios_base::Init -> _M_install_facet frees garbage).
+dnl libvlccore already links these statically; plugins do not, because libtool
+dnl silently drops bare -static-libstdc++/-static-libgcc from module links.
+dnl When build.sh links with -static-libstdc++, force plugins to embed the C++
+dnl runtime too (via libtool's -XCClinker) so the shared libstdc++.6.dylib is
+dnl never loaded.
+case " $LDFLAGS " in
+  *-static-libstdc++*) vlc_cxx_static_runtime=yes ;;
+  *) vlc_cxx_static_runtime=no ;;
+esac
+AM_CONDITIONAL([HAVE_CXX_STATIC_RUNTIME], [test "$vlc_cxx_static_runtime" = "yes"])
 AM_CONDITIONAL([ENABLE_PDB],   [test "$vlc_build_pdb" = "1"])
 
 dnl
@@ -531,6 +722,17 @@ AS_IF([test -n "${CONTRIB_DIR}"], [
   ])
 ])
 AC_SUBST(CONTRIB_DIR)
+
+dnl Wire in contrib/src/libcxx-legacy in place of -stdlib=libc++ (see the
+dnl darwin case above): only reachable once CONTRIB_DIR is known, and
+dnl only actually applied if that package was built (i.e. the target is
+dnl older than Mac OS X 10.9; see libcxx-legacy's own darwin_min_os_at_least
+dnl gate in contrib/src/libcxx-legacy/rules.mak, which must be kept in
+dnl sync with the 10.9 check on macosx_min_has_sdk_libcxx above).
+AS_IF([test "${SYS}" = "darwin" -a "${macosx_min_has_sdk_libcxx}" = "no" \
+       -a -n "${CONTRIB_DIR}" -a -f "${CONTRIB_DIR}/lib/libc++.dylib"], [
+  CXXFLAGS="${CXXFLAGS} -nostdinc++ -D_LIBCPP_DISABLE_AVAILABILITY -isystem ${CONTRIB_DIR}/include/c++/v1 -L${CONTRIB_DIR}/lib -Wl,-rpath,${CONTRIB_DIR}/lib -lc++abi -lc++"
+])
 
 dnl Add extras/tools to the PATH
 TOOLS_DIR="${srcdir}/extras/tools/build/bin"
@@ -1233,8 +1435,17 @@ AH_BOTTOM([
     AS_IF([test "${ac_cv_c_omit_frame_pointer}" = "no"], [VLC_RESTORE_FLAGS])
   ])
 
-  AX_APPEND_COMPILE_FLAGS([-fstack-protector-strong])
-  AX_APPEND_COMPILE_FLAGS([-fstack-protector-strong], [CXXFLAGS])
+  dnl libSystem only provides __stack_chk_fail starting with Mac OS X 10.5;
+  dnl skip the stack protector when targeting older releases.
+  macosx_min_has_ssp="yes"
+  AS_IF([test "${SYS}" = "darwin" -a -n "${with_macosx_version_min}"], [
+      AS_VERSION_COMPARE([${with_macosx_version_min}], [10.5],
+          [macosx_min_has_ssp="no"], [], [])
+  ])
+  AS_IF([test "${macosx_min_has_ssp}" = "yes"], [
+    AX_APPEND_COMPILE_FLAGS([-fstack-protector-strong])
+    AX_APPEND_COMPILE_FLAGS([-fstack-protector-strong], [CXXFLAGS])
+  ])
   dnl Win32 requires linking to ssp for stack-protection
   AS_IF([test "${SYS}" = "mingw32"], [
       LDFLAGS="${LDFLAGS} -lssp"
@@ -1342,7 +1553,7 @@ AC_SUBST(LIBEXECINFO)
 dnl
 dnl  default modules
 dnl
-ALIASES="${ALIASES} cvlc rvlc"
+ALIASES="${ALIASES} cpowervlc rpowervlc"
 
 dnl
 dnl  Accelerated modules
@@ -1799,7 +2010,11 @@ then
   AS_IF([test "${LUAC}" = "false"], [
     AC_MSG_ERROR([Could not find the LUA byte compiler.])
   ])
-  AS_IF([test -d "${CONTRIB_DIR}" -a -f "${CONTRIB_DIR}/lib/liblua.a" -a `echo|${LUAC} -o - -|od -j 8 -N 2 -t x2|head -n 1|tr -s ' '|cut -d' ' -f2` != 0404], [
+  dnl LUAC_ANY_ARCH is set when LUAC does not byte-compile but ships the Lua
+  dnl source (see legacy-luac in the macOS PowerPC/i386 cross builds): the
+  dnl target's Lua compiles it at load time, so the host byte order and word
+  dnl size of the compiler are irrelevant and this check must be skipped.
+  AS_IF([test -z "${LUAC_ANY_ARCH}" -a -d "${CONTRIB_DIR}" -a -f "${CONTRIB_DIR}/lib/liblua.a" -a `echo|${LUAC} -o - -|od -j 8 -N 2 -t x2|head -n 1|tr -s ' '|cut -d' ' -f2` != 0404], [
     AC_MSG_ERROR([You need 32-bits luac when using lua from contrib.])
   ])
 fi
@@ -3969,7 +4184,7 @@ AS_IF([test "${enable_qt}" != "no"], [
 ])
 
 AS_IF([test "${enable_qt}" != "no"], [
-  ALIASES="${ALIASES} qvlc"
+  ALIASES="${ALIASES} qpowervlc"
 ])
 AC_SUBST(QT_VERSION)
 AM_CONDITIONAL(ENABLE_QT, [test "$enable_qt" != "no"])
@@ -4033,7 +4248,7 @@ AS_IF([test "${enable_skins2}" != "no"], [
     ])
     enable_skins2="no"
   ], [
-    ALIASES="${ALIASES} svlc"
+    ALIASES="${ALIASES} spowervlc"
     enable_skins2="yes"
   ])
 ])
@@ -4044,6 +4259,19 @@ dnl  MacOS X gui module
 dnl
 AC_ARG_ENABLE(macosx,
   [  --enable-macosx         Mac OS X gui support (default enabled on Mac OS X)])
+dnl The modern Mac OS X interface is written against 10.7+ and compiled with
+dnl ARC, neither of which the FSF GCC used for the PowerPC and Intel-32 slices
+dnl can do (-fobjc-arc is a clang option). Targeting anything older than 10.6
+dnl therefore builds the legacy interface only -- which is exactly what
+dnl --enable-legacy-macosx defaults to in that case, a few lines below. Without
+dnl this the build dies in gui/macosx with "unrecognized command-line option
+dnl '-fobjc-arc'", since configure.sh always asks for --enable-macosx.
+AS_IF([test "${HAVE_OSX}" = "1" -a "${macosx_min_has_gcd}" = "no"], [
+  AS_IF([test "${enable_macosx}" = "yes"], [
+    AC_MSG_NOTICE([targeting Mac OS X < 10.6: the modern interface cannot be built (ARC), using the legacy one])
+  ])
+  enable_macosx="no"
+])
 if test "x${enable_macosx}" != "xno" -a "${SYS}" = "darwin"
 then
 
@@ -4132,6 +4360,19 @@ then
 fi
 
 dnl
+dnl  Legacy Mac OS X module (video window + main menu for targets too old
+dnl  for the full macosx interface; see modules/gui/legacy_macosx)
+dnl
+AC_ARG_ENABLE(legacy-macosx,
+  [  --enable-legacy-macosx  Legacy Mac OS X interface (default enabled when targeting Mac OS X older than 10.6)])
+AS_IF([test "${SYS}" = "darwin"], [
+  AS_IF([test "${enable_legacy_macosx}" = "yes" \
+      || (test "${enable_legacy_macosx}" != "no" -a "${macosx_min_has_gcd}" = "no")], [
+    VLC_ADD_PLUGIN([legacy_macosx])
+  ])
+])
+
+dnl
 dnl Mac OS X fancy dmg build tool
 dnl
 if test "${HAVE_OSX}" = "1"
@@ -4152,8 +4393,12 @@ AC_CHECK_HEADERS(VideoToolbox/VideoToolbox.h, [
 
 dnl
 dnl  AudioToolbox MIDI plugin
-AC_CHECK_HEADERS([AudioToolbox/AudioToolbox.h], [
-  VLC_ADD_PLUGIN([audiotoolboxmidi])
+dnl (needs AudioComponentDescription & kMusicDeviceProperty_SoundBankURL,
+dnl  which require the 10.6 SDK/runtime)
+AS_IF([test "${macosx_min_has_gcd}" != "no"], [
+  AC_CHECK_HEADERS([AudioToolbox/AudioToolbox.h], [
+    VLC_ADD_PLUGIN([audiotoolboxmidi])
+  ])
 ])
 
 dnl
@@ -4165,7 +4410,7 @@ have_ncurses="no"
 AS_IF([test "${enable_ncurses}" != "no"] ,[
   PKG_CHECK_MODULES([NCURSES], [ncursesw], [
     have_ncurses="yes"
-    ALIASES="${ALIASES} nvlc"
+    ALIASES="${ALIASES} npowervlc"
   ], [
     AS_IF([test -n "${enable_ncurses}"], [
       AC_MSG_ERROR([${NCURSES_PKG_ERRORS}.])
@@ -4368,16 +4613,24 @@ dnl
 dnl OS X notification plugin
 dnl
 AC_ARG_ENABLE(osx_notifications,
-  [  --enable-osx-notifications          osx notification plugin (default disabled)],,
-  [enable_osx_notifications=no])
+  [  --enable-osx-notifications          osx notification plugin (default enabled on Mac OS X)],,
+  [enable_osx_notifications=auto])
+AS_IF([test "${enable_osx_notifications}" = "auto"], [
+  AS_IF([test "${SYS}" = "darwin"],
+        [enable_osx_notifications=yes],
+        [enable_osx_notifications=no])
+])
 AS_IF([test "${enable_osx_notifications}" != "no"], [
+  VLC_ADD_PLUGIN([osx_notifications])
+  VLC_ADD_LIBS([osx_notifications], [-Wl,-framework,Foundation,-framework,AppKit])
+  VLC_ADD_OBJCFLAGS([osx_notifications], [-fobjc-exceptions] )
+  dnl The Growl SDK framework is optional: without it the plugin still
+  dnl talks to old Growl daemons over distributed notifications.
   if test -d ${CONTRIB_DIR}/Growl.framework -o -d ${CONTRIB_DIR}/Frameworks/Growl.framework
   then
-      VLC_ADD_PLUGIN([osx_notifications])
-      VLC_ADD_LIBS([osx_notifications], [-Wl,-framework,Growl,-framework,Foundation])
-      VLC_ADD_OBJCFLAGS([osx_notifications], [-fobjc-exceptions] )
-  else
-      enable_osx_notifications="no"
+      AC_DEFINE([HAVE_GROWL_FRAMEWORK], [1],
+                [Define to 1 if the Growl SDK framework is available.])
+      VLC_ADD_LIBS([osx_notifications], [-Wl,-framework,Growl])
   fi
 ])
 AM_CONDITIONAL(HAVE_OSX_NOTIFICATIONS, [test "$enable_osx_notifications" != "no"])
@@ -4483,8 +4736,9 @@ dnl
 dnl  Stuff used by the program
 dnl
 VERSION_MESSAGE="${VERSION} ${CODENAME}"
-COPYRIGHT_MESSAGE="Copyright © ${COPYRIGHT_YEARS} the VideoLAN team"
+COPYRIGHT_MESSAGE="Copyright © ${COPYRIGHT_YEARS} PowerVLC, the VideoLAN team"
 AC_DEFINE_UNQUOTED(VERSION_MESSAGE, "${VERSION_MESSAGE}", [Simple version string])
+AC_DEFINE_UNQUOTED(POWERVLC_VERSION, "${POWERVLC_VERSION}", [PowerVLC product version string])
 AC_DEFINE_UNQUOTED(COPYRIGHT_MESSAGE, "${COPYRIGHT_MESSAGE}", [Copyright string])
 AC_DEFINE_UNQUOTED(COPYRIGHT_YEARS, "${COPYRIGHT_YEARS}", [The copyright years])
 AC_DEFINE_UNQUOTED(CONFIGURE_LINE, "${CONFIGURE_LINE}", [The ./configure command line])
@@ -4532,6 +4786,25 @@ AC_SUBST(MACOSX_DEPLOYMENT_TARGET)
 AC_SUBST(FILE_LIBVLCCORE_DLL)
 AC_SUBST(FILE_LIBVLC_DLL)
 
+dnl PowerVLC: a handful of plugins have only C sources but link a C++ contrib
+dnl (gme, mod, chromaprint, srt); they force the C++ linker via dummy.cpp and
+dnl pull the *dynamic* -lstdc++/-lc++/-lgcc* their contribs' .pc files export.
+dnl With the static C++ runtime (HAVE_CXX_STATIC_RUNTIME) that dynamic runtime
+dnl reloads the shared libstdc++ and reintroduces the plugin-load locale
+dnl corruption, so drop it here and let -static-libstdc++ (common.am) embed it.
+AS_IF([test "$vlc_cxx_static_runtime" = "yes"], [
+  for _cxxlib in LIBS_gme LIBS_mod SRT_LIBS CHROMAPRINT_LIBS; do
+    eval "_cxxval=\$$_cxxlib"
+    _cxxval=`echo " $_cxxval " | sed \
+      -e 's/ -lstdc++ / /g' \
+      -e 's/ -lc++ / /g' \
+      -e 's/ -lgcc_s.1.1 / /g' \
+      -e 's/ -lgcc_s.10.4 / /g' \
+      -e 's/ -lgcc / /g'`
+    eval "$_cxxlib=\$_cxxval"
+  done
+])
+
 AC_CONFIG_FILES([
   Makefile
   doc/Makefile
@@ -4545,7 +4818,7 @@ AC_CONFIG_FILES([
   bin/Makefile
   test/Makefile
   modules/hw/mmal/Makefile
-  share/org.videolan.vlc.appdata.xml.in
+  share/com.github.PowerVLC.metainfo.xml.in
 ])
 
 AM_COND_IF([HAVE_WIN32], [

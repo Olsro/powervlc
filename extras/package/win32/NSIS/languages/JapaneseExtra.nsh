@@ -20,9 +20,9 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "簡単にアクセスできるようにデスクトップにアイコンを追加"
 ${LangFileString} Desc_Section03 \
-    "VLC MozillaとFirefoxプラグイン"
+    "${PRODUCT_NAME} MozillaとFirefoxプラグイン"
 ${LangFileString} Desc_Section04 \
-    "VLC ActiveXプラグイン"
+    "${PRODUCT_NAME} ActiveXプラグイン"
 ${LangFileString} Desc_Section05 \
     "DVDとCD再生の登録"
 ${LangFileString} Desc_Section06 \
@@ -71,7 +71,7 @@ ${LangFileString} Reinstall_HeadlineInstall "VLCをインストールする方�
 ${LangFileString} Reinstall_HeadlineMaintenance "処理したいメンテナンスオプションを選択してください。"
 ${LangFileString} Reinstall_MessageOlder "古いバージョンのVLCがシステムにインストールされています。処理したいオペレーションを選択して次へをクリックしてください。"
 ${LangFileString} Reinstall_MessageNewer "新しいバージョンのVLCが既にインストールされています。古いバージョンへのダウングレードは推奨されていません。処理したいオペレーションを選択して次へをクリックしてください。"
-${LangFileString} Reinstall_MessageSame "VLC ${VERSION} は既にインストールされています。処理したいオペレーションを選択して次へをクリックしてください。"
+${LangFileString} Reinstall_MessageSame "${PRODUCT_NAME} ${VERSION} は既にインストールされています。処理したいオペレーションを選択して次へをクリックしてください。"
 ${LangFileString} Reinstall_OptionUpgrade "以前の設定を使ってVLCをアップグレード (推奨)"
 ${LangFileString} Reinstall_OptionDowngrade "以前の設定を使ってVLCをダウングレード (推奨)"
 ${LangFileString} Reinstall_OptionComponents "コンポーネントの追加/削除/再インストール"

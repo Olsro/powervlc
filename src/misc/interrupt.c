@@ -43,7 +43,36 @@
 #include "interrupt.h"
 #include "libvlc.h"
 
+#ifdef thread_local
 static thread_local vlc_interrupt_t *vlc_interrupt_var;
+#else
+/* No compiler TLS (e.g. Mac OS X < 10.7): emulate it with pthread keys.
+ * The slot is heap-allocated per thread and freed by the key destructor. */
+# include <pthread.h>
+static pthread_key_t vlc_interrupt_key;
+static pthread_once_t vlc_interrupt_key_once = PTHREAD_ONCE_INIT;
+
+static void vlc_interrupt_key_create(void)
+{
+    if (pthread_key_create(&vlc_interrupt_key, free))
+        abort();
+}
+
+static vlc_interrupt_t **vlc_interrupt_slot(void)
+{
+    pthread_once(&vlc_interrupt_key_once, vlc_interrupt_key_create);
+
+    vlc_interrupt_t **slot = pthread_getspecific(vlc_interrupt_key);
+    if (slot == NULL)
+    {
+        slot = calloc(1, sizeof (*slot));
+        if (slot == NULL || pthread_setspecific(vlc_interrupt_key, slot))
+            abort();
+    }
+    return slot;
+}
+# define vlc_interrupt_var (*vlc_interrupt_slot())
+#endif
 
 /**
  * Initializes an interruption context.

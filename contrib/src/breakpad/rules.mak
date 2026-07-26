@@ -16,7 +16,9 @@ endif
 endif
 
 ifdef CAN_BUILD_BREAKPAD
+ifdef HAVE_CLANG
 PKGS += breakpad
+endif
 endif
 
 $(TARBALLS)/breakpad-$(BREAKPAD_VERSION).tar.gz:

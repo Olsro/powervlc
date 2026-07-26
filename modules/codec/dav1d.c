@@ -85,6 +85,14 @@ struct decoder_sys_t
 {
     Dav1dSettings s;
     Dav1dContext *c;
+#if defined (__powerpc__) || defined (__POWERPC__)
+    /* Keyframe-slideshow state: dav1d has no hurry-up — when the machine
+     * cannot keep up it throttles its input and the whole pipeline plays
+     * in slow motion. Track output lateness and degrade to keyframes. */
+    bool b_slideshow;
+    bool b_seen_typed_keyframe; /* the demux/packetizer does flag TYPE_I */
+    vlc_tick_t i_late_since;
+#endif
 };
 
 static vlc_fourcc_t FindVlcChroma(const Dav1dPicture *img)
@@ -211,7 +219,67 @@ static void FlushDecoder(decoder_t *dec)
 {
     decoder_sys_t *p_sys = dec->p_sys;
     dav1d_flush(p_sys->c);
+#if defined (__powerpc__) || defined (__POWERPC__)
+    p_sys->b_slideshow = false;
+    p_sys->i_late_since = VLC_TICK_INVALID;
+#endif
 }
+
+#if defined (__powerpc__) || defined (__POWERPC__)
+/* dav1d has no equivalent of avcodec's skip_frame/hurry-up: on a machine
+ * that cannot keep up it throttles its own input and the whole pipeline
+ * (audio included) plays in slow motion. Track how long the decoded
+ * pictures have been coming out past their display date; after 5 s of
+ * uninterrupted lateness degrade to a keyframe slideshow (keyframes are
+ * self-contained), like the avcodec PowerPC path does. */
+static void UpdateSlideshowState(decoder_t *dec, vlc_tick_t pic_date)
+{
+    decoder_sys_t *p_sys = dec->p_sys;
+
+    if (pic_date == VLC_TICK_INVALID)
+        return;
+
+    /* Convert the picture's STREAM-domain date to display (system)
+     * time through the core. The raw `pic_date <= mdate()` this used
+     * to do compared a stream timestamp (starts near zero) against
+     * system uptime: true for every picture of every file, so the
+     * slideshow armed unconditionally 5 s into ANY AV1 playback --
+     * masked as "av1 plays at 20% CPU" and, with the look-ahead cache,
+     * visible as a fill stuck at 2/181 pictures. decoder_GetDisplayDate
+     * also returns VLC_TICK_INVALID while the decoder output is parked
+     * (cache fill episode, preroll, pause): lateness is meaningless
+     * there, suspend the tracking instead of accumulating it. */
+    vlc_tick_t display_date = decoder_GetDisplayDate(dec, pic_date);
+    if (display_date == VLC_TICK_INVALID)
+    {
+        p_sys->i_late_since = VLC_TICK_INVALID;
+        return;
+    }
+
+    vlc_tick_t now = mdate();
+    if (display_date <= now) /* picture missed its display date */
+    {
+        if (p_sys->i_late_since == VLC_TICK_INVALID)
+            p_sys->i_late_since = now;
+        else if (!p_sys->b_slideshow &&
+                 now - p_sys->i_late_since > (5*CLOCK_FREQ))
+        {
+            msg_Warn(dec, "hopelessly late video: "
+                     "switching to keyframe slideshow");
+            p_sys->b_slideshow = true;
+        }
+    }
+    else
+    {
+        p_sys->i_late_since = VLC_TICK_INVALID;
+        if (p_sys->b_slideshow)
+        {
+            msg_Warn(dec, "video caught up: leaving keyframe slideshow");
+            p_sys->b_slideshow = false;
+        }
+    }
+}
+#endif
 
 static void release_block(const uint8_t *buf, void *b)
 {
@@ -232,6 +300,24 @@ static int Decode(decoder_t *dec, block_t *block)
         block_Release(block);
         return VLCDEC_SUCCESS;
     }
+
+#if defined (__powerpc__) || defined (__POWERPC__)
+    /* Keyframe slideshow: drop everything else at the door. Only once the
+     * stream has proven it flags its keyframes (the AV1 packetizer and the
+     * mkv demux both set BLOCK_FLAG_TYPE_I; mkv leaves other blocks
+     * unflagged) — a stream with no flags at all must not be dropped or
+     * nothing would ever be decoded again. */
+    if (block != NULL && (block->i_flags & BLOCK_FLAG_TYPE_I))
+        p_sys->b_seen_typed_keyframe = true;
+    if (p_sys->b_slideshow && block != NULL &&
+        p_sys->b_seen_typed_keyframe &&
+        (block->i_flags & BLOCK_FLAG_TYPE_I) == 0 &&
+        (block->i_flags & BLOCK_FLAG_END_OF_SEQUENCE) == 0)
+    {
+        block_Release(block);
+        return VLCDEC_SUCCESS;
+    }
+#endif
 
     bool b_eos = false;
     Dav1dData data;
@@ -292,6 +378,11 @@ static int Decode(decoder_t *dec, block_t *block)
             }
             pic->b_progressive = true; /* codec does not support interlacing */
             pic->date = img.m.timestamp;
+#if defined (__powerpc__) || defined (__POWERPC__)
+            UpdateSlideshowState(dec, pic->date);
+            if (p_sys->b_slideshow)
+                pic->b_force = true; /* late, but a slideshow beats black */
+#endif
             decoder_QueueVideo(dec, pic);
             dav1d_picture_unref(&img);
         }
@@ -328,6 +419,12 @@ static int OpenDecoder(vlc_object_t *p_this)
     decoder_sys_t *p_sys = vlc_obj_malloc(p_this, sizeof(*p_sys));
     if (!p_sys)
         return VLC_ENOMEM;
+
+#if defined (__powerpc__) || defined (__POWERPC__)
+    p_sys->b_slideshow = false;
+    p_sys->b_seen_typed_keyframe = false;
+    p_sys->i_late_since = VLC_TICK_INVALID;
+#endif
 
     dav1d_default_settings(&p_sys->s);
 #if DAV1D_API_VERSION_MAJOR >= 6

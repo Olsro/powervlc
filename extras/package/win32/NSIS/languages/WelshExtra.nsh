@@ -16,33 +16,33 @@ ${LangFileString} Name_Section08 "Dileu'r dewisiadau a'r cuddstôr"
 ${LangFileString} Desc_Section01 \
     "Y chwaraeydd cyfryngau ei hun"
 ${LangFileString} Desc_Section02a \
-    "Rhoi eiconau yn eich dewislen cychwyn i allu agor VLC yn hawdd"
+    "Rhoi eiconau yn eich dewislen cychwyn i allu agor ${PRODUCT_NAME} yn hawdd"
 ${LangFileString} Desc_Section02b \
-    "Rhoi eicon ar eich bwrdd gwaith i allu agor VLC yn hawdd"
+    "Rhoi eicon ar eich bwrdd gwaith i allu agor ${PRODUCT_NAME} yn hawdd"
 ${LangFileString} Desc_Section03 \
-    "Gosod ategyn VLC ar gyfer Mozilla a Mozilla Firefox"
+    "Gosod ategyn ${PRODUCT_NAME} ar gyfer Mozilla a Mozilla Firefox"
 ${LangFileString} Desc_Section04 \
-    "Gosod ategyn VLC ar gyfer ActiveX"
+    "Gosod ategyn ${PRODUCT_NAME} ar gyfer ActiveX"
 ${LangFileString} Desc_Section05 \
     "Cofrestriad chwarae CD a DVD"
 ${LangFileString} Desc_Section06 \
-    "Gosod chwaraeydd VLC fel y rhaglen ddiofyn ar gyfer y mathau o ffeil a dewisir"
+    "Gosod chwaraeydd ${PRODUCT_NAME} fel y rhaglen ddiofyn ar gyfer y mathau o ffeil a dewisir"
 ${LangFileString} Desc_Section07 \
-    "Ychwanegu eitemau cyd-destun at ddewislenni ('Chwarae gyda VLC' ac 'Ychwanegu i restr chwarae VLC')"
+    "Ychwanegu eitemau cyd-destun at ddewislenni ('Chwarae gyda ${PRODUCT_NAME}' ac 'Ychwanegu i restr chwarae ${PRODUCT_NAME}')"
 ${LangFileString} Desc_Section08 \
-    "Dileu dewisiadau a ffeiliau cuddstôr (cache) yn weddill o fersiynau gynt o chwaraeydd VLC"
+    "Dileu dewisiadau a ffeiliau cuddstôr (cache) yn weddill o fersiynau gynt o chwaraeydd ${PRODUCT_NAME}"
 
 ${LangFileString} Name_Section91 "Dadosod"
 ${LangFileString} Name_Section92 "Dileu'r dewisiadau a'r cuddstôr"
 
 ${LangFileString} Desc_Section91 \
-"Dadosod chwaraeydd VLC a'i holl gydrannau"
+"Dadosod chwaraeydd ${PRODUCT_NAME} a'i holl gydrannau"
 ${LangFileString} Desc_Section92 \
-"Dileu dewisiadau a ffeiliau cuddstôr chwaraeydd VLC."
+"Dileu dewisiadau a ffeiliau cuddstôr chwaraeydd ${PRODUCT_NAME}."
 
 ${LangFileString} ShellAssociation_Play "Chwarae"
-${LangFileString} ContextMenuEntry_PlayWith "Chwarae gyda chwaraeydd VLC"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Ychwanegu at restr chwarae VLC"
+${LangFileString} ContextMenuEntry_PlayWith "Chwarae gyda chwaraeydd ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Ychwanegu at restr chwarae ${PRODUCT_NAME}"
 
 ${LangFileString} Link_VisitWebsite "Ymweld â gwefan chwaraeydd VLC gan VideoLAN"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Chwarae Blu-ray"
 ${LangFileString} License_NextText "Wedi ei ddarllen, rydych yn ymwybodol o'ch hawliau. Cliciwch $\"Nesaf$\" i barhau."
 
 ${LangFileString} Detail_CheckProcesses "Yn gwirio..."
-${LangFileString} MessageBox_VLCRunning "Mae'n ymddangos bod VLC yn rhedeg, felly bydd nawr yn cael ei gau."
-${LangFileString} MessageBox_VLCUnableToClose "Methwyd cau VLC. Caewch y chwaraeydd, os gwelwch yn dda."
+${LangFileString} MessageBox_VLCRunning "Mae'n ymddangos bod ${PRODUCT_NAME} yn rhedeg, felly bydd nawr yn cael ei gau."
+${LangFileString} MessageBox_VLCUnableToClose "Methwyd cau ${PRODUCT_NAME}. Caewch y chwaraeydd, os gwelwch yn dda."
 ${LangFileString} MessageBox_InstallAborted "Diweddwyd y broses gosod cyn gorffen!"
 
 ${LangFileString} Reinstall_Headline "Eisoes wedi'i osod"
-${LangFileString} Reinstall_HeadlineInstall "Dewiswch sut hoffech osod VLC."
+${LangFileString} Reinstall_HeadlineInstall "Dewiswch sut hoffech osod ${PRODUCT_NAME}."
 ${LangFileString} Reinstall_HeadlineMaintenance "Dewiswch yr opsiwn cynnal a chadw i'w weithredu."
-${LangFileString} Reinstall_MessageOlder "Mae fersiwn gynt o VLC wedi'i osod ar eich system. Dewiswch un o'r gweithredoedd a chliciwch $\"Nesaf$\" i barhau."
-${LangFileString} Reinstall_MessageNewer "Mae fersiwn mwy diweddar o VLC eisoes wedi'i osod! Nid yw'n arferol i israddio at fersiwn gynt. Dewiswch un o'r gweithredoedd a chliciwch $\"Nesaf$\" i barhau."
-${LangFileString} Reinstall_MessageSame "Mae VLC ${VERSION} eisoes wedi'i osod. Dewiswch un o'r gweithredoedd a chliciwch $\"Nesaf$\" i barhau."
-${LangFileString} Reinstall_OptionUpgrade "Uwchraddio VLC gyda'r un gosodiadau (argymhellwyd)"
-${LangFileString} Reinstall_OptionDowngrade "Israddio VLC gyda'r un gosodiadau (argymhellwyd)"
+${LangFileString} Reinstall_MessageOlder "Mae fersiwn gynt o ${PRODUCT_NAME} wedi'i osod ar eich system. Dewiswch un o'r gweithredoedd a chliciwch $\"Nesaf$\" i barhau."
+${LangFileString} Reinstall_MessageNewer "Mae fersiwn mwy diweddar o ${PRODUCT_NAME} eisoes wedi'i osod! Nid yw'n arferol i israddio at fersiwn gynt. Dewiswch un o'r gweithredoedd a chliciwch $\"Nesaf$\" i barhau."
+${LangFileString} Reinstall_MessageSame "Mae ${PRODUCT_NAME} ${VERSION} eisoes wedi'i osod. Dewiswch un o'r gweithredoedd a chliciwch $\"Nesaf$\" i barhau."
+${LangFileString} Reinstall_OptionUpgrade "Uwchraddio ${PRODUCT_NAME} gyda'r un gosodiadau (argymhellwyd)"
+${LangFileString} Reinstall_OptionDowngrade "Israddio ${PRODUCT_NAME} gyda'r un gosodiadau (argymhellwyd)"
 ${LangFileString} Reinstall_OptionComponents "Ychwanegu/Tynnu/Ailosod cydrannau"
 ${LangFileString} Reinstall_OptionAdvanced "Newid gosodiadau (uwch)"
-${LangFileString} Reinstall_OptionUninstall "Dadosod VLC"
+${LangFileString} Reinstall_OptionUninstall "Dadosod ${PRODUCT_NAME}"

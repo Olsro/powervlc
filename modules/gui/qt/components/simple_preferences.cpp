@@ -30,6 +30,7 @@
 #include "qt.hpp"
 #include "components/simple_preferences.hpp"
 #include "components/preferences_widgets.hpp"
+#include "util/powervlc_links.hpp"
 
 #include <vlc_config_cat.h>
 #include <vlc_configuration.h>
@@ -438,6 +439,14 @@ SPrefsPanel::SPrefsPanel( intf_thread_t *_p_intf, QWidget *_parent,
             CONFIG_GENERIC( "snapshot-format", StringList, ui.arLabel,
                             snapshotsFormat );
 
+            /* Look-ahead decode cache */
+            CONFIG_GENERIC_NO_BOOL( "video-cache-mb", IntegerRange,
+                                    ui.videoCacheMbLabel, videoCacheMbSpin );
+            CONFIG_GENERIC_NO_BOOL( "video-cache-fill-percent", IntegerRange,
+                                    ui.videoCacheFillLabel, videoCacheFillSpin );
+            CONFIG_GENERIC_NO_BOOL( "video-cache-max-seconds", IntegerRange,
+                                    ui.videoCacheSecLabel, videoCacheSecSpin );
+
             updateVideoOptions( ui.outputModule->currentIndex() );
          END_SPREFS_CAT;
 
@@ -765,6 +774,9 @@ SPrefsPanel::SPrefsPanel( intf_thread_t *_p_intf, QWidget *_parent,
                     + QString( " <a href=\"http://www.videolan.org/vlc/skins.php\">" )
                     + qtr( "VLC skins website" )+ QString( "</a>." ) );
             ui.skinsLabel->setFont( italicFont );
+            ui.skinsLabel->setOpenExternalLinks( false );
+            CONNECT( ui.skinsLabel, linkActivated( const QString & ),
+                     this, onSkinsLink( const QString & ) );
 
 #ifdef _WIN32
             BUTTONACT( ui.assoButton, assoDialog() );
@@ -1252,6 +1264,11 @@ void SPrefsPanel::configML()
     mld->exec();
     delete mld;
 #endif
+}
+
+void SPrefsPanel::onSkinsLink( const QString &url )
+{
+    PowerVLCConfirmOpenExternal( this, url );
 }
 
 #ifdef _WIN32

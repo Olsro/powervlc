@@ -276,6 +276,14 @@ static int Open(vlc_object_t *p_this)
     if (p_demux->out == NULL)
         return VLC_EGENERIC;
 
+    /* AVFoundation is weak-linked so the plugin loads on releases that
+     * predate it (10.5/10.6): degrade to "no capture device" there */
+    if (NSClassFromString(@"AVCaptureSession") == nil)
+    {
+        msg_Warn(p_demux, "AVFoundation not available on this OS release");
+        return VLC_EGENERIC;
+    }
+
     @autoreleasepool {
         VLCAVCaptureDemux *demux = [[VLCAVCaptureDemux alloc] init:p_demux];
         if (demux == nil)

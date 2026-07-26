@@ -57,8 +57,20 @@ GCRYPT_CONF += --disable-aesni-support
 ifeq ($(ARCH),aarch64)
 GCRYPT_CONF += --disable-asm --disable-arm-crypto-support
 endif
+ifeq ($(ARCH),i386)
+# The i386 mpi assembler modules (mpih-*.S) do not build with the legacy
+# cctools as / Mach-O PIC combo targeting Tiger, leaving unresolved
+# _gcry_mpih_* symbols at link time. Generic C is plenty for a Core Duo.
+GCRYPT_CONF += --disable-asm
+endif
 ifeq ($(ARCH), x86_64)
 GCRYPT_CONF += ac_cv_sys_symbol_underscore=yes
+# getentropy() only exists since macOS 10.12; the weak-linked symbol is NULL
+# on older releases and crashes the RNG initialization. Fall back to
+# /dev/urandom.
+ifneq ($(call darwin_min_os_at_least, 10.12), true)
+GCRYPT_CONF += ac_cv_func_getentropy=no
+endif
 endif
 else
 ifdef HAVE_BSD

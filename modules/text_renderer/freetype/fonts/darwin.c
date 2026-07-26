@@ -37,18 +37,54 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreText/CoreText.h>
+#include <ApplicationServices/ApplicationServices.h>   /* ATS (pre-10.6 fallback) */
+#include <limits.h>                                     /* PATH_MAX */
 
 #include "../platform_fonts.h"
+
+/* ATSFontGetFileReference is a 10.5 symbol not declared by the 10.4 SDK headers.
+ * Declare it and weak-import it so the plugin still loads on 10.4 (where it just
+ * yields no path); on 10.5 it resolves a font's file the way CoreText's
+ * kCTFontURLAttribute does from 10.6 on. */
+extern OSStatus ATSFontGetFileReference(ATSFontRef iFont, FSRef *oFile)
+    __attribute__((weak_import));
 
 char* getPathForFontDescription(CTFontDescriptorRef fontDescriptor);
 void addNewFontToFamily(filter_t *p_filter, CTFontDescriptorRef iter, char *path, vlc_family_t *family, int index);
 
+/* Resolve a font descriptor's file path on Mac OS X 10.5, where
+ * kCTFontURLAttribute (10.6+) is unavailable. Returns a malloc'd POSIX path or
+ * NULL. */
+static char *getPathForFontDescriptionPre106(CTFontDescriptorRef fontDescriptor)
+{
+    if (&ATSFontGetFileReference == NULL)
+        return NULL;
+    CFStringRef psname =
+        CTFontDescriptorCopyAttribute(fontDescriptor, kCTFontNameAttribute);
+    if (psname == NULL)
+        return NULL;
+    ATSFontRef atsFont = ATSFontFindFromPostScriptName(psname, kATSOptionFlagsDefault);
+    CFRelease(psname);
+    if (atsFont == (ATSFontRef)0 || atsFont == kATSFontRefUnspecified)
+        return NULL;
+    FSRef fsRef;
+    if (ATSFontGetFileReference(atsFont, &fsRef) != noErr)
+        return NULL;
+    UInt8 path[PATH_MAX];
+    if (FSRefMakePath(&fsRef, path, sizeof(path)) != noErr)
+        return NULL;
+    return strdup((char *)path);
+}
+
 
 char* getPathForFontDescription(CTFontDescriptorRef fontDescriptor)
 {
-    CFURLRef url = CTFontDescriptorCopyAttribute(fontDescriptor, kCTFontURLAttribute);
+    /* kCTFontURLAttribute requires Mac OS X 10.6; fall back to ATS on 10.5. */
+    CFURLRef url = NULL;
+    if (__builtin_available(macOS 10.6, *))
+        url = CTFontDescriptorCopyAttribute(fontDescriptor, kCTFontURLAttribute);
     if (url == NULL)
-        return NULL;
+        return getPathForFontDescriptionPre106(fontDescriptor);
     CFStringRef path = CFURLCopyFileSystemPath(url, kCFURLPOSIXPathStyle);
     if (path == NULL) {
         CFRelease(url);
@@ -66,7 +102,14 @@ static CFIndex getFontIndexInFontFile(const char* psz_filePath, const char* psz_
     if (url == NULL) {
         return kCFNotFound;
     }
-    CFArrayRef fontDescriptors = CTFontManagerCreateFontDescriptorsFromURL(url);
+    /* CTFontManagerCreateFontDescriptorsFromURL() requires Mac OS X 10.6. */
+    CFArrayRef fontDescriptors;
+    if (__builtin_available(macOS 10.6, *))
+        fontDescriptors = CTFontManagerCreateFontDescriptorsFromURL(url);
+    else {
+        CFRelease(url);
+        return kCFNotFound;
+    }
     if (fontDescriptors == NULL) {
         CFRelease(url);
         return kCFNotFound;

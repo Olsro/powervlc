@@ -401,6 +401,12 @@ static int OpenDecoder( vlc_object_t *p_this )
     if( MPG123Open( p_dec ) )
         goto error;
 
+    /* Gapless (PowerVLC): libmpg123 applies the LAME encoder delay/padding on
+     * its own, so the generic trimming of the decoder owner must stay out of
+     * the way, otherwise the samples would be dropped twice. */
+    p_dec->fmt_in.audio.i_gapless_priming = 0;
+    p_dec->fmt_in.audio.i_gapless_length = 0;
+
     p_dec->fmt_out.i_codec = VLC_CODEC_FL32;
     p_dec->fmt_out.audio.i_rate = 0; /* So end_date gets initialized */
     p_dec->fmt_out.audio.i_format = p_dec->fmt_out.i_codec;

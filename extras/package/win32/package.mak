@@ -17,22 +17,22 @@ build-npapi: package-win-install
 endif
 
 if HAVE_ARM64
-WINVERSION=vlc-$(VERSION)-winarm64
+WINVERSION=PowerVLC-$(POWERVLC_VERSION)-winarm64
 else
 if HAVE_WIN64
-WINVERSION=vlc-$(VERSION)-win64
+WINVERSION=PowerVLC-$(POWERVLC_VERSION)-win64
 else
-WINVERSION=vlc-$(VERSION)-win32
+WINVERSION=PowerVLC-$(POWERVLC_VERSION)-win32
 endif
 endif
 
 package-win-install:
 	$(MAKE) install
-	cp '$(DESTDIR)$(libdir)/libvlc.dll.a' '$(DESTDIR)$(libdir)/libvlc.lib'
-	cp '$(DESTDIR)$(libdir)/libvlccore.dll.a' '$(DESTDIR)$(libdir)/libvlccore.lib'
+	cp '$(DESTDIR)$(libdir)/libpowervlc.dll.a' '$(DESTDIR)$(libdir)/libpowervlc.lib'
+	cp '$(DESTDIR)$(libdir)/libpowervlccore.dll.a' '$(DESTDIR)$(libdir)/libpowervlccore.lib'
 if ENABLE_PDB
-	cp lib/.libs/libvlc.pdb '$(DESTDIR)$(bindir)'
-	cp src/.libs/libvlccore.pdb '$(DESTDIR)$(bindir)'
+	cp lib/.libs/libpowervlc.pdb '$(DESTDIR)$(bindir)'
+	cp src/.libs/libpowervlccore.pdb '$(DESTDIR)$(bindir)'
 	find '$(DESTDIR)$(libdir)/vlc/plugins' -name "*.dll" -exec sh -c "echo {} | sed -e 's@$(DESTDIR)$(libdir)/vlc/plugins/\(.*\)/\(.*\).dll@modules/.libs/\2.pdb $(DESTDIR)$(libdir)/vlc/plugins/\1@' | xargs -t cp " \;
 endif
 	touch $@
@@ -41,24 +41,28 @@ package-win-sdk: package-win-install
 	mkdir -p "$(win32_destdir)/sdk/lib/"
 	cp -r $(prefix)/include "$(win32_destdir)/sdk"
 	cp -r $(prefix)/lib/pkgconfig "$(win32_destdir)/sdk/lib"
-	cp -rv $(prefix)/lib/libvlc.dll.a "$(win32_destdir)/sdk/lib/libvlc.lib"
-	cp -rv $(prefix)/lib/libvlccore.dll.a "$(win32_destdir)/sdk/lib/libvlccore.lib"
-	$(DLLTOOL) -D libvlc.dll -l "$(win32_destdir)/sdk/lib/libvlc.lib" -d "$(top_builddir)/lib/.libs/libvlc.dll.def"
-	echo "INPUT(libvlc.lib)" > "$(win32_destdir)/sdk/lib/vlc.lib"
-	$(DLLTOOL) -D libvlccore.dll -l "$(win32_destdir)/sdk/lib/libvlccore.lib" -d "$(top_builddir)/src/.libs/libvlccore.dll.def"
-	echo "INPUT(libvlccore.lib)" > "$(win32_destdir)/sdk/lib/vlccore.lib"
+	cp -rv $(prefix)/lib/libpowervlc.dll.a "$(win32_destdir)/sdk/lib/libpowervlc.lib"
+	cp -rv $(prefix)/lib/libpowervlccore.dll.a "$(win32_destdir)/sdk/lib/libpowervlccore.lib"
+	$(DLLTOOL) -D libpowervlc.dll -l "$(win32_destdir)/sdk/lib/libpowervlc.lib" -d "$(top_builddir)/lib/.libs/libpowervlc.dll.def"
+	echo "INPUT(libpowervlc.lib)" > "$(win32_destdir)/sdk/lib/vlc.lib"
+	$(DLLTOOL) -D libpowervlccore.dll -l "$(win32_destdir)/sdk/lib/libpowervlccore.lib" -d "$(top_builddir)/src/.libs/libpowervlccore.dll.def"
+	echo "INPUT(libpowervlccore.lib)" > "$(win32_destdir)/sdk/lib/vlccore.lib"
 
 package-win-common: package-win-install package-win-sdk
 # Executables, major libs
 	find $(prefix) -maxdepth 4 \( -name "*$(LIBEXT)" -o -name "*$(EXEEXT)" \) -exec cp {} "$(win32_destdir)/" \;
+# PowerVLC: nothing to rename here any more -- the executables are built as
+# powervlc.exe and powervlc-cache-gen.exe by their own _PROGRAMS targets, so the
+# find/cp above already copies them under the right names. The mv commands that
+# used to fix up "vlc.exe" were kept only while the automake target was still
+# named "vlc".
 
 # Text files, clean them from mail addresses
-	for file in AUTHORS THANKS ; \
-		do sed 's/@/_AT_/' < "$(srcdir)/$$file" > "$(win32_destdir)/$${file}.txt"; \
-	done
-	for file in NEWS COPYING README; \
-		do cp "$(srcdir)/$$file" "$(win32_destdir)/$${file}.txt"; \
-	done
+	sed 's/@/_AT_/' < "$(srcdir)/AUTHORS" > "$(win32_destdir)/AUTHORS.txt"
+	sed 's/@/_AT_/' < "$(srcdir)/THANKS_VLC" > "$(win32_destdir)/THANKS.txt"
+	cp "$(srcdir)/NEWS_VLC" "$(win32_destdir)/NEWS.txt"
+	cp "$(srcdir)/COPYING" "$(win32_destdir)/COPYING.txt"
+	cp "$(srcdir)/README_VLC" "$(win32_destdir)/README.txt"
 
 	cp $(srcdir)/share/icons/vlc.ico $(win32_destdir)
 	for plugindir in $(prefix)/lib/vlc/plugins/*/; do \
@@ -70,6 +74,25 @@ package-win-common: package-win-install package-win-sdk
 
 # BD-J JAR
 	-cp $(CONTRIB_DIR)/share/java/*.jar $(win32_destdir)/plugins/access/
+
+# libaacs: AACS descrambling for Blu-ray. libbluray does not link against it,
+# it dlopen()s "libaacs.dll", which LoadLibrary resolves from the directory of
+# powervlc.exe -- so the DLL goes next to it, under that exact name (libtool
+# builds it as libaacs-0.dll). A Blu-ray plugin without libaacs plays homemade
+# discs only, so a missing library fails the packaging step instead of
+# shipping a player that cannot read a retail disc.
+	@if test -d "$(win32_destdir)/plugins/access" && \
+	    ls "$(win32_destdir)/plugins/access/"*bluray* >/dev/null 2>&1; then \
+		aacs=`ls $(CONTRIB_DIR)/bin/libaacs*.dll 2>/dev/null | head -1` ; \
+		if test -n "$$aacs"; then \
+			cp "$$aacs" "$(win32_destdir)/libaacs.dll" ; \
+			echo "  PACKAGE  libaacs.dll" ; \
+		else \
+			echo "ERROR: the Blu-ray plugin is packaged but $(CONTRIB_DIR)/bin/libaacs-*.dll is missing." ; \
+			echo "       Build it with: make -C contrib/contrib-<host> .aacs" ; \
+			exit 1 ; \
+		fi ; \
+	fi
 
 if BUILD_LUA
 	mkdir -p $(win32_destdir)/lua/
@@ -94,7 +117,7 @@ package-win-npapi: build-npapi
 	mkdir -p "$(win32_destdir)/sdk/activex/"
 	cp $(top_builddir)/npapi-vlc/activex/README.TXT $(top_builddir)/npapi-vlc/share/test/test.html $(win32_destdir)/sdk/activex/
 
-package-win-strip: package-win-common package-win-npapi
+package-win-strip: package-win-common
 	mkdir -p "$(win32_debugdir)"/
 	find $(win32_destdir) -type f \( -name '*$(LIBEXT)' -or -name '*$(EXEEXT)' \) | while read i; \
 	do if test -n "$$i" ; then \
@@ -107,7 +130,7 @@ package-win-strip: package-win-common package-win-npapi
 package-win32-webplugin-common: package-win-strip
 	mkdir -p "$(win32_xpi_destdir)/plugins/"
 	cp -r $(win32_destdir)/plugins/ "$(win32_xpi_destdir)/plugins/"
-	cp "$(win32_destdir)/libvlc.dll" "$(win32_destdir)/libvlccore.dll" "$(win32_destdir)/npvlc.dll" "$(win32_xpi_destdir)/plugins/"
+	cp "$(win32_destdir)/libpowervlc.dll" "$(win32_destdir)/libpowervlccore.dll" "$(win32_destdir)/npvlc.dll" "$(win32_xpi_destdir)/plugins/"
 	rm -rf "$(win32_xpi_destdir)/plugins/plugins/gui/"
 
 
@@ -176,7 +199,8 @@ package-win32-debug-7zip: package-win-common
 package-win32-cleanup:
 	rm -Rf $(win32_destdir) $(win32_debugdir) $(win32_xpi_destdir)
 
-package-win32: package-win32-zip package-win32-7zip package-win32-exe package-win32-xpi
+# PowerVLC: drop package-win32-xpi (the obsolete NPAPI/Mozilla browser plugin).
+package-win32: package-win32-zip package-win32-7zip package-win32-exe
 
 package-win32-debug: package-win32-debug-zip package-win32-debug-7zip
 
@@ -195,8 +219,8 @@ package-win32-release: package-win32-src $(win32_destdir)/NSIS/nsProcess.dll pac
 # WinCE
 #######
 package-wince: package-win-strip
-	rm -f -- vlc-$(VERSION)-wince.zip
-	zip -r -9 vlc-$(VERSION)-wince.zip vlc-$(VERSION)
+	rm -f -- PowerVLC-$(POWERVLC_VERSION)-wince.zip
+	zip -r -9 PowerVLC-$(POWERVLC_VERSION)-wince.zip vlc-$(VERSION)
 
 .PHONY: package-win-install package-win-common package-win-strip package-win32-webplugin-common package-win32-xpi package-win32-crx package-win32-src package-win32-exe package-win32-zip package-win32-debug-zip package-win32-7zip package-win32-debug-7zip package-win32-cleanup package-win32 package-win32-debug package-wince
 

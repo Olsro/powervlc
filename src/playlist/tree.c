@@ -130,6 +130,23 @@ void playlist_NodeDeleteExplicit( playlist_t *p_playlist,
             playlist_Control( p_playlist, PLAYLIST_STOP, pl_Locked );
     }
 
+    /* Likewise, a deleted node must not linger as the status node nor in a
+     * pending play request: NextItem/ResetCurrentlyPlaying and PLAYLIST_VIEWPLAY
+     * dereference these, and would touch freed memory otherwise. This only bites
+     * in tree mode (e.g. the Media Library, a root distinct from p_playing that
+     * can be entered/played): in a flat playlist the status node is always
+     * p_playing, which is never deleted here. */
+    if( get_current_status_node( p_playlist ) == p_root )
+        set_current_status_node( p_playlist, p_playlist->p_playing );
+
+    if( pl_priv(p_playlist)->request.b_request )
+    {
+        if( pl_priv(p_playlist)->request.p_node == p_root )
+            pl_priv(p_playlist)->request.p_node = p_playlist->p_playing;
+        if( pl_priv(p_playlist)->request.p_item == p_root )
+            pl_priv(p_playlist)->request.p_item = NULL;
+    }
+
     for( i = 0; i < p_playlist->current.i_size; i++ )
         if( p_playlist->current.p_elems[i] == p_root )
             ARRAY_REMOVE( p_playlist->current, i );

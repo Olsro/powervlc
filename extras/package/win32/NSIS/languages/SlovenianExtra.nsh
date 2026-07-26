@@ -20,29 +20,29 @@ ${LangFileString} Desc_Section02a \
 ${LangFileString} Desc_Section02b \
     "Za lažji dostop na vaše namizje postavi ikono"
 ${LangFileString} Desc_Section03 \
-    "Dodatek VLC Mozilla in Mozilla Firefox"
+    "Dodatek ${PRODUCT_NAME} Mozilla in Mozilla Firefox"
 ${LangFileString} Desc_Section04 \
-    "Vstavek ActiveX VLC"
+    "Vstavek ActiveX ${PRODUCT_NAME}"
 ${LangFileString} Desc_Section05 \
     "Registracija predvajanja DVD in CD"
 ${LangFileString} Desc_Section06 \
-    "Predvajalnik VLC naj bo privzeti program za navedeno vrsto datotek"
+    "Predvajalnik ${PRODUCT_NAME} naj bo privzeti program za navedeno vrsto datotek"
 ${LangFileString} Desc_Section07 \
-    "Dodaj ukaze v vsebinski meni (»Predvajaj z VLC« in »Dodaj v predvajalni seznam VLC«)"
+    "Dodaj ukaze v vsebinski meni (»Predvajaj z ${PRODUCT_NAME}« in »Dodaj v predvajalni seznam ${PRODUCT_NAME}«)"
 ${LangFileString} Desc_Section08 \
-    "Izbriše nastavitve predvajalnika VLC in datoteke predpomnilnika, ki so tam ostale od prejšnjih namestitev"
+    "Izbriše nastavitve predvajalnika ${PRODUCT_NAME} in datoteke predpomnilnika, ki so tam ostale od prejšnjih namestitev"
 
 ${LangFileString} Name_Section91 "Odstrani namestitev"
 ${LangFileString} Name_Section92 "Izbriši nastavitve in predpomnilnik"
 
 ${LangFileString} Desc_Section91 \
-"Odstrani predvajalnik VLC in vse njegove dele"
+"Odstrani predvajalnik ${PRODUCT_NAME} in vse njegove dele"
 ${LangFileString} Desc_Section92 \
-"Izbriše nastavitve predvajalnika VLC in datoteke predpomnilnika"
+"Izbriše nastavitve predvajalnika ${PRODUCT_NAME} in datoteke predpomnilnika"
 
 ${LangFileString} ShellAssociation_Play "Predvajaj"
-${LangFileString} ContextMenuEntry_PlayWith "Predvajaj s predvajalnikom VLC"
-${LangFileString} ContextMenuEntry_AddToPlaylist "Dodaj na VLC seznam predvajanja"
+${LangFileString} ContextMenuEntry_PlayWith "Predvajaj s predvajalnikom ${PRODUCT_NAME}"
+${LangFileString} ContextMenuEntry_AddToPlaylist "Dodaj na ${PRODUCT_NAME} seznam predvajanja"
 
 ${LangFileString} Link_VisitWebsite "Obišči spletišče predvajalnika VideoLAN VLC"
 
@@ -62,18 +62,18 @@ ${LangFileString} Action_OnArrivalBluray "Predvajaj Blu-ray"
 ${LangFileString} License_NextText "Sedaj ste seznanjeni z dovoljenji in vašimi pravicami in lahko nadaljujete."
 
 ${LangFileString} Detail_CheckProcesses "Preverjanje opravil ..."
-${LangFileString} MessageBox_VLCRunning "VLC je zagnan in bo zdaj zaprt."
-${LangFileString} MessageBox_VLCUnableToClose "Namestitvenega programa VLC ni mogoče samodejno zapreti. To je treba storiti ročno."
+${LangFileString} MessageBox_VLCRunning "${PRODUCT_NAME} je zagnan in bo zdaj zaprt."
+${LangFileString} MessageBox_VLCUnableToClose "Namestitvenega programa ${PRODUCT_NAME} ni mogoče samodejno zapreti. To je treba storiti ročno."
 ${LangFileString} MessageBox_InstallAborted "Namestitev je prekinjena!"
 
 ${LangFileString} Reinstall_Headline "Že nameščeno"
-${LangFileString} Reinstall_HeadlineInstall "Izberite vrsto namestitve VLC."
+${LangFileString} Reinstall_HeadlineInstall "Izberite vrsto namestitve ${PRODUCT_NAME}."
 ${LangFileString} Reinstall_HeadlineMaintenance "Izberite funkcijo vzdrževanja, ki nej se izvede."
-${LangFileString} Reinstall_MessageOlder "Na vaš sistem je nameščena starejša različica VLC. Izberite opravilo, ki ga želite izvršiti, in kliknite Naprej za nadaljevanje."
-${LangFileString} Reinstall_MessageNewer "Nameščena je že novejša različica VLC! Povrnitev na prejšnjo različico ni priporočena. Izberite želeno opravilo in kliknite Naprej za nadaljevanje."
-${LangFileString} Reinstall_MessageSame "Različica VLC ${VERSION} je že nameščena. Izberite opravilo, ki ga želite izvršiti, in kliknite Naprej za nadaljevanje."
-${LangFileString} Reinstall_OptionUpgrade "Nadgradi VLC z obstoječimi nastavitvami (priporočeno)"
-${LangFileString} Reinstall_OptionDowngrade "Povrni starejšo različico VLC z obstoječimi nastavitvami (priporočeno)"
-${LangFileString} Reinstall_OptionComponents "Dodaj/odstrani/ponovno namesti dele predvajalnika VLC"
+${LangFileString} Reinstall_MessageOlder "Na vaš sistem je nameščena starejša različica ${PRODUCT_NAME}. Izberite opravilo, ki ga želite izvršiti, in kliknite Naprej za nadaljevanje."
+${LangFileString} Reinstall_MessageNewer "Nameščena je že novejša različica ${PRODUCT_NAME}! Povrnitev na prejšnjo različico ni priporočena. Izberite želeno opravilo in kliknite Naprej za nadaljevanje."
+${LangFileString} Reinstall_MessageSame "Različica ${PRODUCT_NAME} ${VERSION} je že nameščena. Izberite opravilo, ki ga želite izvršiti, in kliknite Naprej za nadaljevanje."
+${LangFileString} Reinstall_OptionUpgrade "Nadgradi ${PRODUCT_NAME} z obstoječimi nastavitvami (priporočeno)"
+${LangFileString} Reinstall_OptionDowngrade "Povrni starejšo različico ${PRODUCT_NAME} z obstoječimi nastavitvami (priporočeno)"
+${LangFileString} Reinstall_OptionComponents "Dodaj/odstrani/ponovno namesti dele predvajalnika ${PRODUCT_NAME}"
 ${LangFileString} Reinstall_OptionAdvanced "Spremeni nastavitve (napredno)"
-${LangFileString} Reinstall_OptionUninstall "Odstrani namestitev VLC"
+${LangFileString} Reinstall_OptionUninstall "Odstrani namestitev ${PRODUCT_NAME}"
