@@ -125,7 +125,7 @@ You can support this work by putting a star in this GitHub project, writing posi
 
 Please do not contact me for support requests & use only GitHub issues ideally. I believe most issues you may find should be visible to the whole community. It's better for transparency & this allow me to link code (PR) linked directly with your issues.
 
-Right now at the date of writing (2026-07-26), the project is in early access which means the code right there is up to date but the compiled builds to download are exclusively available for my Patreons during one week. I don't plan to lock all builds behind a one week early access, but for the launch it's the only compromise I found to keep open knowledge in the long term while inciting people to cover my API costs and compensate a bit of the countless of hours I put into building that project.
+Right now at the date of writing (2026-07-26), the project is in early access which means the code right there is up to date but the compiled builds to download are exclusively available for my Patreons during one week from here: https://www.patreon.com/Olsro/posts/early-access-1-0-164876918 . I don't plan to lock all builds behind a one week early access, but for the launch it's the only compromise I found to keep open knowledge in the long term while inciting people to cover my API costs and compensate a bit of the countless of hours I put into building that project.
 
 ## Credits
 - All contributors from VLC/VideoLAN since the beginning
