@@ -810,8 +810,22 @@ void VLCLegacyResizeLastColumnOnly(NSTableView *table)
 
 void VLCLegacySetCellLineBreakMode(NSCell *cell, NSLineBreakMode mode)
 {
-    if ([cell respondsToSelector:@selector(setLineBreakMode:)]) {
-        VLCLegacySetCellLineBreakMode(cell, mode);
+    SEL sel = @selector(setLineBreakMode:);
+
+    if ([cell respondsToSelector:sel]) {
+        /* -setLineBreakMode: is not in the 10.4 SDK this module also builds
+         * against, so it cannot be called directly; and it takes a scalar, so
+         * -performSelector:withObject: cannot carry the argument either. Go
+         * through the IMP, which needs no declaration at all.
+         *
+         * This used to call VLCLegacySetCellLineBreakMode() itself, which is an
+         * unbounded recursion on every system new enough to answer the
+         * respondsToSelector: -- the tail call turns it into a spin rather than
+         * a stack overflow, so the interface simply hung at startup with one
+         * core pinned. It never showed on 10.4/10.5, where NSCell does not
+         * implement the selector and the fallback below runs instead. */
+        typedef void (*VLCSetLineBreakModeIMP)(id, SEL, NSLineBreakMode);
+        ((VLCSetLineBreakModeIMP)[cell methodForSelector:sel])(cell, sel, mode);
         return;
     }
 
@@ -835,8 +849,13 @@ CGFloat VLCLegacySystemFontSizeForControlSize(NSControlSize size)
 
 NSCursor *VLCLegacyResizeUpDownCursor(void)
 {
-    if ([NSCursor respondsToSelector:@selector(resizeUpDownCursor)])
-        return VLCLegacyResizeUpDownCursor();
+    SEL sel = @selector(resizeUpDownCursor);
+
+    /* Same copy-paste recursion as VLCLegacySetCellLineBreakMode() above had.
+     * No argument here, so -performSelector: is enough -- the idiom this module
+     * already uses elsewhere for class methods absent from the 10.4 SDK. */
+    if ([NSCursor respondsToSelector:sel])
+        return [NSCursor performSelector:sel];
     return [NSCursor arrowCursor];
 }
 

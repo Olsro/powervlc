@@ -1,0 +1,189 @@
+From: PowerVLC
+Subject: [PATCH] ppc/h264: force get_cabac inline and lift the chroma MC
+ coefficients out of the stack
+
+Two PowerPC-only codegen fixes found by profiling an H.264 decode on a
+1.42 GHz 7447A (Mac mini G4), both bit-exact.
+
+1. get_cabac() is `static` with no av_always_inline. Every other
+   architecture overrides get_cabac_inline() with assembly, so nobody
+   noticed; on PowerPC GCC 13 emits a real out-of-line _get_cabac and
+   calls it from 73 sites in h264_cabac.o. Per bin that is a call and a
+   return, a full PIC prologue to re-find ff_h264_cabac_tables, and a
+   reload plus store of the low/range state that CABAC_ON_STACK exists
+   precisely to keep in a local -- about 43 instructions where ~20 would
+   do. Measured: +3.5 % on 720p High @4.8 Mbit/s, +0.6 % on 1080p
+   @1.8 Mbit/s (CABAC's share of the decode grows with the bitrate).
+
+2. put/avg_h264_chroma_mc8_altivec computes { (8-x)(8-y), x(8-y),
+   (8-x)y, xy } into a stack array and vec_ld's it back. GCC 13 turns
+   that into, per coefficient, a multiply, a store, a scalar halfword
+   reload, a second store and an lvehx: three round trips through memory
+   before the loop starts, each one a load-hit-store flush on a 7450, for
+   a block of only 64 pixels. Two read-only 128-byte tables and one
+   vec_mladd rebuild the same vector with no store for the loads to hit.
+   Measured: +1.4 % on 720p, +2.2 % on 1080p.
+
+Both are guarded so no other target changes: (1) on ARCH_PPC, (2) on
+HAVE_BIGENDIAN (POWER8+ little-endian keeps the VSX path it was tuned
+for).
+---
+--- a/libavcodec/cabac_functions.h	2026-07-28 12:05:08
++++ b/libavcodec/cabac_functions.h	2026-07-28 12:05:18
+@@ -144,7 +144,21 @@
+     return get_cabac_inline(c,state);
+ }
+ 
+-static int av_unused get_cabac(CABACContext *c, uint8_t * const state){
++#if ARCH_PPC
++/* PowerPC has no asm CABAC reader, so get_cabac_inline() is the whole entropy
++ * decoder -- and GCC refuses to inline it here: it emits a real out-of-line
++ * _get_cabac and calls it from every bin site in h264_cabac.o. Each bin then
++ * pays a call/return, a full PIC prologue to re-find ff_h264_cabac_tables, and
++ * a reload+store of the low/range state that CABAC_ON_STACK went out of its way
++ * to keep in a local. Forcing the inline is bit-exact by construction. */
++#define av_cabac_get_inline av_always_inline
++#else
++/* Elsewhere the compiler's own choice is either right or irrelevant (x86, ARM,
++ * AArch64 and MIPS override get_cabac_inline with asm). */
++#define av_cabac_get_inline
++#endif
++
++static av_cabac_get_inline int av_unused get_cabac(CABACContext *c, uint8_t * const state){
+     return get_cabac_inline(c,state);
+ }
+ 
+--- a/libavcodec/ppc/h264chroma_template.c	2024-07-29 00:54:46
++++ b/libavcodec/ppc/h264chroma_template.c	2026-07-28 12:05:18
+@@ -70,6 +70,70 @@
+ 
+ #define noop(a) a
+ #define add28(a) vec_add(v28ss, a)
++
++#if HAVE_BIGENDIAN
++#ifndef H264_CHROMA_ALTIVEC_COEFF_TABLES
++#define H264_CHROMA_ALTIVEC_COEFF_TABLES
++/* Bilinear weights for the chroma filter, as vectors instead of arithmetic.
++ *
++ * The upstream code computes { (8-x)(8-y), x(8-y), (8-x)y, xy } into a stack
++ * array and vec_ld's it back. GCC 13 compiles that, per coefficient, into a
++ * scalar multiply, a store to the stack, a scalar halfword reload, a *second*
++ * store, an lvehx and a vsplth -- three round trips through memory before the
++ * loop even starts. Every one of them is a load-hit-store flush on a 7450, and
++ * an 8x8 chroma block is far too small to amortise sixteen of them: measured on
++ * a 1.42 GHz 7447A, chroma MC cost ~14 cycles/pixel and 14 % of a 1080p decode,
++ * while its own inner loop only accounts for a fifth of that.
++ *
++ * xcoeff[x] * ycoeff[y] (one vec_mladd) rebuilds the same { A, B, C, D, ... }
++ * from two read-only 128-byte tables, with no store for the loads to hit.
++ */
++static const DECLARE_ALIGNED(16, int16_t, chroma_mc_xcoeff)[8][8] = {
++    { 8, 0, 8, 0, 8, 0, 8, 0 },
++    { 7, 1, 7, 1, 7, 1, 7, 1 },
++    { 6, 2, 6, 2, 6, 2, 6, 2 },
++    { 5, 3, 5, 3, 5, 3, 5, 3 },
++    { 4, 4, 4, 4, 4, 4, 4, 4 },
++    { 3, 5, 3, 5, 3, 5, 3, 5 },
++    { 2, 6, 2, 6, 2, 6, 2, 6 },
++    { 1, 7, 1, 7, 1, 7, 1, 7 },
++};
++static const DECLARE_ALIGNED(16, int16_t, chroma_mc_ycoeff)[8][8] = {
++    { 8, 8, 0, 0, 8, 8, 0, 0 },
++    { 7, 7, 1, 1, 7, 7, 1, 1 },
++    { 6, 6, 2, 2, 6, 6, 2, 2 },
++    { 5, 5, 3, 3, 5, 5, 3, 3 },
++    { 4, 4, 4, 4, 4, 4, 4, 4 },
++    { 3, 3, 5, 5, 3, 3, 5, 5 },
++    { 2, 2, 6, 6, 2, 2, 6, 6 },
++    { 1, 1, 7, 7, 1, 1, 7, 7 },
++};
++#endif /* H264_CHROMA_ALTIVEC_COEFF_TABLES */
++
++/* Sets vA/vB/vC/vD to the four bilinear weights for (x, y). */
++#define CHROMA_MC_LOAD_ABCD(x, y)                                        \
++    const vec_s16 vABCD = vec_mladd(vec_ld(0, chroma_mc_xcoeff[(x)]),     \
++                                    vec_ld(0, chroma_mc_ycoeff[(y)]),    \
++                                    vec_splat_s16(0));                   \
++    const vec_s16 vA = vec_splat(vABCD, 0);                              \
++    const vec_s16 vB = vec_splat(vABCD, 1);                              \
++    const vec_s16 vC = vec_splat(vABCD, 2);                              \
++    const vec_s16 vD = vec_splat(vABCD, 3)
++#else /* !HAVE_BIGENDIAN */
++/* Little-endian (POWER8+) keeps the original path: it has VSX loads and none of
++ * the 7450's store-forwarding cost, and this fork does not build that target. */
++#define CHROMA_MC_LOAD_ABCD(x, y)                                        \
++    DECLARE_ALIGNED(16, signed int, ABCD)[4] =                           \
++                        {((8 - (x)) * (8 - (y))),                        \
++                         ((    (x)) * (8 - (y))),                        \
++                         ((8 - (x)) * (    (y))),                        \
++                         ((    (x)) * (    (y)))};                       \
++    const vec_s32 vABCD = vec_ld(0, ABCD);                               \
++    const vec_s16 vA = VEC_SPLAT16(vABCD, 1);                            \
++    const vec_s16 vB = VEC_SPLAT16(vABCD, 3);                            \
++    const vec_s16 vC = VEC_SPLAT16(vABCD, 5);                            \
++    const vec_s16 vD = VEC_SPLAT16(vABCD, 7)
++#endif /* HAVE_BIGENDIAN */
+ 
+ #if HAVE_BIGENDIAN
+ #define GET_VSRC1(vs0, off, b, perm0, s){    \
+@@ -113,19 +177,10 @@
+                                            ptrdiff_t stride, int h,
+                                            int x, int y)
+ {
+-    DECLARE_ALIGNED(16, signed int, ABCD)[4] =
+-                        {((8 - x) * (8 - y)),
+-                         ((    x) * (8 - y)),
+-                         ((8 - x) * (    y)),
+-                         ((    x) * (    y))};
+     register int i;
+     vec_u8 fperm;
+     LOAD_ZERO;
+-    const vec_s32 vABCD = vec_ld(0, ABCD);
+-    const vec_s16 vA = VEC_SPLAT16(vABCD, 1);
+-    const vec_s16 vB = VEC_SPLAT16(vABCD, 3);
+-    const vec_s16 vC = VEC_SPLAT16(vABCD, 5);
+-    const vec_s16 vD = VEC_SPLAT16(vABCD, 7);
++    CHROMA_MC_LOAD_ABCD(x, y);
+     const vec_s16 v32ss = vec_sl(vec_splat_s16(1),vec_splat_u16(5));
+     const vec_u16 v6us = vec_splat_u16(6);
+ 
+@@ -159,14 +214,16 @@
+     vsrc0ssH = (vec_s16)VEC_MERGEH(zero_u8v,(vec_u8)vsrc0uc);
+     vsrc1ssH = (vec_s16)VEC_MERGEH(zero_u8v,(vec_u8)vsrc1uc);
+ 
+-    if (ABCD[3]) {
++    /* D = x*y, C = (8-x)*y: with 0 <= x,y <= 7 those are non-zero exactly when
++     * (x && y) and when y is, so the tests need no ABCD array of their own. */
++    if (x && y) {
+         for (i = 0 ; i < h ; i++) {
+             GET_VSRC(vsrc2uc, vsrc3uc, stride, 16, vsrcperm0, vsrcperm1, src);
+             CHROMA_MC8_ALTIVEC_CORE(v32ss, noop);
+         }
+     } else {
+         const vec_s16 vE = vec_add(vB, vC);
+-        if (ABCD[2]) { // x == 0 B == 0
++        if (y) { // x == 0 B == 0
+             for (i = 0 ; i < h ; i++) {
+                 GET_VSRC1(vsrc1uc, stride, 15, vsrcperm0, src);
+                 CHROMA_MC8_ALTIVEC_CORE_SIMPLE;
+@@ -188,19 +245,10 @@
+                                                  ptrdiff_t stride, int h,
+                                                  int x, int y)
+ {
+-   DECLARE_ALIGNED(16, signed int, ABCD)[4] =
+-                        {((8 - x) * (8 - y)),
+-                         ((    x) * (8 - y)),
+-                         ((8 - x) * (    y)),
+-                         ((    x) * (    y))};
+     register int i;
+     vec_u8 fperm;
+     LOAD_ZERO;
+-    const vec_s32 vABCD = vec_ld(0, ABCD);
+-    const vec_s16 vA = VEC_SPLAT16(vABCD, 1);
+-    const vec_s16 vB = VEC_SPLAT16(vABCD, 3);
+-    const vec_s16 vC = VEC_SPLAT16(vABCD, 5);
+-    const vec_s16 vD = VEC_SPLAT16(vABCD, 7);
++    CHROMA_MC_LOAD_ABCD(x, y);
+     const vec_s16 v28ss = vec_sub(vec_sl(vec_splat_s16(1),vec_splat_u16(5)),vec_splat_s16(4));
+     const vec_u16 v6us  = vec_splat_u16(6);
+ 

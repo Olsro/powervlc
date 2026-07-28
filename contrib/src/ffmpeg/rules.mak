@@ -304,6 +304,10 @@ ifdef USE_FFMPEG
 	$(APPLY) $(SRC)/ffmpeg/0002-compat-w32dlfcn.h-Remove-MAX_PATH-limit-and-replace-.patch
 	$(APPLY) $(SRC)/ffmpeg/0001-ppc-h264-add-AltiVec-qpel8-and-clz-based-CABAC-renorm.patch
 	$(APPLY) $(SRC)/ffmpeg/ffmpeg-ppc-hpeldsp-altivec.patch
+	$(APPLY) $(SRC)/ffmpeg/0002-ppc-h264-inline-get_cabac-and-table-driven-chroma-mc.patch
+	$(APPLY) $(SRC)/ffmpeg/0003-ppc-h264-altivec-loop-filter-strength.patch
+	$(APPLY) $(SRC)/ffmpeg/0004-ppc-h264-prefetch-whole-reference-block.patch
+	$(APPLY) $(SRC)/ffmpeg/0005-ppc-h264-altivec-chroma-mc4.patch
 endif
 ifdef USE_LIBAV
 	$(APPLY) $(SRC)/ffmpeg/libav_gsm.patch

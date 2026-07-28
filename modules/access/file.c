@@ -236,7 +236,17 @@ int FileOpen( vlc_object_t *p_this )
         /* In most cases, we only read the file once. */
         posix_fadvise (fd, 0, 0, POSIX_FADV_NOREUSE);
 #ifdef F_NOCACHE
-        fcntl (fd, F_NOCACHE, 0);
+        /* Upstream passes 0 here, i.e. explicitly asks Darwin to keep caching
+         * the file -- a no-op, since that is the default. On a Mac with 1 GB
+         * of RAM, streaming a multi-gigabyte film through the unified buffer
+         * cache evicts anonymous pages (the picture pool, the decoder's own
+         * working set) and the playback stalls on swap mid-film; posix_fadvise
+         * is a no-op on Darwin and madvise is advisory, so neither of the calls
+         * above actually prevents it. F_NOCACHE takes the file out of the UBC
+         * altogether. It also disables kernel read-ahead, which is why it is an
+         * option rather than the default: on a slow or remote disk the larger
+         * number of real reads can cost more than the eviction does. */
+        fcntl (fd, F_NOCACHE, var_InheritBool (p_access, "file-nocache") ? 1 : 0);
 #endif
 #ifdef F_RDAHEAD
         if (IsRemote(fd, p_access->psz_filepath))

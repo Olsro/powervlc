@@ -1,0 +1,281 @@
+From: PowerVLC
+Subject: [PATCH] ppc/h264: AltiVec h264_loop_filter_strength
+
+h264dsp.h calls this one "simd only": libavcodec has no C version of it,
+because ff_h264_filter_mb_fast() refuses to run without it and every
+architecture that never wrote one falls back to ff_h264_filter_mb(),
+which recomputes the same boundary strengths one 4x4 edge at a time
+through check_mv(). Only x86 had one, so on a G4 every single macroblock
+took the slow path.
+
+The reference is x86/h264_deblock.asm (mmxext); this follows it step for
+step -- wrapping 16-bit subtract, signed saturate to bytes, wrapping add
+of the limit, unsigned saturating subtract of twice it -- and was
+cross-checked against check_mv() in h264_loopfilter.c. The two have to
+agree bit for bit, since x86 runs the fast path and everything else runs
+the generic one.
+
+It computes all four edges of a direction at once and ignores `edges`
+and `step`, which only ever say "you may stop early"; the extra entries
+land in bS slots the caller does not read. bS is raised from 8- to
+16-byte alignment so the result can be stored as two whole vectors --
+free, it is a stack local, and MMX only ever needed 8.
+
+Measured on a Mac mini G4 (7447A, 1.42 GHz), decoder in isolation,
+output verified bit-identical on 120 frames of each clip:
+
+                       720p High 4.8 Mbit/s   1080p High 1.9 Mbit/s
+  generic path              28.42 fps              14.54 fps
+  fast path, AltiVec bS     28.69 fps (+0.9 %)     14.65 fps (+0.8 %)
+
+By profile the deblocking decision costs 4.19 % of the decode on the
+generic path (ff_h264_filter_mb 2.82 + check_mv 1.11 + the fast wrapper
+0.26) against 2.19 % of wrapper plus 2.01 % here.
+
+For the record, a plain C transliteration was written first and was
+equally bit-exact, but *lost* about 1 %: the four blocks of an edge cost
+four times over what a vector gets for free, and the 32 nnz reads and 32
+halfword stores per macroblock swamped the rest. It is not kept.
+---
+--- a/libavcodec/h264_loopfilter.c	2024-07-29 00:54:46
++++ b/libavcodec/h264_loopfilter.c	2026-07-28 13:41:21
+@@ -358,7 +358,10 @@
+         }
+         return;
+     } else {
+-        LOCAL_ALIGNED(8, int16_t, bS, [2], [4][4]);
++        /* 8 is enough for the mmxext h264_loop_filter_strength (MMX stores 8
++         * bytes at a time); the AltiVec one writes bS[dir] as two full vectors,
++         * so ask for 16. Costs nothing on any target -- it is a stack local. */
++        LOCAL_ALIGNED(16, int16_t, bS, [2], [4][4]);
+         int edges;
+         if( IS_8x8DCT(mb_type) && (sl->cbp&7) == 7 && !chroma444 ) {
+             edges = 4;
+--- a/libavcodec/ppc/h264dsp.c	2026-07-28 13:41:21
++++ b/libavcodec/ppc/h264dsp.c	2026-07-28 13:41:21
+@@ -909,7 +909,212 @@
+ H264_WEIGHT(16)
+ H264_WEIGHT( 8)
+ #endif /* HAVE_ALTIVEC */
++
++/****************************************************************************
++ * Boundary strengths for the whole macroblock.
++ *
++ * h264dsp.h calls this one "simd only": there is no C version in libavcodec,
++ * because ff_h264_filter_mb_fast() refuses to run without it and every
++ * architecture that has not written one falls back to ff_h264_filter_mb(),
++ * which recomputes the same strengths one 4x4 edge at a time through
++ * check_mv(). PowerPC was in that second group, so on a G4 every macroblock
++ * took the slow path.
++ *
++ * The reference is x86/h264_deblock.asm (mmxext); this is a transliteration of
++ * its semantics, cross-checked against check_mv() in h264_loopfilter.c. The two
++ * must agree bit for bit -- x86 runs the fast path and everything else runs the
++ * generic one, so any disagreement would decode differently per architecture.
++ ****************************************************************************/
++
++/* A plain C transliteration was written first and proved bit-exact on both test
++ * clips, but it *lost* 1.7 %: the four blocks of an edge cost four times over
++ * what the asm gets for free, and the 32 nnz reads and 32 halfword stores per
++ * macroblock swamped everything else. Both are what the vector unit is for, so
++ * only the AltiVec version is kept. It computes all four edges of a direction
++ * at once -- ignoring `edges` and `step`, which only ever say "you may stop
++ * early"; the extra entries land in bS slots the caller does not read. */
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++
++/* Both caches are laid out 8 entries per row and an edge needs 4 of them, so
++ * what a direction wants is p[0..3], p[8..11], p[16..19], p[24..27]: four
++ * groups of four, gathered here into one register. Only p[27] is ever
++ * requested, which keeps the last aligned load inside ref_cache's 80 bytes. */
++static av_always_inline vec_u8 lfs_gather(const uint8_t *p)
++{
++    const vec_u8 shift = vec_lvsl(0, p);
++    const vec_u8 w0 = vec_perm(vec_ld( 0, p), vec_ld(15, p), shift);
++    const vec_u8 w1 = vec_perm(vec_ld(16, p), vec_ld(27, p), shift);
++    const vec_u8 pack4 = (const vec_u8){  0,  1,  2,  3,  8,  9, 10, 11,
++                                         16, 17, 18, 19, 24, 25, 26, 27 };
++    return vec_perm(w0, w1, pack4);
++}
+ 
++/* Motion far enough apart to need filtering, for two edges at a time.
++ * Follows the mmxext reference step for step -- wrapping 16-bit subtract,
++ * signed saturate to bytes, wrapping add of the limit, unsigned saturating
++ * subtract of twice it -- so the two cannot drift apart on a pathological
++ * motion vector. The second pack folds each block's x and y flag into one
++ * byte: read as an int16 the pair is non-zero exactly when either half is,
++ * and a signed pack preserves that. */
++static av_always_inline vec_u8 lfs_mv_pair(vec_s16 da, vec_s16 db,
++                                           vec_u8 vlim, vec_u8 vthr)
++{
++    const vec_u8 p = (vec_u8)vec_packs(da, db);
++    return vec_subs(vec_add(p, vlim), vthr);
++}
++
++static void h264_loop_filter_strength_altivec(int16_t bS[2][4][4], uint8_t nnz[40],
++                                              int8_t ref[2][40], int16_t mv[2][40][2],
++                                              int bidir, int edges, int step,
++                                              int mask_mv0, int mask_mv1, int field)
++{
++    /* x always needs 4 quarter-pels of difference; y needs mvy_limit, which is
++     * 2 in a field picture because a vertical quarter-pel is worth twice as
++     * much there. The pattern repeats every two bytes, which is exactly how
++     * the packed { x, y, x, y, ... } bytes come out. */
++    static const vec_u8 lfs_lim[2] = {
++        { 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3 },
++        { 3, 1, 3, 1, 3, 1, 3, 1, 3, 1, 3, 1, 3, 1, 3, 1 },
++    };
++    /* Which of the four groups keep their own motion answer, by mask_mv: an
++     * interior edge of a partition has the same motion on both sides. */
++    static const vec_u8 lfs_keep[4] = {
++        { 255,255,255,255, 255,255,255,255, 255,255,255,255, 255,255,255,255 },
++        { 255,255,255,255,   0,  0,  0,  0, 255,255,255,255,   0,  0,  0,  0 },
++        { 255,255,255,255, 255,255,255,255,   0,  0,  0,  0,   0,  0,  0,  0 },
++        { 255,255,255,255,   0,  0,  0,  0,   0,  0,  0,  0,   0,  0,  0,  0 },
++    };
++    static const vec_u8 lfs_splat0 = { 0,1,2,3, 0,1,2,3, 0,1,2,3, 0,1,2,3 };
++    /* bS[0] is indexed [edge][row] but the loop produces [row][edge]: this is
++     * the asm's TRANSPOSE4x4W, as a single permute over bytes. */
++    static const vec_u8 lfs_transpose = { 0,4, 8,12, 1,5, 9,13,
++                                          2,6,10,14, 3,7,11,15 };
++
++    const vec_u8 vlim = lfs_lim[!!field];
++    const vec_u8 vthr = vec_add(vlim, vlim);
++    const vec_u8 one  = vec_splat_u8(1);
++    const vec_u8 zero = vec_splat_u8(0);
++    const uint8_t *nnzp = nnz;
++    const uint8_t *refp = (const uint8_t *)ref;
++    const int16_t *mv0  = &mv[0][0][0];
++    const int16_t *mv1  = &mv[1][0][0];
++
++    /* The "b" side of the edge is the same for both directions. */
++    const vec_u8 nnz_b  = lfs_gather(nnzp + 12);
++    const vec_u8 ref0_b = lfs_gather(refp + 12);
++    const vec_u8 ref1_b = bidir ? lfs_gather(refp + 52) : zero;
++
++    int dir;
++
++    for (dir = 1; dir >= 0; dir--) {
++        /* dir 1 filters the horizontal edges: the neighbour is one cache row
++         * up. dir 0 filters the vertical ones: the neighbour is to the left. */
++        const int d_idx = dir ? -8 : -1;
++        const vec_u8 keep = lfs_keep[(dir ? mask_mv1 : mask_mv0) & 3];
++        const vec_u8 nnz_bn  = lfs_gather(nnzp + 12 + d_idx);
++        const vec_u8 ref0_bn = lfs_gather(refp + 12 + d_idx);
++        const vec_u8 ref1_bn = bidir ? lfs_gather(refp + 52 + d_idx) : zero;
++        vec_s16 b0, b1, b2, b3, n0, n1, n2, n3;
++        vec_u8 flag, nz, res;
++        int16_t *out = &bS[dir][0][0];
++
++        /* Each edge's four motion vectors are one aligned vector: block 12+8k
++         * sits at byte 48+32k. For dir 1 the neighbour row, block 4+8k, is
++         * aligned too; for dir 0 the neighbour starts one block to the left,
++         * which is the tail of the previous vector glued to this one.
++         *
++         * All four edges are loaded up front. Doing two at a time to shorten
++         * the live ranges was tried and compiles to the same instruction count
++         * and the same opcode mix; nothing spills either way (the seven stvx
++         * in the prologue are the ABI saving v25-v31, not the allocator giving
++         * up). The two are equivalent -- an apparent 1.5 % difference turned
++         * out to be how fragmented the test binary happened to be on the
++         * target's disk, not code. */
++        b0 = vec_ld( 48, mv0); b1 = vec_ld( 80, mv0);
++        b2 = vec_ld(112, mv0); b3 = vec_ld(144, mv0);
++        if (dir) {
++            n0 = vec_ld(16, mv0); n1 = vec_ld( 48, mv0);
++            n2 = vec_ld(80, mv0); n3 = vec_ld(112, mv0);
++        } else {
++            n0 = vec_sld(vec_ld( 32, mv0), b0, 12);
++            n1 = vec_sld(vec_ld( 64, mv0), b1, 12);
++            n2 = vec_sld(vec_ld( 96, mv0), b2, 12);
++            n3 = vec_sld(vec_ld(128, mv0), b3, 12);
++        }
++
++        if (!bidir) {
++            const vec_u8 f01 = lfs_mv_pair(vec_sub(b0, n0), vec_sub(b1, n1), vlim, vthr);
++            const vec_u8 f23 = lfs_mv_pair(vec_sub(b2, n2), vec_sub(b3, n3), vlim, vthr);
++            flag = (vec_u8)vec_packs((vec_s16)f01, (vec_s16)f23);
++            flag = vec_or(flag, vec_xor(ref0_b, ref0_bn));
++            flag = vec_min(flag, one);
++        } else {
++            /* With two lists the boundary is smooth as soon as *one* of the
++             * two ways of pairing them matches, so the answer is the smaller
++             * of the straight and the crossed comparison. ORing the two lists
++             * before the x/y fold gives the same answer as folding each
++             * first -- it is all the same OR. */
++            vec_s16 c0, c1, c2, c3, m0, m1, m2, m3;
++            vec_u8 st, cr, f01, f23;
++
++            c0 = vec_ld( 48, mv1); c1 = vec_ld( 80, mv1);
++            c2 = vec_ld(112, mv1); c3 = vec_ld(144, mv1);
++            if (dir) {
++                m0 = vec_ld(16, mv1); m1 = vec_ld( 48, mv1);
++                m2 = vec_ld(80, mv1); m3 = vec_ld(112, mv1);
++            } else {
++                m0 = vec_sld(vec_ld( 32, mv1), c0, 12);
++                m1 = vec_sld(vec_ld( 64, mv1), c1, 12);
++                m2 = vec_sld(vec_ld( 96, mv1), c2, 12);
++                m3 = vec_sld(vec_ld(128, mv1), c3, 12);
++            }
++
++            /* straight: list 0 against list 0, list 1 against list 1 */
++            f01 = lfs_mv_pair(vec_sub(n0, b0), vec_sub(n1, b1), vlim, vthr);
++            f23 = lfs_mv_pair(vec_sub(n2, b2), vec_sub(n3, b3), vlim, vthr);
++            st  = (vec_u8)vec_packs((vec_s16)f01, (vec_s16)f23);
++            f01 = lfs_mv_pair(vec_sub(m0, c0), vec_sub(m1, c1), vlim, vthr);
++            f23 = lfs_mv_pair(vec_sub(m2, c2), vec_sub(m3, c3), vlim, vthr);
++            st  = vec_or(st, (vec_u8)vec_packs((vec_s16)f01, (vec_s16)f23));
++            st  = vec_or(st, vec_xor(ref0_b, ref0_bn));
++            st  = vec_or(st, vec_xor(ref1_b, ref1_bn));
++
++            /* crossed: list 0 against list 1 and back */
++            f01 = lfs_mv_pair(vec_sub(n0, c0), vec_sub(n1, c1), vlim, vthr);
++            f23 = lfs_mv_pair(vec_sub(n2, c2), vec_sub(n3, c3), vlim, vthr);
++            cr  = (vec_u8)vec_packs((vec_s16)f01, (vec_s16)f23);
++            f01 = lfs_mv_pair(vec_sub(m0, b0), vec_sub(m1, b1), vlim, vthr);
++            f23 = lfs_mv_pair(vec_sub(m2, b2), vec_sub(m3, b3), vlim, vthr);
++            cr  = vec_or(cr, (vec_u8)vec_packs((vec_s16)f01, (vec_s16)f23));
++            cr  = vec_or(cr, vec_xor(ref0_b, ref1_bn));
++            cr  = vec_or(cr, vec_xor(ref1_b, ref0_bn));
++
++            flag = vec_min(vec_min(st, cr), one);
++        }
++
++        if (dir) {
++            /* Interior edges of a partition: no motion difference to find. */
++            flag = vec_and(flag, keep);
++        } else {
++            /* mask_mv0 is only set when this macroblock and the one to its
++             * left are both 16x16/8x16, so every row gives the same answer as
++             * row 0 -- reuse it instead of trusting the other three. */
++            flag = vec_sel(flag, vec_perm(flag, flag, lfs_splat0),
++                           vec_nor(keep, keep));
++        }
++
++        /* Coefficients on either side outrank any motion difference. */
++        nz  = vec_min(vec_or(nnz_b, nnz_bn), one);
++        res = vec_max(vec_add(nz, nz), flag);
++        if (!dir)
++            res = vec_perm(res, res, lfs_transpose);
++
++        vec_st((vec_s16)vec_mergeh(zero, res),  0, out);
++        vec_st((vec_s16)vec_mergel(zero, res), 16, out);
++    }
++}
++#endif /* HAVE_ALTIVEC && HAVE_BIGENDIAN */
++
+ av_cold void ff_h264dsp_init_ppc(H264DSPContext *c, const int bit_depth,
+                                  const int chroma_format_idc)
+ {
+@@ -918,6 +1123,12 @@
+         return;
+ 
+     if (bit_depth == 8) {
++#if HAVE_BIGENDIAN
++        /* Non-NULL is what lets ff_h264_filter_mb_fast() run at all: without
++         * it every macroblock goes down ff_h264_filter_mb(), which recomputes
++         * the same strengths one 4x4 edge at a time. */
++        c->h264_loop_filter_strength = h264_loop_filter_strength_altivec;
++#endif
+         c->h264_idct_add = h264_idct_add_altivec;
+         if (chroma_format_idc <= 1)
+             c->h264_idct_add8 = h264_idct_add8_altivec;

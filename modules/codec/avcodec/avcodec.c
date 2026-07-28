@@ -126,11 +126,20 @@ vlc_module_begin ()
     add_obsolete_bool( "ffmpeg-fast" ) /* removed since 2.1.0 */
     add_bool( "avcodec-fast", false, FAST_TEXT, FAST_LONGTEXT, false )
     add_obsolete_integer ( "ffmpeg-skiploopfilter" ) /* removed since 2.1.0 */
-#if (defined (__powerpc__) || defined (__POWERPC__)) && !defined (__ALTIVEC__)
-    /* Every saved cycle counts on SIMD-less PowerPC: skip the in-loop
-     * deblocking on non-reference frames only. Those frames are never
-     * used for prediction, so the (slight) extra blockiness cannot
-     * propagate; H.264/HEVC 480p goes from saturated to borderline. */
+#if defined (__powerpc__) || defined (__POWERPC__)
+    /* Every saved cycle counts on PowerPC: skip the in-loop deblocking on
+     * non-reference frames only. Those frames are never used for prediction,
+     * so the (slight) extra blockiness cannot propagate -- reference frames
+     * stay bit-exact by construction (h264_slice.c evaluates the level per
+     * slice against nal_ref_idc).
+     *
+     * This used to be limited to SIMD-less PowerPC on the assumption that
+     * AltiVec made deblocking cheap enough. Measured on a 1.42 GHz 7447A with
+     * the decoder in isolation, it does not: 1080p24 H.264 High goes from
+     * 14.5 to 16.7 fps (+15 %), 720p from 28.4 to 30.1 (+6 %). Deblocking is
+     * the largest single cost the decoder can be told not to pay, and on
+     * non-reference frames it costs nothing but a little blockiness on frames
+     * that are shown once and thrown away. */
     add_integer ( "avcodec-skiploopfilter", 1, SKIPLOOPF_TEXT,
                   SKIPLOOPF_LONGTEXT, false)
 #else

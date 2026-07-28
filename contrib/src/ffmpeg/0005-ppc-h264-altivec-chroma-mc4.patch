@@ -1,0 +1,176 @@
+From: PowerVLC
+Subject: [PATCH] ppc/h264: AltiVec put/avg_h264_chroma_mc4
+
+Only the 8xh chroma filter is vectorised on PowerPC; the 4xh one -- which
+is what every 8x8 luma partition asks for, and so the common case in
+1080p High Profile -- stays in C on every architecture but x86. It was
+2.1 % of a 1080p decode measured on a 1.42 GHz 7447A.
+
+Two of the four taps of a row read the same pixels shifted by one, so
+one register holds { s0,s1,s2,s3, s1,s2,s3,s4 } and a single pair of
+multiply-adds covers all four; folding the halves together costs one
+rotate. The bilinear weights come from the same two read-only tables the
+mc8 path uses. Rows are four bytes, so the result is broadcast to all
+four word lanes and stored with one stvewx.
+
+Measured, output bit-identical on 120 frames of each clip:
+
+  1080p High 1.9 Mbit/s   14.87 -> 14.93 fps  (+0.4 %)
+  720p  High 4.8 Mbit/s   28.79 -> 28.91 fps  (+0.4 %)
+
+Modest, because a 4xh block is 16 to 32 pixels and the per-call overhead
+is most of the cost -- but the function drops from 2.10 % to 1.81 % of
+the decode by profile, and it is bit-exact.
+
+Two GCC 13 workarounds are needed to get even that, both documented in
+the code: broadcasting the result word with vec_splat((vec_u32)x, 0)
+lowers to five memory operations through the stack (stvx, scalar lwz,
+scalar stw, lvewx, vspltw), so a permute is used instead; and the two
+loads of the unaligned row idiom make GCC spill one of them to the stack
+and read it back, which resisted every reformulation tried.
+---
+--- a/libavcodec/ppc/h264chroma_template.c	2026-07-28 14:33:54
++++ b/libavcodec/ppc/h264chroma_template.c	2026-07-28 14:33:54
+@@ -238,7 +238,103 @@
+     }
+ }
+ #endif
++
++#if HAVE_BIGENDIAN
++#ifndef H264_CHROMA_MC4_LOAD_DST
++#define H264_CHROMA_MC4_LOAD_DST
++/* Loads dst[0..3] into lanes 0..3. Only ever expanded by the avg_ variant --
++ * for put_ the OP macro drops its third argument, and with it this load. */
++static av_always_inline vec_u8 chroma_mc4_load_dst(const uint8_t *dst, vec_u8 perm)
++{
++    return vec_perm(vec_ld(0, dst), vec_ld(4, dst), perm);
++}
++#endif
++#ifdef PREFIX_h264_chroma_mc4_altivec
++
++/* 4xh chroma block, i.e. what every 8x8 luma partition asks for -- the common
++ * case in 1080p High Profile, and the one upstream left in C on every
++ * architecture but x86 (only mc8 is vectorised here). Two of the four AltiVec
++ * lanes of a row are the same pixels shifted by one, so one register holds
++ * { s0,s1,s2,s3, s1,s2,s3,s4 } and a single pair of multiply-adds covers all
++ * four taps; folding the halves together at the end costs one rotate.
++ *
++ * this code assume that stride % 16 == 0 (so one lvsl serves every row) */
++static void PREFIX_h264_chroma_mc4_altivec(uint8_t *dst, uint8_t *src,
++                                           ptrdiff_t stride, int h,
++                                           int x, int y)
++{
++    /* { A,B,C,D } splatted into { A,A,A,A, B,B,B,B } and { C,C,C,C, D,D,D,D },
++     * from the same two read-only tables the mc8 path uses -- see the comment
++     * there for why the obvious stack array is a trap on this CPU. */
++    const vec_u8 sel_ab = (const vec_u8){ 0,1,0,1,0,1,0,1, 2,3,2,3,2,3,2,3 };
++    const vec_u8 sel_cd = (const vec_u8){ 4,5,4,5,4,5,4,5, 6,7,6,7,6,7,6,7 };
++    /* Unpack src[0..4] to { s0,s1,s2,s3, s1,s2,s3,s4 } as int16, zeroes from
++     * the first operand. */
++    const vec_u8 sel_px = (const vec_u8){ 0,16, 0,17, 0,18, 0,19,
++                                          0,17, 0,18, 0,19, 0,20 };
++    const vec_s16 vABCD = vec_mladd(vec_ld(0, chroma_mc_xcoeff[x]),
++                                    vec_ld(0, chroma_mc_ycoeff[y]),
++                                    vec_splat_s16(0));
++    const vec_s16 vAB = vec_perm(vABCD, vABCD, sel_ab);
++    const vec_s16 vCD = vec_perm(vABCD, vABCD, sel_cd);
++    /* 16 in both halves: they are added together below, for the +32 the
++     * rounding wants. */
++    const vec_s16 v16 = vec_sl(vec_splat_s16(1), vec_splat_u16(4));
++    const vec_u16 v6  = vec_splat_u16(6);
++    const vec_u8  zero = vec_splat_u8(0);
++    const vec_u8  sperm = vec_lvsl(0, src);
++    const vec_u8  av_unused dperm = vec_lvsl(0, dst);
++    vec_s16 above, below;
++    int i;
++
++    /* Broadcasting the result word to all four lanes so vec_ste can pick any
++     * of them. Done with a permute rather than vec_splat((vec_u32)x, 0):
++     * GCC 13 lowers that cast-then-splat by pushing the vector to the stack,
++     * pulling word 0 back out with a scalar lwz, storing it again and reloading
++     * it with lvewx -- five memory operations, and a load-hit-store, to move a
++     * value that never had to leave the register file. */
++    const vec_u8 bcast_w0 = (const vec_u8){ 0,1,2,3, 0,1,2,3, 0,1,2,3, 0,1,2,3 };
+ 
++    above = (vec_s16)vec_perm(zero, vec_perm(vec_ld(0, src), vec_ld(4, src), sperm),
++                              sel_px);
++    for (i = 0; i < h; i++) {
++        vec_s16 acc;
++        vec_u8 res, fsum;
++
++        /* The A/C half of the sum is finished with `above` before `below` is
++         * loaded, so the two never have to be live at once.
++         *
++         * GCC 13 still spills one of the two source loads to the stack and
++         * reads it straight back -- a load-hit-store, and about a third of this
++         * function's samples. It confines itself to a subset of the vector file
++         * (its VRsave mask leaves v2-v4 unused) and would rather spill than take
++         * one of them. Naming the loads in separate locals does not move it, and
++         * hoisting the second load out of the loop for the three chroma block
++         * positions in four that do not need it -- the row is five bytes and
++         * stride is a multiple of 16, so it is decidable once -- measured no
++         * better while doubling the loop. Left as it is. */
++        acc = vec_mladd(vAB, above, v16);
++        src += stride;
++        below = (vec_s16)vec_perm(zero,
++                                  vec_perm(vec_ld(0, src), vec_ld(4, src), sperm),
++                                  sel_px);
++        acc = vec_mladd(vCD, below, acc);
++        /* lanes 0..3 hold the A/C taps, lanes 4..7 the B/D ones */
++        acc = vec_add(acc, vec_sld(acc, acc, 8));
++        res = vec_packsu((vec_s16)vec_sr((vec_u16)acc, v6), (vec_s16)zero);
++
++        OP_U8_ALTIVEC(fsum, res, chroma_mc4_load_dst(dst, dperm));
++
++        fsum = vec_perm(fsum, fsum, bcast_w0);
++        vec_ste((vec_u32)fsum, 0, (unsigned int *)dst);
++
++        dst += stride;
++        above = below;
++    }
++}
++#endif /* PREFIX_h264_chroma_mc4_altivec */
++#endif /* HAVE_BIGENDIAN */
++
+ /* this code assume that stride % 16 == 0 */
+ #ifdef PREFIX_no_rnd_vc1_chroma_mc8_altivec
+ static void PREFIX_no_rnd_vc1_chroma_mc8_altivec(uint8_t *dst, uint8_t *src,
+--- a/libavcodec/ppc/h264chroma_init.c	2023-11-10 00:38:51
++++ b/libavcodec/ppc/h264chroma_init.c	2026-07-28 14:33:54
+@@ -35,18 +35,22 @@
+ #define OP_U8_ALTIVEC                          PUT_OP_U8_ALTIVEC
+ #define PREFIX_h264_chroma_mc8_altivec         put_h264_chroma_mc8_altivec
+ #define PREFIX_h264_chroma_mc8_num             altivec_put_h264_chroma_mc8_num
++#define PREFIX_h264_chroma_mc4_altivec         put_h264_chroma_mc4_altivec
+ #include "h264chroma_template.c"
+ #undef OP_U8_ALTIVEC
+ #undef PREFIX_h264_chroma_mc8_altivec
+ #undef PREFIX_h264_chroma_mc8_num
++#undef PREFIX_h264_chroma_mc4_altivec
+ 
+ #define OP_U8_ALTIVEC                          AVG_OP_U8_ALTIVEC
+ #define PREFIX_h264_chroma_mc8_altivec         avg_h264_chroma_mc8_altivec
+ #define PREFIX_h264_chroma_mc8_num             altivec_avg_h264_chroma_mc8_num
++#define PREFIX_h264_chroma_mc4_altivec         avg_h264_chroma_mc4_altivec
+ #include "h264chroma_template.c"
+ #undef OP_U8_ALTIVEC
+ #undef PREFIX_h264_chroma_mc8_altivec
+ #undef PREFIX_h264_chroma_mc8_num
++#undef PREFIX_h264_chroma_mc4_altivec
+ #endif /* HAVE_ALTIVEC */
+ 
+ av_cold void ff_h264chroma_init_ppc(H264ChromaContext *c, int bit_depth)
+@@ -60,6 +64,13 @@
+     if (!high_bit_depth) {
+         c->put_h264_chroma_pixels_tab[0] = put_h264_chroma_mc8_altivec;
+         c->avg_h264_chroma_pixels_tab[0] = avg_h264_chroma_mc8_altivec;
++#if HAVE_BIGENDIAN
++        /* The 4xh variants matter as much as the 8xh ones in practice: every
++         * 8x8 luma partition asks for a 4x4 chroma block, and upstream leaves
++         * those in C on every architecture but x86. */
++        c->put_h264_chroma_pixels_tab[1] = put_h264_chroma_mc4_altivec;
++        c->avg_h264_chroma_pixels_tab[1] = avg_h264_chroma_mc4_altivec;
++#endif
+     }
+ #endif /* HAVE_ALTIVEC */
+ }

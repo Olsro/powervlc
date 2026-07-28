@@ -156,6 +156,17 @@ struct decoder_t
      */
     int             i_extra_picture_buffers;
 
+    /**
+     * Decoded picture buffer size the decoder actually needs, or 0 if it
+     * does not know. The core otherwise assumes the worst case the codec
+     * allows, which for H.264 is 18 pictures -- 56 MB of 1080p frames that a
+     * stream with four reference frames never touches. Set it once the
+     * sequence header has been parsed, and only to a value that is a genuine
+     * upper bound: falling short does not crash, but it costs the direct
+     * rendering path.
+     */
+    int             i_dpb_size;
+
     /* Audio output callbacks */
     int             (*pf_aout_format_update)( decoder_t * );
 

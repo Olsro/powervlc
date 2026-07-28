@@ -588,6 +588,18 @@ info "Making sure the Blu-ray contribs are current"
 make .bluray
 make .aacs
 
+# Same reasoning for ffmpeg, which carries the PowerPC H.264 patches in
+# contrib/src/ffmpeg/000*-ppc-*: without this the prefix built before those
+# patches existed is reused for ever, and the build still reports success --
+# there is no message at all, because `make list` decides ffmpeg is "to be
+# built" while nothing in the non -c path ever runs it. Worse, deleting the
+# stamp and the unpacked source is NOT enough on its own: need_pkg finds the
+# already-installed libav*.pc in the prefix and marks the package found. To
+# force a rebuild, delete the stamp, the unpacked source *and*
+# contrib/<triple>/lib/pkgconfig/{libav*,libswscale,libpostproc}.pc.
+# A no-op (one stat) once the stamp is current.
+make .ffmpeg
+
 # Record the deployment target this prefix was built for (see the guard above).
 mkdir -p "${vlcroot}/contrib/${HOST_TRIPLET}${LEGACY_CONTRIB_SUFFIX}"
 echo "$MINIMAL_OSX_VERSION" \

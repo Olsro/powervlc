@@ -214,6 +214,39 @@ don't say which platform they belong to, unlike `win64` or `linux-x86_64`.
 `build-powervlc.sh` invocations in parallel** — build the targets one after
 another.
 
+### 5.1b Forcing a contrib to rebuild after you change its patches
+
+Without `-c`, `build-powervlc.sh` treats an **existing contrib prefix as
+complete** and rebuilds nothing in it. Add a patch under `contrib/src/<pkg>/`
+and every later build will keep linking the old library — and still report
+success, with no message of any kind. `make list` even prints the package under
+"To-be-built packages", which is what makes this so easy to believe.
+
+Deleting the stamp and the unpacked source is **not** enough. `rules.mak` asks
+`need_pkg`, which runs `pkg-config` against the **installed prefix**; as long as
+the `.pc` files are there the package counts as found and is skipped. All three
+have to go:
+
+```bash
+# example: ffmpeg for the G3 (jaguar) prefix
+rm -f  contrib/contrib-powerpc-apple-darwin8-jaguar/.ffmpeg
+rm -rf contrib/contrib-powerpc-apple-darwin8-jaguar/ffmpeg
+find contrib/powerpc-apple-darwin8-jaguar/lib/pkgconfig -maxdepth 1 \
+     \( -name 'libav*' -o -name 'libswscale*' -o -name 'libpostproc*' \) -delete
+```
+
+Then check the result rather than the exit status — `ls -la
+contrib/<triple>/lib/libavcodec.a` must have a new timestamp, and the unpacked
+tree must contain your patch.
+
+`build.sh` asks for `.bluray`, `.aacs` and `.ffmpeg` by name for this reason
+(they carry local patches); they are one `stat` each once their stamps are
+current. A contrib you patch and do *not* add to that list has the same problem.
+
+Note for zsh users: `rm -f dir/libav*.pc.orig` **aborts the whole command** when
+the glob matches nothing ("no matches found"), so a cleanup line like the above
+can silently stop half way. Use `find … -delete`.
+
 ### 5.2 Translations (`.po` → `.gmo`) — two traps
 Editing a `po/<lang>.po` file does **not** by itself update the app. Regenerate
 the compiled catalog by hand:

@@ -71,6 +71,9 @@ struct decoder_sys_t
     bool b_from_preroll;
     bool b_hardware_only;
     enum AVDiscard i_skip_frame;
+    /* The configured deblocking level, kept so the late-frame escalation
+     * below has something to escalate from -- and to restore to. */
+    enum AVDiscard i_skip_loopfilter;
 
     /* how many decoded frames are late */
     int     i_late_frames;
@@ -351,6 +354,16 @@ static int lavc_UpdateVideoFormat(decoder_t *dec, AVCodecContext *ctx,
         dec->fmt_out.video.mastering = dec->fmt_in.video.mastering;
     dec->fmt_out.video.lighting = dec->fmt_in.video.lighting;
 
+    /* By now the sequence header has been parsed, so libavcodec knows how many
+     * reference frames this stream really uses and how far output can be
+     * reordered -- which is what the core needs to size the picture pool,
+     * instead of the worst case the codec allows. Both counts plus the frame
+     * being decoded and one of slack: generous, and still far below the 18 the
+     * core assumes for H.264. Left at 0 (meaning "no idea") when libavcodec has
+     * not filled them in. */
+    if (ctx->refs > 0 || ctx->has_b_frames > 0)
+        dec->i_dpb_size = ctx->refs + ctx->has_b_frames + 2;
+
     return decoder_UpdateVideoFormat(dec);
 }
 
@@ -492,11 +505,12 @@ static int InitVideoDecCommon( decoder_t *p_dec )
     p_context->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
 
     i_val = var_CreateGetInteger( p_dec, "avcodec-skiploopfilter" );
-    if( i_val >= 4 ) p_context->skip_loop_filter = AVDISCARD_ALL;
-    else if( i_val == 3 ) p_context->skip_loop_filter = AVDISCARD_NONKEY;
-    else if( i_val == 2 ) p_context->skip_loop_filter = AVDISCARD_BIDIR;
-    else if( i_val == 1 ) p_context->skip_loop_filter = AVDISCARD_NONREF;
-    else p_context->skip_loop_filter = AVDISCARD_DEFAULT;
+    if( i_val >= 4 ) p_sys->i_skip_loopfilter = AVDISCARD_ALL;
+    else if( i_val == 3 ) p_sys->i_skip_loopfilter = AVDISCARD_NONKEY;
+    else if( i_val == 2 ) p_sys->i_skip_loopfilter = AVDISCARD_BIDIR;
+    else if( i_val == 1 ) p_sys->i_skip_loopfilter = AVDISCARD_NONREF;
+    else p_sys->i_skip_loopfilter = AVDISCARD_DEFAULT;
+    p_context->skip_loop_filter = p_sys->i_skip_loopfilter;
 
     if( var_CreateGetBool( p_dec, "avcodec-fast" ) )
         p_context->flags2 |= AV_CODEC_FLAG2_FAST;
@@ -584,7 +598,12 @@ static int InitVideoDecCommon( decoder_t *p_dec )
             break;
     }
 
-    if( p_context->thread_type & FF_THREAD_FRAME )
+    /* The extra buffers exist to keep the frame-threading workers fed. With a
+     * single thread libavcodec clears active_thread_type and decodes
+     * synchronously, so nothing ever holds those pictures -- they are just two
+     * more full-size frames pinned in the vout pool (6.2 MB at 1080p, on
+     * machines that have 1 GB in total). */
+    if( (p_context->thread_type & FF_THREAD_FRAME) && p_context->thread_count > 1 )
         p_dec->i_extra_picture_buffers = 2 * p_context->thread_count;
 
     /* ***** misc init ***** */
@@ -928,6 +947,23 @@ static bool check_block_being_late( decoder_sys_t *p_sys, block_t *block, vlc_ti
 
 static bool check_frame_should_be_dropped( decoder_sys_t *p_sys, AVCodecContext *p_context, bool *b_need_output_picture )
 {
+#if defined (__powerpc__) || defined (__POWERPC__)
+    /* Deblocking is the biggest cost the decoder can be told to drop, and the
+     * only one whose damage is bounded: measured on a 1.42 GHz 7447A, turning
+     * it off entirely is worth +32 % on 1080p24 and +19 % on 720p. Spend that
+     * before dropping whole frames -- a couple of seconds of slightly blocky
+     * picture beats a couple of seconds of stutter, and unlike a dropped
+     * reference frame the artefact stops propagating at the next IDR either
+     * way.
+     *
+     * Only in the single-threaded configuration: with frame threading the new
+     * level reaches the worker a whole pipeline behind, so the escalation
+     * would land after the moment it was meant to rescue. */
+    if( p_context->active_thread_type == 0 && p_sys->i_late_frames > 2 &&
+        p_sys->i_skip_loopfilter < AVDISCARD_ALL )
+        p_context->skip_loop_filter = AVDISCARD_ALL;
+#endif
+
     if( p_sys->i_late_frames <= 4)
         return false;
 
@@ -1199,10 +1235,26 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block, bool *error
     else
         b_need_output_picture = false;
 
+    /* Both of these are *raised* further down (the preroll path and the
+     * keyframe slideshow use __MAX, the late-frame escalation sets ALL), so
+     * they have to be put back for every block. Restoring them only when
+     * hurry-up was enabled -- as this did -- meant that with
+     * --no-avcodec-hurry-up a single preroll block left skip_frame stuck at
+     * NONREF for the rest of the file: the decoder silently dropped every
+     * non-reference frame, and no message said so. Measured on the G4, that
+     * removed about 30 % of the decoding work and made every
+     * avcodec-skiploopfilter=NONREF measurement read as "no effect", because
+     * the frames it applies to were not being decoded at all.
+     *
+     * skip_loop_filter is symmetrical: H.264 re-reads it once per slice, so
+     * putting it back here makes the escalation last exactly as long as the
+     * decoder is behind, with no reopening. */
+    p_context->skip_frame = p_sys->i_skip_frame;
+    p_context->skip_loop_filter = p_sys->i_skip_loopfilter;
+
     /* Change skip_frame config only if hurry_up is enabled */
     if( p_sys->b_hurry_up )
     {
-        p_context->skip_frame = p_sys->i_skip_frame;
 
         /* Check also if we should/can drop the block and move to next block
             as trying to catchup the speed*/
