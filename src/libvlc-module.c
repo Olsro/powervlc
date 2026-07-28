@@ -33,6 +33,10 @@
 
 #include <limits.h>
 
+#ifdef __APPLE__
+# include <AvailabilityMacros.h>
+#endif
+
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_cpu.h>

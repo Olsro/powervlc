@@ -43,6 +43,19 @@ typedef unsigned int NSUInteger;
 #define NSINTEGER_DEFINED 1
 #endif
 
+/* Mac OS X 10.2's Objective-C runtime walks the __module_info records of
+ * every image it is handed and reads module->symtab without checking it for
+ * NULL -- and GCC leaves exactly that pointer NULL in an Objective-C file
+ * that defines no class of its own, as this one does not. The result is not
+ * a plug-in that declines to load: it is a bus error inside _objcInit(),
+ * which takes the whole process down the moment the plug-in is dlopen()ed.
+ * One throwaway class gives the module a symtab and settles it.
+ * extras/package/macosx/check-objc-modules.sh guards against it coming back. */
+@interface VLCSpeechSynthesizerModuleAnchor : NSObject
+@end
+@implementation VLCSpeechSynthesizerModuleAnchor
+@end
+
 static int Create (vlc_object_t *);
 static void Destroy(vlc_object_t *);
 static int RenderText(filter_t *,
@@ -61,22 +74,37 @@ vlc_module_end ()
 
 struct filter_sys_t
 {
-    NSSpeechSynthesizer *speechSynthesizer;
+    id speechSynthesizer;   /* an NSSpeechSynthesizer, see Create() */
     NSString *currentLocale;
     NSString *lastString;
 };
+
+/* NSSpeechSynthesizer arrived with 10.3, and naming it literally would emit a
+ * hard .objc_class_name_ reference -- which on 10.2 stops this plug-in from
+ * loading rather than merely making it decline the job. Resolved by name, the
+ * module simply reports failure there. */
+static Class SpeechSynthesizerClass(void)
+{
+    return NSClassFromString(@"NSSpeechSynthesizer");
+}
 
 static int  Create (vlc_object_t *p_this)
 {
     filter_t *p_filter = (filter_t *)p_this;
     filter_sys_t *p_sys;
+    Class synthClass = SpeechSynthesizerClass();
+
+    if (synthClass == Nil) {
+        msg_Dbg(p_filter, "no speech synthesizer on this system version");
+        return VLC_EGENERIC;
+    }
 
     p_filter->p_sys = p_sys = malloc(sizeof(filter_sys_t));
     if (!p_sys)
         return VLC_ENOMEM;
 
     p_sys->currentLocale = p_sys->lastString = @"";
-    p_sys->speechSynthesizer = [[NSSpeechSynthesizer alloc] init];
+    p_sys->speechSynthesizer = [[synthClass alloc] init];
 
     p_filter->pf_render = RenderText;
 
@@ -124,7 +152,7 @@ static int RenderText(filter_t *p_filter,
         text_segment_t *p_segment = p_region_in->p_text;
 
         if (!p_segment) {
-            [pool drain];
+            [pool release];
             return VLC_EGENERIC;
         }
 
@@ -152,12 +180,12 @@ static int RenderText(filter_t *p_filter,
                 if (![detectedLocale isEqualToString:p_sys->currentLocale]) {
                     p_sys->currentLocale = [detectedLocale retain];
                     msg_Dbg(p_filter, "switching speaker locale to '%s'", [p_sys->currentLocale UTF8String]);
-                    NSArray *voices = [NSSpeechSynthesizer availableVoices];
+                    NSArray *voices = [SpeechSynthesizerClass() availableVoices];
                     NSUInteger count = [voices count];
                     NSRange range = NSMakeRange(0, 2);
 
                     for (NSUInteger i = 0; i < count; i++) {
-                        NSDictionary *voiceAttributes = [NSSpeechSynthesizer attributesForVoice: [voices objectAtIndex:i]];
+                        NSDictionary *voiceAttributes = [SpeechSynthesizerClass() attributesForVoice: [voices objectAtIndex:i]];
                         NSString *voiceLanguage = [voiceAttributes objectForKey:@"VoiceLanguage"];
                         if ([p_sys->currentLocale isEqualToString:[voiceLanguage substringWithRange:range]]) {
                             NSString *voiceName = [voiceAttributes objectForKey:@"VoiceName"];
@@ -174,7 +202,7 @@ static int RenderText(filter_t *p_filter,
             [p_sys->speechSynthesizer startSpeakingString:stringToSpeech];
         }
 
-        [pool drain];
+        [pool release];
         return VLC_SUCCESS;
     }
 }

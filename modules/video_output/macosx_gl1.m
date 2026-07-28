@@ -46,6 +46,7 @@
 
 /* U4 — present HW piloté par le vout (contrat décodeur ↔ vout via bus libvlc). */
 #include "../codec/dvddriver_piccontext.h"
+#include "cgl_lock_compat.h"
 
 /* Per-stage timing of the display path, enabled by setting VLC_GL1_PROF in
  * the environment. Costs one gettimeofday per stage when off... nothing at
@@ -1390,8 +1391,12 @@ static void BuildSubsOverlay (vout_display_t *vd, subpicture_t *subpic)
     if (_rep != nil) {
         /* Dessin 1:1 : ni rééchantillonnage ni anticrénelage à demander. */
         NSGraphicsContext *ctx = [NSGraphicsContext currentContext];
-        [ctx setImageInterpolation:NSImageInterpolationNone];
-        [ctx setShouldAntialias:NO];
+        /* both 10.3; below it the context has neither knob and draws 1:1
+         * anyway, which is exactly what is being asked for here */
+        if ([ctx respondsToSelector:@selector(setImageInterpolation:)])
+            [ctx setImageInterpolation:NSImageInterpolationNone];
+        if ([ctx respondsToSelector:@selector(setShouldAntialias:)])
+            [ctx setShouldAntialias:NO];
         [_rep drawInRect:_repRect];
     }
 }
@@ -1568,12 +1573,17 @@ static int Open (vlc_object_t *this)
         /* */
         vout_display_SendEventDisplaySize (vd, vd->fmt.i_visible_width, vd->fmt.i_visible_height);
 
-        [pool drain];
+        /* -release, not -drain: -[NSAutoreleasePool drain] only exists from
+         * Mac OS X 10.4, and a missing selector is invisible to every
+         * link-time check -- it raises NSInvalidArgumentException at runtime
+         * instead. The two are the same thing outside a garbage-collected
+         * environment, which this never is. */
+        [pool release];
         return VLC_SUCCESS;
 
     error:
         Close(this);
-        [pool drain];
+        [pool release];
         return VLC_EGENERIC;
     }
 }
@@ -1676,7 +1686,7 @@ void Close (vlc_object_t *this)
             vout_display_DeleteWindow (vd, sys->embed);
         free (sys);
     }
-    [pool drain];
+    [pool release];
 }
 
 /*****************************************************************************
@@ -1893,13 +1903,26 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
     dvddriver_ctx *hw = var_GetAddress(vd->obj.libvlc, DVDDRIVER_VAR_CTX);
     dvddriver_present_cb present =
         (dvddriver_present_cb) var_GetAddress(vd->obj.libvlc, DVDDRIVER_VAR_PRESENT);
-    /* Diagnostic (une fois) : pourquoi le present matériel ne s'engage pas. */
+    /* Diagnostic. The old one-shot version fired on the very first picture,
+     * which is always BEFORE the decoder has opened the hardware -- the
+     * decision is taken a few pictures in, once the progressive/interlaced
+     * probe has run -- so it only ever reported "not engaged" and said
+     * nothing about the state that matters. Report the engagement itself,
+     * and repeat the reason every 100 pictures while it does not happen. */
     {
-        static bool s_told = false;
-        if (!s_told && (hw == NULL || present == NULL || pic->context == NULL)) {
-            s_told = true;
-            msg_Dbg(vd, "present matériel non engagé : hw=%p present=%p context=%p",
-                    (void *)hw, (void *)present, (void *)pic->context);
+        static bool s_engaged = false;
+        static unsigned s_not_engaged = 0;
+        bool now = (hw != NULL && present != NULL && pic->context != NULL);
+
+        if (now && !s_engaged) {
+            s_engaged = true;
+            msg_Dbg(vd, "present matériel engagé");
+        } else if (!now) {
+            if ((s_not_engaged++ % 100) == 0)
+                msg_Dbg(vd, "present matériel non engagé (%u) : hw=%p "
+                        "present=%p context=%p", s_not_engaged,
+                        (void *)hw, (void *)present, (void *)pic->context);
+            s_engaged = false;
         }
     }
     if (hw != NULL && present != NULL && pic->context != NULL) {
@@ -1969,6 +1992,20 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
                 subpicture_Delete(subpicture);
             return;
         }
+    }
+
+    /* ★ RÉOUVERTURE EN COURS (bascule plein écran ⇄ fenêtré) : le décodeur a
+     * fermé son contexte matériel et le rouvrira sur la nouvelle fenêtre à la
+     * prochaine image I. Les pictures qui traversent le vout entre-temps ne sont
+     * PAS affichables : en mode remplacement les plans logiciels des références
+     * n'ont jamais été reconstruits, les dessiner produit l'écran vert/blanc et
+     * les glitchs constatés à chaque bascule. On ne dessine rien du tout — la
+     * dernière image correcte reste composée par le WindowServer. */
+    if (var_GetBool(vd->obj.libvlc, DVDDRIVER_VAR_HOLD)) {
+        picture_Release (pic);
+        if (subpicture)
+            subpicture_Delete(subpicture);
+        return;
     }
 
     /* Le contexte HW a disparu (repli CPU, fin de lecture) : le chemin GL
@@ -2073,7 +2110,7 @@ static int Control (vout_display_t *vd, int query, va_list ap)
 
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     int ret = ControlInPool (vd, query, ap);
-    [pool drain];
+    [pool release];
     return ret;
 }
 
@@ -2089,9 +2126,9 @@ static int OpenglLock (vlc_gl_t *gl)
     assert(sys->locked_ctx == NULL);
 
     NSOpenGLContext *context = [sys->glView openGLContext];
-    CGLContextObj cglcntx = [context CGLContextObj];
+    CGLContextObj cglcntx = vlc_CGLContextOf(context);
 
-    CGLError err = CGLLockContext (cglcntx);
+    CGLError err = vlc_CGLLockContext (cglcntx);
     if (kCGLNoError == err) {
         sys->locked_ctx = cglcntx;
         [context makeCurrentContext];
@@ -2103,7 +2140,7 @@ static int OpenglLock (vlc_gl_t *gl)
 static void OpenglUnlock (vlc_gl_t *gl)
 {
     struct gl_sys *sys = gl->sys;
-    CGLUnlockContext (sys->locked_ctx);
+    vlc_CGLUnlockContext (sys->locked_ctx);
     sys->locked_ctx = NULL;
 }
 
@@ -2156,7 +2193,11 @@ static void OpenglSwap (vlc_gl_t *gl)
 
     /* Swap buffers only during the vertical retrace of the monitor. */
     GLint params[] = { 1 };
-    CGLSetParameter ([[self openGLContext] CGLContextObj], kCGLCPSwapInterval, params);
+    /* No CGL context to set it on below 10.3 (see vlc_CGLContextOf): the
+     * output then simply swaps without waiting for the retrace. */
+    CGLContextObj swapCtx = vlc_CGLContextOf([self openGLContext]);
+    if (swapCtx != NULL)
+        CGLSetParameter (swapCtx, kCGLCPSwapInterval, params);
 
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(applicationDidChangeScreenParameters:)
@@ -2325,6 +2366,18 @@ static void OpenglSwap (vlc_gl_t *gl)
      * un G3 : alpha PRÉMULTIPLIÉ (seul chemin rapide de CoreGraphics) et espace
      * colorimétrique PÉRIPHÉRIQUE — avec NSCalibratedRGBColorSpace, ColorSync
      * convertit chaque pixel à l'affichage. */
+    /* The -bitmapFormat: initialiser is 10.4, and it is the ONLY way to
+     * declare alpha-first premultiplied data: its 10.0 ancestor always reads
+     * the buffer as non-premultiplied alpha-LAST, which would render these
+     * subtitles in the wrong colours rather than merely slower. Below 10.4
+     * the overlay is left empty and the caller falls back to the ordinary
+     * blended path. */
+    if (![NSBitmapImageRep instancesRespondToSelector:
+            @selector(initWithBitmapDataPlanes:pixelsWide:pixelsHigh:bitsPerSample:samplesPerPixel:hasAlpha:isPlanar:colorSpaceName:bitmapFormat:bytesPerRow:bitsPerPixel:)]) {
+        free (data);
+        return;
+    }
+
     NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
         initWithBitmapDataPlanes:&data
                       pixelsWide:bw
@@ -2346,7 +2399,9 @@ static void OpenglSwap (vlc_gl_t *gl)
      * dessine puis on l'affiche, déjà à jour. */
     BOOL wasVisible = [_subsOverlay isVisible];
     if (!NSEqualRects (frame, [_subsOverlay frame])) {
-        [_subsOverlay disableScreenUpdatesUntilFlush];
+        if ([_subsOverlay respondsToSelector:
+                @selector(disableScreenUpdatesUntilFlush)])
+            [_subsOverlay disableScreenUpdatesUntilFlush];
         [_subsOverlay setFrame:frame display:NO];
     }
     _subsOverlayRect = frame;
@@ -2411,7 +2466,7 @@ static void OpenglSwap (vlc_gl_t *gl)
 {
     VLCAssertMainThread();
     NSOpenGLContext *context = [self openGLContext];
-    CGLError err = CGLLockContext ([context CGLContextObj]);
+    CGLError err = vlc_CGLLockContext (vlc_CGLContextOf(context));
     if (err == kCGLNoError)
         [context makeCurrentContext];
     return err == kCGLNoError;
@@ -2423,7 +2478,7 @@ static void OpenglSwap (vlc_gl_t *gl)
 - (void)unlockgl
 {
     VLCAssertMainThread();
-    CGLUnlockContext ([[self openGLContext] CGLContextObj]);
+    vlc_CGLUnlockContext (vlc_CGLContextOf([self openGLContext]));
 }
 
 /**
@@ -2616,7 +2671,12 @@ static void OpenglSwap (vlc_gl_t *gl)
 {
     /* Prevent the window server from rendering non-OpenGL content in the
      * window asynchronously from OpenGL content (avoids flickering). */
-    [[self window] disableScreenUpdatesUntilFlush];
+    /* -disableScreenUpdatesUntilFlush is 10.4; without it the window
+     * server may show a resized window before it is redrawn, which costs a
+     * flicker and nothing else. */
+    if ([[self window] respondsToSelector:
+            @selector(disableScreenUpdatesUntilFlush)])
+        [[self window] disableScreenUpdatesUntilFlush];
 
     [super renewGState];
 }

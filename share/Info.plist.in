@@ -33,6 +33,11 @@
 			</array>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>flv</string>
+				<string>f4v</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>flv.icns</string>
 			<key>CFBundleTypeName</key>
@@ -111,6 +116,10 @@
 			<string>Viewer</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>pls</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>playlist.icns</string>
 			<key>CFBundleTypeName</key>
@@ -123,6 +132,11 @@
 			</array>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>m3u</string>
+				<string>m3u8</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>playlist.icns</string>
 			<key>CFBundleTypeName</key>
@@ -135,6 +149,10 @@
 			</array>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>vlc</string>
+			</array>
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>org.videolan.vlc</string>
@@ -147,6 +165,10 @@
 			<string>Viewer</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>asx</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>playlist.icns</string>
 			<key>CFBundleTypeName</key>
@@ -187,6 +209,10 @@
 			<string>Binary</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>flac</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>audio.icns</string>
 			<key>CFBundleTypeName</key>
@@ -243,6 +269,13 @@
 			<string>Viewer</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>rmvb</string>
+				<string>ra</string>
+				<string>ram</string>
+				<string>rm</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>rm.icns</string>
 			<key>CFBundleTypeName</key>
@@ -310,6 +343,12 @@
 			<string>Binary</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>aif</string>
+				<string>aiff</string>
+				<string>aifc</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>aiff.icns</string>
 			<key>CFBundleTypeName</key>
@@ -323,6 +362,10 @@
 			</array>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>amr</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>audio.icns</string>
 			<key>CFBundleTypeName</key>
@@ -359,6 +402,10 @@
 			<string>Viewer</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>dav</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>movie.icns</string>
 			<key>CFBundleTypeName</key>
@@ -399,6 +446,10 @@
 			<string>Viewer</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>wav</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>wav.icns</string>
 			<key>CFBundleTypeName</key>
@@ -459,6 +510,10 @@
 			<string>Viewer</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>iso</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>generic.icns</string>
 			<key>CFBundleTypeName</key>
@@ -483,6 +538,11 @@
 			<string>Viewer</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>ac3</string>
+				<string>a52</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>audio.icns</string>
 			<key>CFBundleTypeName</key>
@@ -495,6 +555,11 @@
 			</array>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>aac</string>
+				<string>adts</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>audio.icns</string>
 			<key>CFBundleTypeName</key>
@@ -724,6 +789,10 @@
 			<string>Binary</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>avi</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>avi.icns</string>
 			<key>CFBundleTypeName</key>
@@ -772,6 +841,11 @@
 			<string>Viewer</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>mov</string>
+				<string>qt</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>mov.icns</string>
 			<key>CFBundleTypeName</key>
@@ -796,6 +870,10 @@
 			<string>Viewer</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>dv</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>movie.icns</string>
 			<key>CFBundleTypeName</key>
@@ -808,6 +886,10 @@
 			</array>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>asf</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>movie.icns</string>
 			<key>CFBundleTypeName</key>
@@ -820,6 +902,10 @@
 			</array>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>wma</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>wma.icns</string>
 			<key>CFBundleTypeName</key>
@@ -832,6 +918,11 @@
 			</array>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>wm</string>
+				<string>wmv</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>wmv.icns</string>
 			<key>CFBundleTypeName</key>
@@ -857,6 +948,12 @@
 			<string>Viewer</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>mpg</string>
+				<string>mpeg</string>
+				<string>mpe</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>mpeg.icns</string>
 			<key>CFBundleTypeName</key>
@@ -905,6 +1002,10 @@
 			<string>Viewer</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>mp2</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>mpeg.icns</string>
 			<key>CFBundleTypeName</key>
@@ -917,6 +1018,10 @@
 			</array>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>mp3</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>mp3.icns</string>
 			<key>CFBundleTypeName</key>
@@ -963,6 +1068,10 @@
 			<string>Viewer</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>m2v</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>mpeg.icns</string>
 			<key>CFBundleTypeName</key>
@@ -987,6 +1096,12 @@
 			<string>Viewer</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>mp4a</string>
+				<string>m4v</string>
+				<string>mp4</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>m4v.icns</string>
 			<key>CFBundleTypeName</key>
@@ -1001,6 +1116,10 @@
 			</array>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>m4a</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>m4a.icns</string>
 			<key>CFBundleTypeName</key>
@@ -1013,6 +1132,13 @@
 			</array>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>3gp</string>
+				<string>3gpp</string>
+				<string>3g2</string>
+				<string>3gp2</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>movie.icns</string>
 			<key>CFBundleTypeName</key>
@@ -1025,6 +1151,11 @@
 			</array>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>mid</string>
+				<string>midi</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>audio.icns</string>
 			<key>CFBundleTypeName</key>
@@ -1049,6 +1180,10 @@
 			<string>Viewer</string>
 		</dict>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>mka</string>
+			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>audio.icns</string>
 			<key>CFBundleTypeName</key>

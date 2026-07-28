@@ -33,6 +33,8 @@
 #import <CoreAudio/CoreAudio.h>             // AudioDeviceID
 #import <CoreServices/CoreServices.h>
 
+#import "coreaudio_compat.h"          // 10.3: AudioObject* is 10.4-only
+
 #pragma mark -
 #pragma mark local prototypes & module descriptor
 
@@ -142,7 +144,7 @@ AoGetProperty(audio_output_t *p_aout, AudioObjectID id,
 
     /* Get data size */
     UInt32 i_out_size;
-    OSStatus err = AudioObjectGetPropertyDataSize(id, p_address, 0, NULL,
+    OSStatus err = vlc_AudioObjectGetPropertyDataSize(id, p_address, 0, NULL,
                                                   &i_out_size);
     if (err != noErr)
     {
@@ -190,7 +192,7 @@ AoGetProperty(audio_output_t *p_aout, AudioObjectID id,
     }
 
     /* Fill data */
-    err = AudioObjectGetPropertyData(id, p_address, 0, NULL, &i_out_size,
+    err = vlc_AudioObjectGetPropertyData(id, p_address, 0, NULL, &i_out_size,
                                      p_out_data);
     if (err != noErr)
     {
@@ -224,7 +226,7 @@ AoIsPropertySettable(audio_output_t *p_aout, AudioObjectID id,
                      const AudioObjectPropertyAddress *p_address)
 {
     Boolean b_settable;
-    OSStatus err = AudioObjectIsPropertySettable(id, p_address, &b_settable);
+    OSStatus err = vlc_AudioObjectIsPropertySettable(id, p_address, &b_settable);
     if (err != noErr)
     {
         msg_Warn(p_aout, "AudioObjectIsPropertySettable failed, device id: %i, "
@@ -240,7 +242,7 @@ AoIsPropertySettable(audio_output_t *p_aout, AudioObjectID id,
                          &(AudioObjectPropertyAddress) { (a1), (a2), 0})
 
 #define AO_HASPROP(id, a1, a2) \
-    AudioObjectHasProperty((id), &(AudioObjectPropertyAddress) { (a1), (a2), 0})
+    vlc_AudioObjectHasProperty((id), &(AudioObjectPropertyAddress) { (a1), (a2), 0})
 
 static int
 AoSetProperty(audio_output_t *p_aout, AudioObjectID id,
@@ -248,7 +250,7 @@ AoSetProperty(audio_output_t *p_aout, AudioObjectID id,
               const void *p_data)
 {
     OSStatus err =
-        AudioObjectSetPropertyData(id, p_address, 0, NULL, i_data, p_data);
+        vlc_AudioObjectSetPropertyData(id, p_address, 0, NULL, i_data, p_data);
 
     if (err != noErr)
     {
@@ -271,8 +273,8 @@ AoUpdateListener(audio_output_t *p_aout, bool add, AudioObjectID id,
                  AudioObjectPropertyListenerProc listener, void *data)
 {
     OSStatus err = add ?
-        AudioObjectAddPropertyListener(id, p_address, listener, data) :
-        AudioObjectRemovePropertyListener(id, p_address, listener, data);
+        vlc_AudioObjectAddPropertyListener(id, p_address, listener, data) :
+        vlc_AudioObjectRemovePropertyListener(id, p_address, listener, data);
 
     if (err != noErr)
     {
@@ -422,7 +424,7 @@ AudioDeviceIsAHeadphone(audio_output_t *p_aout, AudioDeviceID i_dev_id)
         kAudioObjectPropertyElementMaster
     };
 
-    AudioObjectGetPropertyData(kAudioObjectSystemObject, &defaultAddr, 0, NULL, &defaultSize, &i_dev_id);
+    vlc_AudioObjectGetPropertyData(kAudioObjectSystemObject, &defaultAddr, 0, NULL, &defaultSize, &i_dev_id);
 
     AudioObjectPropertyAddress property;
     property.mSelector = kAudioDevicePropertyDataSource;
@@ -431,7 +433,7 @@ AudioDeviceIsAHeadphone(audio_output_t *p_aout, AudioDeviceID i_dev_id)
 
     UInt32 data;
     UInt32 size = sizeof(UInt32);
-    AudioObjectGetPropertyData(i_dev_id, &property, 0, NULL, &size, &data);
+    vlc_AudioObjectGetPropertyData(i_dev_id, &property, 0, NULL, &size, &data);
 
     /*
      'hdpn' == headphone

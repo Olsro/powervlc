@@ -100,7 +100,7 @@ typedef float CGFloat;
     NSScrollView *playlistScroll;
     NSView *dropzoneView;
     NSTextField *viewTitleLabel;
-    NSSearchField *searchField;
+    NSTextField *searchField;   /* an NSSearchField except on 10.2 */
     NSString *searchString;
     NSMutableArray *visibleColumns; /* playlist column identifiers */
 
@@ -118,6 +118,12 @@ typedef float CGFloat;
     NSWindow *videoHostWindow;
     BOOL videoHostFullscreen;
     NSRect videoHostWindowedFrame;
+    /* Cadre RÉEL de la vue vidéo juste avant le passage en plein écran, pour le
+     * restituer tel quel au retour. Le cadre du splitView, utilisé jusqu'ici,
+     * avait entre-temps rétréci (mesuré : 1024x576 au démarrage de la vidéo,
+     * 690x404 à la sortie du plein écran) : la vidéo revenait tassée dans un
+     * coin, le reste du cadre en blanc. */
+    NSRect preFullscreenVideoFrame;
 
     /* Snapshot of the core playlist (tree of dictionaries with keys
      * "id" (NSNumber), "title", "duration", "arturl" and, for nodes,

@@ -36,6 +36,15 @@
  * ordres et fenêtre non opaque comprise) — le vout passe par une fenêtre enfant
  * transparente. */
 #define DVDDRIVER_VAR_SUBS    "dvddriver-subs"
+/* ★ SUSPENSION D'AFFICHAGE pendant la réouverture du décodeur matériel (bascule
+ * plein écran ⇄ fenêtré : la surface est liée à UNE fenêtre CGS, il faut rouvrir
+ * sur la nouvelle). Le décodeur la lève à la fermeture et la baisse dès que le
+ * nouveau contexte est publié. Sans elle, le vout voyait `hw` à NULL alors que
+ * les pictures déjà en file portaient encore un contexte matériel : il retombait
+ * sur le rendu OpenGL avec des plans logiciels VIDES (jamais reconstruits en mode
+ * remplacement) — d'où l'écran vert/blanc et les glitchs à chaque bascule. Le vout
+ * doit alors NE RIEN DESSINER : la dernière image correcte reste à l'écran. */
+#define DVDDRIVER_VAR_HOLD    "dvddriver-hold"
 /* Variables de géométrie publiées par le vout (U1). */
 #define DVDDRIVER_VAR_WID     "dvddriver-vout-wid"
 #define DVDDRIVER_VAR_RECT_X  "dvddriver-vout-rect-x"

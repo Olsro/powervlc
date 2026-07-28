@@ -956,6 +956,22 @@ static int ThreadDisplayPreparePicture(vout_thread_t *vout, bool reuse, bool fra
                         late_threshold = VOUT_DISPLAY_LATE_THRESHOLD * (num / (CLOCK_FREQ/2));
                     const vlc_tick_t predicted = mdate() + 0; /* TODO improve */
                     const vlc_tick_t late = predicted - decoded->date;
+                    /* A picture decoded by the GPU costs nothing to display:
+                     * the work is already spent and the surface already holds
+                     * the image. Dropping one that is merely a frame or two
+                     * late saves no decoding and leaves a hole where its frame
+                     * period should be -- measured on the ATI DVDDriver path
+                     * (Mac OS X 10.2, iBook G3), that is what made the picture
+                     * stutter as if frames were repeated.
+                     * Be generous, but NOT infinite: dropping is also the only
+                     * way the pipeline ever catches up. With no ceiling at all
+                     * a deficit taken at start-up (the software probe runs
+                     * before the hardware path commits) never resorbs, and the
+                     * vout settles into displaying every picture 1.3 s late in
+                     * bursts -- same stutter, harder to see. Above a quarter of
+                     * a second the deficit is worth paying down. */
+                    if (decoded->context != NULL && late_threshold < CLOCK_FREQ / 4)
+                        late_threshold = CLOCK_FREQ / 4;
                     if (late > late_threshold) {
                         msg_Warn(vout, "picture is too late to be displayed (missing %"PRId64" ms)", late/1000);
                         picture_Release(decoded);

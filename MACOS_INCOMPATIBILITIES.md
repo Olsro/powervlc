@@ -22,14 +22,14 @@ Each target produces a distinct Mach-O slice. The **universal** binary merges up
 
 | Build | Arch / subtype | macOS min | SDK | Compiler | SIMD | Endian / word | Interface(s) |
 |---|---|---|---|---|---|---|---|
-| `buildg3` | ppc (ppc750) | 10.4 | 10.4u | FSF GCC 13 (Tiger) | — (`--disable-altivec`) | BE / 32-bit | legacy |
-| `buildg4` | ppc (ppc7400) | 10.4 | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
-| `buildg4e` | ppc (ppc7450) | 10.4 | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
-| `buildg5` | ppc (ppc970) | 10.4 | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
+| `buildg3` | ppc (ppc750) | **10.2** | 10.4u | FSF GCC 13 (Tiger) | — (`--disable-altivec`) | BE / 32-bit | legacy |
+| `buildg4` | ppc (ppc7400) | **10.2** | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
+| `buildg4e` | ppc (ppc7450) | **10.2** | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
+| `buildg5` | ppc (ppc970) | **10.2** | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
 | `buildx86` | i386 | 10.4 (10.4.4) | 10.4u | FSF GCC 13 (Tiger) | — (`--disable-mmx --disable-sse`) | LE / 32-bit | legacy |
 | `buildx64` | x86_64 | 10.5 *(see 1.2)* | modern Xcode | Apple clang | SSE2 | LE / 64-bit | modern + legacy |
 | `buildarm64` | arm64 | 11.0 | modern Xcode | Apple clang | NEON | LE / 64-bit | modern + legacy |
-| `builduniversal` | fat (the 7 above) | 10.4 (per arch) | — | — (`lipo` merge) | — | — | both worlds |
+| `builduniversal` | fat (the 7 above) | **10.2** (per arch) | — | — (`lipo` merge) | — | — | both worlds |
 
 - **G4 / G4e / G5 share one set of contribs** built for the lowest common ISA (`-mcpu=7400 -maltivec`); only VLC itself is tuned per variant. The PowerPC slice embedded in the universal is in practice `ppc750`, which loads on **any G3/G4/G5** by subtype grading.
 - **G3 has no AltiVec** (`ppc750`, `-mcpu=750`); it uses separate contribs.
@@ -40,6 +40,7 @@ Each target produces a distinct Mach-O slice. The **universal** binary merges up
 
 | Mac / OS | Slice loaded | Interface | Notes |
 |---|---|---|---|
+| PowerPC G3/G4/G5 — **Jaguar 10.2 / Panther 10.3** | `ppc750` … `ppc970` | **legacy** | See §1.3. Shipped in the universal bundle, **launch validated on a real 10.2 iBook** |
 | PowerPC G3 — Tiger 10.4 / Leopard 10.5 | `ppc750` | **legacy** | GPU often lacks GLSL → GL1 vout (§9) |
 | PowerPC G4 / G5 — Tiger 10.4 / Leopard 10.5 | `ppc` (tuned) | **legacy** | AltiVec active |
 | Intel 32-bit only — 10.4.4 → 10.6 | `i386` | **legacy** | Core Solo/Duo of the first Intel Macs |
@@ -48,7 +49,45 @@ Each target produces a distinct Mach-O slice. The **universal** binary merges up
 | Intel 64-bit — **10.7+** (Lion →) | `x86_64` | **modern** (+ legacy, switchable) | |
 | Apple Silicon — 11.0+ | `arm64` | **modern** (+ legacy) | x86_64 also runs under Rosetta |
 
-> **Why the `x86_64` slice is gated to 10.6 and not 10.5.8** (`make-universal.sh:118-131`): the Mach-O produced by the modern clang carries the `LC_DYLD_INFO_ONLY` load command, which Leopard 10.5's `dyld` does not understand. Result: on an Intel 10.5.8 machine, **all** native interface plugins (modern **and** legacy) would fail to load and VLC would fall back to the Lua CLI interface (a "lua error" dialog). By declaring `LSMinimumSystemVersionByArchitecture:x86_64 = 10.6.0`, LaunchServices on 10.5.8 picks the **i386** slice (legacy toolchain, loads cleanly, legacy interface): the app "just works" with no manual 32-bit toggle. ✅ (validated on a 2007 white MacBook, round 89)
+### 1.3 The 10.2 Jaguar floor (every PowerPC slice)
+
+**All four PowerPC slices** (`ppc750`, `ppc7400`, `ppc7450`, `ppc970`) target **10.2**,
+and the universal bundle ships them: `LSMinimumSystemVersion = 10.2`,
+`…ByArchitecture:ppc = 10.2.0`. Launch and DVD playback validated on a real
+iBook G3 (PowerBook4,3, Radeon 7500): interface, playlist, audio, **video**, DVD
+playback and even the **ATI hardware MPEG-2 decoder** all run. It is built with the same
+FSF GCC 13 / 10.4u SDK, only `-mmacosx-version-min=10.2` changes — plus the
+compatibility work below.
+
+What Jaguar lacks and how it is worked around:
+
+| Missing on 10.2 | Consequence | Workaround |
+|---|---|---|
+| `dlopen`/`dlsym`/`dlclose` (10.3+) | 329 of 332 Mach-Os reference them — nothing loads | `jaguar-compat/dlcompat.c` over `NSCreateObjectFileImageFromFile`/`NSLinkModule`. ⚠️ `NSLookupSymbolInModule()` does **not** search the sub-frameworks an umbrella re-exports, so a fallback to `NSIsSymbolNameDefined`/`NSLookupAndBindSymbol` is required — without it every `dlsym` on an umbrella framework silently returns NULL |
+| Dylib exports found **only** through the table of contents | Every symbol of a shipped dylib reads as undefined | `add-dylib-toc.py`, run **last** (after `install_name_tool`) on `Contents/MacOS/lib/*.dylib` |
+| ObjC 1.0 runtime | A `.m` defining **no class** leaves `module->symtab` NULL and `_objcInit()` dereferences it → the process dies at `dlopen`, silently | `check-objc-modules.sh` guards the bundle at build time |
+| `@try/@catch` does not catch Foundation exceptions | Diagnosis impossible from inside the app | stderr of a Finder-launched app goes to `/var/tmp/console.log` |
+| `sysconf(_SC_PAGESIZE)` returns **-1** | `block_mmap_Alloc` gets `p_start=NULL`; plug-in cache unusable (25 s startup) | `block_PageSize()` falls back to `getpagesize()` |
+| `snprintf(NULL, 0, …)` returns **-1** | `vlc_http_msg_format()` returns NULL → **no HTTP/1.1 request can be built** (HTTP/2 worked, hence the clue) | one-byte probe buffer in `messages.c`, `memstream.c`, `vasprintf.c`. ⚠️ Do **not** redefine `snprintf` in a compat library: it collides with `libSystemStubs.a` (`duplicate symbol _snprintf$LDBLStub`) |
+| UTIs (`LSItemContentTypes`, 10.4+) | VLC declares the common formats by UTI only → invisible in "Open With" | 29 `CFBundleTypeExtensions` blocks (127 extensions) in `share/Info.plist.in` |
+| `CGSMainConnectionID` (10.3+) | The private CGS path used by the hardware decoder has no connection | `GetCGSConnectionID()`, exported by **QD** — reachable only thanks to the `dlsym` fallback above |
+| AppKit APIs added in 10.3/10.4 | `-setHidden:`, NSMenu delegates, alternating table rows, `sizeLastColumnToFit`… | compatibility layer in `legacy_macosx/misc.m`; a menu carrying a **submenu is never validated**, so dynamic submenus rebuild from an `-[NSMenu update]` subclass |
+| AUHAL never sets `kAudioTimeStampHostTimeValid` | `ca_TimeGet()` returns -1 permanently: no audio clock feedback | tolerated; ⚠️ see §13 |
+
+> **Two silent traps closed while lowering the floor.** ① Neither a contrib prefix nor a
+> build directory recorded the deployment target it was made for, and **neither is
+> rebuilt or reconfigured in place** — lowering the floor would have linked 10.4 objects
+> into a "10.2" bundle with no error at all, the failure showing up only as a dyld error
+> on the old machine. Both now carry a `.powervlc-osx-min` stamp, checked at start-up.
+> ② `make-universal.sh` compiles its own **architecture trampoline** (`vlctrampoline.c`)
+> and did so **without `-mmacosx-version-min`**: the Tiger cross-GCC defaulted to 10.4,
+> and the whole bundle died on Jaguar with `undefined reference to _snprintf$LDBL128`
+> even though every real slice was correct. That stub now builds with
+> `-mmacosx-version-min=10.2` **and `-lSystemStubs`** (below 10.4 the SDK redirects the
+> printf family to `_<fn>$LDBLStub`, which lives only in that static library — without
+> it the stub does not even link).
+
+> > **Why the `x86_64` slice is gated to 10.6 and not 10.5.8** (`make-universal.sh:118-131`): the Mach-O produced by the modern clang carries the `LC_DYLD_INFO_ONLY` load command, which Leopard 10.5's `dyld` does not understand. Result: on an Intel 10.5.8 machine, **all** native interface plugins (modern **and** legacy) would fail to load and VLC would fall back to the Lua CLI interface (a "lua error" dialog). By declaring `LSMinimumSystemVersionByArchitecture:x86_64 = 10.6.0`, LaunchServices on 10.5.8 picks the **i386** slice (legacy toolchain, loads cleanly, legacy interface): the app "just works" with no manual 32-bit toggle. ✅ (validated on a 2007 white MacBook, round 89)
 
 ### 1.3 macOS version reference
 
@@ -354,6 +393,7 @@ Four `vout display` modules, chosen by priority and GPU capabilities:
 
 ## 11. Summary by macOS version
 
+- **10.2 Jaguar / 10.3 Panther** (PPC): **legacy** interface via the dedicated `buildg3-jaguar` slice (§1.3). Everything the 10.4 floor offers minus what Jaguar itself lacks; **DVD playback and the ATI hardware decoder work**. ⚠️ Not merged into the universal bundle today — `make-universal.sh` still declares `ppc = 10.4.0`.
 - **10.4 Tiger** (PPC & Intel 32): **legacy** interface; notifications **via Growl**; **no media keys** (legacy requires 10.5); TTS without language detection; no CoreText (default face only); no Chromecast/Bonjour/Keychain/VideoToolbox/AVFoundation/Sparkle; fixed GL1 or QuickTime vout.
 - **10.5 Leopard** (PPC & Intel): same, but **legacy media keys OK** (10.5+, with accessibility), Blu-ray header available. On Intel 64-bit, the **i386** slice is chosen (x86_64 gated to 10.6).
 - **10.6 Snow Leopard** (Intel): **x86_64** slice; interface **still legacy** (modern = 10.7); notifications **via Growl**; VideoToolbox/Keychain/AVFoundation/Chromecast **available**; `caopengllayer` **not** (compiled arm64 only).
@@ -384,6 +424,21 @@ Four `vout display` modules, chosen by priority and GPU capabilities:
 | 4 | **Keyboard media keys & Apple Remote** validated on real hardware (Intel 10.4/10.5); media keys need 10.5+ (none on 10.4 by design, see ⚠️⁶) | all (legacy) | ✅ Validated |
 | 5 | **Chromecast** compiles but **no real cast tested**; unavailable on 10.4–10.6 | x86_64/arm64 | To validate for real |
 | 6 | **Windowed GL1 planar** does not render correctly | ATI/PPC GPUs | Worked around (default = packed; planar fullscreen only) |
+
+---
+- ⚠️ **10.2 — DVD playback stutters with the ATI hardware decoder.** The path works
+  (2.5× the software decoder: ~23.5 vs ~9 frames/s at 720×576) but never reaches the
+  25 fps of the source, and the residual irregularity is visible. Apple's own DVD
+  Player is perfectly smooth on the same machine, same GPU, same driver. Eliminated by
+  measurement: the surface pool, the vout's retention policy, the clock, input
+  starvation, the entropy decoder, the WindowServer (4.5 % CPU), the frame-drop policy,
+  the display-composition calls, the audio clock and the resampler, and VSync (the
+  panel exposes no configurable refresh — 9 modes, all fixed-timing). With audio
+  disabled the presentation cadence becomes near perfect (93.5 % of intervals on the
+  40 ms grid) **and the stutter is still visible**, so the defect is in *what* is shown,
+  not *when*. Investigation suspended; see the project memory for the full list of
+  closed leads.
+- ⚠️ **10.2 — untested:** subtitles, window resize during playback, long files.
 
 ---
 

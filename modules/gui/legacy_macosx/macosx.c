@@ -132,8 +132,22 @@ vlc_module_begin ()
               N_("Héberge la vidéo intégrée dans une fenêtre enfant sans "
                  "bordure : le passage en plein écran est instantané et "
                  "n'interrompt pas le décodage accéléré. Désactiver rétablit "
-                 "l'ancien comportement (fenêtre de plein écran séparée)."),
+                 "l'ancien comportement (fenêtre de plein écran séparée). "
+                 "Sans effet sous Mac OS X 10.4, où une fenêtre enfant "
+                 "n'affiche rien."),
               true )
+    /* Debug affordance, mirroring VLC_LEGACY_SHOW: names a window to open at
+     * startup (prefs, prefsadv, mediainfo, errors, about, bookmarks...). An
+     * application started by the Finder inherits loginwindow's environment,
+     * so the variable never reaches it -- this is the way in. */
+    add_string( "legacy-macosx-show", "",
+                N_("Ouvrir une fenêtre au démarrage (débogage)"),
+                N_("Nom de la fenêtre à ouvrir au lancement, comme la "
+                   "variable d'environnement VLC_LEGACY_SHOW : prefs, "
+                   "prefsadv, mediainfo, errors, about, bookmarks, "
+                   "messages, tracksync, effects, videoeffects, convert, "
+                   "fspanel, open0..3."),
+                true )
     add_bool( "legacy-macosx-black", false,
               N_("Black screens in fullscreen"),
               N_("In fullscreen mode, keep screen where there is no video "
@@ -164,7 +178,21 @@ vlc_module_begin ()
                  "playback."),
               false )
         change_integer_list( legacy_itunes_list, legacy_itunes_list_text )
-    add_integer( "legacy-macosx-deinterlace", 2,
+/* Deinterlacing costs a full software filter pass per picture, and VLC's are
+ * AltiVec-accelerated -- exactly like Apple's own DVDAltivecMADeInterlacer.
+ * A slice built without AltiVec runs them scalar, and a G3 cannot sustain
+ * that at DVD resolution: the picture stutters instead of being merely
+ * combed. So those machines default to Off, the way Apple's DVD Player
+ * greys out what a given model cannot do. Everything else keeps "Optimal";
+ * the setting stays fully user-changeable either way. */
+#if (defined(__ppc__) || defined(__ppc64__) || defined(__POWERPC__)) \
+ && !defined(HAVE_ALTIVEC_H)
+# define LEGACY_DEINT_DEFAULT 0
+#else
+# define LEGACY_DEINT_DEFAULT 2
+#endif
+
+    add_integer( "legacy-macosx-deinterlace", LEGACY_DEINT_DEFAULT,
               N_("Deinterlacing"),
               N_("Removes the interlacing combing from interlaced video such "
                  "as most PAL DVDs. Higher settings look better but use more "

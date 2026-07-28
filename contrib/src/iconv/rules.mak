@@ -7,7 +7,17 @@ PKGS += iconv
 # Hard-code based on the operating system.
 ifndef HAVE_WIN32
 ifndef HAVE_ANDROID
+ifdef HAVE_DARWIN_OS
+# /usr/lib/libiconv.2.dylib only appears with Mac OS X 10.3 -- verified absent
+# from a real 10.2.1 install, which ships no iconv at all. Below that
+# deployment target the system cannot provide it, so build ours: otherwise
+# every binary carries a load command dyld will not be able to satisfy.
+ifeq ($(call darwin_min_os_at_least,10.3),true)
 PKGS_FOUND += iconv
+endif
+else
+PKGS_FOUND += iconv
+endif
 else
 ifeq ($(shell expr "$(ANDROID_API)" '>=' '28'), 1)
 PKGS_FOUND += iconv

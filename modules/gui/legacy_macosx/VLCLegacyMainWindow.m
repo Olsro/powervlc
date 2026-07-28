@@ -607,8 +607,10 @@ static NSString *const VLCLegacyArtHeightKey = @"VLCLegacySidebarArtHeight";
         background = [NSColor windowBackgroundColor];
     /* a textured window hands out a pattern colour: anchor it on the
      * window, not on this view, or the fill shows a seam */
-    [[NSGraphicsContext currentContext]
-        setPatternPhase:[self convertPoint:NSZeroPoint toView:nil]];
+    if ([[NSGraphicsContext currentContext]
+            respondsToSelector:@selector(setPatternPhase:)])
+        [[NSGraphicsContext currentContext]
+            setPatternPhase:[self convertPoint:NSZeroPoint toView:nil]];
     [background set];
     NSRectFill(fill);
 }
@@ -678,14 +680,21 @@ static NSString *const VLCLegacyArtHeightKey = @"VLCLegacySidebarArtHeight";
     /* erase first: the handle only draws a hairline, the rest of it would
      * otherwise keep the pixels of wherever it was dragged from */
     [self eraseBackground:dirtyRect];
-    /* a subtle separator line along the top edge of the handle */
+    /* A subtle separator line along the top edge of the handle.
+     * ⚠ NSRectFill() copies, it does not blend: the 15%-alpha colour lands
+     * in the backing store as it is, and where that store has no alpha to
+     * spend -- 10.2 -- the "subtle" hairline comes out solid black. Filling
+     * through NSCompositeSourceOver blends it against what is already
+     * there, which is what was meant, on every version. */
     [[NSColor colorWithCalibratedWhite:(VLCLegacyDarkMode() ? 1.0 : 0.0)
                                  alpha:0.15] set];
-    NSRectFill(NSMakeRect(0, b.size.height - 1, b.size.width, 1));
+    NSRectFillUsingOperation(NSMakeRect(0, b.size.height - 1,
+                                        b.size.width, 1),
+                             NSCompositeSourceOver);
 }
 - (void)resetCursorRects
 {
-    [self addCursorRect:[self bounds] cursor:[NSCursor resizeUpDownCursor]];
+    [self addCursorRect:[self bounds] cursor:VLCLegacyResizeUpDownCursor()];
 }
 - (void)mouseDown:(NSEvent *)event    { [self relayDrag:event]; }
 - (void)mouseDragged:(NSEvent *)event { [self relayDrag:event]; }
@@ -746,8 +755,10 @@ static NSString *const VLCLegacyArtHeightKey = @"VLCLegacySidebarArtHeight";
     NSRect dst = NSMakeRect(b.origin.x + (b.size.width  - drawn.width)  / 2.0,
                             b.origin.y + (b.size.height - drawn.height) / 2.0,
                             drawn.width, drawn.height);
-    [[NSGraphicsContext currentContext]
-        setImageInterpolation:NSImageInterpolationHigh];
+    if ([[NSGraphicsContext currentContext]
+            respondsToSelector:@selector(setImageInterpolation:)])
+        [[NSGraphicsContext currentContext]
+            setImageInterpolation:NSImageInterpolationHigh];
     [artImage drawInRect:dst
                 fromRect:NSZeroRect
                operation:NSCompositeSourceOver
@@ -1051,7 +1062,8 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
     [sidebarPane addSubview:sidebarArtView];
     [sidebarPane addSubview:sidebarArtDivider];
     [sidebarScroll setHasVerticalScroller:YES];
-    [sidebarScroll setAutohidesScrollers:YES];
+    if ([sidebarScroll respondsToSelector:@selector(setAutohidesScrollers:)])
+        [sidebarScroll setAutohidesScrollers:YES];
     [sidebarScroll setBorderType:NSNoBorder];
     /* relayout the art stack whenever the pane changes height (window
      * resize, Show Sidebar re-attach) */
@@ -1073,16 +1085,18 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
     [sidebarColumn setWidth:SIDEBAR_WIDTH - 16];
     /* the column follows the pane width, or the count badge pinned to
      * the right edge of the cell gets clipped by the scroll view */
-    [sidebarColumn setResizingMask:NSTableColumnAutoresizingMask];
-    [sidebarTable setColumnAutoresizingStyle:
-        NSTableViewLastColumnOnlyAutoresizingStyle];
+    if ([sidebarColumn respondsToSelector:@selector(setResizingMask:)])
+        [sidebarColumn setResizingMask:NSTableColumnAutoresizingMask];
+    if ([sidebarTable respondsToSelector:@selector(setColumnAutoresizingStyle:)])
+        [sidebarTable setColumnAutoresizingStyle:
+            NSTableViewLastColumnOnlyAutoresizingStyle];
     [sidebarColumn setEditable:NO];
     VLCLegacySidebarCell *sidebarCell =
         [[[VLCLegacySidebarCell alloc] initTextCell:@""] autorelease];
     /* single line: long service names must truncate, not wrap out of
      * the 20 px row */
     [sidebarCell setWraps:NO];
-    [sidebarCell setLineBreakMode:NSLineBreakByTruncatingTail];
+    VLCLegacySetCellLineBreakMode(sidebarCell, NSLineBreakByTruncatingTail);
     [sidebarColumn setDataCell:sidebarCell];
     [sidebarTable addTableColumn:sidebarColumn];
     [sidebarTable setDataSource:(id)self];
@@ -1124,16 +1138,9 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
     [viewTitleLabel setStringValue:_NS("Playlist")];
     [topStrip addSubview:viewTitleLabel];
 
-    searchField = [[[NSSearchField alloc]
-        initWithFrame:NSMakeRect(rightBounds.size.width - 166, 3, 156, 22)]
-        autorelease];
-    [[searchField cell] setControlSize:NSSmallControlSize];
-    [[searchField cell] setFont:[NSFont systemFontOfSize:11]];
-    [searchField setTarget:self];
-    [searchField setAction:@selector(searchChanged:)];
-    [[searchField cell] setSendsWholeSearchString:NO];
-    [(NSSearchFieldCell *)[searchField cell]
-        setSendsSearchStringImmediately:YES];
+    searchField = VLCLegacyMakeSearchField(
+        NSMakeRect(rightBounds.size.width - 166, 3, 156, 22),
+        self, @selector(searchChanged:));
     [searchField setAutoresizingMask:NSViewMinXMargin];
     [topStrip addSubview:searchField];
 
@@ -1142,16 +1149,22 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
     playlistScroll = [[[NSScrollView alloc] initWithFrame:tableRect]
         autorelease];
     [playlistScroll setHasVerticalScroller:YES];
-    [playlistScroll setAutohidesScrollers:YES];
+    if ([playlistScroll respondsToSelector:@selector(setAutohidesScrollers:)])
+        [playlistScroll setAutohidesScrollers:YES];
     [playlistScroll setBorderType:NSNoBorder];
     [playlistScroll setAutoresizingMask:NSViewWidthSizable
                                        | NSViewHeightSizable];
 
     /* an outline view: the media library, podcasts... are trees in the
      * core playlist and 3.0 presents them hierarchically */
-    playlistTable = [[[NSOutlineView alloc]
+    playlistTable = [[[VLCLegacyStripedOutlineView alloc]
         initWithFrame:[[playlistScroll contentView] bounds]] autorelease];
-    [playlistTable setUsesAlternatingRowBackgroundColors:!VLCLegacyDarkMode()];
+    if ([playlistTable respondsToSelector:@selector(setUsesAlternatingRowBackgroundColors:)])
+        [playlistTable setUsesAlternatingRowBackgroundColors:!VLCLegacyDarkMode()];
+    /* Only the last column follows the width of the table. Without this the
+     * Duration column keeps for ever the sliver it was given while the
+     * table was still narrower than its columns. */
+    VLCLegacyResizeLastColumnOnly(playlistTable);
     if (VLCLegacyDarkMode())
         [playlistTable setBackgroundColor:VLCLegacyTableBackgroundColor()];
     [playlistTable setRowHeight:20];
@@ -1228,10 +1241,16 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
             VLCLegacyPlaylistItemPboardType, nil]];
     /* allow the rows to be a drag source: move/copy inside the app, and
      * copy out to the Finder / other apps (10.4 defaults forbid leaving) */
-    [playlistTable setDraggingSourceOperationMask:
-        NSDragOperationCopy | NSDragOperationMove forLocal:YES];
-    [playlistTable setDraggingSourceOperationMask:
-        NSDragOperationCopy forLocal:NO];
+    /* 10.3; below it, dragging rows out of the playlist is simply not
+     * offered -- dropping media INTO it is a separate mechanism and keeps
+     * working */
+    if ([playlistTable respondsToSelector:
+            @selector(setDraggingSourceOperationMask:forLocal:)]) {
+        [playlistTable setDraggingSourceOperationMask:
+            NSDragOperationCopy | NSDragOperationMove forLocal:YES];
+        [playlistTable setDraggingSourceOperationMask:
+            NSDragOperationCopy forLocal:NO];
+    }
     [playlistScroll setDocumentView:playlistTable];
     [rightContainer addSubview:playlistScroll];
 
@@ -1254,7 +1273,10 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
     /* NSImageView registers itself as a drag destination and would
      * swallow drops over the icon; the surrounding dropzone must get
      * them (VLCDropDisabledImageView does the same) */
-    [dropImage unregisterDraggedTypes];
+    /* -unregisterDraggedTypes is 10.3; below it, a view that never
+     * registered a type has nothing to unregister anyway */
+    if ([dropImage respondsToSelector:@selector(unregisterDraggedTypes)])
+        [dropImage unregisterDraggedTypes];
     [dropzoneView addSubview:dropImage];
 
     NSTextField *dropLabel = [[[NSTextField alloc]
@@ -1301,8 +1323,8 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
     [videoView registerForDraggedTypes:
         [NSArray arrayWithObject:NSFilenamesPboardType]];
     [videoView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-    [videoView setHidden:YES];
     [content addSubview:videoView];
+    VLCLegacySetViewHidden(videoView, YES);
     /* Keep the controls bar the TOPMOST sibling: on modern macOS the
      * vout's GL surface bleeds one bar-height below the video view
      * whatever the layer frames say; with the bar stacked above it the
@@ -1330,6 +1352,13 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
 
     [window center];
     [window makeKeyAndOrderFront:nil];
+
+    /* The playlist columns were sized against the width the table had before
+     * the split view laid it out, which left the last one (Duration) a few
+     * pixels wide. From 10.4 the next resize of the table hands the slack
+     * back to it; on 10.2 nothing resizes it again, so fit it once here, now
+     * that the window is up and the widths are the real ones. */
+    [playlistTable sizeLastColumnToFit];
 }
 
 - (void)mute:(id)sender      { [core toggleMute]; }
@@ -1357,8 +1386,8 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
      * around it (5 buttons) and turns backward/forward into plain seek
      * buttons (6-buttons artwork). */
     float x = 12;
-    [previousButton setHidden:!showJump];
-    [nextButton setHidden:!showJump];
+    VLCLegacySetViewHidden(previousButton, !showJump);
+    VLCLegacySetViewHidden(nextButton, !showJump);
     if (showJump) {
         [previousButton setFrame:NSMakeRect(x, 7, 29, 23)];
         x += 29;
@@ -1424,8 +1453,8 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
             : themedImage(@"playlist-1btn-pressed",
                           @"playlist-1btn-dark-pressed"),
         NSMakeSize(29, 23))];
-    [shuffleButton setHidden:!showPlaymode];
-    [repeatButton setHidden:!showPlaymode];
+    VLCLegacySetViewHidden(shuffleButton, !showPlaymode);
+    VLCLegacySetViewHidden(repeatButton, !showPlaymode);
     if (showPlaymode) {
         [repeatButton setFrame:NSMakeRect(x, 7, 28, 23)];
         x += 28;
@@ -1451,7 +1480,7 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
             : themedImage(@"fullscreen-one-button-pressed",
                           @"fullscreen-one-button-pressed_dark"),
         NSMakeSize(29, 23))];
-    [effectsButton setHidden:!showEffects];
+    VLCLegacySetViewHidden(effectsButton, !showEffects);
     if (showEffects) {
         [effectsButton setFrame:NSMakeRect(W - 63, 7, 29, 23)];
         [effectsButton setImage:VLCLegacyImageSized(
@@ -1598,9 +1627,9 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
 - (void)showPlaylistView
 {
     [window makeKeyAndOrderFront:nil];
-    if (videoActive && ![videoView isHidden]) {
-        [videoView setHidden:YES];
-        [splitView setHidden:NO];
+    if (videoActive && !VLCLegacyViewIsHidden(videoView)) {
+        VLCLegacySetViewHidden(videoView, YES);
+        VLCLegacySetViewHidden(splitView, NO);
     }
 }
 
@@ -1970,7 +1999,7 @@ static const struct {
     /* La lecture s'est vraiment arrêtée : la liste de lecture reprend sa place
      * (c'est ici, et non dans -releaseVideoView, puisque ce dernier peut n'être
      * qu'une transition entre deux vouts du même DVD). */
-    [splitView setHidden:NO];
+    VLCLegacySetViewHidden(splitView, NO);
     [window setHasShadow:YES];
 }
 
@@ -2024,11 +2053,16 @@ static const struct {
      * near the edges changes: with 25 GL frames a second that turns
      * every flush into a surface remap (io_connect_map_memory storm,
      * one windowed frame in three late). Classic Tiger video-player
-     * trick: drop the shadow while video plays. */
-    [window setHasShadow:NO];
+     * trick: drop the shadow while video plays.
+     * ⚠ Not below 10.3: there, a shadowless window that shrinks leaves its
+     * old pixels behind on the desktop -- the window server never repaints
+     * what it uncovered. The measurement that justifies dropping the shadow
+     * was made on 10.4 anyway. */
+    if (VLCLegacyOSVersionAtLeast(10, 3, 0))
+        [window setHasShadow:NO];
     [videoView setFrame:[splitView frame]];
-    [videoView setHidden:NO];
-    [splitView setHidden:YES];
+    VLCLegacySetViewHidden(videoView, NO);
+    VLCLegacySetViewHidden(splitView, YES);
     [window makeKeyAndOrderFront:nil];
     if (videoHostWindow) {
         /* Réutilisation : le masquage différé est annulé, la vidéo reprend dans
@@ -2040,7 +2074,16 @@ static const struct {
         [self syncVideoHostFrame];
         if (![videoHostWindow isVisible])
             [videoHostWindow orderFront:nil];
-    } else if (var_InheritBool(p_intf, "legacy-macosx-childvideo")) {
+    } else if (var_InheritBool(p_intf, "legacy-macosx-childvideo")
+            && VLCLegacyOSVersionAtLeast(10, 4, 0)) {
+        /* ⚠ Mesuré sur 10.2.1 : la fenêtre enfant se crée, se place et
+         * s'ordonne sans erreur, et n'affiche RIEN — le vout tourne (126
+         * images, ponctualité parfaite) dans une surface que le WindowServer
+         * ne compose pas. La même vidéo apparaît immédiatement dès que la vue
+         * reste dans la fenêtre principale. Le chantier F n'a jamais été
+         * validé ailleurs que sur 10.4 ; en dessous on garde le chemin
+         * classique, qui coûte une réouverture du vout au plein écran et
+         * rien d'autre. */
         [self openVideoHostWindow];
     }
     if (!videoHostWindow)
@@ -2055,7 +2098,7 @@ static const struct {
     if ([self videoIsFullscreen])
         [self setVideoFullscreenFromNumber:[NSNumber numberWithBool:NO]];
     videoActive = NO;
-    [videoView setHidden:YES];
+    VLCLegacySetViewHidden(videoView, YES);
     /* La fenêtre hôte SURVIT au vout : un DVD en recrée un à chaque transition
      * (menu → titre…) et la démonter à chaque fois la faisait clignoter. Elle
      * est seulement masquée, et encore, après un délai — annulé si une nouvelle
@@ -2069,7 +2112,7 @@ static const struct {
                    afterDelay:VLC_LEGACY_VIDEOHOST_HIDE_DELAY];
         return;                 /* splitView/ombre rétablis au vrai arrêt */
     }
-    [splitView setHidden:NO];
+    VLCLegacySetViewHidden(splitView, NO);
     [window setHasShadow:YES];
 }
 
@@ -2098,12 +2141,12 @@ static const struct {
         size.height = minSize.height - BOTTOM_BAR_HEIGHT;
     NSRect frame = [window frame];
     NSRect contentr =
-        [window contentRectForFrameRect:frame];
+        VLCLegacyContentRectForFrameRect(window, frame);
     float newHeight = size.height + BOTTOM_BAR_HEIGHT;
     contentr.origin.y += contentr.size.height - newHeight;
     contentr.size.width = size.width;
     contentr.size.height = newHeight;
-    NSRect newFrame = [window frameRectForContentRect:contentr];
+    NSRect newFrame = VLCLegacyFrameRectForContentRect(window, contentr);
 
     /* Keep the whole window (bottom bar included!) on the screen: a 720p
      * video on a 800px display would otherwise push the controls below
@@ -2256,6 +2299,7 @@ static const struct {
         [fsVideoWindow setReleasedWhenClosed:NO];
         [fsVideoWindow setAcceptsMouseMovedEvents:YES];
         [videoView retain];
+        preFullscreenVideoFrame = [videoView frame];   /* pour la restitution */
         [videoView removeFromSuperview];
         [videoView setFrame:[[fsVideoWindow contentView] bounds]];
         [[fsVideoWindow contentView] addSubview:videoView];
@@ -2270,7 +2314,17 @@ static const struct {
         [self closeBlackScreens];
         [videoView retain];
         [videoView removeFromSuperview];
-        [videoView setFrame:[splitView frame]];
+        /* ★ Restituer le cadre MÉMORISÉ à l'aller, et non celui du splitView :
+         * ce dernier avait rétréci entre-temps (1024x576 au démarrage de la
+         * vidéo, 690x404 à la sortie du plein écran), d'où une vidéo tassée
+         * dans un coin et le reste du cadre en blanc — le framebuffer OpenGL
+         * n'étant jamais peint quand le décodage matériel est en mode
+         * remplacement. */
+        if (preFullscreenVideoFrame.size.width > 0
+            && preFullscreenVideoFrame.size.height > 0)
+            [videoView setFrame:preFullscreenVideoFrame];
+        else
+            [videoView setFrame:[splitView frame]];
         /* re-insert BELOW the controls bar: appending it last would put
          * the GL surface back over the bar (the setupWindow stacking
          * fix would be undone on every fullscreen exit) */
@@ -2388,15 +2442,24 @@ static const struct {
     [self rebuildItemsSnapshot];
 }
 
+/* Only ever called on 10.2, where the search field is a plain NSTextField
+ * and would otherwise wait for Return: VLCLegacyMakeSearchField() makes us
+ * its delegate in that case and in no other. */
+- (void)controlTextDidChange:(NSNotification *)notification
+{
+    if ([notification object] == searchField)
+        [self searchChanged:searchField];
+}
+
 /* View toggle button: switch between video and playlist, like the 3.0
  * playlist button */
 - (void)toggleView:(id)sender
 {
     if (!videoActive)
         return;
-    BOOL showPlaylist = [videoView isHidden] == NO;
-    [videoView setHidden:showPlaylist];
-    [splitView setHidden:!showPlaylist];
+    BOOL showPlaylist = VLCLegacyViewIsHidden(videoView) == NO;
+    VLCLegacySetViewHidden(videoView, showPlaylist);
+    VLCLegacySetViewHidden(splitView, !showPlaylist);
 }
 
 - (void)openFiles:(id)sender
@@ -2663,26 +2726,21 @@ static const struct {
 
 - (void)deleteSelectedItems:(id)sender
 {
-    NSIndexSet *selection = [playlistTable selectedRowIndexes];
+    NSArray *selection = VLCLegacySelectedRows(playlistTable);
     if (![selection count])
         return;
 
     /* collect the ids first: the outline rows shift as nodes go away */
     NSMutableArray *ids = [NSMutableArray array];
-    unsigned row;
-    for (row = (unsigned)[selection firstIndex]; ;
-         row = (unsigned)[selection indexGreaterThanIndex:row]) {
-        if (row == (unsigned)NSNotFound)
-            break;
-        NSDictionary *entry = [playlistTable itemAtRow:(NSInteger)row];
+    unsigned i;
+    for (i = 0; i < [selection count]; i++) {
+        NSInteger row = (NSInteger)[[selection objectAtIndex:i] intValue];
+        NSDictionary *entry = [playlistTable itemAtRow:row];
         if (entry)
             [ids addObject:[entry objectForKey:@"id"]];
-        if (row == (unsigned)[selection lastIndex])
-            break;
     }
     playlist_t *p_playlist = pl_Get(p_intf);
     playlist_Lock(p_playlist);
-    unsigned i;
     for (i = 0; i < [ids count]; i++) {
         playlist_item_t *p_item = playlist_ItemGetById(p_playlist,
             [[ids objectAtIndex:i] intValue]);
@@ -2913,9 +2971,7 @@ static const struct {
             if (answer != NSAlertDefaultReturn) {
                 /* back to the playlist view */
                 sidebarSelection = 1;
-                [sidebarTable selectRowIndexes:
-                    [NSIndexSet indexSetWithIndex:1]
-                          byExtendingSelection:NO];
+                VLCLegacySelectRow(sidebarTable, 1);
                 [self rebuildItemsSnapshot];
                 return;
             }
@@ -3529,8 +3585,8 @@ static const struct {
                 objectForKey:@"kind"] isEqualToString:@"playlist"];
     BOOL showDropzone = [items count] == 0 && isPlaylistView
                      && ![searchString length];
-    [dropzoneView setHidden:!showDropzone];
-    [playlistScroll setHidden:showDropzone];
+    VLCLegacySetViewHidden(dropzoneView, !showDropzone);
+    VLCLegacySetViewHidden(playlistScroll, showDropzone);
 }
 
 /* cover art of the playing item at the bottom of the sidebar (the same
@@ -3596,7 +3652,7 @@ static const struct {
     }
 
     /* shuffle/repeat artwork tracks the playlist state (3.0 look) */
-    if (![shuffleButton isHidden]) {
+    if (!VLCLegacyViewIsHidden(shuffleButton)) {
         BOOL shuffleOn = [core playlistBool:"random"];
         if (shuffleOn != lastShuffleOn) {
             lastShuffleOn = shuffleOn;

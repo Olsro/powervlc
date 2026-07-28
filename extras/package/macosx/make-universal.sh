@@ -105,15 +105,18 @@ if [ -f "$UNIICON" ] && [ -d "$OUT/Contents/Resources" ]; then
 fi
 
 # the Info.plist came from the FIRST input: relax the launch gate so the
-# oldest supported release accepts the bundle, with per-architecture
-# minimums for LaunchServices that understand them
+# oldest supported release accepts the bundle (10.2, the PowerPC floor), with
+# per-architecture minimums for LaunchServices that understand them
 PLIST="$OUT/Contents/Info.plist"
 if [ -f "$PLIST" ]; then
     PB=/usr/libexec/PlistBuddy
-    $PB -c "Set :LSMinimumSystemVersion 10.4" "$PLIST" 2>/dev/null || true
+    $PB -c "Set :LSMinimumSystemVersion 10.2" "$PLIST" 2>/dev/null || true
     $PB -c "Delete :LSMinimumSystemVersionByArchitecture" "$PLIST" 2>/dev/null || true
     $PB -c "Add :LSMinimumSystemVersionByArchitecture dict" "$PLIST" 2>/dev/null && {
-        $PB -c "Add :LSMinimumSystemVersionByArchitecture:ppc string 10.4.0" "$PLIST"
+        # Every PowerPC slice (G3/G4/G4e/G5) is built with
+        # -mmacosx-version-min=10.2 and carries the Jaguar compatibility
+        # layer, so LaunchServices may offer the bundle from 10.2 on.
+        $PB -c "Add :LSMinimumSystemVersionByArchitecture:ppc string 10.2.0" "$PLIST"
         $PB -c "Add :LSMinimumSystemVersionByArchitecture:i386 string 10.4.4" "$PLIST"
         # x86_64 gate is 10.6, NOT 10.5.8, on purpose: the Intel 64-bit slice
         # is built by the modern Xcode toolchain and its Mach-Os carry
@@ -176,8 +179,21 @@ if [ -f "$REALBIN" ] && [ -f "$STUBSRC" ]; then
         for K in $TARGETS; do
             OBJ="$TD/stub.$K"
             case "$K" in
-                i386)   "$CC_I386" -arch i386 -O2 -o "$OBJ" "$STUBSRC" 2>/dev/null || OK=no ;;
-                ppc)    "$CC_PPC"  -arch ppc  -O2 -o "$OBJ" "$STUBSRC" 2>/dev/null || OK=no ;;
+                # ⚠ The deployment target MUST be stated. Left implicit, the
+                # Tiger cross-GCC defaults to 10.4 and the PowerPC stub comes
+                # out referencing `_snprintf$LDBL128` -- the 128-bit long-double
+                # variant that only exists from 10.4 on. The bundle then dies at
+                # launch on Jaguar with "undefined reference to
+                # _snprintf$LDBL128", even though every real slice was built
+                # for 10.2: the two-line trampoline was the whole problem.
+                i386)   "$CC_I386" -arch i386 -mmacosx-version-min=10.4 \
+                            -O2 -o "$OBJ" "$STUBSRC" 2>/dev/null || OK=no ;;
+                # -lSystemStubs: below 10.4 the SDK redirects the printf family
+                # to `_<fn>$LDBLStub`, which lives in that static library and
+                # nowhere else -- without it the stub does not even link.
+                ppc)    "$CC_PPC"  -arch ppc  -mmacosx-version-min=10.2 \
+                            -O2 -o "$OBJ" "$STUBSRC" -lSystemStubs \
+                            2>/dev/null || OK=no ;;
                 x86_64) xcrun clang -arch x86_64 -mmacosx-version-min=10.4 -O2 -o "$OBJ" "$STUBSRC" 2>/dev/null || OK=no ;;
                 arm64)  xcrun clang -arch arm64  -mmacosx-version-min=11.0 -O2 -o "$OBJ" "$STUBSRC" 2>/dev/null || OK=no ;;
                 *)      OK=no ;;

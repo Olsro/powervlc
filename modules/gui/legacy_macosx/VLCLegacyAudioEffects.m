@@ -23,6 +23,7 @@
 #endif
 
 #import "VLCLegacyAudioEffects.h"
+#import "misc.h"
 #import "VLCLegacyCoreInteraction.h"
 
 #include <vlc_playlist.h>
@@ -342,7 +343,7 @@ static const struct {
             frame:NSMakeRect(x - 6, 8, 62, 42) bold:NO in:pane];
         [caption setAlignment:NSCenterTextAlignment];
         [[caption cell] setWraps:YES];
-        [[caption cell] setLineBreakMode:NSLineBreakByWordWrapping];
+        VLCLegacySetCellLineBreakMode([caption cell], NSLineBreakByWordWrapping);
     }
 
     return pane;

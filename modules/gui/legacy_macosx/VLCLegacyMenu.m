@@ -188,8 +188,7 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
                                                    action:@selector(inputDependentParent:)
                                             keyEquivalent:@""] autorelease];
     [item setTarget:self];
-    NSMenu *menu = [[[NSMenu alloc] initWithTitle:title] autorelease];
-    [menu setDelegate:(id)self];
+    NSMenu *menu = VLCLegacyMakeDynamicMenu(title, self);
     [item setSubmenu:menu];
     [parent addItem:item];
     return menu;
@@ -371,9 +370,7 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
                action:@selector(extensionsParent:)
         keyEquivalent:@""] autorelease];
     [extensionsItem setTarget:self];
-    extensionsMenu = [[[NSMenu alloc] initWithTitle:_NS("Extensions")]
-        autorelease];
-    [extensionsMenu setDelegate:(id)self];
+    extensionsMenu = VLCLegacyMakeDynamicMenu(_NS("Extensions"), self);
     [extensionsItem setSubmenu:extensionsMenu];
     [appMenu addItem:extensionsItem];
     [self addItemTo:appMenu title:_NS("Addons Manager")
@@ -381,10 +378,10 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     [appMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *addIntfItem = [[[NSMenuItem alloc]
         initWithTitle:_NS("Add Interface")
-               action:nil keyEquivalent:@""] autorelease];
-    addInterfaceMenu = [[[NSMenu alloc]
-        initWithTitle:_NS("Add Interface")] autorelease];
-    [addInterfaceMenu setDelegate:(id)self];
+               action:@selector(dynamicSubmenuParent:)
+        keyEquivalent:@""] autorelease];
+    [addIntfItem setTarget:self];
+    addInterfaceMenu = VLCLegacyMakeDynamicMenu(_NS("Add Interface"), self);
     [addIntfItem setSubmenu:addInterfaceMenu];
     [appMenu addItem:addIntfItem];
     [appMenu addItem:[NSMenuItem separatorItem]];
@@ -423,12 +420,12 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
              action:@selector(openCapture:) key:@"r"];
     /* separators and ordering cloned from the 3.0 MainMenu.xib */
     [fileMenu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *recentItem = [fileMenu addItemWithTitle:_NS("Open Recent")
-                                                 action:nil
-                                          keyEquivalent:@""];
-    recentMenu = [[[NSMenu alloc] initWithTitle:_NS("Open Recent")]
-        autorelease];
-    [recentMenu setDelegate:(id)self];
+    NSMenuItem *recentItem = [fileMenu
+        addItemWithTitle:_NS("Open Recent")
+                  action:@selector(dynamicSubmenuParent:)
+           keyEquivalent:@""];
+    [recentItem setTarget:self];
+    recentMenu = VLCLegacyMakeDynamicMenu(_NS("Open Recent"), self);
     [recentItem setSubmenu:recentMenu];
     [fileMenu addItem:[NSMenuItem separatorItem]];
     [fileMenu addItemWithTitle:_NS("Close Window")
@@ -576,10 +573,10 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     [playMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *rendererItem = [[[NSMenuItem alloc]
         initWithTitle:_NS("Renderer")
-               action:nil keyEquivalent:@""] autorelease];
-    rendererMenu = [[[NSMenu alloc] initWithTitle:_NS("Renderer")]
-        autorelease];
-    [rendererMenu setDelegate:(id)self];
+               action:@selector(dynamicSubmenuParent:)
+        keyEquivalent:@""] autorelease];
+    [rendererItem setTarget:self];
+    rendererMenu = VLCLegacyMakeDynamicMenu(_NS("Renderer"), self);
     [rendererItem setSubmenu:rendererMenu];
     [playMenu addItem:rendererItem];
     programMenu = [self addDynamicMenuTo:playMenu title:_NS("Program")];
@@ -611,10 +608,10 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     [audioMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *audioDeviceItem = [[[NSMenuItem alloc]
         initWithTitle:_NS("Audio Device")
-               action:nil keyEquivalent:@""] autorelease];
-    audioDeviceMenu = [[[NSMenu alloc] initWithTitle:_NS("Audio Device")]
-        autorelease];
-    [audioDeviceMenu setDelegate:(id)self];
+               action:@selector(dynamicSubmenuParent:)
+        keyEquivalent:@""] autorelease];
+    [audioDeviceItem setTarget:self];
+    audioDeviceMenu = VLCLegacyMakeDynamicMenu(_NS("Audio Device"), self);
     [audioDeviceItem setSubmenu:audioDeviceMenu];
     [audioMenu addItem:audioDeviceItem];
 
@@ -1424,9 +1421,43 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
                    [[sender representedObject] UTF8String], [sender tag]);
 }
 
+/* debug: exercise the very call AppKit makes before showing a menu, and
+ * report what each dynamic submenu ends up containing. VLC_LEGACY_SHOW /
+ * legacy-macosx-show = "menucheck". */
+- (void)debugDumpDynamicMenus
+{
+    struct { const char *name; NSMenu *menu; } dyn[8] = {
+        { "audioDevice",  audioDeviceMenu },
+        { "renderer",     rendererMenu },
+        { "extensions",   extensionsMenu },
+        { "addInterface", addInterfaceMenu },
+        { "recent",       recentMenu },
+        { "crop",         cropMenu },
+        { "title",        titleMenu },
+        { "chapter",      chapterMenu },
+    };
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        if (dyn[i].menu == nil)
+            continue;
+        [dyn[i].menu update];
+        msg_Info(p_intf, "menucheck: %s -> %d entrée(s)", dyn[i].name,
+                 (int)[dyn[i].menu numberOfItems]);
+    }
+}
+
 /* Never fired (the items carry submenus); exists so validateMenuItem:
  * can gray those entries without a playing input */
 - (void)inputDependentParent:(id)sender
+{
+}
+
+/* Never fired either. It marks the items whose submenu is rebuilt on the
+ * fly, and it exists because AppKit only validates items that HAVE an
+ * action -- which is how those submenus get refreshed where NSMenu has no
+ * delegate (see -validateMenuItem:). Always enabled. */
+- (void)dynamicSubmenuParent:(id)sender
 {
 }
 
@@ -1557,6 +1588,9 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
 {
     SEL action = [item action];
     playlist_t *p_playlist = pl_Get(p_intf);
+
+    if (action == @selector(dynamicSubmenuParent:))
+        return YES;
     const char *name = NULL;
     if (action == @selector(toggleRandom:))
         name = "random";

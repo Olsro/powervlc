@@ -20,6 +20,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <sys/time.h>
+#include <sys/utsname.h>
 #include <ApplicationServices/ApplicationServices.h>
 #include <IOKit/IOKitLib.h>
 
@@ -300,6 +301,7 @@ struct dvddriver_ctx
     pthread_cond_t  surf_cv;
     unsigned        n_surf_wait;     /* diagnostics : attentes de surface */
 
+
     /* ⚠ DURÉE DE VIE. Les picture_context_t de VLC survivent au décodeur : à
      * l'arrêt en cours de lecture, VLC détruit des contextes APRÈS le
      * CloseDecoder, et chacun appelle dvddriver_surface_release() sur ce ctx.
@@ -421,6 +423,52 @@ static void dd_recycle_locked(dvddriver_ctx *ctx, int keep)
  * Le bundle ATIRadeonDVDDriver se charge ET un service "ATIRadeon" existe. */
 bool dvddriver_available(void)
 {
+    /* Reverse-engineered and validated on Darwin 8 (Mac OS X 10.4) with an
+     * RV200. Enabling it on hardware it had not been reversed for has
+     * already WEDGED a GPU once (the RV280 of the Mac mini G4, 2026-07-23:
+     * the machine needed a full power cycle), so the rule stands -- only
+     * what has been checked runs.
+     *
+     * Mac OS X 10.2 ships its own build of ATIRadeonDVDDriver.bundle (Oct
+     * 2002, 51320 bytes). Checked before opening it up, by disassembly:
+     *   - the same 26 entry points, DVDDriverOpenDevice/Decode included;
+     *   - DVDDriverDecode(ctx, pic, rect) still reads the rect as four
+     *     int16, the picture type at pic[2] and the buffer pointers from
+     *     pic[0x10] onwards -- the argument contract this code depends on;
+     *   - an IOKit service of class ATIRadeon is present.
+     * What did NOT survive is the PRIVATE context layout: the subpicture
+     * plane pokes ctx[0x1C4], ctx[0x1FC], ctx[0x2D4+4i], offsets read off
+     * the 10.4 binary, and "452(" does not appear once in the 10.2 one --
+     * hence the sp_available gate in dvddriver_open().
+     *
+     * ⚠ OFF BY DEFAULT below Darwin 8 all the same, and this is not caution
+     * but measurement: the decoder opens and decodes there (18-22 ms per
+     * picture, well inside the 40 ms budget), but the vout never presents
+     * its surface -- the picture reaches it with no hardware context -- so
+     * the image is refreshed by the driver's own buffer recycling instead,
+     * with no PTS pacing and at the wrong place on screen. Playback is
+     * JERKIER than the plain CPU path and leaves a stray window. Until the
+     * present path is wired, 10.2 keeps the CPU decoder.
+     * Set /tmp/hw_jaguar to 1 to try it anyway (same idiom as
+     * /tmp/hw_force and /tmp/hw_carbon in libmpeg2.c). */
+    {
+        struct utsname uts;
+
+        if (uname(&uts) == 0 && atoi(uts.release) > 0 && atoi(uts.release) < 8)
+        {
+            FILE *f = fopen("/tmp/hw_jaguar", "r");
+            int on = 0;
+
+            if (f != NULL)
+            {
+                if (fscanf(f, "%d", &on) != 1)
+                    on = 0;
+                fclose(f);
+            }
+            if (!on)
+                return false;
+        }
+    }
     void *dl = dlopen(ATI_BUNDLE, RTLD_NOW | RTLD_LOCAL);
     if (dl == NULL)
         return false;
@@ -473,7 +521,27 @@ dvddriver_ctx *dvddriver_open(unsigned width, unsigned height, int display_mode,
     if (as == NULL)
         return NULL;
 
+    /* CGSMainConnectionID() is 10.3. Jaguar's CoreGraphics exports neither it
+     * nor CGSDefaultConnection; what it has is CGSGetActiveConnection(), the
+     * older way of asking for the connection the WindowServer already gave
+     * this process. Everything else of the surface API -- CGSAddSurface,
+     * CGSBindSurface, CGSSetSurfaceBounds, CGSOrderSurface, CGSFlushSurface
+     * -- is present in the 10.2 build, checked symbol by symbol. */
+    /* Ce que fait le CLIENT D'APPLE, relevé sur 10.2 : DVDPlayback.framework
+     * (embarqué dans DVD Player.app, c'est lui et non l'application qui pilote
+     * ce driver) n'importe NI CGSMainConnectionID NI CGSGetConnectionIDForPSN.
+     * Il demande GetCGSConnectionID(), exporté par QD -- un sous-framework
+     * d'ApplicationServices, d'où l'importance du repli dlsym de dlcompat.c.
+     * Désassemblé : aucun argument, la connexion revient dans r3 depuis un
+     * global qu'INIT_CGSSupport remplit au premier appel. C'est la connexion
+     * DU PROCESSUS quel que soit le thread appelant -- exactement ce que
+     * réclament les appels de surface, et sans le détour par le PSN. */
+    int (*QDConnID)(void)                      = CGS_SYM(as, "GetCGSConnectionID");
     int (*MainConn)(void)                      = CGS_SYM(as, "CGSMainConnectionID");
+    int (*ActiveConn)(int *)                   = CGS_SYM(as, "CGSGetActiveConnection");
+    int (*NewConn)(int, int *)                 = CGS_SYM(as, "CGSNewConnection");
+    int (*ConnForPSN)(int, const uint32_t *, int *)
+                                 = CGS_SYM(as, "CGSGetConnectionIDForPSN");
     int (*NewRegion)(const CGRect *, void **)  = CGS_SYM(as, "CGSNewRegionWithRect");
     int (*NewWindow)(int, int, float, float, void *, int *) = CGS_SYM(as, "CGSNewWindow");
     int (*AddSurf)(int, int, int *)            = CGS_SYM(as, "CGSAddSurface");
@@ -484,10 +552,49 @@ dvddriver_ctx *dvddriver_open(unsigned width, unsigned height, int display_mode,
     int (*WinList)(int, int, int, int *, int *) = CGS_SYM(as, "CGSGetOnScreenWindowList");
     int (*WinBounds)(int, int, CGRect *)       = CGS_SYM(as, "CGSGetWindowBounds");
     s_CGSBindSurface = (int (*)(int,int,int,int,int,uint32_t)) CGS_SYM(as, "CGSBindSurface");
-    if (MainConn == NULL || AddSurf == NULL || s_CGSBindSurface == NULL)
+    if ((MainConn == NULL && ActiveConn == NULL && NewConn == NULL)
+     || AddSurf == NULL || s_CGSBindSurface == NULL)
         goto err_as;
 
-    int cid = MainConn();
+    int cid = 0;
+
+    /* Mac OS X 10.2 has no CGSMainConnectionID(), and its CGS connections are
+     * per-thread: from the decoder thread CGSGetActiveConnection() answers
+     * kCGErrorInvalidConnection (1002). A connection made here with
+     * CGSNewConnection() is valid but owns no window, and CGSAddSurface() on
+     * the VLC window then answers kCGErrorIllegalArgument (1001) -- measured,
+     * both of them. What is needed is the connection of THIS PROCESS, the one
+     * AppKit's main thread opened, and CGSGetConnectionIDForPSN() maps it
+     * from the process serial number. Its three arguments were read off the
+     * disassembly: (connection, ProcessSerialNumber *, out). */
+    if (QDConnID != NULL)
+        cid = QDConnID();
+
+    if (cid == 0 && MainConn != NULL)
+        cid = MainConn();
+
+    if (cid == 0 && NewConn != NULL && NewConn(0, &cid) != 0)
+        cid = 0;
+
+    /* Repli seulement : avec GetCGSConnectionID() la connexion est déjà la
+     * bonne, et repasser par le PSN la remplacerait par une autre. */
+    if (QDConnID == NULL && ConnForPSN != NULL) {
+        void *carbon_psn = dlopen(CARBON_FW, RTLD_NOW | RTLD_GLOBAL);
+
+        if (carbon_psn != NULL) {
+            int (*GetCurProc)(uint32_t *) = CGS_SYM(carbon_psn,
+                                                    "GetCurrentProcess");
+            uint32_t psn[2] = { 0, 0 };
+            int app_cid = 0;
+
+            if (GetCurProc != NULL && GetCurProc(psn) == 0
+             && ConnForPSN(cid, psn, &app_cid) == 0 && app_cid != 0)
+                cid = app_cid;
+        }
+    }
+
+    if (cid == 0 && ActiveConn != NULL && ActiveConn(&cid) != 0)
+        cid = 0;
     if (cid == 0)
         goto err_as;                     /* pas de connexion WindowServer */
 
@@ -640,6 +747,7 @@ dvddriver_ctx *dvddriver_open(unsigned width, unsigned height, int display_mode,
      * +1 dans tous les cas. */
     if (on_screen && OrderSurf)
         OrderSurf(cid, wid, sid, 1, 0);
+
     (void) subs_overlay;
     /* Niveau de fenêtre. ⚠ INTÉGRATION UI (Option A) EN COURS : l'idéal serait un
      * niveau JUSTE sous le FSPanel de contrôles (NSFloatingWindowLevel=3) pour laisser
@@ -732,6 +840,21 @@ dvddriver_ctx *dvddriver_open(unsigned width, unsigned height, int display_mode,
     for (int i = 0; i < 4; i++) ctx->open_dims[i] = ctx_dims_out[i];
     ctx->sp_available = (ctx->GetSPBuffer && ctx->SetSPBuffer && ctx->ShowSPBuffer
                          && ctx->SetSPPalette && ctx->EnableSP);
+
+    /* The hardware subpicture plane addresses the driver's private context
+     * by offsets taken from the 10.4 build of the bundle. The 10.2 build is
+     * a different one and does not share them -- the ctx[0x1C4] display flag
+     * that makes the whole thing work is not even referenced there. Reading,
+     * let alone writing, at those offsets on 10.2 would be poking at
+     * whatever happens to live there. Subtitles fall back to the CPU path;
+     * the decoder itself, which only uses the exported entry points, stays
+     * on. */
+    {
+        struct utsname uts;
+
+        if (uname(&uts) == 0 && atoi(uts.release) > 0 && atoi(uts.release) < 8)
+            ctx->sp_available = false;
+    }
     if (ctx->sp_available && ctx->dev_ctx) {
         uint32_t a[8], bb[8];
         memset(a, 0, sizeof(a)); memset(bb, 0, sizeof(bb));
@@ -866,26 +989,53 @@ unsigned dvddriver_encode_block(const int16_t *dctblock, const uint8_t *scan,
 {
     int last = -1;
     unsigned n = 0;
-    for (int zz = 0; zz < 64; zz++) {
+    /* ★ PERF — sortir les zéros AVANT tout calcul. Mesuré sur le DVD de Chihiro
+     * (720x576) : une picture I coûtait 76 ms pour un budget de 40, une toutes
+     * les 9 images, soit précisément les 10 % d'images manquantes (22,6 des
+     * 25 im/s). Une I porte 1620 macroblocs tous intra = 9720 blocs = 622 000
+     * coefficients, et la boucle faisait pour CHACUN une division arrondie avec
+     * branchement puis un memcpy de deux octets — alors que la grande majorité
+     * sont nuls et ne produisent rien. Seul le coefficient DC doit être traité
+     * même nul : le recentrage chroma peut le rendre non nul. */
+    {
+        int v0 = dctblock[scan[0]];
+        v0 = (v0 >= 0) ? (v0 + 8) / 16 : -(((-v0) + 8) / 16);
+        v0 -= dc_bias;
+        if (v0 != 0) {
+            if (v0 > 2047) v0 = 2047; else if (v0 < -2047) v0 = -2047;
+            out[0] = 0;                      /* run : premier coefficient */
+            out[1] = 0;
+            int16_t lv0 = (int16_t) v0;
+            memcpy(out + 2, &lv0, sizeof lv0);   /* ordre-octet NATIF */
+            out += 4;
+            n++;
+            last = 0;
+        }
+    }
+    for (int zz = 1; zz < 64; zz++) {
         int v = dctblock[scan[zz]];
+        if (v == 0)
+            continue;              /* ni division, ni branchement, ni écriture */
         /* libmpeg2 travaille dans une échelle 16× celle attendue par le driver
          * (son iDCT veut pixel=DC/128, neutre DC=16384=128*128 ; le driver veut
          * pixel=DC/8, neutre 1024 — validé au harnais). On ramène chaque coeff à
          * l'échelle driver en divisant par 16 (arrondi au plus proche). Sans ça :
          * luma 16× surexposé + chroma jamais recentrable → contours magenta. */
         v = (v >= 0) ? (v + 8) / 16 : -(((-v) + 8) / 16);
-        if (zz == 0)
-            v -= dc_bias;                                  /* recentrage DC chroma (échelle driver) */
         if (v != 0) {
             if (v >  2047) v =  2047;                       /* borne coeff driver (12 bits signés) */
             else if (v < -2047) v = -2047;
-            int16_t lv = (int16_t) v;
             out[0] = (uint8_t)(zz - last - 1);            /* run (écart zigzag) */
             out[1] = 0;                                    /* pad */
             /* level : i16 en ordre-octet NATIF (big-endian sur PPC), comme le
              * driver et le harnais ati_carbon.c (qui stockait un int16_t natif).
              * Un octet-à-octet little-endian inverse les octets sur le G3 →
-             * coefficients corrompus → bruit à l'écran. */
+             * coefficients corrompus → bruit à l'écran.
+             * ⚠ GARDER memcpy : écrire par `*(int16_t *)(out + 2)` dans un
+             * tampon manipulé en uint8_t viole l'aliasing strict — essayé, GCC 13
+             * a produit un flux que le GPU n'a pas digéré et DVDDriverDecode
+             * s'est bloqué à répétition (garde-fou anti-wedge déclenché). */
+            int16_t lv = (int16_t) v;
             memcpy(out + 2, &lv, sizeof lv);
             out += 4;
             n++;
@@ -912,9 +1062,17 @@ static int dd_pick_output(dvddriver_ctx *ctx)
     for (int attempt = 0; attempt < 6 && sel < 0 && !ctx->closed; attempt++) {
         for (int k = 1; k <= 5; k++) {
             int s = (ctx->rr_out + k) % 5;
+            /* ★ Ne JAMAIS choisir la surface actuellement à l'écran. Elle
+             * n'était protégée que tant que VLC détenait sa picture ; dès la
+             * destruction du contexte, `surf_hold` retombe à 0 et l'image
+             * suivante se décodait PAR-DESSUS celle en cours de balayage.
+             * Mesuré : 59 surfaces présentées deux fois de suite sur 1441
+             * (≈ une par seconde) — invisible pour l'histogramme de cadence,
+             * mais bien visible à l'œil, la première image n'ayant qu'un cycle
+             * pour être composée avant d'être écrasée. */
             if (s != ctx->ref_idx[0] && s != ctx->ref_idx[1]
                 && ctx->surf_hold[s] == 0) {
-                sel = s;
+                    sel = s;
                 break;
             }
         }
@@ -1202,6 +1360,26 @@ void dvddriver_picture_mb_end(dvddriver_ctx *ctx)
         ctx->mb_index++;
 }
 
+/* Type de picture tel que le backend l'a mémorisé au dernier picture_begin.
+ * Diagnostic : s'il diffère de celui que libmpeg2 croit soumettre, c'est qu'un
+ * picture_begin s'est glissé entre la capture et la soumission — et il remet
+ * mb_index à zéro, d'où un [0/nb_mbs] alors que les macroblocs ont bien été vus. */
+
+
+/* Nombre de fois où le décodeur a dû ATTENDRE qu'une surface GPU se libère.
+ * Le pool est de 5, mais les deux références en occupent deux : il n'en reste
+ * que TROIS pour la sortie, et chacune reste prise tant que VLC détient la
+ * picture. Si ce compteur monte, le décodeur est cadencé par l'affichage et ne
+ * peut plus tenir le débit de la source. */
+
+unsigned dvddriver_surf_waits(const dvddriver_ctx *ctx)
+{
+    return (ctx != NULL) ? ctx->n_surf_wait : 0;
+}
+
+
+
+
 void dvddriver_last_progress(const dvddriver_ctx *ctx, unsigned *captured,
                              unsigned *total)
 {
@@ -1222,6 +1400,7 @@ uint8_t dvddriver_cbp_from_libmpeg2(unsigned mpeg2_cbp)
  * -4 = matériel abandonné après stalls répétés, l'appelant doit repasser CPU). */
 int dvddriver_picture_submit(dvddriver_ctx *ctx)
 {
+
     if (ctx->dev_ctx == NULL || ctx->Decode == NULL)
         return -1;
     if (ctx->gpu_disabled)

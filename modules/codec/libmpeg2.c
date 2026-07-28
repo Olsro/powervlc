@@ -42,6 +42,7 @@
 #include <assert.h>
 
 #include <vlc_common.h>
+#include <sys/time.h>
 #include <vlc_plugin.h>
 #include <vlc_codec.h>
 #include <vlc_block_helper.h>
@@ -301,7 +302,13 @@ vlc_module_begin ()
      * field du GPU qu'il faut alimenter correctement (le lecteur DVD d'Apple lit
      * ces disques proprement sur ce même matériel : le moteur fonctionne).
      * Voir doc/pb-offload/phase2-field-findings.md. */
-    add_integer( "mpeg2-hwaccel-field", 1, MPEG2_HWACCEL_FIELD_TEXT,
+    /* Défaut 4 (prédiction frame équivalente) et non 1 (moteur field brut) :
+     * le commentaire de dvddriver_picture_mb_begin l'annonçait déjà comme le
+     * défaut voulu pour l'entrelacé, mais l'option était restée à 1. Mesuré sur
+     * le DVD de Chihiro (iBook G3, 10.2) : images affichées par tranche de 5 s
+     * 113-116 → 117-121, retard moyen 1-2 ms → 0,3-0,6 ms, et surtout PIRE
+     * retard 40 ms → 5 ms, ce qui est précisément la régularité qui manquait. */
+    add_integer( "mpeg2-hwaccel-field", 4, MPEG2_HWACCEL_FIELD_TEXT,
                  MPEG2_HWACCEL_FIELD_LONGTEXT, true )
         change_integer_range( 0, 4 )
         change_private()
@@ -413,6 +420,8 @@ static int OpenDecoder( vlc_object_t *p_this )
      * matériel, donc toujours après. Ici, seulement l'existence + un défaut sûr. */
     var_Create( p_dec->obj.libvlc, DVDDRIVER_VAR_SUBS,    VLC_VAR_BOOL );
     var_SetBool( p_dec->obj.libvlc, DVDDRIVER_VAR_SUBS,   false );
+    var_Create( p_dec->obj.libvlc, DVDDRIVER_VAR_HOLD,    VLC_VAR_BOOL );
+    var_SetBool( p_dec->obj.libvlc, DVDDRIVER_VAR_HOLD,   false );
     msg_Dbg( p_dec, "décodage MPEG-2 matériel (ATI DVDDriver) : %s",
              p_sys->b_hwaccel ? "disponible, sera tenté" : "non (repli libmpeg2 CPU)" );
 #endif
@@ -669,6 +678,8 @@ static bool HwOpenContext( decoder_t *p_dec, int i_replace )
      * au premier present matériel, qui ne peut avoir lieu qu'après ces deux-là. */
     var_SetBool( p_dec->obj.libvlc, DVDDRIVER_VAR_SUBS, b_subs );
     var_SetAddress( p_dec->obj.libvlc, DVDDRIVER_VAR_CTX,     p_sys->p_hw );
+    /* Le nouveau contexte est publié : le vout peut se remettre à afficher. */
+    var_SetBool( p_dec->obj.libvlc, DVDDRIVER_VAR_HOLD, false );
     var_SetAddress( p_dec->obj.libvlc, DVDDRIVER_VAR_PRESENT, (void *)HwPresentCallback );
     msg_Info( p_dec, "décodage MPEG-2 matériel ATI actif (%ux%u)%s%s%s",
               p_seq->width, p_seq->height,
@@ -970,6 +981,10 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                              p_sys->i_hw_wid, i_wid_now );
                     mpeg2_hwaccel( p_sys->p_mpeg2dec, NULL );
                     mpeg2_set_hw_replace( 0 );
+                    /* Suspendre l'affichage AVANT de dépublier le contexte :
+                     * les pictures déjà en file chez le vout portent encore un
+                     * contexte matériel mais ne pourront plus être présentées. */
+                    var_SetBool( p_dec->obj.libvlc, DVDDRIVER_VAR_HOLD, true );
                     var_SetAddress( p_dec->obj.libvlc, DVDDRIVER_VAR_CTX, NULL );
                     dvddriver_close( p_sys->p_hw );
                     p_sys->p_hw = NULL;
@@ -1210,6 +1225,17 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
 
             mpeg2_skip( p_sys->p_mpeg2dec, p_pic == NULL );
             p_sys->b_skip = p_pic == NULL;
+#ifdef __APPLE__
+            /* Picture sautée par le synchro : libmpeg2 ne décodera pas ses
+             * slices, donc aucun macrobloc n'arrivera aux hooks. La soumettre
+             * quand même produisait un DVDDriverDecode rc=-2 [0/nb_mbs] et lui
+             * attachait un contexte matériel invalide — 174 fois sur 1208
+             * pictures en 45 s, presque toutes des B. Rien à décoder, rien à
+             * afficher : on désarme la picture matérielle. (Les B ne servent de
+             * référence à personne, la chaîne GPU reste intacte.) */
+            if( p_sys->b_skip )
+                p_sys->b_hw_picture = false;
+#endif
             if( p_pic != NULL )
                 decoder_SynchroDecode( p_sys->p_synchro );
             else
@@ -1482,6 +1508,8 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                               "%lu us/appel | present périmés %u",
                               n_d, us_d, n_d ? us_d / n_d : 0,
                               n_p, us_p, n_p ? us_p / n_p : 0, n_st );
+                    msg_Dbg( p_dec, "PERF HW : attentes de surface GPU=%u",
+                             dvddriver_surf_waits( p_sys->p_hw ) );
                     msg_Dbg( p_dec, "PERF HW : rappels de present reçus du vout=%u",
                              g_hw_cb_calls );
                     unsigned mb8[8] = {0}, dct2[2] = {0}, cvt2[2] = {0};
@@ -1502,6 +1530,22 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
             {
                 p_pic = p_sys->p_info->display_fbuf->id;
 
+#ifdef __APPLE__
+                /* ★ TROU DE RÉOUVERTURE (bascule plein écran ⇄ fenêtré). Le
+                 * décodeur matériel vient d'être fermé et sera rouvert à la
+                 * prochaine image I. Dans l'intervalle le décodage repasse au CPU
+                 * — mais en mode REMPLACEMENT les plans logiciels des références
+                 * n'ont JAMAIS été reconstruits : ces P/B sont prédites à partir
+                 * de rien et sortent en bouillie (l'écran vert et les glitchs vus
+                 * à la bascule). Elles n'ont aucune valeur : on les jette et la
+                 * dernière image correcte reste affichée le temps du trou. */
+                if( p_sys->b_hw_reopen )
+                {
+                    DpbUnlinkPicture( p_dec, p_pic );
+                    p_pic = NULL;
+                }
+                else
+#endif
                 if( DpbDisplayPicture( p_dec, p_pic ) )
                     p_pic = NULL;
 
@@ -1672,8 +1716,17 @@ static picture_t *GetNewPicture( decoder_t *p_dec )
     if( p_pic == NULL )
         return NULL;
 
-    p_pic->b_progressive = p_sys->p_info->current_picture != NULL ?
-        p_sys->p_info->current_picture->flags & PIC_FLAG_PROGRESSIVE_FRAME : 1;
+    /* In hardware replacement mode the GPU's field engine has already woven
+     * the two fields: the picture that comes out is progressive, and saying
+     * otherwise makes the core insert a software deinterlace filter. That
+     * filter costs a good part of a G3 -- and, worse, it hands the vout NEW
+     * pictures, which carry no hardware picture context: the vout then never
+     * presents the GPU surface (measured on 10.2: "present matériel non
+     * engagé ... context=0x0", 800 pictures in a row). */
+    p_pic->b_progressive = ( p_sys->b_hwaccel && p_sys->p_hw != NULL ) ? true
+        : ( p_sys->p_info->current_picture != NULL ?
+            p_sys->p_info->current_picture->flags & PIC_FLAG_PROGRESSIVE_FRAME
+          : 1 );
     p_pic->b_top_field_first = p_sys->p_info->current_picture != NULL ?
         p_sys->p_info->current_picture->flags & PIC_FLAG_TOP_FIELD_FIRST : 1;
     p_pic->i_nb_fields = p_sys->p_info->current_picture != NULL ?

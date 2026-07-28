@@ -48,6 +48,7 @@
 #include <vlc_opengl.h>
 #include <vlc_dialog.h>
 #include "opengl/vout_helper.h"
+#include "cgl_lock_compat.h"
 
 /**
  * Forward declarations
@@ -268,7 +269,7 @@ static int Open (vlc_object_t *this)
         sys->gl->getProcAddress = OurGetProcAddress;
 
         var_SetAddress(vd->obj.parent, "macosx-glcontext",
-                       [[sys->glView openGLContext] CGLContextObj]);
+                       vlc_CGLContextOf([sys->glView openGLContext]));
 
         const vlc_fourcc_t *subpicture_chromas;
 
@@ -301,12 +302,12 @@ static int Open (vlc_object_t *this)
         /* */
         vout_display_SendEventDisplaySize (vd, vd->fmt.i_visible_width, vd->fmt.i_visible_height);
 
-        [pool drain];
+        [pool release];
         return VLC_SUCCESS;
 
     error:
         Close(this);
-        [pool drain];
+        [pool release];
         return VLC_EGENERIC;
     }
 }
@@ -367,7 +368,7 @@ void Close (vlc_object_t *this)
             vout_display_DeleteWindow (vd, sys->embed);
         free (sys);
     }
-    [pool drain];
+    [pool release];
 }
 
 /*****************************************************************************
@@ -525,7 +526,7 @@ static int Control (vout_display_t *vd, int query, va_list ap)
 
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     int ret = ControlInPool (vd, query, ap);
-    [pool drain];
+    [pool release];
     return ret;
 }
 
@@ -541,9 +542,9 @@ static int OpenglLock (vlc_gl_t *gl)
     assert(sys->locked_ctx == NULL);
 
     NSOpenGLContext *context = [sys->glView openGLContext];
-    CGLContextObj cglcntx = [context CGLContextObj];
+    CGLContextObj cglcntx = vlc_CGLContextOf(context);
 
-    CGLError err = CGLLockContext (cglcntx);
+    CGLError err = vlc_CGLLockContext (cglcntx);
     if (kCGLNoError == err) {
         sys->locked_ctx = cglcntx;
         [context makeCurrentContext];
@@ -555,7 +556,7 @@ static int OpenglLock (vlc_gl_t *gl)
 static void OpenglUnlock (vlc_gl_t *gl)
 {
     struct gl_sys *sys = gl->sys;
-    CGLUnlockContext (sys->locked_ctx);
+    vlc_CGLUnlockContext (sys->locked_ctx);
     sys->locked_ctx = NULL;
 }
 
@@ -641,7 +642,11 @@ static void OpenglSwap (vlc_gl_t *gl)
      http://developer.apple.com/documentation/GraphicsImaging/
      Conceptual/OpenGL/chap5/chapter_5_section_44.html */
     GLint params[] = { 1 };
-    CGLSetParameter ([[self openGLContext] CGLContextObj], kCGLCPSwapInterval, params);
+    /* No CGL context to set it on below 10.3 (see vlc_CGLContextOf): the
+     * output then simply swaps without waiting for the retrace. */
+    CGLContextObj swapCtx = vlc_CGLContextOf([self openGLContext]);
+    if (swapCtx != NULL)
+        CGLSetParameter (swapCtx, kCGLCPSwapInterval, params);
 
     /* Use the classic observer API: the block-based variant requires
      * Mac OS X 10.6 and the blocks runtime. */
@@ -721,7 +726,7 @@ static void OpenglSwap (vlc_gl_t *gl)
 {
     VLCAssertMainThread();
     NSOpenGLContext *context = [self openGLContext];
-    CGLError err = CGLLockContext ([context CGLContextObj]);
+    CGLError err = vlc_CGLLockContext (vlc_CGLContextOf(context));
     if (err == kCGLNoError)
         [context makeCurrentContext];
     return err == kCGLNoError;
@@ -733,7 +738,7 @@ static void OpenglSwap (vlc_gl_t *gl)
 - (void)unlockgl
 {
     VLCAssertMainThread();
-    CGLUnlockContext ([[self openGLContext] CGLContextObj]);
+    vlc_CGLUnlockContext (vlc_CGLContextOf([self openGLContext]));
 }
 
 /**
@@ -887,7 +892,12 @@ static void OpenglSwap (vlc_gl_t *gl)
 
     // In macOS 10.13 and later, window updates are automatically batched
     // together and this no longer needs to be called (effectively a no-op)
-    [[self window] disableScreenUpdatesUntilFlush];
+    /* -disableScreenUpdatesUntilFlush is 10.4; without it the window
+     * server may show a resized window before it is redrawn, which costs a
+     * flicker and nothing else. */
+    if ([[self window] respondsToSelector:
+            @selector(disableScreenUpdatesUntilFlush)])
+        [[self window] disableScreenUpdatesUntilFlush];
 
     [super renewGState];
 }

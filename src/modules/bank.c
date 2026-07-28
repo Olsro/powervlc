@@ -647,6 +647,9 @@ int module_Map(vlc_object_t *obj, vlc_plugin_t *plugin)
  * \note This function is not thread-safe. The caller must ensure that the
  * plug-in is no longer used before calling this function.
  */
+/* Kept for parity with upstream, but no longer called: see module_EndBank()
+ * for why a plug-in must not be unmapped before its descriptor is freed. */
+static void module_Unmap(vlc_plugin_t *plugin) __attribute__((unused));
 static void module_Unmap(vlc_plugin_t *plugin)
 {
     if (!plugin->unloadable)
@@ -742,7 +745,19 @@ void module_EndBank (bool b_plugins)
         vlc_plugin_t *lib = libs;
 
         libs = lib->next;
-        module_Unmap(lib);
+        /* Deliberately NOT module_Unmap()ed first. A plug-in that was
+         * described by loading it (rather than read from the cache) keeps
+         * descriptor fields pointing into its own image, and
+         * vlc_plugin_destroy() frees some of them. Unmapping first therefore
+         * hands free() an address that is no longer mapped.
+         *
+         * That goes unnoticed wherever dlclose() does not really unmap -- the
+         * usual case on macOS -- but Mac OS X 10.2 has no dlclose() at all and
+         * the NSUnLinkModule() behind it unmaps for real: the process then
+         * dies in free() at the very end of libvlc_release(). There is nothing
+         * to gain from unmapping here anyway, since this runs as the bank goes
+         * away; plug-ins that are merely unused are still unmapped as they are
+         * scanned. */
         vlc_plugin_destroy(lib);
     }
 

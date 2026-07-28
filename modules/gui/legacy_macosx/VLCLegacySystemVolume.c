@@ -23,12 +23,14 @@
  *****************************************************************************/
 
 #ifdef HAVE_CONFIG_H
-# import "config.h"
+# include "config.h"
 #endif
 
-#import "VLCLegacySystemVolume.h"
+#include "VLCLegacySystemVolume.h"
 
-#import <CoreAudio/CoreAudio.h>
+#include <CoreAudio/CoreAudio.h>
+
+#include "../../audio_output/coreaudio_compat.h"  // 10.3: AudioObject* is 10.4-only
 
 /* volume of one channel of the default output device, 0.0 on failure */
 static float systemVolumeForChannel(int channel)
@@ -43,7 +45,7 @@ static float systemVolumeForChannel(int channel)
         { kAudioHardwarePropertyDefaultOutputDevice,
           kAudioDevicePropertyScopeOutput,
           kAudioObjectPropertyElementMaster };
-    err = AudioObjectGetPropertyData( kAudioObjectSystemObject,
+    err = vlc_AudioObjectGetPropertyData( kAudioObjectSystemObject,
                                       &deviceAddress, 0, NULL,
                                       &i_size, &i_device );
     if (err != noErr)
@@ -54,7 +56,7 @@ static float systemVolumeForChannel(int channel)
           kAudioDevicePropertyScopeOutput,
           channel };
     i_size = sizeof( f_volume );
-    err = AudioObjectGetPropertyData(i_device, &propertyAddress, 0, NULL,
+    err = vlc_AudioObjectGetPropertyData(i_device, &propertyAddress, 0, NULL,
                                      &i_size, &f_volume);
     if (err != noErr)
         return .0;
@@ -75,7 +77,7 @@ static int setSystemVolumeForChannel(float f_volume, int i_channel)
         { kAudioHardwarePropertyDefaultOutputDevice,
           kAudioDevicePropertyScopeOutput,
           kAudioObjectPropertyElementMaster };
-    err = AudioObjectGetPropertyData( kAudioObjectSystemObject,
+    err = vlc_AudioObjectGetPropertyData( kAudioObjectSystemObject,
                                       &deviceAddress, 0, NULL,
                                       &i_size, &i_device );
     if (err != noErr)
@@ -86,11 +88,11 @@ static int setSystemVolumeForChannel(float f_volume, int i_channel)
           kAudioDevicePropertyScopeOutput,
           i_channel };
     i_size = sizeof( f_volume );
-    err = AudioObjectIsPropertySettable( i_device, &propertyAddress,
+    err = vlc_AudioObjectIsPropertySettable( i_device, &propertyAddress,
                                          &b_writeable );
     if (err != noErr || !b_writeable)
         return 0;
-    err = AudioObjectSetPropertyData(i_device, &propertyAddress, 0, NULL,
+    err = vlc_AudioObjectSetPropertyData(i_device, &propertyAddress, 0, NULL,
                                      i_size, &f_volume);
     if (err != noErr)
         return 0;

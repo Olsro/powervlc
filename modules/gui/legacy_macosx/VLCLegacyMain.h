@@ -78,7 +78,8 @@
 - (void)displayQuestion:(NSArray *)dialogData;
 
 /* Must run on the main thread */
-- (void)setup;
+- (void)setup;          /* guarded wrapper, catches and logs */
+- (void)setupInterface; /* the actual work */
 - (void)shutdown;
 
 @end

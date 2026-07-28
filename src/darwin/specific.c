@@ -52,9 +52,35 @@ void system_Init(void)
         CFArrayRef all_locales, preferred_locales;
         char psz_locale[50];
 
-        all_locales = CFLocaleCopyAvailableLocaleIdentifiers();
+        /* CFLocaleCopyAvailableLocaleIdentifiers() only exists since Mac OS X
+         * 10.4. Below that deployment target the SDK weak-imports it, so on a
+         * 10.3 system the symbol resolves to NULL and calling it jumps to 0 --
+         * and this runs from system_Init(), i.e. before anything else. Fall
+         * back to the user's AppleLanguages preference, which is what
+         * CFBundleCopyLocalizationsForPreferences() (available since 10.0)
+         * intersects against anyway. */
+        CFArrayRef (*copy_available_locales)(void) =
+            CFLocaleCopyAvailableLocaleIdentifiers;
 
-        preferred_locales = CFBundleCopyLocalizationsForPreferences( all_locales, NULL );
+        if( copy_available_locales != NULL )
+            all_locales = copy_available_locales();
+        else
+        {
+            CFPropertyListRef languages = CFPreferencesCopyAppValue(
+                CFSTR("AppleLanguages"), kCFPreferencesCurrentApplication );
+
+            if( languages != NULL
+             && CFGetTypeID( languages ) != CFArrayGetTypeID() )
+            {
+                CFRelease( languages );
+                languages = NULL;
+            }
+            all_locales = languages;
+        }
+
+        preferred_locales = ( all_locales != NULL )
+            ? CFBundleCopyLocalizationsForPreferences( all_locales, NULL )
+            : NULL;
 
         if ( preferred_locales )
         {
@@ -66,7 +92,8 @@ void system_Init(void)
             }
             CFRelease( preferred_locales );
         }
-        CFRelease( all_locales );
+        if ( all_locales != NULL )
+            CFRelease( all_locales );
     }
 #endif
 }

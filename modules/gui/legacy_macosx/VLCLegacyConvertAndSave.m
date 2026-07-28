@@ -23,6 +23,7 @@
 #endif
 
 #import "VLCLegacyConvertAndSave.h"
+#import "misc.h"
 #import "VLCLegacyCoreInteraction.h"
 #import "VLCLegacyHUDWindow.h"   /* modal text/popup prompts */
 #import "VLCLegacyMenu.h"        /* VLCLegacyNoteRecentItem */
@@ -208,7 +209,7 @@ static NSTextField *label(NSView *parent, NSString *text, NSRect frame,
     [field setDrawsBackground:NO];
     [[field cell] setFont:bold ? [NSFont boldSystemFontOfSize:12]
                                 : [NSFont systemFontOfSize:11]];
-    [[field cell] setLineBreakMode:NSLineBreakByTruncatingTail];
+    VLCLegacySetCellLineBreakMode([field cell], NSLineBreakByTruncatingTail);
     [field setStringValue:text];
     [parent addSubview:field];
     return field;
@@ -220,7 +221,7 @@ static NSTextField *editField(NSView *parent, NSRect frame, id target)
         autorelease];
     [[field cell] setControlSize:NSSmallControlSize];
     [[field cell] setFont:[NSFont systemFontOfSize:
-        [NSFont systemFontSizeForControlSize:NSSmallControlSize]]];
+        VLCLegacySystemFontSizeForControlSize(NSSmallControlSize)]];
     [[field cell] setWraps:NO];
     [[field cell] setScrollable:YES];
     [parent addSubview:field];
@@ -248,7 +249,7 @@ static NSButton *checkBox(NSView *parent, NSString *title, NSRect frame,
     [box setTitle:title];
     [[box cell] setControlSize:NSSmallControlSize];
     [[box cell] setFont:[NSFont systemFontOfSize:
-        [NSFont systemFontSizeForControlSize:NSSmallControlSize]]];
+        VLCLegacySystemFontSizeForControlSize(NSSmallControlSize)]];
     [box setTarget:target];
     [box setAction:action];
     [parent addSubview:box];
@@ -262,7 +263,7 @@ static NSPopUpButton *popup(NSView *parent, NSRect frame)
         autorelease];
     [[button cell] setControlSize:NSSmallControlSize];
     [[button cell] setFont:[NSFont systemFontOfSize:
-        [NSFont systemFontSizeForControlSize:NSSmallControlSize]]];
+        VLCLegacySystemFontSizeForControlSize(NSSmallControlSize)]];
     [parent addSubview:button];
     return button;
 }
@@ -336,7 +337,7 @@ static NSPopUpButton *popup(NSView *parent, NSRect frame)
     [destinationCancelButton setTarget:self
                                 action:@selector(cancelDestination:)];
     [destContent addSubview:destinationCancelButton];
-    [destinationCancelButton setHidden:YES];
+    VLCLegacySetViewHidden(destinationCancelButton, YES);
 
     /* file sub-view -- RETAINED: it lives outside the view tree until
      * the user picks a destination (autorelease alone = use after free
@@ -428,20 +429,20 @@ static NSPopUpButton *popup(NSView *parent, NSRect frame)
 
 - (void)iWantAFile:(id)sender
 {
-    [destinationFileButton setHidden:YES];
-    [destinationStreamButton setHidden:YES];
+    VLCLegacySetViewHidden(destinationFileButton, YES);
+    VLCLegacySetViewHidden(destinationStreamButton, YES);
     [[destinationBox contentView] addSubview:fileDestinationView];
-    [destinationCancelButton setHidden:NO];
+    VLCLegacySetViewHidden(destinationCancelButton, NO);
     b_streaming = NO;
     [self updateOKButton];
 }
 
 - (void)iWantAStream:(id)sender
 {
-    [destinationFileButton setHidden:YES];
-    [destinationStreamButton setHidden:YES];
+    VLCLegacySetViewHidden(destinationFileButton, YES);
+    VLCLegacySetViewHidden(destinationStreamButton, YES);
     [[destinationBox contentView] addSubview:streamDestinationView];
-    [destinationCancelButton setHidden:NO];
+    VLCLegacySetViewHidden(destinationCancelButton, NO);
     b_streaming = YES;
     [self updateOKButton];
 }
@@ -452,9 +453,9 @@ static NSPopUpButton *popup(NSView *parent, NSRect frame)
         [fileDestinationView removeFromSuperview];
     if ([streamDestinationView superview])
         [streamDestinationView removeFromSuperview];
-    [destinationCancelButton setHidden:YES];
-    [destinationFileButton setHidden:NO];
-    [destinationStreamButton setHidden:NO];
+    VLCLegacySetViewHidden(destinationCancelButton, YES);
+    VLCLegacySetViewHidden(destinationFileButton, NO);
+    VLCLegacySetViewHidden(destinationStreamButton, NO);
     [outputDestination release];
     outputDestination = nil;
     [fileDestinationLabel setStringValue:_NS("Choose an output location")];
@@ -494,7 +495,8 @@ static NSPopUpButton *popup(NSView *parent, NSRect frame)
 {
     NSSavePanel *panel = [NSSavePanel savePanel];
     [panel setCanSelectHiddenExtension:YES];
-    [panel setCanCreateDirectories:YES];
+    if ([panel respondsToSelector:@selector(setCanCreateDirectories:)])
+        [panel setCanCreateDirectories:YES];
     /* no clever guess for RAW (3.0 does the same) */
     NSString *file = mediaName ? mediaName : _NS("Untitled");
     if ([self currentEncapsulationTag] != RAW)
@@ -589,7 +591,7 @@ static NSPopUpButton *popup(NSView *parent, NSRect frame)
     [prototype setButtonType:NSRadioButton];
     [prototype setControlSize:NSSmallControlSize];
     [prototype setFont:[NSFont systemFontOfSize:
-        [NSFont systemFontSizeForControlSize:NSSmallControlSize]]];
+        VLCLegacySystemFontSizeForControlSize(NSSmallControlSize)]];
     [prototype setTitle:@""];
 
     encapMatrix = [[[NSMatrix alloc]
@@ -651,7 +653,7 @@ static NSPopUpButton *popup(NSView *parent, NSRect frame)
             "VLC will autodetect the other using the original aspect ratio"),
         NSMakeRect(12, 62, 370, 38), NO);
     [[hint cell] setWraps:YES];
-    [[hint cell] setLineBreakMode:NSLineBreakByWordWrapping];
+    VLCLegacySetCellLineBreakMode([hint cell], NSLineBreakByWordWrapping);
     label(resolution, _NS("Width"), NSMakeRect(12, 30, 70, 15), NO);
     vidWidthField = editField(resolution, NSMakeRect(84, 26, 60, 20), self);
     label(resolution, _NS("Height"), NSMakeRect(160, 30, 70, 15), NO);
@@ -1051,7 +1053,7 @@ static NSPopUpButton *popup(NSView *parent, NSRect frame)
     NSButtonCell *prototype = [[[NSButtonCell alloc] init] autorelease];
     [prototype setButtonType:NSRadioButton];
     [prototype setFont:[NSFont systemFontOfSize:
-        [NSFont systemFontSizeForControlSize:NSSmallControlSize]]];
+        VLCLegacySystemFontSizeForControlSize(NSSmallControlSize)]];
     [prototype setTitle:@""];
     streamSDPMatrix = [[[NSMatrix alloc]
         initWithFrame:NSMakeRect(30, 96, 400, 52)
@@ -1134,8 +1136,9 @@ static NSPopUpButton *popup(NSView *parent, NSRect frame)
 {
     NSSavePanel *panel = [NSSavePanel savePanel];
     [panel setCanSelectHiddenExtension:YES];
-    [panel setCanCreateDirectories:YES];
-    [panel setAllowedFileTypes:[NSArray arrayWithObject:@"sdp"]];
+    if ([panel respondsToSelector:@selector(setCanCreateDirectories:)])
+        [panel setCanCreateDirectories:YES];
+    VLCLegacySetPanelFileType(panel, @"sdp");
     if ([panel runModalForDirectory:nil file:@"stream"]
             == NSFileHandlingPanelOKButton)
         [streamSDPField setStringValue:[panel filename]];

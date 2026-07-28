@@ -136,6 +136,7 @@ void dvddriver_perf_get(dvddriver_ctx *ctx, unsigned *n_dec, unsigned long *us_d
 
 /* Diagnostic : nombre de macroblocs capturés / attendus pour la picture courante
  * (utile pour comprendre un submit rc=-2 = capture incomplète). */
+unsigned dvddriver_surf_waits(const dvddriver_ctx *ctx);
 void dvddriver_last_progress(const dvddriver_ctx *ctx, unsigned *captured,
                              unsigned *total);
 

@@ -23,6 +23,7 @@
 #endif
 
 #import "VLCLegacyMain.h"
+#import "misc.h"
 #import "VLCLegacyCoreInteraction.h"
 #import "VLCLegacyMainWindow.h"
 #import "VLCLegacyMenu.h"
@@ -295,7 +296,27 @@ static const vlc_dialog_cbs dialog_callbacks = {
     }
 }
 
+/* -setup runs on the main thread, inside AppKit's run loop. AppKit catches
+ * whatever escapes from there and reports it somewhere we cannot read when
+ * the application was started by the Finder -- the failure looks exactly
+ * like an application that launched and drew nothing: no window, no menu
+ * bar, no log line. That already cost a debugging session on Tiger, where
+ * one 10.5-only call in this path silently cost the entire interface. So
+ * catch it here, name it in VLC's own log, and let the caller see that the
+ * interface is only half-built rather than guess. */
 - (void)setup
+{
+    @try {
+        [self setupInterface];
+    }
+    @catch (NSException *e) {
+        msg_Err(p_intf, "interface setup failed: %s: %s",
+                [[e name] UTF8String] ?: "?",
+                [[e reason] UTF8String] ?: "?");
+    }
+}
+
+- (void)setupInterface
 {
     /* AppKit turns unknown command-line arguments into open-file events,
      * which would add every item twice (libvlc already parses argv) */
@@ -303,9 +324,13 @@ static const vlc_dialog_cbs dialog_callbacks = {
         [NSDictionary dictionaryWithObject:@"NO"
                                     forKey:@"NSTreatUnknownArgumentsAsOpen"]];
 
+    msg_Dbg(p_intf, "setup: menu");
     [menu setupMenu];
+    msg_Dbg(p_intf, "setup: main window");
     [mainWindow setupWindow];
+    msg_Dbg(p_intf, "setup: fullscreen panel");
     [fsPanel activate];
+    msg_Dbg(p_intf, "setup: application delegate");
     [NSApp setDelegate:(id)self];
 
     /* Apple Remote, media keys and external player control; the remote
@@ -347,8 +372,17 @@ static const vlc_dialog_cbs dialog_callbacks = {
     }
     /* error dialogs land in the Errors and Warnings panel */
     vlc_dialog_provider_set_callbacks(p_intf, &dialog_callbacks, self);
-    /* debug helper: open a window at startup, e.g. VLC_LEGACY_SHOW=prefs */
+    /* debug helper: open a window at startup, e.g. VLC_LEGACY_SHOW=prefs.
+     * The "legacy-macosx-show" option does the same through vlcrc, which is
+     * the only way in when the application is started by the Finder: an app
+     * launched by LaunchServices inherits loginwindow's environment, not the
+     * one of whoever asked for it. That is the whole difference between
+     * being able to look at a window on an old machine over SSH and not. */
+    char *psz_show_conf = var_InheritString(p_intf, "legacy-macosx-show");
     const char *psz_show = getenv("VLC_LEGACY_SHOW");
+
+    if (psz_show == NULL && psz_show_conf != NULL && *psz_show_conf != '\0')
+        psz_show = psz_show_conf;
     if (psz_show && !strncmp(psz_show, "prefs", 5)
      && psz_show[5] >= '0' && psz_show[5] <= '5') {
         [prefs showWindow];
@@ -359,6 +393,13 @@ static const vlc_dialog_cbs dialog_callbacks = {
         [prefs showWindow];
     else if (psz_show && !strcmp(psz_show, "prefsadv")) {
         [prefs showWindow];
+        [prefs performSelector:@selector(toggleAdvanced:) withObject:nil];
+    }
+    else if (psz_show && !strcmp(psz_show, "prefsadvback")) {
+        /* there and back again: the round trip is what used to lose the
+         * toolbar buttons, hidden by tag and then unfindable */
+        [prefs showWindow];
+        [prefs performSelector:@selector(toggleAdvanced:) withObject:nil];
         [prefs performSelector:@selector(toggleAdvanced:) withObject:nil];
     }
     else if (psz_show && !strcmp(psz_show, "fspanel"))
@@ -373,8 +414,13 @@ static const vlc_dialog_cbs dialog_callbacks = {
     }
     else if (psz_show && !strcmp(psz_show, "about"))
         [about showAbout];
-    else if (psz_show && !strcmp(psz_show, "mediainfo"))
+    else if (psz_show && !strncmp(psz_show, "mediainfo", 9)) {
         [mediaInfo showWindow];
+        if (psz_show[9] >= '0' && psz_show[9] <= '2')
+            [mediaInfo performSelector:@selector(debugSelectPane:)
+                            withObject:[NSNumber numberWithInt:
+                                            psz_show[9] - '0']];
+    }
     else if (psz_show && !strcmp(psz_show, "bookmarks"))
         [bookmarks showWindow];
     else if (psz_show && !strncmp(psz_show, "effects", 7)) {
@@ -402,6 +448,10 @@ static const vlc_dialog_cbs dialog_callbacks = {
             [convertAndSave performSelector:@selector(customizeProfile:)
                                  withObject:nil];
     }
+    else if (psz_show && !strcmp(psz_show, "menucheck"))
+        [menu performSelector:@selector(debugDumpDynamicMenus)
+                   withObject:nil
+                   afterDelay:8.0];
     else if (psz_show && !strcmp(psz_show, "messages"))
         [messages showWindow];
     else if (psz_show && !strcmp(psz_show, "errors"))
@@ -409,6 +459,8 @@ static const vlc_dialog_cbs dialog_callbacks = {
     else if (psz_show && !strncmp(psz_show, "open", 4)
           && psz_show[4] >= '0' && psz_show[4] <= '3')
         [open showTab:psz_show[4] - '0'];
+
+    free(psz_show_conf);
 
     /* debug: VLC_LEGACY_PAUSE_AFTER=<s> pauses playback after a delay,
      * to measure the paused CPU consumption without UI scripting */
@@ -426,6 +478,8 @@ static const vlc_dialog_cbs dialog_callbacks = {
                                        selector:@selector(snapshotWindows:)
                                        userInfo:nil
                                         repeats:NO];
+
+    msg_Dbg(p_intf, "setup: done");
 }
 
 - (void)applicationBecameActive:(NSNotification *)notification
@@ -498,6 +552,9 @@ static void dumpMenu(NSMenu *menu, int depth, NSMutableString *tree)
             continue;
         NSView *view = [w contentView];
         NSRect bounds = [view bounds];
+        if (![view respondsToSelector:
+                @selector(bitmapImageRepForCachingDisplayInRect:)])
+            continue;   /* 10.4+; the snapshot helper is debug-only */
         NSBitmapImageRep *rep =
             [view bitmapImageRepForCachingDisplayInRect:bounds];
         if (!rep)
@@ -525,7 +582,7 @@ static void dumpMenu(NSMenu *menu, int depth, NSMutableString *tree)
                 ? [v performSelector:@selector(layer)] : nil;
             [tree appendFormat:@"%@%@ frame=%@ hidden=%d layer=%@\n",
                 pad, NSStringFromClass([v class]),
-                NSStringFromRect([v frame]), [v isHidden],
+                NSStringFromRect([v frame]), VLCLegacyViewIsHidden(v),
                 layer ? [[layer valueForKey:@"frame"] description] : @"none"];
             NSArray *subs = [v subviews];
             unsigned si;
@@ -548,7 +605,8 @@ static void dumpMenu(NSMenu *menu, int depth, NSMutableString *tree)
 - (void)application:(NSApplication *)application openFiles:(NSArray *)files
 {
     [mainWindow addPaths:files playFirst:YES];
-    [application replyToOpenOrPrint:NSApplicationDelegateReplySuccess];
+    if ([application respondsToSelector:@selector(replyToOpenOrPrint:)])
+        [application replyToOpenOrPrint:NSApplicationDelegateReplySuccess];
 }
 
 - (BOOL)application:(NSApplication *)application openFile:(NSString *)file

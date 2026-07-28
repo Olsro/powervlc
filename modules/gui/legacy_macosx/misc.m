@@ -50,6 +50,8 @@
 #include <vlc_modules.h>
 #include <vlc_plugin.h>    /* CONFIG_ITEM_KEY */
 
+#import "VLCLegacyControls.h"   /* VLCLegacyDarkMode() */
+
 /* PowerVLC: same gettext helper the other legacy files define locally */
 #define _NS(s) ((NSString *)[NSString stringWithUTF8String:vlc_gettext(s)])
 
@@ -455,6 +457,18 @@ void VLCLegacyConfirmAndOpenVideoLANURL(NSURL *url)
         "Please do not bother VideoLAN with bug reports and support requests, as this fork is absolutely unofficial and not supported by VideoLAN.\n\n"
         "By clicking \"Yes\", you will be redirected to the requested link.");
 
+    /* NSAlert is 10.3. Jaguar's AppKit exports the class symbol -- so the
+     * plug-in links and loads -- but implements none of its methods, and
+     * every one of them below would raise. NSRunAlertPanel has been there
+     * since 10.0 and asks the same two-button question. */
+    if (![NSAlert instancesRespondToSelector:@selector(setMessageText:)]) {
+        if (NSRunAlertPanel(_NS("Warning!"), @"%@",
+                            _NS("Yes"), _NS("No"), nil, body)
+                == NSAlertDefaultReturn)
+            [[NSWorkspace sharedWorkspace] openURL:url];
+        return;
+    }
+
     NSAlert *alert = [[[NSAlert alloc] init] autorelease];
     [alert setMessageText:_NS("Warning!")];
 
@@ -503,4 +517,435 @@ void VLCLegacyConfirmAndOpenVideoLANURL(NSURL *url)
 
     if ([alert runModal] == NSAlertFirstButtonReturn)
         [[NSWorkspace sharedWorkspace] openURL:url];
+}
+
+/*****************************************************************************
+ * 10.3 AppKit conveniences, resolved at runtime (see misc.h)
+ *****************************************************************************/
+
+NSTextField *VLCLegacyMakeSearchField(NSRect frame, id target, SEL action)
+{
+    Class searchClass = NSClassFromString(@"NSSearchField");
+    NSTextField *field = [[[(searchClass ? searchClass : [NSTextField class])
+        alloc] initWithFrame:frame] autorelease];
+    id cell = [field cell];
+
+    [cell setControlSize:NSSmallControlSize];
+    [cell setFont:[NSFont systemFontOfSize:11]];
+    [field setTarget:target];
+    [field setAction:action];
+
+    if (searchClass != Nil) {
+        /* search as you type, rather than on Return */
+        [cell setSendsWholeSearchString:NO];
+        if ([cell respondsToSelector:
+                @selector(setSendsSearchStringImmediately:)])
+            [cell setSendsSearchStringImmediately:YES];
+    } else if ([target respondsToSelector:@selector(controlTextDidChange:)]) {
+        [field setDelegate:target];
+    }
+    return field;
+}
+
+NSArray *VLCLegacySelectedRows(NSTableView *table)
+{
+    NSMutableArray *rows = [NSMutableArray array];
+
+    if ([table respondsToSelector:@selector(selectedRowIndexes)]) {
+        id selection = [table selectedRowIndexes];
+        NSUInteger index;
+
+        for (index = [selection firstIndex]; index != (NSUInteger)NSNotFound;
+             index = [selection indexGreaterThanIndex:index])
+            [rows addObject:[NSNumber numberWithInt:(int)index]];
+    } else {
+        /* 10.2: an enumerator of NSNumbers, already in ascending order */
+        NSEnumerator *e = [table performSelector:
+            @selector(selectedRowEnumerator)];
+        NSNumber *row;
+
+        while ((row = [e nextObject]) != nil)
+            [rows addObject:row];
+    }
+    return rows;
+}
+
+void VLCLegacySelectRow(NSTableView *table, NSInteger row)
+{
+    Class indexSetClass = NSClassFromString(@"NSIndexSet");
+
+    if (indexSetClass != Nil
+     && [table respondsToSelector:
+            @selector(selectRowIndexes:byExtendingSelection:)])
+        [table selectRowIndexes:[indexSetClass indexSetWithIndex:(NSUInteger)row]
+           byExtendingSelection:NO];
+    else
+        [table selectRow:row byExtendingSelection:NO];
+}
+
+/* Views detached by VLCLegacySetViewHidden(), keyed by the view's address:
+ * the superview it came from and the sibling it sat under, so it goes back
+ * exactly where it was rather than on top of everything. Main thread only,
+ * like the rest of the interface. */
+static NSMutableDictionary *detachedViews;
+
+/* Views asked to hide BEFORE they were inserted anywhere. That order is
+ * natural to write and harmless with a real -setHidden:, but detaching a
+ * view that is not attached yet does nothing -- and then whoever adds it
+ * makes it visible. It cost the whole Preferences window, whose advanced
+ * pane covered the simple one, and the video view over the playlist before
+ * that. AppKit offers no hook on -addSubview:, so they are reconciled at
+ * the end of the current run-loop cycle, by which time the interface has
+ * finished building itself. */
+static NSMutableArray *pendingHides;
+
+@interface VLCLegacyHideReconciler : NSObject
+@end
+
+@implementation VLCLegacyHideReconciler
+
+- (void)reconcile:(NSTimer *)timer
+{
+    NSArray *views = [[pendingHides copy] autorelease];
+    unsigned i;
+
+    (void)timer;
+    [pendingHides removeAllObjects];
+
+    for (i = 0; i < [views count]; i++) {
+        NSView *view = [views objectAtIndex:i];
+
+        if ([view superview] == nil) {
+            /* still nowhere: keep waiting rather than lose the request */
+            [pendingHides addObject:view];
+            continue;
+        }
+        /* drop the "hidden while detached" record so the real detach runs */
+        [detachedViews removeObjectForKey:[NSValue valueWithPointer:view]];
+        VLCLegacySetViewHidden(view, YES);
+    }
+
+    if ([pendingHides count] > 0)
+        [NSTimer scheduledTimerWithTimeInterval:0.0 target:self
+                                       selector:@selector(reconcile:)
+                                       userInfo:nil repeats:NO];
+}
+
+@end
+
+void VLCLegacySetViewHidden(NSView *view, BOOL hidden)
+{
+    if (view == nil)
+        return;
+
+    if ([view respondsToSelector:@selector(setHidden:)]) {
+        [view setHidden:hidden];
+        return;
+    }
+
+    NSValue *key = [NSValue valueWithPointer:view];
+
+    if (detachedViews == nil)
+        detachedViews = [[NSMutableDictionary alloc] init];
+
+    NSDictionary *entry = [detachedViews objectForKey:key];
+
+    if (hidden) {
+        NSView *superview = [view superview];
+
+        if (entry != nil)
+            return;                     /* already hidden */
+
+        if (superview == nil) {
+            /* Hidden before being inserted anywhere: remember the state so
+             * -isHidden does not lie, and come back for it once the caller
+             * has put the view somewhere (see VLCLegacyHideReconciler). */
+            [detachedViews setObject:
+                [NSDictionary dictionaryWithObject:view forKey:@"view"]
+                               forKey:key];
+
+            if (pendingHides == nil)
+                pendingHides = [[NSMutableArray alloc] init];
+            if (![pendingHides containsObject:view]) {
+                [pendingHides addObject:view];
+                [NSTimer scheduledTimerWithTimeInterval:0.0
+                    target:[[[VLCLegacyHideReconciler alloc] init] autorelease]
+                  selector:@selector(reconcile:)
+                  userInfo:nil repeats:NO];
+            }
+            return;
+        }
+
+        /* The sibling drawn just below this one: re-inserting relative to
+         * it restores the z-order, which matters wherever a hidden view
+         * overlaps the one that replaces it (the video view and the
+         * playlist share the same rectangle). */
+        NSArray *siblings = [superview subviews];
+        NSUInteger index = [siblings indexOfObject:view];
+        NSView *below = (index != (NSUInteger)NSNotFound && index > 0)
+            ? [siblings objectAtIndex:index - 1] : nil;
+
+        NSMutableDictionary *record = [NSMutableDictionary dictionary];
+        [record setObject:view forKey:@"view"];      /* keeps it alive */
+        [record setObject:superview forKey:@"superview"];
+        if (below != nil)
+            [record setObject:below forKey:@"below"];
+        /* A detached view misses every resize its superview goes through --
+         * and the main window DOES resize while the playlist is hidden, to
+         * fit the video. Recording the size it was detached at is what makes
+         * -resizeWithOldSuperviewSize: able to catch it up on the way back;
+         * without it the playlist came back laid out for the old window. */
+        [record setObject:[NSValue valueWithSize:[superview bounds].size]
+                   forKey:@"superviewSize"];
+        [detachedViews setObject:record forKey:key];
+
+        [view removeFromSuperview];
+    } else {
+        if (entry == nil)
+            return;                     /* already visible */
+
+        [pendingHides removeObject:view];
+
+        NSView *superview = [entry objectForKey:@"superview"];
+        NSView *below = [entry objectForKey:@"below"];
+
+        if (superview == nil)
+            ;                           /* was never attached; see above */
+        else if (below != nil && [below superview] == superview)
+            [superview addSubview:view positioned:NSWindowAbove
+                       relativeTo:below];
+        else
+            [superview addSubview:view positioned:NSWindowBelow
+                       relativeTo:nil];
+
+        /* Apply the resizes it slept through, by its own autoresizing mask:
+         * exactly what AppKit would have done had it stayed in place. */
+        NSValue *oldSize = [entry objectForKey:@"superviewSize"];
+        if (superview != nil && oldSize != nil)
+            [view resizeWithOldSuperviewSize:[oldSize sizeValue]];
+
+        [detachedViews removeObjectForKey:key];
+    }
+}
+
+NSView *VLCLegacyViewWithTag(NSView *root, NSInteger tag)
+{
+    NSView *found = [root viewWithTag:tag];
+
+    if (found != nil || detachedViews == nil)
+        return found;
+
+    NSEnumerator *e = [detachedViews objectEnumerator];
+    NSDictionary *record;
+
+    while ((record = [e nextObject]) != nil) {
+        NSView *view = [record objectForKey:@"view"];
+
+        if ([view tag] == tag)
+            return view;
+    }
+    return nil;
+}
+
+BOOL VLCLegacyViewIsHidden(NSView *view)
+{
+    if (view == nil)
+        return YES;
+    if ([view respondsToSelector:@selector(isHidden)])
+        return [view isHidden];
+    return [detachedViews objectForKey:[NSValue valueWithPointer:view]] != nil;
+}
+
+void VLCLegacyResizeLastColumnOnly(NSTableView *table)
+{
+    if ([table respondsToSelector:@selector(setColumnAutoresizingStyle:)])
+        [table setColumnAutoresizingStyle:
+            NSTableViewLastColumnOnlyAutoresizingStyle];
+    else
+        [table setAutoresizesAllColumnsToFit:NO];
+}
+
+@implementation VLCLegacyStripedOutlineView
+
+- (void)highlightSelectionInClipRect:(NSRect)clipRect
+{
+    /* From 10.3 on AppKit does this itself, and better (it follows the
+     * user's appearance setting). */
+    /* ⚠ -drawsBackground has no business being asked here: on NSTableView
+     * it is 10.6, and asking cost the whole playlist -- an exception raised
+     * inside -drawRect: leaves the view black. */
+    if (![self respondsToSelector:
+             @selector(setUsesAlternatingRowBackgroundColors:)]
+     && !VLCLegacyDarkMode()) {
+        /* Panther's own second row colour, which is what this is standing
+         * in for. */
+        NSColor *stripe = [NSColor colorWithCalibratedRed:0.929
+                                                    green:0.953
+                                                     blue:0.996
+                                                    alpha:1.0];
+        CGFloat step = [self rowHeight] + [self intercellSpacing].height;
+
+        if (step > 0.0) {
+            /* Rows are numbered from the top of the view, and every other
+             * one is striped -- past the last row too, like AppKit. */
+            int first = (int)floor(NSMinY(clipRect) / step);
+            int last = (int)ceil(NSMaxY(clipRect) / step);
+            int row;
+
+            [stripe set];
+            for (row = first; row <= last; row++) {
+                if (row % 2 == 0)
+                    continue;
+                NSRectFill(NSIntersectionRect(clipRect,
+                    NSMakeRect(NSMinX(clipRect), row * step,
+                               NSWidth(clipRect), step)));
+            }
+        }
+    }
+
+    [super highlightSelectionInClipRect:clipRect];
+}
+
+@end
+
+void VLCLegacySetCellLineBreakMode(NSCell *cell, NSLineBreakMode mode)
+{
+    if ([cell respondsToSelector:@selector(setLineBreakMode:)]) {
+        VLCLegacySetCellLineBreakMode(cell, mode);
+        return;
+    }
+
+    [cell setWraps:mode == NSLineBreakByWordWrapping
+                || mode == NSLineBreakByCharWrapping];
+}
+
+CGFloat VLCLegacySystemFontSizeForControlSize(NSControlSize size)
+{
+    if ([NSFont respondsToSelector:@selector(systemFontSizeForControlSize:)])
+        return [NSFont systemFontSizeForControlSize:size];
+
+    switch (size) {
+        case NSMiniControlSize:
+        case NSSmallControlSize:
+            return [NSFont smallSystemFontSize];
+        default:
+            return [NSFont systemFontSize];
+    }
+}
+
+NSCursor *VLCLegacyResizeUpDownCursor(void)
+{
+    if ([NSCursor respondsToSelector:@selector(resizeUpDownCursor)])
+        return VLCLegacyResizeUpDownCursor();
+    return [NSCursor arrowCursor];
+}
+
+void VLCLegacySelectItemWithTag(NSPopUpButton *popup, NSInteger tag)
+{
+    if ([popup respondsToSelector:@selector(selectItemWithTag:)]) {
+        [popup selectItemWithTag:tag];
+        return;
+    }
+
+    NSInteger count = (NSInteger)[popup numberOfItems];
+    NSInteger i;
+
+    for (i = 0; i < count; i++)
+        if ([[popup itemAtIndex:i] tag] == tag) {
+            [popup selectItemAtIndex:i];
+            return;
+        }
+}
+
+void VLCLegacySetPanelFileType(NSSavePanel *panel, NSString *extension)
+{
+    if ([panel respondsToSelector:@selector(setAllowedFileTypes:)])
+        [panel setAllowedFileTypes:[NSArray arrayWithObject:extension]];
+    else
+        [panel setRequiredFileType:extension];
+}
+
+NSRect VLCLegacyContentRectForFrameRect(NSWindow *window, NSRect frame)
+{
+    if ([window respondsToSelector:@selector(contentRectForFrameRect:)])
+        return [window contentRectForFrameRect:frame];
+    return [NSWindow contentRectForFrameRect:frame
+                                   styleMask:[window styleMask]];
+}
+
+NSRect VLCLegacyFrameRectForContentRect(NSWindow *window, NSRect content)
+{
+    if ([window respondsToSelector:@selector(frameRectForContentRect:)])
+        return [window frameRectForContentRect:content];
+    return [NSWindow frameRectForContentRect:content
+                                   styleMask:[window styleMask]];
+}
+
+BOOL VLCLegacyMenuDelegatesAvailable(void)
+{
+    return [NSMenu instancesRespondToSelector:@selector(setDelegate:)];
+}
+
+BOOL VLCLegacySetMenuDelegate(NSMenu *menu, id delegate)
+{
+    if (!VLCLegacyMenuDelegatesAvailable())
+        return NO;
+
+    [menu setDelegate:delegate];
+    return YES;
+}
+
+/* The pre-10.3 stand-in for an NSMenu delegate (see misc.h). */
+@interface VLCLegacyDynamicMenu : NSMenu
+{
+    id controller;   /* weak: it owns the menu, not the other way round */
+}
+- (void)setUpdateController:(id)c;
+@end
+
+@implementation VLCLegacyDynamicMenu
+
+- (void)setUpdateController:(id)c
+{
+    controller = c;
+}
+
+- (void)update
+{
+    if ([controller respondsToSelector:@selector(menuNeedsUpdate:)])
+        [controller menuNeedsUpdate:self];
+    [super update];
+}
+
+@end
+
+NSMenu *VLCLegacyMakeDynamicMenu(NSString *title, id controller)
+{
+    if (VLCLegacyMenuDelegatesAvailable()) {
+        NSMenu *menu = [[[NSMenu alloc] initWithTitle:title] autorelease];
+
+        [menu setDelegate:controller];
+        return menu;
+    }
+
+    VLCLegacyDynamicMenu *menu =
+        [[[VLCLegacyDynamicMenu alloc] initWithTitle:title] autorelease];
+
+    [menu setUpdateController:controller];
+    return menu;
+}
+
+static NSInteger VLCLegacyCompareTitles(id left, id right, void *context)
+{
+    VLC_UNUSED(context);
+    return (NSInteger)[[left objectForKey:@"title"] caseInsensitiveCompare:
+                       [right objectForKey:@"title"]];
+}
+
+void VLCLegacySortDictionariesByTitle(NSMutableArray *array)
+{
+    /* -sortUsingFunction:context: has been there since 10.0 and does not
+     * need the array to be key-value coding compliant, which is what
+     * NSSortDescriptor was buying us. */
+    [array sortUsingFunction:VLCLegacyCompareTitles context:NULL];
 }

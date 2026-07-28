@@ -120,7 +120,7 @@ static void addonChangedCallback(addons_manager_t *manager,
     [field setDrawsBackground:NO];
     [[field cell] setFont:bold ? [NSFont boldSystemFontOfSize:11]
                                 : [NSFont systemFontOfSize:11]];
-    [[field cell] setLineBreakMode:NSLineBreakByTruncatingTail];
+    VLCLegacySetCellLineBreakMode([field cell], NSLineBreakByTruncatingTail);
     [field setStringValue:text];
     [parent addSubview:field];
     return field;

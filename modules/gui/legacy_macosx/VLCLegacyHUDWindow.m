@@ -23,6 +23,7 @@
 #endif
 
 #import "VLCLegacyHUDWindow.h"
+#import "misc.h"
 #import "VLCLegacyControls.h"
 
 /*****************************************************************************
@@ -326,7 +327,7 @@
     [label setTextColor:bold
         ? [NSColor whiteColor]
         : [NSColor colorWithCalibratedWhite:0.70f alpha:1.0f]];
-    [[label cell] setLineBreakMode:NSLineBreakByTruncatingTail];
+    VLCLegacySetCellLineBreakMode([label cell], NSLineBreakByTruncatingTail);
     [label setStringValue:text];
     [parent addSubview:label];
     return label;
@@ -350,7 +351,7 @@
         [[field cell] setWraps:NO];
         [[field cell] setScrollable:YES];
     } else
-        [[field cell] setLineBreakMode:NSLineBreakByTruncatingMiddle];
+        VLCLegacySetCellLineBreakMode([field cell], NSLineBreakByTruncatingMiddle);
     [field setStringValue:@""];
     [parent addSubview:field];
     return field;
@@ -383,7 +384,7 @@
     /* never truncate a localized caption: grow leftward when the button
      * would overflow its parent (right-anchored Reset buttons) */
     NSFont *font = [NSFont systemFontOfSize:
-        [NSFont systemFontSizeForControlSize:NSSmallControlSize]];
+        VLCLegacySystemFontSizeForControlSize(NSSmallControlSize)];
     float needed = (float)ceil([title sizeWithAttributes:
         [NSDictionary dictionaryWithObject:font
                                     forKey:NSFontAttributeName]].width) + 28;
@@ -428,7 +429,7 @@
     [[popup cell] setControlSize:NSSmallControlSize];
     [[popup cell] setFont:
         [NSFont systemFontOfSize:
-            [NSFont systemFontSizeForControlSize:NSSmallControlSize]]];
+            VLCLegacySystemFontSizeForControlSize(NSSmallControlSize)]];
     [popup setTarget:self];
     [popup setAction:action];
     [parent addSubview:popup];

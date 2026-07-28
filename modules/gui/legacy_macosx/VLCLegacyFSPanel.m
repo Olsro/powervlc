@@ -23,6 +23,7 @@
 #endif
 
 #import "VLCLegacyFSPanel.h"
+#import "misc.h"
 #import "VLCLegacyCoreInteraction.h"
 #import "VLCLegacyControls.h"
 
@@ -186,7 +187,7 @@ static NSString *fsTimeToString(int seconds)
     [mediaTitleField setTextColor:[NSColor whiteColor]];
     [mediaTitleField setAlignment:NSCenterTextAlignment];
     [[mediaTitleField cell] setFont:[NSFont boldSystemFontOfSize:11]];
-    [[mediaTitleField cell] setLineBreakMode:NSLineBreakByTruncatingTail];
+    VLCLegacySetCellLineBreakMode([mediaTitleField cell], NSLineBreakByTruncatingTail);
     [mediaTitleField setStringValue:@""];
     [content addSubview:mediaTitleField];
 

@@ -346,7 +346,7 @@ int main(int i_argc, const char *ppsz_argv[])
             [NSApp run];
         }
     }
-    [pool drain];
+    [pool release];
 
     ret = 0;
     /* Cleanup */

@@ -23,6 +23,7 @@
 #endif
 
 #import "VLCLegacyMediaInfo.h"
+#import "misc.h"
 #import "VLCLegacyCoreInteraction.h"
 #import "VLCLegacyControls.h"
 #import "VLCLegacyHUDWindow.h"
@@ -147,7 +148,7 @@ static const struct {
     [label setTextColor:bold
         ? [NSColor whiteColor]
         : [NSColor colorWithCalibratedWhite:0.70f alpha:1.0f]];
-    [[label cell] setLineBreakMode:NSLineBreakByTruncatingTail];
+    VLCLegacySetCellLineBreakMode([label cell], NSLineBreakByTruncatingTail);
     [label setStringValue:text];
     [parent addSubview:label];
     return label;
@@ -171,7 +172,7 @@ static const struct {
         [[field cell] setWraps:NO];
         [[field cell] setScrollable:YES];
     } else
-        [[field cell] setLineBreakMode:NSLineBreakByTruncatingMiddle];
+        VLCLegacySetCellLineBreakMode([field cell], NSLineBreakByTruncatingMiddle);
     [field setStringValue:@""];
     [parent addSubview:field];
     return field;
@@ -189,7 +190,10 @@ static const struct {
     artworkView = [[[NSImageView alloc]
         initWithFrame:NSMakeRect(6, 246, 100, 100)] autorelease];
     [artworkView setEditable:NO];
-    [artworkView unregisterDraggedTypes];
+    /* -unregisterDraggedTypes is 10.3; below it, a view that never
+     * registered a type has nothing to unregister anyway */
+    if ([artworkView respondsToSelector:@selector(unregisterDraggedTypes)])
+        [artworkView unregisterDraggedTypes];
     [pane addSubview:artworkView];
 
     int i;
@@ -220,7 +224,14 @@ static const struct {
         initWithFrame:NSMakeRect(6, 8, 468, 336)] autorelease];
     [scroll setHasVerticalScroller:YES];
     [scroll setBorderType:NSNoBorder];
-    [scroll setDrawsBackground:NO];
+    /* The dark HUD background has to come from the SCROLL view, not the outline
+     * view: an outline view only paints the rows it has, and this pane is
+     * empty until a medium is playing. On 10.4 something else filled the
+     * rest; on 10.2 the pane was simply transparent, showing the window
+     * behind it through the "Codec Details" tab and its white scroller. */
+    [scroll setDrawsBackground:YES];
+    [scroll setBackgroundColor:
+        [NSColor colorWithCalibratedWhite:0.13f alpha:1.0f]];
 
     streamsOutline = [[[NSOutlineView alloc]
         initWithFrame:[[scroll contentView] bounds]] autorelease];
@@ -242,8 +253,10 @@ static const struct {
     [streamsOutline setBackgroundColor:
         [NSColor colorWithCalibratedWhite:0.13f alpha:1.0f]];
     [streamsOutline setHeaderView:nil];
-    [streamsOutline setGridStyleMask:NSTableViewGridNone];
-    [streamsOutline setUsesAlternatingRowBackgroundColors:NO];
+    if ([streamsOutline respondsToSelector:@selector(setGridStyleMask:)])
+        [streamsOutline setGridStyleMask:NSTableViewGridNone];
+    if ([streamsOutline respondsToSelector:@selector(setUsesAlternatingRowBackgroundColors:)])
+        [streamsOutline setUsesAlternatingRowBackgroundColors:NO];
     [streamsOutline setIndentationPerLevel:12];
     [streamsOutline setAutoresizesOutlineColumn:NO];
     [streamsOutline setRowHeight:14];
@@ -296,6 +309,11 @@ objectValueForTableColumn:(NSTableColumn *)tableColumn byItem:(id)item
 {
     if (![cell isKindOfClass:[NSTextFieldCell class]])
         return;
+    /* ⚠ White text needs a cell that does NOT paint its own background:
+     * on 10.2 every row came out with a white block behind each string,
+     * the dark table background showing only in the gaps. Already the
+     * default from 10.3 on, so this changes nothing there. */
+    [cell setDrawsBackground:NO];
     [cell setTextColor:[NSColor whiteColor]];
     /* categories in bold, their properties in the plain small font */
     BOOL isCategory = [[item children] count] > 0;
@@ -514,6 +532,15 @@ objectValueForTableColumn:(NSTableColumn *)tableColumn byItem:(id)item
     [window orderOut:sender];
     [refreshTimer invalidate];
     refreshTimer = nil;
+}
+
+/* debug helper, like -[VLCLegacyPrefs debugSelectPane:] */
+- (void)debugSelectPane:(NSNumber *)index
+{
+    int i = [index intValue];
+
+    if (i >= 0 && i < 3)
+        [self selectPane:tabButtons[i]];
 }
 
 - (void)showWindow

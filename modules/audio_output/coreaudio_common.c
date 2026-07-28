@@ -633,8 +633,18 @@ RenderCallback(void *p_data, AudioUnitRenderActionFlags *ioActionFlags,
     VLC_UNUSED(inTimeStamp);
     VLC_UNUSED(inBusNumber);
 
+    /* The AUHAL of Mac OS X 10.2 announces kAudioTimeStampSampleTimeValid
+     * and nothing else (measured: mFlags == 0x1), leaving mHostTime filled
+     * with uninitialised memory. Passing 0 down is not an option: ca_Render
+     * would then find its deferred start time forever in the future and
+     * write silence for the whole file, ca_TimeGet would never succeed, and
+     * the input would wait for a drain that never comes -- silent playback
+     * that never ends. The callback runs immediately before the buffer is
+     * handed to the device, so "now" is the right substitute; what it costs
+     * in accuracy is the device latency, which i_dev_latency_us already
+     * accounts for separately. */
     uint64_t i_host_time = (inTimeStamp->mFlags & kAudioTimeStampHostTimeValid)
-                         ? inTimeStamp->mHostTime : 0;
+                         ? inTimeStamp->mHostTime : mach_absolute_time();
 
     ca_Render(p_data, inNumberFrames, i_host_time, ioData->mBuffers[0].mData,
               ioData->mBuffers[0].mDataByteSize);
@@ -768,6 +778,25 @@ MapOutputLayout(audio_output_t *p_aout, audio_sample_format_t *fmt,
     if (outlayout->mChannelLayoutTag !=
         kAudioChannelLayoutTag_UseChannelDescriptions)
     {
+        /* AudioFormatGetProperty() only exists since Mac OS X 10.3; below that
+         * deployment target it is weak-imported and resolves to NULL on the
+         * running system. Expanding a layout tag into channel descriptions is
+         * then impossible, so settle for stereo -- which is what every Mac
+         * that stops at 10.2 has on its built-in output anyway. Taken through
+         * a variable so the 10.3+ builds, where the symbol is not weak, do not
+         * warn that its address is always true. */
+        OSStatus (*get_layout_info)(AudioFormatPropertyID, UInt32,
+                                    const void *, UInt32 *) =
+            AudioFormatGetPropertyInfo;
+
+        if (get_layout_info == NULL)
+        {
+            msg_Dbg(p_aout, "no AudioFormat API (pre-10.3): assuming stereo");
+            fmt->i_physical_channels = AOUT_CHANS_STEREO;
+            aout_FormatPrepare(fmt);
+            return VLC_SUCCESS;
+        }
+
         reslayout = GetLayoutDescription(p_aout, outlayout);
         if (reslayout == NULL)
             return VLC_EGENERIC;
@@ -1017,7 +1046,16 @@ au_Initialize(audio_output_t *p_aout, AudioUnit au, audio_sample_format_t *fmt,
                                    kAudioUnitScope_Input, 0, inlayout,
                                    inlayout_size);
         free(inlayout_buf);
-        if (err != noErr)
+        if (err == kAudioUnitErr_InvalidProperty)
+        {
+            /* The AUHAL of Mac OS X 10.2 has no channel layout property at
+             * all: it plays whatever interleaved stream it is fed, in the
+             * channel order the format already describes. Declining to
+             * describe the layout is not a reason to refuse to play. */
+            ca_LogWarn("AU has no channel layout property, using the "
+                       "stream order as-is");
+        }
+        else if (err != noErr)
         {
             ca_LogErr("failed to setup input layout");
             return VLC_EGENERIC;
