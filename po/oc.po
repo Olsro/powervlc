@@ -31241,3 +31241,22 @@ msgstr "Ama&gar lo lector multimèdia PowerVLC dins la barra dels prètzfaches"
 
 msgid "Sho&w PowerVLC media player"
 msgstr "A&fichar lo lector multimèdia PowerVLC"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:806
+#: modules/gui/macosx/VLCMainMenu.m:143
+#: modules/gui/qt/menus.cpp:810
+msgid "Open the libaacs folder (Blu-ray)"
+msgstr "Dobrir lo dossièr de libaacs (Blu-ray)"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:808
+#: modules/gui/macosx/VLCMainMenu.m:150
+#: modules/gui/qt/menus.cpp:815
+msgid "Open the libbdplus folder (Blu-ray)"
+msgstr "Dobrir lo dossièr de libbdplus (Blu-ray)"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1609
+#: modules/gui/macosx/VLCMainMenu.m:1423
+#: modules/gui/qt/util/powervlc_disclibs.cpp:64
+#, c-format
+msgid "The folder %s could not be opened."
+msgstr "Impossible de dobrir lo dossièr %s."

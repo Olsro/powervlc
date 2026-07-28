@@ -45,6 +45,7 @@
 #include "actions_manager.hpp"                    /* Actions Management: play+volume */
 #include "extensions_manager.hpp"                 /* Extensions menu */
 #include "util/qmenuview.hpp"                     /* Simple Playlist menu */
+#include "util/powervlc_disclibs.hpp"             /* libaacs/libbdplus folders */
 #include "components/playlist/playlist_model.hpp" /* PLModel getter */
 #include "components/playlist/standardpanel.hpp"  /* PLView getter */
 #include "components/extended_panels.hpp"
@@ -796,6 +797,27 @@ QMenu *VLCMenuBar::HelpMenu( QWidget *parent )
     addDPStaticEntry( menu, qtr( "Check for &Updates..." ) , "",
                       SLOT( updateDialog() ) );
 #endif
+
+    /* Neither library can decrypt anything until the user drops their own
+     * files in these folders, and both folders are hidden away where nobody
+     * would find them. Only offered when this build can play Blu-ray at all. */
+    if( PowerVLCHasBluray() )
+    {
+        menu->addSeparator();
+
+        /* The three-argument addAction( text, context, functor ) is Qt 5.6 and
+         * this player still builds against 5.5. */
+        QAction *action = menu->addAction( qtr( "Open the libaacs folder (Blu-ray)" ) );
+        QObject::connect( action, &QAction::triggered, menu, [parent]() {
+            PowerVLCOpenDiscLibFolder( parent, "aacs" );
+        } );
+
+        action = menu->addAction( qtr( "Open the libbdplus folder (Blu-ray)" ) );
+        QObject::connect( action, &QAction::triggered, menu, [parent]() {
+            PowerVLCOpenDiscLibFolder( parent, "bdplus" );
+        } );
+    }
+
     menu->addSeparator();
     addDPStaticEntry( menu, qtr( I_MENU_ABOUT ), ":/menu/info.svg",
             SLOT( aboutDialog() ), "Shift+F1", QAction::AboutRole );

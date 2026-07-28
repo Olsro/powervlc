@@ -29450,3 +29450,22 @@ msgstr ""
 #: modules/gui/qt/ui/vlm.h:299
 msgid "Media Manager List"
 msgstr "Isiphathi sohlu semidiya"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:806
+#: modules/gui/macosx/VLCMainMenu.m:143
+#: modules/gui/qt/menus.cpp:810
+msgid "Open the libaacs folder (Blu-ray)"
+msgstr "Vula ifolda ye-libaacs (Blu-ray)"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:808
+#: modules/gui/macosx/VLCMainMenu.m:150
+#: modules/gui/qt/menus.cpp:815
+msgid "Open the libbdplus folder (Blu-ray)"
+msgstr "Vula ifolda ye-libbdplus (Blu-ray)"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1609
+#: modules/gui/macosx/VLCMainMenu.m:1423
+#: modules/gui/qt/util/powervlc_disclibs.cpp:64
+#, c-format
+msgid "The folder %s could not be opened."
+msgstr "Ifolda %s ayikwazanga ukuvulwa."

@@ -533,7 +533,7 @@ static bool FindRawDevice(char **file)
 
 /* Hands our MMC channel to libaacs, which cannot open its own: SCSITaskLib
  * grants exclusive access to a single owner. libbluray dlopen()s libaacs by the
- * path SetupLibaacsPath() exported, so opening that same path here yields the
+ * path SetupDiscLibPath() exported, so opening that same path here yields the
  * very same image and therefore the same globals. Absent from older libaacs
  * builds, hence the dlsym() rather than a direct call. */
 static void ShareMMCWithLibaacs(demux_t *p_demux, void *task_interface)
@@ -542,7 +542,7 @@ static void ShareMMCWithLibaacs(demux_t *p_demux, void *task_interface)
     if (psz_lib == NULL)
         return;
 
-    /* SetupLibaacsPath() exports the path *without* the extension, because that
+    /* SetupDiscLibPath() exports the path *without* the extension, because that
      * is what libbluray expects to append to. dlopen() needs the real file. */
     char *psz_file;
     if (asprintf(&psz_file, "%s.dylib", psz_lib) < 0)
@@ -852,22 +852,23 @@ bailout:
 }
 
 /*****************************************************************************
- * SetupLibaacsPath: point libbluray at the AACS library we ship
+ * SetupDiscLibPath: point libbluray at the descrambling libraries we ship
  *
- * libbluray does not link against libaacs, it dlopen()s it under a plain name
- * ("libaacs.dylib", "libaacs.dll", "libaacs.so.0"). That relies on the
- * platform library search path, which is fine for a distribution package but
- * not for the copy we bundle: an application bundle is on no search path, and
- * DYLD_/LD_LIBRARY_PATH cannot be counted on. libbluray does try
- * @executable_path itself on Darwin, but that is one dyld behaviour on one
- * platform to bet a retail Blu-ray on; it tries $LIBAACS_PATH before anything
- * else, so point that at our own copy - unless the user already selected an
- * implementation, e.g. libmmbd.
+ * libbluray does not link against libaacs or libbdplus, it dlopen()s them
+ * under plain names ("libaacs.dylib", "libbdplus.dll", "libaacs.so.0"...).
+ * That relies on the platform library search path, which is fine for a
+ * distribution package but not for the copies we bundle: an application bundle
+ * is on no search path, and DYLD_/LD_LIBRARY_PATH cannot be counted on.
+ * libbluray does try @executable_path itself on Darwin, but that is one dyld
+ * behaviour on one platform to bet a retail Blu-ray on; it tries $LIBAACS_PATH
+ * / $LIBBDPLUS_PATH before anything else, so point those at our own copies -
+ * unless the user already selected an implementation, e.g. libmmbd.
  *
- * The variable holds the path *without* the extension: libbluray appends the
+ * The variables hold the path *without* the extension: libbluray appends the
  * platform one itself (see dl_dlopen() in libbluray).
  *****************************************************************************/
-static void SetupLibaacsPath(demux_t *p_demux)
+static void SetupDiscLibPath(demux_t *p_demux, const char *psz_lib,
+                             const char *psz_var)
 {
 #ifdef _WIN32
     static const char psz_ext[] = ".dll";
@@ -877,15 +878,15 @@ static void SetupLibaacsPath(demux_t *p_demux)
     static const char psz_ext[] = ".so.0";
 #endif
     static const char *const ppsz_fmt[] = {
-        "%s/lib/libaacs",  /* VLC.app/Contents/MacOS + /lib */
-        "%s/libaacs",      /* Windows: beside powervlc.exe; UNIX: $libdir */
-        "%s/../libaacs",   /* UNIX: $libdir is .../lib/vlc, library in lib/ */
+        "%s/lib/%s",  /* VLC.app/Contents/MacOS + /lib */
+        "%s/%s",      /* Windows: beside powervlc.exe; UNIX: $libdir */
+        "%s/../%s",   /* UNIX: $libdir is .../lib/vlc, library in lib/ */
     };
     static vlc_mutex_t lock = VLC_STATIC_MUTEX;
 
     vlc_mutex_lock(&lock);
 
-    if (getenv("LIBAACS_PATH") != NULL)
+    if (getenv(psz_var) != NULL)
         goto out;
 
     char *psz_libdir = config_GetLibDir();
@@ -894,7 +895,7 @@ static void SetupLibaacsPath(demux_t *p_demux)
 
     for (size_t i = 0; i < ARRAY_SIZE(ppsz_fmt); i++) {
         char *psz_base;
-        if (asprintf(&psz_base, ppsz_fmt[i], psz_libdir) < 0)
+        if (asprintf(&psz_base, ppsz_fmt[i], psz_libdir, psz_lib) < 0)
             break;
 
         char *psz_file;
@@ -906,8 +907,8 @@ static void SetupLibaacsPath(demux_t *p_demux)
         struct stat st;
         bool b_found = vlc_stat(psz_file, &st) == 0 && !S_ISDIR(st.st_mode);
         if (b_found) {
-            msg_Dbg(p_demux, "using bundled AACS library %s", psz_file);
-            setenv("LIBAACS_PATH", psz_base, 1);
+            msg_Dbg(p_demux, "using bundled descrambling library %s", psz_file);
+            setenv(psz_var, psz_base, 1);
         }
 
         free(psz_file);
@@ -996,7 +997,8 @@ static int blurayOpen(vlc_object_t *object)
     var_AddCallback( p_demux->p_input, "intf-event", onIntfEvent, p_demux );
 
     /* Open BluRay */
-    SetupLibaacsPath(p_demux);
+    SetupDiscLibPath(p_demux, "libaacs", "LIBAACS_PATH");
+    SetupDiscLibPath(p_demux, "libbdplus", "LIBBDPLUS_PATH");
 #ifdef BLURAY_DEMUX
     if (p_demux->s) {
         i_init_pos = vlc_stream_Tell(p_demux->s);

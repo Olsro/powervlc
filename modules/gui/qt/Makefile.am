@@ -144,6 +144,7 @@ libqt_plugin_la_SOURCES = \
 	gui/qt/util/singleton.hpp \
 	gui/qt/util/imagehelper.cpp gui/qt/util/imagehelper.hpp \
 	gui/qt/util/powervlc_links.cpp gui/qt/util/powervlc_links.hpp \
+	gui/qt/util/powervlc_disclibs.cpp gui/qt/util/powervlc_disclibs.hpp \
 	gui/qt/styles/seekstyle.cpp gui/qt/styles/seekstyle.hpp
 if HAVE_WIN32
 libqt_plugin_la_SOURCES += \

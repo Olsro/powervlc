@@ -279,6 +279,8 @@
 - (IBAction)showPreferences:(id)sender;
 - (IBAction)showHelp:(id)sender;
 - (IBAction)openDocumentation:(id)sender;
+- (IBAction)openAACSFolder:(id)sender;
+- (IBAction)openBDPlusFolder:(id)sender;
 - (IBAction)openWebsite:(id)sender;
 - (IBAction)openForum:(id)sender;
 - (IBAction)openDonate:(id)sender;

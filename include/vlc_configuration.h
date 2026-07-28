@@ -136,6 +136,18 @@ typedef enum vlc_userdir
 
 VLC_API char * config_GetUserDir( vlc_userdir_t ) VLC_USED VLC_MALLOC;
 
+/**
+ * Directory a Blu-ray descrambling library reads its user files from.
+ *
+ * libaacs (KEYDB.cfg) and libbdplus (vm0/, conversion tables) look under
+ * <config home>/<name>, the parent of VLC's own configuration directory on
+ * every platform. The directory is not created.
+ *
+ * \param psz_lib "aacs" or "bdplus"
+ * \return the path, to be freed by the caller, or NULL
+ */
+VLC_API char * config_GetDiscLibDir( const char *psz_lib ) VLC_USED VLC_MALLOC;
+
 VLC_API void config_AddIntf( vlc_object_t *, const char * );
 VLC_API void config_RemoveIntf( vlc_object_t *, const char * );
 VLC_API bool config_ExistIntf( vlc_object_t *, const char * ) VLC_USED;

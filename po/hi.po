@@ -29762,6 +29762,23 @@ msgstr "AAAA; "
 msgid "Media Manager List"
 msgstr "मीडिया प्रबंधन सूची"
 
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:806
+#: modules/gui/macosx/VLCMainMenu.m:143 modules/gui/qt/menus.cpp:810
+msgid "Open the libaacs folder (Blu-ray)"
+msgstr "libaacs फ़ोल्डर खोलें (ब्लू-रे)"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:808
+#: modules/gui/macosx/VLCMainMenu.m:150 modules/gui/qt/menus.cpp:815
+msgid "Open the libbdplus folder (Blu-ray)"
+msgstr "libbdplus फ़ोल्डर खोलें (ब्लू-रे)"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1609
+#: modules/gui/macosx/VLCMainMenu.m:1423
+#: modules/gui/qt/util/powervlc_disclibs.cpp:64
+#, c-format
+msgid "The folder %s could not be opened."
+msgstr "फ़ोल्डर %s को खोला नहीं जा सका।"
+
 #, c-format
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "VLC संस्करण %s(%s)\n"

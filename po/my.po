@@ -29518,6 +29518,23 @@ msgstr "AAAA; "
 msgid "Media Manager List"
 msgstr "မီဒီယာ စီမံရေးရာ စာရင်း"
 
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:806
+#: modules/gui/macosx/VLCMainMenu.m:143 modules/gui/qt/menus.cpp:810
+msgid "Open the libaacs folder (Blu-ray)"
+msgstr "libaacs ဖိုင်တွဲကို ဖွင့်ရန် (Blu-ray)"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:808
+#: modules/gui/macosx/VLCMainMenu.m:150 modules/gui/qt/menus.cpp:815
+msgid "Open the libbdplus folder (Blu-ray)"
+msgstr "libbdplus ဖိုင်တွဲကို ဖွင့်ရန် (Blu-ray)"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1609
+#: modules/gui/macosx/VLCMainMenu.m:1423
+#: modules/gui/qt/util/powervlc_disclibs.cpp:64
+#, c-format
+msgid "The folder %s could not be opened."
+msgstr "%s ဖိုင်တွဲကို မဖွင့်နိုင်ပါ။"
+
 #, c-format
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "VLC ဗားရှင်း %s (%s)\n"

@@ -585,3 +585,53 @@ void config_ResetAll( vlc_object_t *p_this )
 
     VLC_UNUSED(p_this);
 }
+
+/*****************************************************************************
+ * config_GetDiscLibDir: directory a Blu-ray descrambling library reads its
+ * user files from.
+ *****************************************************************************
+ * libaacs and libbdplus are dlopen()ed by libbluray and look for their own
+ * files -- KEYDB.cfg for one, vm0/ and the conversion tables for the other --
+ * under <config home>/aacs and <config home>/bdplus, where the config home is
+ * $HOME/Library/Preferences on macOS, %APPDATA% on Windows and
+ * $XDG_CONFIG_HOME (or $HOME/.config) elsewhere.
+ *
+ * That is the parent of our own configuration directory on every platform,
+ * which is how it is derived here instead of duplicating the three rules. The
+ * directory is not created: callers that mean to write there say so
+ * themselves.
+ *
+ * Two callers need the same answer -- the key database importer
+ * (modules/demux/keydb.c) writes into it, and the "Open the libaacs/libbdplus
+ * folder" items of every interface's Help menu open it -- and a menu that
+ * opened a different folder than the importer writes to would be a bug nobody
+ * could see. Hence one implementation.
+ *****************************************************************************/
+char *config_GetDiscLibDir( const char *psz_lib )
+{
+    char *psz_config = config_GetUserDir( VLC_CONFIG_DIR );
+    if( psz_config == NULL )
+        return NULL;
+
+    /* strip our own application directory, keep its parent */
+    char *psz_sep = NULL;
+    for( char *p = psz_config; *p != '\0'; p++ )
+        if( *p == '/' || *p == '\\' )
+            psz_sep = p;
+
+    if( psz_sep == NULL || psz_sep == psz_config )
+    {
+        free( psz_config );
+        return NULL;
+    }
+
+    const char c_sep = *psz_sep;
+    *psz_sep = '\0';
+
+    char *psz_dir;
+    if( asprintf( &psz_dir, "%s%c%s", psz_config, c_sep, psz_lib ) < 0 )
+        psz_dir = NULL;
+    free( psz_config );
+
+    return psz_dir;
+}

@@ -29755,3 +29755,22 @@ msgstr "&Gøym PowerVLC-mediespelar i oppgåvelinja"
 
 msgid "Sho&w PowerVLC media player"
 msgstr "&Vis PowerVLC-mediespelar"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:806
+#: modules/gui/macosx/VLCMainMenu.m:143
+#: modules/gui/qt/menus.cpp:810
+msgid "Open the libaacs folder (Blu-ray)"
+msgstr "Opna mappa til libaacs (Blu-ray)"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:808
+#: modules/gui/macosx/VLCMainMenu.m:150
+#: modules/gui/qt/menus.cpp:815
+msgid "Open the libbdplus folder (Blu-ray)"
+msgstr "Opna mappa til libbdplus (Blu-ray)"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1609
+#: modules/gui/macosx/VLCMainMenu.m:1423
+#: modules/gui/qt/util/powervlc_disclibs.cpp:64
+#, c-format
+msgid "The folder %s could not be opened."
+msgstr "Klarte ikkje å opna mappa %s."

@@ -443,6 +443,14 @@ if ! ls ../$CONTRIB_PREFIX/bin/libaacs*.dll >/dev/null 2>&1; then
     info "Building libaacs contrib"
     make .aacs
 fi
+
+# Same for libbdplus (BD+, the layer above AACS on some retail discs): dlopen()ed
+# by libbluray, shipped next to powervlc.exe, and never present in a prebuilt
+# contrib set.
+if ! ls ../$CONTRIB_PREFIX/bin/libbdplus*.dll >/dev/null 2>&1; then
+    info "Building libbdplus contrib"
+    make .bdplus
+fi
 cd ../..
 
 info "Bootstrapping"

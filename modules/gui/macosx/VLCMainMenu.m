@@ -130,6 +130,35 @@
         [appMenu insertItem:[NSMenuItem separatorItem] atIndex:prefsIndex + 3];
     }
 
+    /* libaacs and libbdplus ship with the player but decrypt nothing until the
+     * user drops their own files next to them -- in a folder inside
+     * ~/Library/Preferences that nobody would ever find on their own. Offer to
+     * open it, but only when this build can play Blu-ray at all. Appended to
+     * the Help menu rather than declared in the nib: nothing here depends on
+     * the layout of that menu.
+     *
+     * "libbluray", not "bluray": module_find() only ever compares
+     * pp_shortcuts[0], which is the module's object name (the plugin is built
+     * as liblibbluray_plugin). The "bluray" of add_shortcut() sits at index 1
+     * and can never match. */
+    if (module_exists("libbluray")) {
+        [_helpMenu addItem:[NSMenuItem separatorItem]];
+
+        NSMenuItem *item = [[NSMenuItem alloc]
+            initWithTitle:_NS("Open the libaacs folder (Blu-ray)")
+                   action:@selector(openAACSFolder:)
+            keyEquivalent:@""];
+        [item setTarget:self];
+        [_helpMenu addItem:item];
+
+        item = [[NSMenuItem alloc]
+            initWithTitle:_NS("Open the libbdplus folder (Blu-ray)")
+                   action:@selector(openBDPlusFolder:)
+            keyEquivalent:@""];
+        [item setTarget:self];
+        [_helpMenu addItem:item];
+    }
+
     key = config_GetPsz(p_intf, "key-quit");
     keyString = [NSString stringWithFormat:@"%s", key];
     [_quit setKeyEquivalent: [stringUtility VLCKeyToString: keyString]];
@@ -1368,6 +1397,57 @@
     NSURL *url = [NSURL URLWithString: @"https://www.videolan.org/contribute.html#paypal"];
 
     [VLCMain openURLWithVideoLANConfirmation: url];
+}
+
+/* Reveals <config home>/<lib> in the Finder, creating it first: the folder
+ * does not exist until something writes there, and an "open" that silently did
+ * nothing would look like a broken menu item. config_GetDiscLibDir() is what
+ * the key database importer uses too, so the two can never disagree. */
+- (void)openDiscLibFolder:(const char *)psz_lib
+{
+    char *psz_dir = config_GetDiscLibDir(psz_lib);
+    NSString *path = psz_dir ? toNSStr(psz_dir) : nil;
+
+    if (path != nil
+     && [[NSFileManager defaultManager] createDirectoryAtPath:path
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:nil]
+     && [[NSWorkspace sharedWorkspace] openFile:path]) {
+        free(psz_dir);
+        return;
+    }
+
+    msg_Err(getIntf(), "cannot open the %s folder", psz_lib);
+
+    /* The "%s" is substituted by hand rather than through -stringWithFormat:,
+     * whose %s decodes the bytes in the *system* encoding rather than UTF-8,
+     * and this is a path. The msgid keeps VLC's "%s" so that the three
+     * interfaces share a single string to translate. */
+    NSMutableString *msg = [NSMutableString stringWithString:
+        _NS("The folder %s could not be opened.")];
+    [msg replaceOccurrencesOfString:@"%s"
+                         withString:(path != nil ? path : toNSStr(psz_lib))
+                            options:0
+                              range:NSMakeRange(0, [msg length])];
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:_NS("Error")];
+    [alert setInformativeText:msg];
+    [alert addButtonWithTitle:_NS("OK")];
+    [alert runModal];
+
+    free(psz_dir);
+}
+
+- (IBAction)openAACSFolder:(id)sender
+{
+    [self openDiscLibFolder:"aacs"];
+}
+
+- (IBAction)openBDPlusFolder:(id)sender
+{
+    [self openDiscLibFolder:"bdplus"];
 }
 
 - (IBAction)showInformationPanel:(id)sender

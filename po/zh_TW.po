@@ -29798,3 +29798,22 @@ msgstr "在工作列隱藏 PowerVLC 媒體播放器(&H)"
 
 msgid "Sho&w PowerVLC media player"
 msgstr "顯示 PowerVLC 媒體播放器(&W)"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:806
+#: modules/gui/macosx/VLCMainMenu.m:143
+#: modules/gui/qt/menus.cpp:810
+msgid "Open the libaacs folder (Blu-ray)"
+msgstr "開啟 libaacs 資料夾（藍光）"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:808
+#: modules/gui/macosx/VLCMainMenu.m:150
+#: modules/gui/qt/menus.cpp:815
+msgid "Open the libbdplus folder (Blu-ray)"
+msgstr "開啟 libbdplus 資料夾（藍光）"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1609
+#: modules/gui/macosx/VLCMainMenu.m:1423
+#: modules/gui/qt/util/powervlc_disclibs.cpp:64
+#, c-format
+msgid "The folder %s could not be opened."
+msgstr "無法開啟資料夾 %s。"

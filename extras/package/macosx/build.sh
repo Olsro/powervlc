@@ -575,7 +575,7 @@ fi
 # rules or patches have changed. These two carry the Blu-ray support and are
 # cheap no-ops once their stamps are current, so ask for them by name. Deleting
 # a stamp (and the unpacked source, so the patches re-apply) is what forces a
-# rebuild after touching contrib/src/{bluray,aacs}.
+# rebuild after touching contrib/src/{bluray,aacs,bdplus}.
 #
 # libaacs additionally has to exist at all: libbluray dlopen()s it, it is
 # bundled with the player (see contrib/src/aacs), and packaging refuses to ship
@@ -584,9 +584,13 @@ fi
 # but no symbol from that header was ever used, and
 # libaacs-powervlc-tiger-and-external-mmc.patch drops the include, so every
 # slice gets AACS now and AACS_OPTIONAL is no longer set for any of them.
+#
+# libbdplus is the BD+ layer, dlopen()ed and bundled the same way; it is only a
+# warning when missing, but it is just as cheap to keep current.
 info "Making sure the Blu-ray contribs are current"
 make .bluray
 make .aacs
+make .bdplus
 
 # Same reasoning for ffmpeg, which carries the PowerPC H.264 patches in
 # contrib/src/ffmpeg/000*-ppc-*: without this the prefix built before those

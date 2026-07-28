@@ -1,0 +1,514 @@
+From a7a38b3d19a41590a959b63db7cf0be682f98a54 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Tue, 28 Jul 2026 02:46:25 +0000
+Subject: [PATCH 6/6] PPC: Add AltiVec 8-tap subpel motion-compensation kernels
+ (put/prep)
+
+New 8bpc put_8tap and prep_8tap kernels for the big-endian AltiVec (G4/G5)
+sub-target, covering all nine regular/smooth/sharp filter combinations plus
+the integer-MV copy and prep pixel-widening cases. Subpel MC is the hottest
+DSP family in inter decode and previously ran scalar C on these machines.
+
+Horizontal filtering loads the 15/16 source bytes for 8 outputs once and
+shuffles them into per-output 4-byte groups for vmsummbm (signed taps x
+unsigned pixels, summed into 32-bit lanes): one load, three permutes and
+four multiply-sums per 8 pixels. Vertical filtering on pixels byte-
+transposes the 8 sliding row registers into the same form with two merge
+levels; the 2D second pass runs vmsumshm on interleaved 16-bit row pairs
+from the mid buffer. Rounding mirrors src/mc_tmpl.c for
+intermediate_bits=4; the documented intermediate range [-5132, 9212]
+guarantees the saturating i32->i16 packs are exact and vec_packsu
+implements iclip_pixel.
+
+Registered under ARCH_PPC && !ARCH_PPC64LE only; the ppc64le build is
+unchanged. Verified bit-exact vs the C reference with checkasm under
+qemu-ppc (-cpu 7400, 32-bit big-endian): mc_8bpc.mc and mc_8bpc.mct pass
+for every filter/width/height/subpel combination (1473 tests), full suite
+regression-clean.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011ufaEhvCRX9nswQTF2pzdN
+---
+ src/ppc/mc.h      |  35 +++-
+ src/ppc/mc_tmpl.c | 409 ++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 442 insertions(+), 2 deletions(-)
+
+diff --git a/src/ppc/mc.h b/src/ppc/mc.h
+index 1101fa3a..cf207206 100644
+--- a/src/ppc/mc.h
++++ b/src/ppc/mc.h
+@@ -38,11 +38,26 @@ decl_blend_dir_fn(BF(dav1d_blend_h, pwr9));
+ decl_blend_dir_fn(BF(dav1d_blend_v, pwr9));
+ 
+ #if !ARCH_PPC64LE
+-/* Compound-prediction kernels only built for the big-endian AltiVec (G4/G5)
+- * sub-target; ppc64le would need separate little-endian verification. */
++/* Compound-prediction and 8-tap subpel kernels only built for the big-endian
++ * AltiVec (G4/G5) sub-target; ppc64le would need separate LE verification. */
+ decl_avg_fn(BF(dav1d_avg, altivec));
+ decl_w_avg_fn(BF(dav1d_w_avg, altivec));
+ decl_mask_fn(BF(dav1d_mask, altivec));
++
++#define decl_8tap_fns(type) \
++decl_mc_fn(BF(dav1d_put_8tap_##type, altivec)); \
++decl_mct_fn(BF(dav1d_prep_8tap_##type, altivec))
++
++decl_8tap_fns(regular);
++decl_8tap_fns(regular_sharp);
++decl_8tap_fns(regular_smooth);
++decl_8tap_fns(smooth);
++decl_8tap_fns(smooth_regular);
++decl_8tap_fns(smooth_sharp);
++decl_8tap_fns(sharp);
++decl_8tap_fns(sharp_regular);
++decl_8tap_fns(sharp_smooth);
++#undef decl_8tap_fns
+ #endif
+ #endif
+ 
+@@ -61,6 +76,22 @@ static ALWAYS_INLINE void mc_dsp_init_ppc(Dav1dMCDSPContext *const c) {
+   c->avg = BF(dav1d_avg, altivec);
+   c->w_avg = BF(dav1d_w_avg, altivec);
+   c->mask = BF(dav1d_mask, altivec);
++
++#define init_8tap_fns(type, name) do { \
++    c->mc [type] = BF(dav1d_put_8tap_##name, altivec); \
++    c->mct[type] = BF(dav1d_prep_8tap_##name, altivec); \
++} while (0)
++
++  init_8tap_fns(FILTER_2D_8TAP_REGULAR,        regular);
++  init_8tap_fns(FILTER_2D_8TAP_REGULAR_SMOOTH, regular_smooth);
++  init_8tap_fns(FILTER_2D_8TAP_REGULAR_SHARP,  regular_sharp);
++  init_8tap_fns(FILTER_2D_8TAP_SHARP_REGULAR,  sharp_regular);
++  init_8tap_fns(FILTER_2D_8TAP_SHARP_SMOOTH,   sharp_smooth);
++  init_8tap_fns(FILTER_2D_8TAP_SHARP,          sharp);
++  init_8tap_fns(FILTER_2D_8TAP_SMOOTH_REGULAR, smooth_regular);
++  init_8tap_fns(FILTER_2D_8TAP_SMOOTH,         smooth);
++  init_8tap_fns(FILTER_2D_8TAP_SMOOTH_SHARP,   smooth_sharp);
++#undef init_8tap_fns
+ #endif
+ #endif
+ #else
+diff --git a/src/ppc/mc_tmpl.c b/src/ppc/mc_tmpl.c
+index 6f73bb5d..e62b15bc 100644
+--- a/src/ppc/mc_tmpl.c
++++ b/src/ppc/mc_tmpl.c
+@@ -764,6 +764,415 @@ void dav1d_mask_8bpc_altivec(pixel *dst, const ptrdiff_t dst_stride,
+     }
+ }
+ 
++/*
++ * 8-tap subpel motion compensation (put + prep), the hottest DSP family in
++ * inter decode. Horizontal filtering uses vmsummbm (vec_msum on signed-taps x
++ * unsigned-pixels byte groups of 4): the 15/16 source bytes for 8 outputs are
++ * loaded once and shuffled into per-output 4-byte groups, so each group of 8
++ * pixels costs one load, three permutes and four multiply-sums. Vertical
++ * filtering on pixels byte-transposes 4 rows per column group (two merge
++ * levels) into the same vmsummbm form; vertical filtering on the 16-bit
++ * intermediate (the 2D case) uses vmsumshm on interleaved row pairs.
++ *
++ * 8bpc rounding mirrors src/mc_tmpl.c: intermediate_bits = 4, so
++ *   put h:  (sum + 34) >> 6      put v: (sum + 32) >> 6
++ *   mid:    (sum + 2)  >> 2      put hv second pass: (sum + 512) >> 10
++ *   prep h/v: (sum + 2) >> 2     prep hv second pass: (sum + 32) >> 6
++ * All 32-bit sums are packed with saturating vec_packs; the value ranges
++ * (documented in src/mc_tmpl.c: intermediate range [-5132, 9212]) guarantee
++ * the i32->i16 packs are exact, and the final vec_packsu is iclip_pixel.
++ */
++
++/* Build the two byte-group tap vectors {f0..f3}x4 / {f4..f7}x4. */
++#define H8TAPS(fh, tapsA, tapsB) \
++    const i8x16 tapsA = {fh[0],fh[1],fh[2],fh[3], fh[0],fh[1],fh[2],fh[3], \
++                         fh[0],fh[1],fh[2],fh[3], fh[0],fh[1],fh[2],fh[3]}; \
++    const i8x16 tapsB = {fh[4],fh[5],fh[6],fh[7], fh[4],fh[5],fh[6],fh[7], \
++                         fh[4],fh[5],fh[6],fh[7], fh[4],fh[5],fh[6],fh[7]}
++
++/* 8 horizontal 8-tap sums from the 16 bytes at ptr (= &src[x - 3]):
++ * s03/s47 are i32x4 accumulators seeded with accv. Output j needs bytes
++ * j..j+7; groups of four taps make that bytes j..j+3 (perm base 0) and
++ * j+4..j+7 (perm base 4), with outputs 4..7 reusing base 4 and adding base 8. */
++#define H8TAP_SUMS(s03, s47, ptr, tapsA, tapsB, accv) \
++    const u8x16 s03##_v = vec_xl(0, ptr); \
++    const u8x16 s03##_a = vec_perm(s03##_v, s03##_v, \
++        (u8x16){0,1,2,3, 1,2,3,4, 2,3,4,5, 3,4,5,6}); \
++    const u8x16 s03##_b = vec_perm(s03##_v, s03##_v, \
++        (u8x16){4,5,6,7, 5,6,7,8, 6,7,8,9, 7,8,9,10}); \
++    const u8x16 s03##_c = vec_perm(s03##_v, s03##_v, \
++        (u8x16){8,9,10,11, 9,10,11,12, 10,11,12,13, 11,12,13,14}); \
++    const i32x4 s03 = vec_msum(tapsB, s03##_b, vec_msum(tapsA, s03##_a, accv)); \
++    const i32x4 s47 = vec_msum(tapsB, s03##_c, vec_msum(tapsA, s03##_b, accv))
++
++static inline void store_wN(uint8_t *dst, u8x16 v, const int w) {
++    ALIGN_STK_16(uint8_t, buf, 16,);
++    vec_st(v, 0, buf);
++    memcpy(dst, buf, w);
++}
++
++static void put_8tap_h_altivec(pixel *dst, const ptrdiff_t dst_stride,
++                               const pixel *src, const ptrdiff_t src_stride,
++                               const int w, int h, const int8_t *const fh)
++{
++    const i32x4 accv = vec_splats((int32_t)34); // 32 + ((1 << 2) >> 1)
++    const u32x4 shv = vec_splats(6u);
++    H8TAPS(fh, tapsA, tapsB);
++
++    if (w <= 8) {
++        do {
++            H8TAP_SUMS(s03, s47, src - 3, tapsA, tapsB, accv);
++            const i16x8 t = vec_packs(vec_sra(s03, shv), vec_sra(s47, shv));
++            store_wN(dst, vec_packsu(t, t), w);
++            dst += PXSTRIDE(dst_stride);
++            src += PXSTRIDE(src_stride);
++        } while (--h);
++    } else {
++        do {
++            for (int x = 0; x < w; x += 16) {
++                H8TAP_SUMS(s03, s47, src + x - 3, tapsA, tapsB, accv);
++                H8TAP_SUMS(s8b, scf, src + x + 5, tapsA, tapsB, accv);
++                const i16x8 t0 = vec_packs(vec_sra(s03, shv), vec_sra(s47, shv));
++                const i16x8 t1 = vec_packs(vec_sra(s8b, shv), vec_sra(scf, shv));
++                vec_xst(vec_packsu(t0, t1), 0, dst + x);
++            }
++            dst += PXSTRIDE(dst_stride);
++            src += PXSTRIDE(src_stride);
++        } while (--h);
++    }
++}
++
++static void prep_8tap_h_altivec(int16_t *tmp, const pixel *src,
++                                const ptrdiff_t src_stride,
++                                const int w, int h, const int8_t *const fh)
++{
++    const i32x4 accv = vec_splats((int32_t)2); // (1 << 2) >> 1
++    const u32x4 shv = vec_splats(2u);          // 6 - intermediate_bits
++    H8TAPS(fh, tapsA, tapsB);
++
++    do {
++        if (w <= 4) {
++            H8TAP_SUMS(s03, s47, src - 3, tapsA, tapsB, accv);
++            const i16x8 t = vec_packs(vec_sra(s03, shv), vec_sra(s47, shv));
++            ALIGN_STK_16(int16_t, buf, 8,);
++            vec_st(t, 0, buf);
++            memcpy(tmp, buf, 2 * w);
++        } else for (int x = 0; x < w; x += 8) {
++            H8TAP_SUMS(s03, s47, src + x - 3, tapsA, tapsB, accv);
++            vec_xst(vec_packs(vec_sra(s03, shv), vec_sra(s47, shv)), 0, tmp + x);
++        }
++        tmp += w;
++        src += PXSTRIDE(src_stride);
++    } while (--h);
++}
++
++/* Vertical 8-tap: byte-transpose the 8 sliding row registers into per-column
++ * 4-byte groups (rows 0-3 then rows 4-7) and vmsummbm them, 8 columns at a
++ * time. cols 0-3 of rows 0-3 = mergeh(mergeh(r0,r1) as u16, mergeh(r2,r3)). */
++#define V8TAP_QUAD(q0, q1, ra, rb, rc, rd, mh) \
++    const u8x16 q0##_ab = mh(ra, rb); \
++    const u8x16 q0##_cd = mh(rc, rd); \
++    const u8x16 q0 = (u8x16)vec_mergeh((u16x8)q0##_ab, (u16x8)q0##_cd); \
++    const u8x16 q1 = (u8x16)vec_mergel((u16x8)q0##_ab, (u16x8)q0##_cd)
++
++#define V8TAP_SUMS8(s03, s47, uniq, r0, r1, r2, r3, r4, r5, r6, r7, tapsA, tapsB, accv, mh) \
++    V8TAP_QUAD(uniq##q0, uniq##q1, r0, r1, r2, r3, mh); \
++    V8TAP_QUAD(uniq##q2, uniq##q3, r4, r5, r6, r7, mh); \
++    const i32x4 s03 = vec_msum(tapsB, uniq##q2, vec_msum(tapsA, uniq##q0, accv)); \
++    const i32x4 s47 = vec_msum(tapsB, uniq##q3, vec_msum(tapsA, uniq##q1, accv))
++
++#define V8TAP_SLIDE \
++    r0 = r1; r1 = r2; r2 = r3; r3 = r4; r4 = r5; r5 = r6; r6 = r7
++
++/* is_put: rounding 32 >> 6 and pixel output; else prep: 2 >> 2, int16_t. */
++static ALWAYS_INLINE void v8tap_altivec(pixel *dst, const ptrdiff_t dst_stride,
++                                        int16_t *tmp,
++                                        const pixel *src, const ptrdiff_t src_stride,
++                                        const int w, const int h,
++                                        const int8_t *const fv,
++                                        const i32x4 accv, const u32x4 shv,
++                                        const int is_put)
++{
++    H8TAPS(fv, tapsA, tapsB);
++    const ptrdiff_t stride = PXSTRIDE(src_stride);
++
++    if (w <= 8) {
++        const pixel *s = src - 3 * stride;
++        u8x16 r0 = vec_xl(0, s);
++        u8x16 r1 = vec_xl(0, s + 1 * stride);
++        u8x16 r2 = vec_xl(0, s + 2 * stride);
++        u8x16 r3 = vec_xl(0, s + 3 * stride);
++        u8x16 r4 = vec_xl(0, s + 4 * stride);
++        u8x16 r5 = vec_xl(0, s + 5 * stride);
++        u8x16 r6 = vec_xl(0, s + 6 * stride);
++        s += 7 * stride;
++        for (int y = 0; y < h; y++) {
++            const u8x16 r7 = vec_xl(0, s);
++            V8TAP_SUMS8(s03, s47, a, r0, r1, r2, r3, r4, r5, r6, r7,
++                        tapsA, tapsB, accv, vec_mergeh);
++            const i16x8 t = vec_packs(vec_sra(s03, shv), vec_sra(s47, shv));
++            if (is_put) {
++                store_wN(dst, vec_packsu(t, t), w);
++                dst += PXSTRIDE(dst_stride);
++            } else {
++                if (w == 8) {
++                    vec_xst(t, 0, tmp);
++                } else {
++                    ALIGN_STK_16(int16_t, buf, 8,);
++                    vec_st(t, 0, buf);
++                    memcpy(tmp, buf, 2 * w);
++                }
++                tmp += w;
++            }
++            V8TAP_SLIDE;
++            s += stride;
++        }
++    } else {
++        for (int x = 0; x < w; x += 16) {
++            const pixel *s = src + x - 3 * stride;
++            pixel *d = dst + x;
++            int16_t *t16 = tmp + x;
++            u8x16 r0 = vec_xl(0, s);
++            u8x16 r1 = vec_xl(0, s + 1 * stride);
++            u8x16 r2 = vec_xl(0, s + 2 * stride);
++            u8x16 r3 = vec_xl(0, s + 3 * stride);
++            u8x16 r4 = vec_xl(0, s + 4 * stride);
++            u8x16 r5 = vec_xl(0, s + 5 * stride);
++            u8x16 r6 = vec_xl(0, s + 6 * stride);
++            s += 7 * stride;
++            for (int y = 0; y < h; y++) {
++                const u8x16 r7 = vec_xl(0, s);
++                V8TAP_SUMS8(s03, s47, a, r0, r1, r2, r3, r4, r5, r6, r7,
++                            tapsA, tapsB, accv, vec_mergeh);
++                V8TAP_SUMS8(s8b, scf, b, r0, r1, r2, r3, r4, r5, r6, r7,
++                            tapsA, tapsB, accv, vec_mergel);
++                const i16x8 t0 = vec_packs(vec_sra(s03, shv), vec_sra(s47, shv));
++                const i16x8 t1 = vec_packs(vec_sra(s8b, shv), vec_sra(scf, shv));
++                if (is_put) {
++                    vec_xst(vec_packsu(t0, t1), 0, d);
++                    d += PXSTRIDE(dst_stride);
++                } else {
++                    vec_xst(t0, 0, t16);
++                    vec_xst(t1, 0, t16 + 8);
++                    t16 += w;
++                }
++                V8TAP_SLIDE;
++                s += stride;
++            }
++        }
++    }
++}
++
++/* First (horizontal) pass of the 2D filter into the 16-bit mid buffer,
++ * mirroring the C: rows [-3, h+3], (sum + 2) >> 2, mid stride 128. Widths
++ * below 8 just compute a full 8 and store 16 bytes into the scratch row. */
++static void h8tap_mid_altivec(int16_t *mid, const pixel *src,
++                              const ptrdiff_t src_stride,
++                              const int w, int rows, const int8_t *const fh)
++{
++    const i32x4 accv = vec_splats((int32_t)2);
++    const u32x4 shv = vec_splats(2u);
++    H8TAPS(fh, tapsA, tapsB);
++
++    do {
++        for (int x = 0; x < w; x += 8) {
++            H8TAP_SUMS(s03, s47, src + x - 3, tapsA, tapsB, accv);
++            vec_st(vec_packs(vec_sra(s03, shv), vec_sra(s47, shv)), 0, mid + x);
++        }
++        mid += 128;
++        src += PXSTRIDE(src_stride);
++    } while (--rows);
++}
++
++/* Second (vertical) pass over the mid buffer: vmsumshm on interleaved row
++ * pairs against (fv[k], fv[k+1]) tap pairs, 8 columns per slice. */
++#define MID_V_SUMS(s03, s47, m0, m1, m2, m3, m4, m5, m6, m7, accv) \
++    i32x4 s03 = vec_msum(vec_mergeh(m0, m1), tp01, accv); \
++    i32x4 s47 = vec_msum(vec_mergel(m0, m1), tp01, accv); \
++    s03 = vec_msum(vec_mergeh(m2, m3), tp23, s03); \
++    s47 = vec_msum(vec_mergel(m2, m3), tp23, s47); \
++    s03 = vec_msum(vec_mergeh(m4, m5), tp45, s03); \
++    s47 = vec_msum(vec_mergel(m4, m5), tp45, s47); \
++    s03 = vec_msum(vec_mergeh(m6, m7), tp67, s03); \
++    s47 = vec_msum(vec_mergel(m6, m7), tp67, s47)
++
++#define MID_V_TAPS(fv) \
++    const i16x8 tp01 = vec_mergeh(vec_splats((int16_t)fv[0]), vec_splats((int16_t)fv[1])); \
++    const i16x8 tp23 = vec_mergeh(vec_splats((int16_t)fv[2]), vec_splats((int16_t)fv[3])); \
++    const i16x8 tp45 = vec_mergeh(vec_splats((int16_t)fv[4]), vec_splats((int16_t)fv[5])); \
++    const i16x8 tp67 = vec_mergeh(vec_splats((int16_t)fv[6]), vec_splats((int16_t)fv[7]))
++
++#define MID_V_SLIDE \
++    m0 = m1; m1 = m2; m2 = m3; m3 = m4; m4 = m5; m5 = m6; m6 = m7
++
++static ALWAYS_INLINE void v8tap_mid_altivec(pixel *dst, const ptrdiff_t dst_stride,
++                                            int16_t *tmp, const int16_t *mid,
++                                            const int w, const int h,
++                                            const int8_t *const fv,
++                                            const i32x4 accv, const u32x4 shv,
++                                            const int is_put)
++{
++    MID_V_TAPS(fv);
++
++    for (int x = 0; x < w; x += 8) {
++        const int16_t *m = mid + x;
++        pixel *d = dst + x;
++        int16_t *t16 = tmp + x;
++        i16x8 m0 = vec_ld(0, m);
++        i16x8 m1 = vec_ld(0, m + 1 * 128);
++        i16x8 m2 = vec_ld(0, m + 2 * 128);
++        i16x8 m3 = vec_ld(0, m + 3 * 128);
++        i16x8 m4 = vec_ld(0, m + 4 * 128);
++        i16x8 m5 = vec_ld(0, m + 5 * 128);
++        i16x8 m6 = vec_ld(0, m + 6 * 128);
++        m += 7 * 128;
++        for (int y = 0; y < h; y++) {
++            const i16x8 m7 = vec_ld(0, m);
++            MID_V_SUMS(s03, s47, m0, m1, m2, m3, m4, m5, m6, m7, accv);
++            const i16x8 t = vec_packs(vec_sra(s03, shv), vec_sra(s47, shv));
++            if (is_put) {
++                if (w >= 8) store_h8(d, vec_packsu(t, t));
++                else        store_wN(d, vec_packsu(t, t), w);
++                d += PXSTRIDE(dst_stride);
++            } else {
++                if (w >= 8) {
++                    vec_xst(t, 0, t16);
++                } else {
++                    ALIGN_STK_16(int16_t, buf, 8,);
++                    vec_st(t, 0, buf);
++                    memcpy(t16, buf, 2 * w);
++                }
++                t16 += w;
++            }
++            MID_V_SLIDE;
++            m += 128;
++        }
++        if (w <= 8) break;
++    }
++}
++
++static void put_copy_altivec(pixel *dst, const ptrdiff_t dst_stride,
++                             const pixel *src, const ptrdiff_t src_stride,
++                             const int w, int h)
++{
++    do {
++        memcpy(dst, src, w);
++        dst += PXSTRIDE(dst_stride);
++        src += PXSTRIDE(src_stride);
++    } while (--h);
++}
++
++static void prep_copy_altivec(int16_t *tmp, const pixel *src,
++                              const ptrdiff_t src_stride, const int w, int h)
++{
++    const u16x8 four = vec_splat_u16(4);
++    do {
++        if (w <= 4) {
++            const u8x16 s = vec_xl(0, src);
++            const i16x8 t = (i16x8)vec_sl((u16x8)u8h_to_i16(s), four);
++            ALIGN_STK_16(int16_t, buf, 8,);
++            vec_st(t, 0, buf);
++            memcpy(tmp, buf, 2 * w);
++        } else for (int x = 0; x < w; x += 8) {
++            const u8x16 s = vec_xl(0, src + x);
++            vec_xst((i16x8)vec_sl((u16x8)u8h_to_i16(s), four), 0, tmp + x);
++        }
++        tmp += w;
++        src += PXSTRIDE(src_stride);
++    } while (--h);
++}
++
++static void put_8tap_altivec(pixel *dst, const ptrdiff_t dst_stride,
++                             const pixel *src, const ptrdiff_t src_stride,
++                             const int w, const int h, const int mx, const int my,
++                             const int filter_type)
++{
++    const int8_t *const fh = !mx ? NULL : w > 4 ?
++        dav1d_mc_subpel_filters[filter_type & 3][mx - 1] :
++        dav1d_mc_subpel_filters[3 + (filter_type & 1)][mx - 1];
++    const int8_t *const fv = !my ? NULL : h > 4 ?
++        dav1d_mc_subpel_filters[filter_type >> 2][my - 1] :
++        dav1d_mc_subpel_filters[3 + ((filter_type >> 2) & 1)][my - 1];
++
++    if (fh) {
++        if (fv) {
++            ALIGN_STK_16(int16_t, mid, 128 * 135,);
++            h8tap_mid_altivec(mid, src - 3 * PXSTRIDE(src_stride), src_stride,
++                              w, h + 7, fh);
++            v8tap_mid_altivec(dst, dst_stride, NULL, mid, w, h, fv,
++                              vec_splats((int32_t)512), vec_splats(10u), 1);
++        } else {
++            put_8tap_h_altivec(dst, dst_stride, src, src_stride, w, h, fh);
++        }
++    } else if (fv) {
++        v8tap_altivec(dst, dst_stride, NULL, src, src_stride, w, h, fv,
++                      vec_splats((int32_t)32), vec_splats(6u), 1);
++    } else {
++        put_copy_altivec(dst, dst_stride, src, src_stride, w, h);
++    }
++}
++
++static void prep_8tap_altivec(int16_t *tmp, const pixel *src,
++                              const ptrdiff_t src_stride,
++                              const int w, const int h, const int mx, const int my,
++                              const int filter_type)
++{
++    const int8_t *const fh = !mx ? NULL : w > 4 ?
++        dav1d_mc_subpel_filters[filter_type & 3][mx - 1] :
++        dav1d_mc_subpel_filters[3 + (filter_type & 1)][mx - 1];
++    const int8_t *const fv = !my ? NULL : h > 4 ?
++        dav1d_mc_subpel_filters[filter_type >> 2][my - 1] :
++        dav1d_mc_subpel_filters[3 + ((filter_type >> 2) & 1)][my - 1];
++
++    if (fh) {
++        if (fv) {
++            ALIGN_STK_16(int16_t, mid, 128 * 135,);
++            h8tap_mid_altivec(mid, src - 3 * PXSTRIDE(src_stride), src_stride,
++                              w, h + 7, fh);
++            v8tap_mid_altivec(NULL, 0, tmp, mid, w, h, fv,
++                              vec_splats((int32_t)32), vec_splats(6u), 0);
++        } else {
++            prep_8tap_h_altivec(tmp, src, src_stride, w, h, fh);
++        }
++    } else if (fv) {
++        v8tap_altivec(NULL, 0, tmp, src, src_stride, w, h, fv,
++                      vec_splats((int32_t)2), vec_splats(2u), 0);
++    } else {
++        prep_copy_altivec(tmp, src, src_stride, w, h);
++    }
++}
++
++#define filter_8tap_fns(type, type_h, type_v) \
++void BF(dav1d_put_8tap_##type, altivec)(pixel *const dst, \
++                                        const ptrdiff_t dst_stride, \
++                                        const pixel *const src, \
++                                        const ptrdiff_t src_stride, \
++                                        const int w, const int h, \
++                                        const int mx, const int my) \
++{ \
++    put_8tap_altivec(dst, dst_stride, src, src_stride, w, h, mx, my, \
++                     type_h | (type_v << 2)); \
++} \
++void BF(dav1d_prep_8tap_##type, altivec)(int16_t *const tmp, \
++                                         const pixel *const src, \
++                                         const ptrdiff_t src_stride, \
++                                         const int w, const int h, \
++                                         const int mx, const int my) \
++{ \
++    prep_8tap_altivec(tmp, src, src_stride, w, h, mx, my, \
++                      type_h | (type_v << 2)); \
++}
++
++filter_8tap_fns(regular,        DAV1D_FILTER_8TAP_REGULAR, DAV1D_FILTER_8TAP_REGULAR)
++filter_8tap_fns(regular_sharp,  DAV1D_FILTER_8TAP_REGULAR, DAV1D_FILTER_8TAP_SHARP)
++filter_8tap_fns(regular_smooth, DAV1D_FILTER_8TAP_REGULAR, DAV1D_FILTER_8TAP_SMOOTH)
++filter_8tap_fns(smooth,         DAV1D_FILTER_8TAP_SMOOTH,  DAV1D_FILTER_8TAP_SMOOTH)
++filter_8tap_fns(smooth_regular, DAV1D_FILTER_8TAP_SMOOTH,  DAV1D_FILTER_8TAP_REGULAR)
++filter_8tap_fns(smooth_sharp,   DAV1D_FILTER_8TAP_SMOOTH,  DAV1D_FILTER_8TAP_SHARP)
++filter_8tap_fns(sharp,          DAV1D_FILTER_8TAP_SHARP,   DAV1D_FILTER_8TAP_SHARP)
++filter_8tap_fns(sharp_regular,  DAV1D_FILTER_8TAP_SHARP,   DAV1D_FILTER_8TAP_REGULAR)
++filter_8tap_fns(sharp_smooth,   DAV1D_FILTER_8TAP_SHARP,   DAV1D_FILTER_8TAP_SMOOTH)
++
+ #endif // !ARCH_PPC64LE
+ 
+ #endif // BITDEPTH
+-- 
+2.43.0
+

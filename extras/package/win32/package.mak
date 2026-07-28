@@ -94,6 +94,24 @@ package-win-common: package-win-install package-win-sdk
 		fi ; \
 	fi
 
+# libbdplus: BD+ descrambling, the second protection layer some retail Blu-rays
+# carry on top of AACS. Same loading story as libaacs -- libbluray dlopen()s
+# "libbdplus.dll", LoadLibrary resolves it from the directory of powervlc.exe,
+# and libtool builds it as libbdplus-0.dll. Missing it is only a warning: BD+
+# concerns a minority of discs, and libbdplus does nothing anyway until the
+# user drops a VM into %APPDATA%\bdplus\vm0\ (the Help menu opens that folder).
+	@if test -d "$(win32_destdir)/plugins/access" && \
+	    ls "$(win32_destdir)/plugins/access/"*bluray* >/dev/null 2>&1; then \
+		bdplus=`ls $(CONTRIB_DIR)/bin/libbdplus*.dll 2>/dev/null | head -1` ; \
+		if test -n "$$bdplus"; then \
+			cp "$$bdplus" "$(win32_destdir)/libbdplus.dll" ; \
+			echo "  PACKAGE  libbdplus.dll" ; \
+		else \
+			echo "  NOTE     no libbdplus: BD+ protected discs will not play" ; \
+			echo "           Build it with: make -C contrib/contrib-<host> .bdplus" ; \
+		fi ; \
+	fi
+
 if BUILD_LUA
 	mkdir -p $(win32_destdir)/lua/
 	cp -r $(prefix)/lib/vlc/lua/* $(win32_destdir)/lua/

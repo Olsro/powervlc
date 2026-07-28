@@ -114,6 +114,25 @@ if [ -n "$BLURAY_PLUGIN" ]; then
         echo "         found on this host: retail Blu-ray discs will not play." >&2
         echo "         Install it (Debian/Ubuntu: libaacs0) and re-run." >&2
     fi
+
+    # libbdplus: BD+ descrambling, the second protection layer some retail
+    # Blu-rays carry on top of AACS. dlopen()ed as "libbdplus.so.0" exactly
+    # like libaacs, hence invisible to linuxdeploy for the same reason. Only a
+    # note when absent: BD+ concerns a minority of discs, and libbdplus does
+    # nothing until the user drops a VM into ~/.config/bdplus/vm0/ (the Help
+    # menu opens that folder).
+    LIBBDPLUS="$(ldconfig -p 2>/dev/null | sed -n 's/.*libbdplus\.so\.0 (.*) => \(.*\)/\1/p' | head -1)"
+    if [ -n "$LIBBDPLUS" ] && [ -e "$LIBBDPLUS" ]; then
+        LIBDIR="$(dirname "$(find "$APPDIR" -name 'libvlccore.so.*' -print -quit)")"
+        [ -n "$LIBDIR" ] || LIBDIR="$APPDIR/usr/lib"
+        mkdir -p "$LIBDIR"
+        cp -L "$LIBBDPLUS" "$LIBDIR/libbdplus.so.0"
+        echo "  bundled     : $LIBBDPLUS -> $LIBDIR/libbdplus.so.0"
+    else
+        echo "NOTE: libbdplus.so.0 was not found on this host: BD+ protected" >&2
+        echo "      discs will not play. Install it (Debian/Ubuntu: libbdplus0)" >&2
+        echo "      and re-run to include it." >&2
+    fi
 fi
 
 # The install prefix inside the tree is typically /usr or /usr/local; the

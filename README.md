@@ -69,6 +69,7 @@ PowerVLC is shining there with HD content, using full VDA hardware acceleration 
 	- Targets the lowest Java at compile. So only Java 5 is required to play BD-J menus on PowerVLC
 	- Can load the Java 6 bundled into Snow Leopard automatically (same about the Java 5 shipped on Tiger/Leopard)
 	- Simple commercial Blu-Ray playback setup: libaacs is already included, and a convenient importation workflow has been integrated into PowerVLC: just drag & drop/open your keydb.cfg and PowerVLC will ask you to automatically import it into the right place, then insert your blu-ray disc and it will play (with menus also if Java 6+ is available on your system)
+	- Menu items in the "Help" menu to quickly open folders related to content decryption using libaacs/libbdplus
 
 ### About upstream
 I don't have the time to invest on making those improvements available on upstream VLC, though I allow anyone to submit patches on my behalf if you've got interest in any of them. Just credit me and the name of this fork (PowerVLC) on the description of your commits & pull requests. No gatekeeping there, sharing is caring.

@@ -841,6 +841,8 @@ modules/gui/qt/util/input_slider.cpp
 modules/gui/qt/util/input_slider.hpp
 modules/gui/qt/util/pictureflow.cpp
 modules/gui/qt/util/pictureflow.hpp
+modules/gui/qt/util/powervlc_disclibs.cpp
+modules/gui/qt/util/powervlc_disclibs.hpp
 modules/gui/qt/util/qmenuview.cpp
 modules/gui/qt/util/qmenuview.hpp
 modules/gui/qt/util/qt_dirs.cpp

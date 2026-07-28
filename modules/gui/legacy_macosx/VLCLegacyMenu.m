@@ -794,6 +794,26 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     [self addItemTo:helpMenu title:_NS("Online Forum...")
              action:@selector(openForum:) key:@""];
 
+    /* libaacs and libbdplus ship with the player but decrypt nothing until
+     * the user drops their own files next to them -- in a folder inside
+     * ~/Library/Preferences that nobody would ever find on their own. Offer to
+     * open it, but only where Blu-ray playback works at all: the plugin has to
+     * be in this build, and the disc access needs Mac OS X 10.4 (Tiger is the
+     * floor for IOKit's optical-drive and DiskArbitration APIs libaacs uses;
+     * this interface itself runs as far down as 10.2).
+     *
+     * "libbluray", not "bluray": module_find() only ever compares
+     * pp_shortcuts[0], which is the module's object name (the plugin is built
+     * as liblibbluray_plugin). The "bluray" of add_shortcut() sits at index 1
+     * and can never match. */
+    if (module_exists("libbluray") && VLCLegacyOSVersionAtLeast(10, 4, 0)) {
+        [helpMenu addItem:[NSMenuItem separatorItem]];
+        [self addItemTo:helpMenu title:_NS("Open the libaacs folder (Blu-ray)")
+                 action:@selector(openAACSFolder:) key:@""];
+        [self addItemTo:helpMenu title:_NS("Open the libbdplus folder (Blu-ray)")
+                 action:@selector(openBDPlusFolder:) key:@""];
+    }
+
     [NSApp setMainMenu:menubar];
 
     /* On Mac OS X 10.4, the application menu must be declared explicitly
@@ -1558,6 +1578,57 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
 {
     VLCLegacyConfirmAndOpenVideoLANURL(
         [NSURL URLWithString:@"https://forum.videolan.org/"]);
+}
+
+/* Reveals <config home>/<lib> in the Finder, creating it first: the folder
+ * does not exist until something writes there, and an "open" that silently did
+ * nothing would look like a broken menu item. config_GetDiscLibDir() is what
+ * the key database importer uses too, so the two can never disagree.
+ *
+ * -createDirectoryAtPath:attributes: creates one level only, which is all that
+ * is needed: its parent is ~/Library/Preferences, which every account has.
+ * (The recursive -createDirectoryAtPath:withIntermediateDirectories:... is
+ * 10.5 and would take this interface's Tiger builds down with it.) */
+- (void)openDiscLibFolder:(const char *)psz_lib
+{
+    char *psz_dir = config_GetDiscLibDir(psz_lib);
+    NSString *path = psz_dir ? [NSString stringWithUTF8String:psz_dir] : nil;
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    if (path != nil
+     && ([fm fileExistsAtPath:path]
+      || [fm createDirectoryAtPath:path attributes:nil])
+     && [[NSWorkspace sharedWorkspace] openFile:path]) {
+        free(psz_dir);
+        return;
+    }
+
+    msg_Err(p_intf, "cannot open the %s folder", psz_lib);
+
+    /* The "%s" is substituted by hand rather than through -stringWithFormat:,
+     * whose %s decodes the bytes in the *system* encoding -- which is not
+     * necessarily UTF-8 here, and this is a path. The msgid keeps VLC's "%s"
+     * so that the three interfaces share a single string to translate. */
+    NSMutableString *msg = [NSMutableString stringWithString:
+        _NS("The folder %s could not be opened.")];
+    [msg replaceOccurrencesOfString:@"%s"
+                         withString:(path != nil ? path
+                                     : [NSString stringWithUTF8String:psz_lib])
+                            options:0
+                              range:NSMakeRange(0, [msg length])];
+    NSRunAlertPanel(_NS("Error"), @"%@", _NS("OK"), nil, nil, msg);
+    free(psz_dir);
+}
+
+- (void)openAACSFolder:(id)sender
+{
+    [self openDiscLibFolder:"aacs"];
+}
+
+- (void)openBDPlusFolder:(id)sender
+{
+    [self openDiscLibFolder:"bdplus"];
 }
 
 /* An input must be playing for these to make sense */

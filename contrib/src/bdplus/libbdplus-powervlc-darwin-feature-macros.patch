@@ -1,0 +1,19 @@
+diff --git a/configure.ac b/configure.ac
+index 215a7b5..d51eb72 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -49,6 +49,14 @@ case "${host_os}" in
+     ;;
+   *darwin*)
+     SYS=darwin
++    dnl _POSIX_C_SOURCE hides non-POSIX declarations on Mac OS X -- fsync() in
++    dnl <unistd.h>, used by src/file/file_posix.c, sits inside an
++    dnl "#ifndef _POSIX_C_SOURCE" block there. Modern SDKs undo that when
++    dnl _DARWIN_C_SOURCE is also defined, but the 10.4 SDK has no such escape
++    dnl hatch, so the build fails with an implicit declaration of fsync().
++    dnl Simply do not ask for strict POSIX visibility on Darwin -- libaacs and
++    dnl libbluray carry the same fix for the same reason.
++    SET_FEATURES="-D_ISOC99_SOURCE -D_DARWIN_C_SOURCE"
+     ;;
+   *)
+     SYS="${host_os}"

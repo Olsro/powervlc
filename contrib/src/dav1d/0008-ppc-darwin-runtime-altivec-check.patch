@@ -1,0 +1,44 @@
+diff --git a/src/ppc/cpu.c b/src/ppc/cpu.c
+index 127cff0..5ddbb25 100644
+--- a/src/ppc/cpu.c
++++ b/src/ppc/cpu.c
+@@ -37,6 +37,13 @@
+ #include <sys/auxv.h>
+ #endif
+ 
++#define HAVE_DARWIN_SYSCTL \
++    (!HAVE_AUX && defined(__APPLE__) && (defined(__ppc__) || defined(__ppc64__)))
++#if HAVE_DARWIN_SYSCTL
++#include <sys/types.h>
++#include <sys/sysctl.h>
++#endif
++
+ COLD unsigned dav1d_get_cpu_flags_ppc(void) {
+     unsigned flags = dav1d_get_default_cpu_flags();
+ #if HAVE_AUX
+@@ -45,8 +52,23 @@ COLD unsigned dav1d_get_cpu_flags_ppc(void) {
+     flags |= (hw_cap & PPC_FEATURE_HAS_ALTIVEC) ? DAV1D_PPC_CPU_FLAG_ALTIVEC : 0;
+     flags |= (hw_cap & PPC_FEATURE_HAS_VSX) ? DAV1D_PPC_CPU_FLAG_VSX : 0;
+     flags |= (hw_cap2 & PPC_FEATURE2_ARCH_3_00) ? DAV1D_PPC_CPU_FLAG_PWR9 : 0;
+-#elif defined(__APPLE__) && (defined(__ppc__) || defined(__ppc64__))
+-    flags |= DAV1D_PPC_CPU_FLAG_ALTIVEC;
++#elif HAVE_DARWIN_SYSCTL
++    /* Darwin has no auxiliary vector, and not every PowerPC Mac has a vector
++     * unit: the G3 (750/750FX) has none, and an AltiVec instruction there is
++     * an illegal instruction, not a slow path. Assuming a G4 because the host
++     * is an Apple PowerPC -- or because the compiler was handed -maltivec, as
++     * dav1d_get_default_cpu_flags() does on __ALTIVEC__ -- crashes the decoder
++     * on those machines, so ask the kernel instead and clear the flag when the
++     * answer is no. hw.vectorunit exists in every Darwin release, including
++     * 10.2, which is this player's floor. */
++    int i_vu = 0;
++    size_t i_len = sizeof (i_vu);
++    int mib[2] = { CTL_HW, HW_VECTORUNIT };
++
++    if (sysctl(mib, 2, &i_vu, &i_len, NULL, 0) == 0 && i_vu != 0)
++        flags |= DAV1D_PPC_CPU_FLAG_ALTIVEC;
++    else
++        flags &= ~(unsigned)DAV1D_PPC_CPU_FLAG_ALTIVEC;
+ #endif
+     return flags;
+ }

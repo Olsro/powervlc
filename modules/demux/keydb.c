@@ -26,11 +26,10 @@
  * directory nobody should have to know about.
  *
  * So claim the file, offer to install it where libaacs looks for it, and play
- * nothing. libaacs reads <config home>/aacs/KEYDB.cfg (keydbcfg.c), where the
- * config home is $HOME/Library/Preferences on macOS, %APPDATA% on Windows and
- * $XDG_CONFIG_HOME (or $HOME/.config) elsewhere - i.e. the parent of our own
- * configuration directory on every platform, which is how it is derived below
- * instead of duplicating that logic.
+ * nothing. libaacs reads <config home>/aacs/KEYDB.cfg (keydbcfg.c); the
+ * directory is what config_GetDiscLibDir() answers, so that this importer and
+ * the "Open the libaacs folder" item of every interface's Help menu can never
+ * end up pointing at two different places.
  *
  * The name is spelled KEYDB.cfg on the way out even when the imported file is
  * lowercase: only case-insensitive filesystems would forgive us otherwise.
@@ -120,36 +119,17 @@ static bool LooksLikeText(stream_t *s)
  *****************************************************************************/
 
 /* <config home>/aacs and <config home>/aacs/KEYDB.cfg, i.e. the directory
- * libaacs reads its key database from and the database itself. */
+ * libaacs reads its key database from and the database itself. The directory
+ * itself comes from the core: the Help menu of every interface opens the very
+ * same one, and the two must never disagree. */
 static int KeydbPaths(char **ppsz_dir, char **ppsz_file)
 {
-    char *psz_config = config_GetUserDir(VLC_CONFIG_DIR);
-    if (psz_config == NULL)
-        return VLC_EGENERIC;
-
-    /* strip our own application directory, keep its parent */
-    char *psz_sep = NULL;
-    for (char *p = psz_config; *p != '\0'; p++)
-        if (*p == '/' || *p == '\\')
-            psz_sep = p;
-
-    if (psz_sep == NULL || psz_sep == psz_config) {
-        free(psz_config);
-        return VLC_EGENERIC;
-    }
-
-    const char c_sep = *psz_sep;
-    *psz_sep = '\0';
-
-    char *psz_dir, *psz_file;
-    if (asprintf(&psz_dir, "%s%caacs", psz_config, c_sep) < 0)
-        psz_dir = NULL;
-    free(psz_config);
-
+    char *psz_dir = config_GetDiscLibDir("aacs");
     if (psz_dir == NULL)
-        return VLC_ENOMEM;
+        return VLC_EGENERIC;
 
-    if (asprintf(&psz_file, "%s%cKEYDB.cfg", psz_dir, c_sep) < 0) {
+    char *psz_file;
+    if (asprintf(&psz_file, "%s"DIR_SEP"KEYDB.cfg", psz_dir) < 0) {
         free(psz_dir);
         return VLC_ENOMEM;
     }

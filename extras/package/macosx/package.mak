@@ -127,6 +127,23 @@ endif
 			exit 1 ; \
 		fi ; \
 	fi
+	## libbdplus: BD+ descrambling, the second protection layer some retail
+	## Blu-rays carry on top of AACS. Loaded exactly like libaacs -- libbluray
+	## dlopen()s "libbdplus.dylib" from @executable_path/lib/ -- so it is
+	## bundled the same way. Unlike libaacs its absence is only a warning: BD+
+	## concerns a minority of discs, and libbdplus is useless anyway until the
+	## user drops a VM into ~/Library/Preferences/bdplus/vm0/ (the Help menu
+	## opens that folder).
+	@if ls $@/Contents/MacOS/plugins/*bluray_plugin.dylib >/dev/null 2>&1; then \
+		if test -f "$(CONTRIB_DIR)/lib/libbdplus.dylib"; then \
+			cp -L "$(CONTRIB_DIR)/lib/libbdplus.dylib" \
+				$@/Contents/MacOS/lib/libbdplus.dylib ; \
+			echo "  BUNDLE   libbdplus.dylib" ; \
+		else \
+			echo "  NOTE     no libbdplus for this target: BD+ protected discs will not play" ; \
+			echo "           Build it with: make -C contrib/contrib-<host> .bdplus" ; \
+		fi ; \
+	fi
 	## Copy libbluray jar
 	find "$(CONTRIB_DIR)/share/java/" -name 'libbluray*.jar' -maxdepth 1 -exec cp -a {} $@/Contents/MacOS/plugins \; || true
 	## Install binary
