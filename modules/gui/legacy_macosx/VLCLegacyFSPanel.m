@@ -23,8 +23,13 @@
 #endif
 
 #import "VLCLegacyFSPanel.h"
+
+void VLCLegacyCursorActivity(void);      /* intf.m */
+void VLCLegacyCursorSetHidden(bool);     /* intf.m */
 #import "misc.h"
 #import "VLCLegacyCoreInteraction.h"
+#import "VLCLegacyMain.h"
+#import "VLCLegacyMainWindow.h"
 #import "VLCLegacyControls.h"
 
 #include <vlc_playlist.h>
@@ -241,21 +246,28 @@ static NSString *fsTimeToString(int seconds)
         NSMakeRect(134, 15, 15, 13), self, @selector(maxVolume:))
         setToolTip:_NS("Full Volume")];
 
-    /* transport, centered */
+    /* Transport, centré sur la largeur du panneau (550).
+     * ⚠ Sous 10.3/10.4 les illustrations sont utilisées à leur TAILLE
+     * NATURELLE (fsPanelImage renvoie l'image telle quelle, sans mise à
+     * l'échelle) : un bouton plus étroit que son image la ROGNE — c'est ce qui
+     * amputait les triangles de rembobinage et d'avance (image 42 px de large
+     * dans un bouton de 28). Les cadres ci-dessous reprennent donc exactement
+     * les dimensions des images : 30x19 précédent/suivant, 42x20
+     * rembobinage/avance, 34x28 lecture. */
     [fsTemplateButton(content, @"VLCPreviousTemplate",
-        NSMakeRect(186, 12, 22, 18), self, @selector(prev:))
+        NSMakeRect(174, 12, 30, 19), self, @selector(prev:))
         setToolTip:_NS("Previous")];
     [fsTemplateButton(content, @"VLCBackwardTemplate",
-        NSMakeRect(218, 10, 28, 22), self, @selector(backward:))
+        NSMakeRect(210, 11, 42, 20), self, @selector(backward:))
         setToolTip:_NS("Backward")];
     playButton = fsTemplateButton(content, @"VLCPlayTemplate",
-        NSMakeRect(256, 4, 34, 34), self, @selector(playPause:));
+        NSMakeRect(258, 7, 34, 28), self, @selector(playPause:));
     [playButton setToolTip:_NS("Play/Pause")];
     [fsTemplateButton(content, @"VLCForwardTemplate",
-        NSMakeRect(300, 10, 28, 22), self, @selector(forward:))
+        NSMakeRect(298, 11, 42, 20), self, @selector(forward:))
         setToolTip:_NS("Forward")];
     [fsTemplateButton(content, @"VLCNextTemplate",
-        NSMakeRect(338, 12, 22, 18), self, @selector(next:))
+        NSMakeRect(346, 12, 30, 19), self, @selector(next:))
         setToolTip:_NS("Next")];
 
     /* exit fullscreen, far right */
@@ -278,7 +290,9 @@ static NSString *fsTimeToString(int seconds)
 {
     lastMouseLocation = [NSEvent mouseLocation];
     lastActivity = [NSDate timeIntervalSinceReferenceDate];
-    pollTimer = [NSTimer scheduledTimerWithTimeInterval:0.3
+    /* Cadence réduite sous 10.4 : cf. le tic de la fenêtre principale. */
+    pollTimer = [NSTimer scheduledTimerWithTimeInterval:
+                     (VLCLegacyOSVersionAtLeast(10, 4, 0) ? 0.3 : 1.0)
                                                  target:self
                                                selector:@selector(poll:)
                                                userInfo:nil
@@ -334,21 +348,48 @@ static NSString *fsTimeToString(int seconds)
 
 - (void)poll:(NSTimer *)timer
 {
-    /* dormant outside fullscreen: only look for a fullscreen vout at
-     * ~1s pace and skip the mouse tracking entirely */
-    if (!fullscreenActive && ++dormantTicks < 3)
-        return;
-    dormantTicks = 0;
-
-    BOOL fullscreen = [self voutIsFullscreen];
     double now = [NSDate timeIntervalSinceReferenceDate];
 
-    /* any pointer move counts as activity */
+    /* Le suivi du pointeur tourne à CHAQUE tic, y compris hors plein écran :
+     * c'est lui qui pilote le masquage du curseur dans les deux modes (le
+     * coeur en est incapable, cf. intf.m). Seule la recherche d'un vout plein
+     * écran, plus coûteuse, reste espacée. */
     NSPoint mouse = [NSEvent mouseLocation];
     if (!NSEqualPoints(mouse, lastMouseLocation)) {
         lastMouseLocation = mouse;
         lastActivity = now;
+        VLCLegacyCursorActivity();   /* mouvement → pointeur rendu */
     }
+
+    if (!fullscreenActive) {
+        /* FENÊTRÉ : masquer seulement si le pointeur est immobile AU-DESSUS
+         * DE L'IMAGE (ailleurs — contrôles, barre de titre, autre app — il
+         * doit rester visible). */
+        BOOL b_over_video = NO;
+        /* ⚠ +sharedInstance N'EXISTE PAS sur VLCLegacyMain : l'appeler levait
+         * une exception qui interrompait TOUT le sondage en silence (ni
+         * masquage, ni trace). L'objet principal est le délégué de NSApp. */
+        NSView *vv = nil;
+        id appDelegate = [NSApp delegate];
+        if ([appDelegate respondsToSelector:@selector(mainWindowController)])
+            vv = [[(VLCLegacyMain *)appDelegate mainWindowController]
+                      videoViewIfVisible];
+        NSWindow *vw = (vv != nil) ? [vv window] : nil;
+        if (vw != nil && [vw isVisible]) {
+            NSRect r = [vv convertRect:[vv bounds] toView:nil];
+            r.origin.x += [vw frame].origin.x;
+            r.origin.y += [vw frame].origin.y;
+            b_over_video = NSPointInRect(mouse, r);
+        }
+        VLCLegacyCursorSetHidden(b_over_video
+                                 && (now - lastActivity) >= FS_PANEL_HIDE_DELAY);
+
+        if (++dormantTicks < 3)
+            return;
+        dormantTicks = 0;
+    }
+
+    BOOL fullscreen = [self voutIsFullscreen];
     /* so does hovering the panel itself */
     if (panel && [panel isVisible]
         && NSPointInRect(mouse, [panel frame]))
@@ -368,6 +409,9 @@ static NSString *fsTimeToString(int seconds)
     }
 
     BOOL shouldShow = (now - lastActivity) < FS_PANEL_HIDE_DELAY;
+    /* Le pointeur suit le panneau : masqué avec lui, rendu avec lui. Un seul
+     * propriétaire, donc aucun risque d'état incohérent ni de curseur perdu. */
+    VLCLegacyCursorSetHidden(!shouldShow);
     if (shouldShow) {
         if (!panel)
             [self buildPanel];
@@ -407,9 +451,22 @@ static NSString *fsTimeToString(int seconds)
         }
         int seconds = (int)(var_GetInteger(p_input, "time") / CLOCK_FREQ);
         int total = (int)(var_GetInteger(p_input, "length") / CLOCK_FREQ);
-        [timeField setStringValue:fsTimeToString(seconds)];
-        [durationField setStringValue:fsTimeToString(total)];
-        [seekSlider setFloatValue:var_GetFloat(p_input, "position")];
+        /* Ne toucher les champs QUE si le texte change : un setStringValue:
+         * identique redessine quand même, et sur Mac OS X 10.3 chaque redessin
+         * de glyphes passe par un RPC au serveur de polices (~140 ms la barre)
+         * — c'est ce qui rendait le PLEIN ÉCRAN scintillant alors que le mode
+         * fenêtré venait d'être corrigé (même classe de bug que le tic de la
+         * barre principale). Idem pour le slider, dont chaque setFloatValue
+         * salit tout le panneau. */
+        NSString *newTime = fsTimeToString(seconds);
+        if (![[timeField stringValue] isEqualToString:newTime])
+            [timeField setStringValue:newTime];
+        NSString *newTotal = fsTimeToString(total);
+        if (![[durationField stringValue] isEqualToString:newTotal])
+            [durationField setStringValue:newTotal];
+        float pos = var_GetFloat(p_input, "position");
+        if ([seekSlider floatValue] != pos)
+            [seekSlider setFloatValue:pos];
         vlc_object_release(p_input);
     }
     [volumeSlider setFloatValue:[core volume]];

@@ -302,6 +302,22 @@ AVCodecContext *ffmpeg_AllocContext( decoder_t *p_dec,
         }
         free( psz_decoder );
     }
+#if (defined (__powerpc__) || defined (__POWERPC__)) && !defined (__ALTIVEC__)
+    /* Tranche G3 (PowerPC sans AltiVec) : l'AC-3 en VIRGULE FIXE. Le décodeur
+     * flottant coûtait ~18 % du thread audio au PC-sampling sur l'iBook G3 et
+     * contribuait à faire déborder le budget de la lecture DVD accélérée ; la
+     * variante entière calcule au plancher de quantification 16 bits, inaudible
+     * sur cette chaîne (downmix normalisé AC-3, SRC CoreAudio, sortie
+     * intégrée). Les tranches AltiVec gardent le décodeur flottant, qui ne
+     * leur coûte rien. Ne s'applique que si l'utilisateur n'a pas déjà forcé
+     * un décodeur par avcodec-codec. */
+    if( !p_codec && i_codec_id == AV_CODEC_ID_AC3 )
+    {
+        p_codec = avcodec_find_decoder_by_name( "ac3_fixed" );
+        if( p_codec )
+            msg_Dbg( p_dec, "AC-3 en virgule fixe (G3)" );
+    }
+#endif
     if( !p_codec )
         p_codec = avcodec_find_decoder( i_codec_id );
     if( !p_codec )

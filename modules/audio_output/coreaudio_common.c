@@ -375,6 +375,7 @@ void
 ca_Play(audio_output_t * p_aout, block_t * p_block)
 {
     struct aout_sys_common *p_sys = (struct aout_sys_common *) p_aout->sys;
+    vlc_tick_t i_stuck_us = 0;   /* cumul d'attente sans drainage (anti-gel) */
 
     /* Do the channel reordering */
     if (p_sys->chans_to_reorder)
@@ -434,9 +435,32 @@ ca_Play(audio_output_t * p_aout, block_t * p_block)
                 FramesToUs(p_sys, BytesToFrames(p_sys, p_block->i_buffer));
 
             /* Wait for the render buffer to play the remaining data */
+            const size_t i_out_before = p_sys->i_out_size;
             lock_unlock(p_sys);
             msleep(i_frame_us);
             lock_lock(p_sys);
+            /* ★ Garde anti-gel (10.3, gel au quit mesuré au sample) : si le
+             * rappel de rendu ne draine PLUS (sortie arrêtée pendant qu'on
+             * dormait — teardown, périphérique figé), cette boucle redormait
+             * indéfiniment ; le thread décodeur audio ne mourait jamais et le
+             * quit restait suspendu sur son pthread_join (« stopping current
+             * input » en boucle). 2 s sans progrès = sortie morte : on
+             * abandonne le bloc. En lecture normale le tampon se vide en
+             * quelques dizaines de ms, la garde est inatteignable. */
+            if (p_sys->i_out_size >= i_out_before)
+            {
+                i_stuck_us += (i_frame_us > 0) ? i_frame_us : 40000;
+                if (i_stuck_us > (vlc_tick_t)2 * CLOCK_FREQ)
+                {
+                    msg_Warn(p_aout, "la sortie CoreAudio ne draine plus — "
+                             "bloc audio abandonné (garde anti-gel)");
+                    lock_unlock(p_sys);
+                    block_Release(p_block);
+                    return;
+                }
+            }
+            else
+                i_stuck_us = 0;
         }
         else
         {

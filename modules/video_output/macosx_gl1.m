@@ -283,11 +283,25 @@ vlc_module_end ()
     /* Chantier S — fenêtre enfant transparente portant sous-titres et OSD
      * au-dessus de la surface matérielle (cf. VLCGL1SubsOverlayView). */
     NSWindow *_subsOverlay;
+    /* ⚠⚠ Fenêtre PARENTE de l'incrustation, suivie PAR NOUS (référence faible,
+     * jamais retenue). NE PAS demander `-[NSWindow parentWindow]` : sur 10.2 cet
+     * accesseur CRASHE (EXC_BAD_ACCESS à 0x0 dans un objc_msgSend interne,
+     * relevé en direct le 2026-07-29 sur 10.2.8, pendant une pause) — la
+     * machinerie de fenêtres enfants de Jaguar est celle dont nos notes disent
+     * déjà qu'elle « n'affiche rien ». Nous savons à qui nous l'avons donnée :
+     * il n'y a rien à demander à AppKit. */
+    NSWindow *_subsOverlayParent;
     NSRect    _subsOverlayRect;   /* cadre courant (écran), 0 = jamais posé */
 }
 - (void)setVoutDisplay:(vout_display_t *)vd;
 - (void)setVoutFlushing:(BOOL)flushing;
 - (void)refreshSubsOverlay;
++ (void)vlcHideCursor;
++ (void)vlcHideCursorAgain;
+- (void)vlcHwEnsureCover;
+- (void)vlcHwCoverAndRefresh;
+- (void)vlcHwRestoreOpaque;
+- (void)vlcTryRemedy:(NSNumber *)num;
 @end
 
 /* Packed mode binds one texture per pool picture buffer (5-ish buffers:
@@ -1143,6 +1157,22 @@ static void OpenglDraw (vout_display_sys_t *sys)
  * On hache donc la géométrie ET un ÉCHANTILLON des pixels source (lecture
  * seule, une ligne sur 4 et un octet sur 16) : assez pour distinguer deux
  * sous-titres, sans rien allouer ni composer. 0 = aucune incrustation. */
+/* 10.4 ou plus ? (Darwin 8 = 10.4). Les FENÊTRES ENFANTS n'affichent rien sous
+ * 10.2 — et le même défaut se voit sur 10.3 : la superposition sous-titres/OSD
+ * y restait invisible, alors que le panneau de contrôles plein écran, lui, est
+ * une fenêtre INDÉPENDANTE placée par son niveau, et s'affiche parfaitement. */
+static bool gl1_osx_at_least_10_4 (void)
+{
+    static int s_yes = -1;
+    if (s_yes < 0) {
+        char rel[32] = "";
+        size_t len = sizeof (rel);
+        s_yes = (sysctlbyname ("kern.osrelease", rel, &len, NULL, 0) == 0
+                 && atoi (rel) >= 8);
+    }
+    return s_yes != 0;
+}
+
 static uint64_t SubpictureSignature (subpicture_t *subpic)
 {
     if (subpic == NULL)
@@ -1150,10 +1180,19 @@ static uint64_t SubpictureSignature (subpicture_t *subpic)
     uint64_t h = 1469598103934665603ull ^ (uint64_t) subpic->i_order;
     for (subpicture_region_t *r = subpic->p_region; r != NULL; r = r->p_next)
     {
+        /* ⚠ L'ALPHA EST VOLONTAIREMENT ABSENT de la signature. Le cœur applique
+         * un FONDU sur le dernier quart de chaque réplique
+         * (vout_subpictures.c, `dst->i_alpha = fade_alpha * …`) : mesuré sur ce
+         * DVD, l'alpha descend 255→249→241→…→4 à raison d'une valeur PAR IMAGE,
+         * ce qui faisait recomposer et re-flusher l'incrustation trente fois de
+         * suite, à 13-36 ms de thread principal la fois. Le fondu ne vaut pas
+         * ce prix sur un G3 : l'incrustation garde l'alpha qu'elle avait à sa
+         * composition et disparaît d'un coup, comme sur un lecteur de salon.
+         * (Cela ne concerne QUE le chemin matériel : le rendu GL logiciel
+         * continue de dessiner le subpicture tel que le cœur le fournit.) */
         const uint64_t v[] = {
             (uint64_t) r->i_x, (uint64_t) r->i_y,
             (uint64_t) r->fmt.i_visible_width, (uint64_t) r->fmt.i_visible_height,
-            (uint64_t) r->i_alpha, (uint64_t) subpic->i_alpha,
         };
         unsigned i;
         for (i = 0; i < sizeof (v) / sizeof (v[0]); i++)
@@ -1350,34 +1389,48 @@ static void BuildSubsOverlay (vout_display_t *vd, subpicture_t *subpic)
              (int) (t_blit - t_alloc), bw, bh);
 }
 
+/* ★★ POURQUOI UN CGImageRef ET PAS UN NSBitmapImageRep :
+ * CoreGraphics n'a qu'un seul chemin de composition rapide, celui de l'alpha
+ * PRÉMULTIPLIÉ. Le seul initialiseur de NSBitmapImageRep capable de déclarer
+ * des données prémultipliées alpha-en-tête est celui à `bitmapFormat:`, qui est
+ * du 10.4 : sous 10.3 il fallait dé-prémultiplier le tampon (une boucle par
+ * pixel) pour l'initialiseur d'origine, et le dessin repassait par le chemin
+ * LENT — mesuré 3 à 30 ms de -drawRect: pour une bande 1023x74, à chaque
+ * apparition de réplique, sur le thread principal. `CGImageCreate` accepte
+ * `kCGImageAlphaPremultipliedFirst` depuis 10.0 : le chemin rapide redevient
+ * accessible sur 10.3 ET 10.2, et la conversion par pixel disparaît. */
 @interface VLCGL1SubsOverlayView : NSView
 {
-    NSBitmapImageRep *_rep;
+    CGImageRef        _img;
     uint8_t          *_repData;
     NSRect            _repRect;   /* où dessiner, en coordonnées de la vue */
+@public
+    int               _lastDrawUs; /* durée du dernier -drawRect: (diag) */
 }
-- (void)setRep:(NSBitmapImageRep *)rep data:(uint8_t *)data rect:(NSRect)rect;
+- (void)setImage:(CGImageRef)img data:(uint8_t *)data rect:(NSRect)rect;
 @end
 
 @implementation VLCGL1SubsOverlayView
-/* ⚠ La vue devient PROPRIÉTAIRE du tampon : NSBitmapImageRep ne copie pas les
- * pixels, il lit dedans à chaque affichage. Le laisser au thread vout (qui
- * libère l'ancienne image dès qu'il en compose une nouvelle) donnait un
+/* ⚠ La vue devient PROPRIÉTAIRE du tampon : le CGImage ne copie pas les pixels,
+ * il lit dedans à chaque affichage. Le laisser au thread vout (qui libère
+ * l'ancienne image dès qu'il en compose une nouvelle) donnait un
  * use-after-free reproductible — crash dans CGSBlendRGBA8888toARGB8888 sous
  * -[NSWindow display]. Le tampon n'est libéré qu'ici, sur le thread principal,
  * quand l'image est remplacée. */
-- (void)setRep:(NSBitmapImageRep *)rep data:(uint8_t *)data rect:(NSRect)rect
+- (void)setImage:(CGImageRef)img data:(uint8_t *)data rect:(NSRect)rect
 {
-    [_rep release];
+    if (_img != NULL)
+        CGImageRelease (_img);
     free (_repData);
-    _rep = [rep retain];
+    _img = img;                       /* propriété transférée */
     _repData = data;
     _repRect = rect;
     [self setNeedsDisplay:YES];
 }
 - (void)dealloc
 {
-    [_rep release];
+    if (_img != NULL)
+        CGImageRelease (_img);
     free (_repData);
     [super dealloc];
 }
@@ -1385,20 +1438,32 @@ static void BuildSubsOverlay (vout_display_t *vd, subpicture_t *subpic)
 - (BOOL)acceptsFirstMouse:(NSEvent *)e { VLC_UNUSED(e); return NO; }
 - (void)drawRect:(NSRect)rect
 {
+    mtime_t t_draw = mdate ();
     VLC_UNUSED(rect);
+    /* ⚠⚠ NE PAS « OPTIMISER » CE DESSIN. Trois variantes ont été essayées le
+     * 2026-07-29 pour réduire la saccade — effacement conditionnel quand
+     * l'incrustation recouvre la vue, composition en NSCompositeCopy au lieu du
+     * mélange, et -displayIfNeeded au lieu de -display. Elles n'ont donné AUCUN
+     * gain mesurable (la saccade est dans le flush au WindowServer, pas ici) et
+     * l'une d'elles a FIGÉ LE GPU sur 10.4.11, quatre fois de suite, alors que
+     * 10.2 et 10.3 tournaient avec le même binaire. On efface, on mélange
+     * normalement, et on s'en tient là. */
     [[NSColor clearColor] set];
     NSRectFill ([self bounds]);
-    if (_rep != nil) {
-        /* Dessin 1:1 : ni rééchantillonnage ni anticrénelage à demander. */
-        NSGraphicsContext *ctx = [NSGraphicsContext currentContext];
-        /* both 10.3; below it the context has neither knob and draws 1:1
-         * anyway, which is exactly what is being asked for here */
-        if ([ctx respondsToSelector:@selector(setImageInterpolation:)])
-            [ctx setImageInterpolation:NSImageInterpolationNone];
-        if ([ctx respondsToSelector:@selector(setShouldAntialias:)])
-            [ctx setShouldAntialias:NO];
-        [_rep drawInRect:_repRect];
+    if (_img != NULL) {
+        CGContextRef cg = (CGContextRef) [[NSGraphicsContext currentContext]
+                                             graphicsPort];
+        if (cg != NULL) {
+            /* Dessin 1:1 : ni rééchantillonnage ni anticrénelage à demander. */
+            CGContextSetInterpolationQuality (cg, kCGInterpolationNone);
+            CGContextSetShouldAntialias (cg, false);
+            CGContextDrawImage (cg, CGRectMake (_repRect.origin.x,
+                                                _repRect.origin.y,
+                                                _repRect.size.width,
+                                                _repRect.size.height), _img);
+        }
     }
+    _lastDrawUs = (int) (mdate () - t_draw);
 }
 @end
 
@@ -1561,6 +1626,7 @@ static int Open (vlc_object_t *this)
         info.has_pictures_invalid = false;
         info.subpicture_chromas = gl1_subpicture_chromas;
 
+
         /* Setup vout_display_t once everything is fine */
         vd->fmt = fmt;
         vd->info = info;
@@ -1595,6 +1661,13 @@ void Close (vlc_object_t *this)
 
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     {
+        /* Rendre la fenêtre pleinement opaque AVANT de lâcher la vue : l'alpha
+         * 0.99 n'est justifié que pendant le mode remplacement matériel (cf.
+         * vlcHwEngagedRefresh) et la fenêtre, elle, survit au vout. */
+        [sys->glView performSelectorOnMainThread:@selector(vlcHwRestoreOpaque)
+                                      withObject:nil
+                                   waitUntilDone:NO];
+
         /* Le vout ne pilote plus rien : -refreshSubsOverlay, qui lit vd->sys,
          * sort immédiatement à partir d'ici (vd == NULL sous @synchronized). */
         [sys->glView setVoutDisplay:nil];
@@ -1874,7 +1947,7 @@ static void PictureRender (vout_display_t *vd, picture_t *pic, subpicture_t *sub
         if (sys->hw_subs_mode) {
             uint64_t sig = SubpictureSignature (subpicture);
             if (sig != sys->ovl_sig) {
-                sys->ovl_sig = sig;
+                sys->ovl_sig  = sig;
                 BuildSubsOverlay (vd, subpicture);
             }
         }
@@ -1890,6 +1963,18 @@ static void PictureRender (vout_display_t *vd, picture_t *pic, subpicture_t *sub
         vlc_gl_ReleaseCurrent(sys->gl);
     }
 }
+
+/* ★ Compteur de presents matériels pour la salve d'auto-clics réparateurs
+ * (cf. vlcHwEngagedRefresh). Remis à zéro à chaque ré-engagement ET à chaque
+ * changement du rect vidéo fenêtre-local : la bascule plein écran ⇄ fenêtré
+ * de 10.3 REDIMENSIONNE la même fenêtre sans rouvrir le décodeur (même wid,
+ * aucun ré-engagement) mais invalide l'état de composition réparé — le
+ * changement de rect est le signal fiable des deux sens de bascule. */
+static unsigned s_gl1_hw_pres = 0;
+/* Fenêtre de recouvrement d'un pixel (cf. vlcHwEnsureCover) — thread principal
+ * uniquement. Taille réglable pour l'A/B (candidats 45/46 du banc). */
+static NSWindow *s_gl1_cover = nil;
+static int s_gl1_cover_side = 1;
 
 static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *subpicture)
 {
@@ -1914,9 +1999,58 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
         static unsigned s_not_engaged = 0;
         bool now = (hw != NULL && present != NULL && pic->context != NULL);
 
+        /* ★★ CORRECTIF DU SCINTILLEMENT 10.3 : poser l'alpha < 1 sur la
+         * fenêtre hôte dès les premiers presents matériels, et le re-poser
+         * après tout changement de fenêtre/géométrie (compteur remis à zéro).
+         * Trois tirs suffisent et coûtent trois appels AppKit par engagement.
+         * /tmp/hw_noautoclick désarme la salve (observation de l'état cassé
+         * pendant les essais du banc). */
+        static int s_noauto = -2;
+        if (s_noauto == -2) {
+            FILE *g = fopen("/tmp/hw_noautoclick", "r");
+            s_noauto = (g != NULL);
+            if (g) fclose(g);
+        }
+        if (now && !s_noauto && ++s_gl1_hw_pres <= 50) {
+            if (s_gl1_hw_pres == 2 || s_gl1_hw_pres == 25)
+                [sys->glView
+                    performSelectorOnMainThread:@selector(vlcHwCoverAndRefresh)
+                                     withObject:nil waitUntilDone:NO];
+            else if (s_gl1_hw_pres == 50)
+                /* re-poser (la géométrie peut avoir bougé entre-temps) */
+                [sys->glView
+                    performSelectorOnMainThread:@selector(vlcHwCoverAndRefresh)
+                                     withObject:nil waitUntilDone:NO];
+        }
+        /* Fin du mode remplacement : garantir une fenêtre opaque. */
+        if (!now && s_engaged)
+            [sys->glView performSelectorOnMainThread:@selector(vlcHwRestoreOpaque)
+                                          withObject:nil
+                                       waitUntilDone:NO];
+
+        /* ★ BANC D'ESSAI : /tmp/hw_cmd = numéro de remède à exécuter une fois
+         * (cf. vlcTryRemedy:). Lu toutes les 25 images, puis effacé. */
+        static unsigned s_cmd_tick = 0;
+        if (now && (++s_cmd_tick % 25) == 0) {
+            FILE *f = fopen("/tmp/hw_cmd", "r");
+            if (f != NULL) {
+                int cmd = 0;
+                int got = fscanf(f, "%d", &cmd);
+                fclose(f);
+                unlink("/tmp/hw_cmd");
+                if (got == 1)
+                    [sys->glView
+                        performSelectorOnMainThread:@selector(vlcTryRemedy:)
+                                         withObject:[NSNumber numberWithInt:cmd]
+                                      waitUntilDone:NO];
+            }
+        }
         if (now && !s_engaged) {
             s_engaged = true;
             msg_Dbg(vd, "present matériel engagé");
+            /* ★ réarmer la salve d'auto-clics à CHAQUE ré-engagement (toute
+             * réouverture du décodeur repart d'un état de composition cassé). */
+            s_gl1_hw_pres = 0;
         } else if (!now) {
             if ((s_not_engaged++ % 100) == 0)
                 msg_Dbg(vd, "present matériel non engagé (%u) : hw=%p "
@@ -1925,6 +2059,31 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
             s_engaged = false;
         }
     }
+    /* ★ La fenêtre qui héberge la vidéo peut être RETIRÉE par l'interface
+     * (bouton « liste de lecture » : elle abrite la vue vidéo). Retirer la
+     * fenêtre ne suffit PAS à cacher la surface — le WindowServer continue de
+     * la composer, et la vidéo restait affichée par-dessus la liste. On
+     * escamote donc la surface elle-même, et on la rend au retour. */
+    if (hw != NULL) {
+        static bool s_surf_hidden = false;
+        bool win_visible = ([sys->glView window] != nil
+                            && [[sys->glView window] isVisible]);
+        if (win_visible == s_surf_hidden) {
+            dvddriver_hide_cb hide = (dvddriver_hide_cb)
+                var_GetAddress(vd->obj.libvlc, DVDDRIVER_VAR_HIDE);
+            if (hide != NULL) {
+                hide(hw, !win_visible);
+                s_surf_hidden = !win_visible;
+            }
+        }
+        if (!win_visible) {
+            picture_Release(pic);
+            if (subpicture)
+                subpicture_Delete(subpicture);
+            return;
+        }
+    }
+
     if (hw != NULL && present != NULL && pic->context != NULL) {
         /* Rectangle FENÊTRE-local (pas `place`, qui est en coords VUE : l'utiliser
          * décalait la surface vers le haut de la hauteur de la barre de titre et
@@ -1962,6 +2121,12 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
         {
             static int lx = -12345, ly, lw, lh;
             if (hx != lx || hy != ly || hw_ != lw || hh != lh) {
+                /* ★ géométrie vidéo changée (bascule plein écran ⇄ fenêtré,
+                 * redimensionnement) : l'état de composition réparé ne
+                 * survit pas à la reconfiguration → réarmer la salve
+                 * d'auto-clics (sauf tout premier passage, lx sentinelle). */
+                if (lx != -12345)
+                    s_gl1_hw_pres = 0;
                 lx = hx; ly = hy; lw = hw_; lh = hh;
                 msg_Dbg (vd, "present matériel : rect fenêtre-local %d,%d %dx%d "
                              "(valide=%d, source %ux%u)", hx, hy, hw_, hh,
@@ -2002,6 +2167,22 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
      * les glitchs constatés à chaque bascule. On ne dessine rien du tout — la
      * dernière image correcte reste composée par le WindowServer. */
     if (var_GetBool(vd->obj.libvlc, DVDDRIVER_VAR_HOLD)) {
+        picture_Release (pic);
+        if (subpicture)
+            subpicture_Delete(subpicture);
+        return;
+    }
+
+    /* ★★ SCINTILLEMENT (Panther/Jaguar) : quand le décodeur MATÉRIEL est engagé
+     * (hw non NULL), une picture SANS contexte matériel est une picture que le
+     * synchro a fait sauter — en mode remplacement ses plans logiciels n'ont
+     * JAMAIS été reconstruits. La dessiner en GL compose une image poubelle
+     * par-dessus la surface GPU, en alternance avec elle : scintillement
+     * proportionnel au taux d'images sautées (invisible sur Tiger à 2 %,
+     * infernal sur Panther à 26 %) — et chaque dessin gaspille un upload
+     * 720×576. On ne dessine RIEN : la dernière image correcte reste composée
+     * par le WindowServer. */
+    if (hw != NULL && pic->context == NULL) {
         picture_Release (pic);
         if (subpicture)
             subpicture_Delete(subpicture);
@@ -2263,6 +2444,600 @@ static void OpenglSwap (vlc_gl_t *gl)
  * pas de NSView — l'exception « unrecognized selector » qui en résulte est
  * avalée par le perform et abandonne silencieusement la méthode.
  */
+/* ★★ RÉPARATION DU SCINTILLEMENT 10.3 (images fantômes sur la surface GPU).
+ *
+ * Symptôme : quelques secondes après l'engagement du décodage matériel, le
+ * WindowServer cesse de composer correctement notre surface accélérée et
+ * mêle à l'image des restes d'images voisines. Un CLIC SOURIS de l'utilisateur
+ * n'importe où sur la fenêtre répare définitivement (état collant).
+ *
+ * Ce qui a été établi expérimentalement (banc /tmp/hw_cmd) et par
+ * DÉSASSEMBLAGE de CoreGraphics 10.3 :
+ *  - le clic doit VRAIMENT traverser le WindowServer : un NSEvent posté dans
+ *    notre propre file ne répare pas ; un mouvement seul, un bouton du milieu
+ *    ou UpdateSystemActivity non plus ;
+ *  - dans `CGXFlushSurface`, le blit accéléré `IOAccelFlushSurfaceOnFrame-
+ *    buffers` exige des drapeaux + un masque de framebuffer armés par
+ *    `__CGXActivateSurfaces` / `__CGXSynchronizeSurfaceVisibility` ;
+ *  - MAIS aucun des appels client menant à `CGXRedrawDisplay` ne répare :
+ *    ordre, niveau, tags, ombre, alpha, opacité, forme, fenêtre de devant,
+ *    focus souris, synchro accélérateur, réactivation d'update, déplacement
+ *    de fenêtre, redessin/flush AppKit, activation de l'application.
+ *  - SEUL `-[NSWindow orderWindow:NSWindowAbove relativeTo:0]` répare —
+ *    alors que `CGSOrderWindow` BRUT sur la même fenêtre ne répare PAS.
+ *    AppKit fait donc plus que l'ordre CGS en remettant la fenêtre en place
+ *    (ré-attache du drawable GL, très probablement), et c'est cela qui réarme
+ *    la composition accélérée.
+ *
+ * On rejoue donc cet ordre AppKit après chaque engagement du present matériel
+ * (et après tout changement de géométrie : bascule plein écran, resize).
+ * Garde-fou : seulement si notre application est ACTIVE — sinon remonter la
+ * fenêtre passerait devant l'app que l'utilisateur est en train d'utiliser
+ * (et un film démarré en arrière-plan ne souffre pas du défaut). */
+/* ★ BANC D'ESSAI « pourquoi le clic répare » (10.3).
+ * Écrire un numéro dans /tmp/hw_cmd fait exécuter UNE fois le remède candidat
+ * correspondant, sur le thread principal, sans rebuild ni relance — de quoi
+ * essayer des dizaines de pistes sur UN SEUL état cassé. Le résultat de chaque
+ * essai est jugé à l'œil par l'utilisateur.
+ * Le candidat 1 est LE discriminateur : un NSEvent posté dans NOTRE file
+ * d'événements ne passe PAS par le WindowServer. S'il répare, le remède est
+ * dans le traitement AppKit du clic (côté app) ; s'il ne répare pas, il est
+ * dans le serveur. */
+- (void)vlcTryRemedy:(NSNumber *)num
+{
+    VLCAssertMainThread();
+    const int c = [num intValue];
+    NSWindow *win = [self window];
+    if (win == nil) {
+        fprintf(stderr, "REMEDE %d : pas de fenêtre\n", c);
+        return;
+    }
+    int wid = (int) [win windowNumber];
+    void *as = dlopen("/System/Library/Frameworks/ApplicationServices.framework"
+                      "/ApplicationServices", RTLD_NOW | RTLD_GLOBAL);
+    /* ⚠ chaîne de connexion : CGSMainConnectionID n'est pas toujours visible
+     * par dlsym sur l'umbrella (sous-frameworks) — mêmes replis que le
+     * backend, sinon cid=0 et TOUS les appels CGS sont des non-op silencieux. */
+    int (*MainConn)(void)    = as ? dlsym(as, "CGSMainConnectionID") : NULL;
+    int (*QDConn)(void)      = as ? dlsym(as, "GetCGSConnectionID") : NULL;
+    int (*ActiveConn)(int *) = as ? dlsym(as, "CGSGetActiveConnection") : NULL;
+    int cid = 0;
+    if (MainConn) cid = MainConn();
+    if (!cid && QDConn) cid = QDConn();
+    if (!cid && ActiveConn) ActiveConn(&cid);
+    const char *what = "?";
+
+    switch (c) {
+    case 1: {   /* NSEvent synthétique — n'atteint QUE notre app */
+        NSPoint p = [self convertPoint:NSMakePoint(NSMidX([self bounds]),
+                                                   NSMidY([self bounds]))
+                                toView:nil];
+        NSEvent *d = [NSEvent mouseEventWithType:NSLeftMouseDown location:p
+                        modifierFlags:0 timestamp:0 windowNumber:wid
+                              context:nil eventNumber:0 clickCount:1 pressure:1.0];
+        NSEvent *u = [NSEvent mouseEventWithType:NSLeftMouseUp location:p
+                        modifierFlags:0 timestamp:0 windowNumber:wid
+                              context:nil eventNumber:0 clickCount:1 pressure:0.0];
+        [NSApp postEvent:d atStart:NO];
+        [NSApp postEvent:u atStart:NO];
+        what = "NSEvent clic posté dans notre file (hors serveur)";
+        break;
+    }
+    case 2:
+        [win display];
+        what = "[win display]";
+        break;
+    case 3:
+        [win makeKeyAndOrderFront:nil];
+        what = "makeKeyAndOrderFront";
+        break;
+    case 4:
+        [NSApp activateIgnoringOtherApps:YES];
+        what = "activateIgnoringOtherApps";
+        break;
+    case 5: {
+        int (*FlushWin)(int, int, int) = as ? dlsym(as, "CGSFlushWindow") : NULL;
+        if (FlushWin) FlushWin(cid, wid, 0);
+        what = FlushWin ? "CGSFlushWindow" : "CGSFlushWindow ABSENT";
+        break;
+    }
+    case 6: {
+        int (*OrderWin)(int, int, int, int) = as ? dlsym(as, "CGSOrderWindow") : NULL;
+        if (OrderWin) OrderWin(cid, wid, 1, 0);
+        what = OrderWin ? "CGSOrderWindow(above)" : "CGSOrderWindow ABSENT";
+        break;
+    }
+    case 7: {
+        int (*SetLvl)(int, int, int) = as ? dlsym(as, "CGSSetWindowLevel") : NULL;
+        int (*GetLvl)(int, int, int *) = as ? dlsym(as, "CGSGetWindowLevel") : NULL;
+        int lvl = 0;
+        if (GetLvl) GetLvl(cid, wid, &lvl);
+        if (SetLvl) SetLvl(cid, wid, lvl);
+        what = SetLvl ? "CGSSetWindowLevel (même niveau)" : "CGSSetWindowLevel ABSENT";
+        break;
+    }
+    case 8: {
+        int (*Dis)(int)  = as ? dlsym(as, "CGSDisableUpdate") : NULL;
+        int (*Reen)(int) = as ? dlsym(as, "CGSReenableUpdate") : NULL;
+        if (Dis && Reen) { Dis(cid); Reen(cid); }
+        what = (Dis && Reen) ? "CGSDisable/ReenableUpdate" : "CGSDisableUpdate ABSENT";
+        break;
+    }
+    case 9:
+        [win setViewsNeedDisplay:YES];
+        [win displayIfNeeded];
+        [win flushWindow];
+        what = "setViewsNeedDisplay + displayIfNeeded + flushWindow";
+        break;
+    case 10:
+        [win invalidateShadow];
+        what = "invalidateShadow";
+        break;
+    case 11:
+        [win setHasShadow:NO];
+        [win setHasShadow:YES];
+        what = "setHasShadow NO/YES (recalcul de forme serveur)";
+        break;
+    case 12: {   /* re-poser la forme de fenêtre côté serveur */
+        NSRect f = [win frame];
+        [win setFrame:NSMakeRect(f.origin.x, f.origin.y,
+                                 f.size.width, f.size.height) display:YES];
+        what = "setFrame identique + display";
+        break;
+    }
+    case 13: {   /* déplacement RÉEL de fenêtre côté serveur, puis retour */
+        int (*MoveWin)(int, int, const CGPoint *) = as ? dlsym(as, "CGSMoveWindow") : NULL;
+        NSRect f = [win frame];
+        float scr_h = [[[NSScreen screens] objectAtIndex:0] frame].size.height;
+        CGPoint o1, o0;
+        o0.x = f.origin.x; o0.y = scr_h - (f.origin.y + f.size.height);
+        o1.x = o0.x + 1;   o1.y = o0.y;
+        if (MoveWin) { MoveWin(cid, wid, &o1); MoveWin(cid, wid, &o0); }
+        what = MoveWin ? "CGSMoveWindow +1/-1" : "CGSMoveWindow ABSENT";
+        break;
+    }
+    /* ==== candidats issus du DÉSASSEMBLAGE de CoreGraphics 10.3 ==========
+     * Chemin de composition accélérée établi statiquement :
+     *   CGXFlushSurface → (surf->0x1c & 0x10000000) && surf->0xc==2
+     *                  && surf->0x40 && surf->0x44 && !CGXAreUpdatesDisabled
+     *                  → IOAccelFlushSurfaceOnFramebuffers
+     * et l'armement de surf->0x40/0x44 se fait dans __CGXActivateSurfaces /
+     * __CGXSynchronizeSurfaceVisibility, atteints depuis CGXRedrawDisplay
+     * (ordre, niveau, tags, ombre, alpha, forme, réactivation d'update…). */
+    case 20: {   /* état vu du PROPRIÉTAIRE (les getters exigent l'ownership) */
+        int (*SurfCount)(int, int, int *)  = as ? dlsym(as, "CGSGetSurfaceCount") : NULL;
+        int (*Seed)(int, int, int *)       = as ? dlsym(as, "CGSGetWindowFlushSeed") : NULL;
+        int (*GetTags)(int, int, int *, int) = as ? dlsym(as, "CGSGetWindowTags") : NULL;
+        int sc = -1, s1 = -1, s2 = -1, tg[2] = { 0, 0 };
+        if (SurfCount) SurfCount(cid, wid, &sc);
+        if (Seed) Seed(cid, wid, &s1);
+        if (GetTags) GetTags(cid, wid, tg, 32);
+        usleep(300000);
+        if (Seed) Seed(cid, wid, &s2);
+        fprintf(stderr, "ETAT wid=%d surfaces=%d seed %d→%d tags=%08x/%08x\n",
+                wid, sc, s1, s2, tg[0], tg[1]);
+        what = "relevé d'état";
+        break;
+    }
+    case 21: {
+        int (*SetLvl)(int, int, int) = as ? dlsym(as, "CGSSetWindowLevel") : NULL;
+        int (*GetLvl)(int, int, int *) = as ? dlsym(as, "CGSGetWindowLevel") : NULL;
+        int lvl = 0;
+        if (GetLvl) GetLvl(cid, wid, &lvl);
+        if (SetLvl) SetLvl(cid, wid, lvl);
+        what = SetLvl ? "CGSSetWindowLevel (identique)" : "ABSENT";
+        break;
+    }
+    case 22: {
+        int (*SetTags)(int, int, int *, int) = as ? dlsym(as, "CGSSetWindowTags") : NULL;
+        int (*GetTags)(int, int, int *, int) = as ? dlsym(as, "CGSGetWindowTags") : NULL;
+        int tg[2] = { 0, 0 };
+        if (GetTags) GetTags(cid, wid, tg, 32);
+        if (SetTags) SetTags(cid, wid, tg, 32);
+        what = SetTags ? "CGSSetWindowTags (identiques)" : "ABSENT";
+        break;
+    }
+    case 23: {
+        int (*Inval)(int, int) = as ? dlsym(as, "CGSInvalidateWindowShadow") : NULL;
+        if (Inval) Inval(cid, wid);
+        what = Inval ? "CGSInvalidateWindowShadow" : "ABSENT";
+        break;
+    }
+    case 24: {
+        int (*SetA)(int, int, float) = as ? dlsym(as, "CGSSetWindowAlpha") : NULL;
+        if (SetA) { SetA(cid, wid, 0.99f); usleep(30000); SetA(cid, wid, 1.0f); }
+        what = SetA ? "CGSSetWindowAlpha 0.99→1.0" : "ABSENT";
+        break;
+    }
+    case 25: {
+        int (*SetOp)(int, int, int) = as ? dlsym(as, "CGSSetWindowOpacity") : NULL;
+        if (SetOp) { SetOp(cid, wid, 0); usleep(30000); SetOp(cid, wid, 1); }
+        what = SetOp ? "CGSSetWindowOpacity 0→1" : "ABSENT";
+        break;
+    }
+    case 26: {
+        int (*Front)(int, int) = as ? dlsym(as, "CGSSetFrontWindow") : NULL;
+        if (Front) Front(cid, wid);
+        what = Front ? "CGSSetFrontWindow" : "ABSENT";
+        break;
+    }
+    case 27: {
+        int (*MouseFoc)(int, int) = as ? dlsym(as, "CGSSetMouseFocusWindow") : NULL;
+        if (MouseFoc) MouseFoc(cid, wid);
+        what = MouseFoc ? "CGSSetMouseFocusWindow (ce qu'un clic établit)" : "ABSENT";
+        break;
+    }
+    case 28: {
+        int (*Sync)(int, int, int, int, int) =
+            as ? dlsym(as, "CGSSynchronizeWindowAccelerator") : NULL;
+        int rc = -1;
+        if (Sync) rc = Sync(cid, wid, 1, 0, 0);
+        fprintf(stderr, "  CGSSynchronizeWindowAccelerator rc=%d\n", rc);
+        what = Sync ? "CGSSynchronizeWindowAccelerator" : "ABSENT";
+        break;
+    }
+    case 29: {
+        int (*SendExp)(int, int, int) = as ? dlsym(as, "CGSSetWindowSendExposed") : NULL;
+        if (SendExp) { SendExp(cid, wid, 1); }
+        what = SendExp ? "CGSSetWindowSendExposed(1)" : "ABSENT";
+        break;
+    }
+    case 30: {   /* re-poser la FORME : passe par FinalizeGeometryChange */
+        int (*GetShape)(int, int, void **) = as ? dlsym(as, "CGSGetWindowShape") : NULL;
+        int (*SetShape)(int, int, int, int, void *) =
+            as ? dlsym(as, "CGSSetWindowShape") : NULL;
+        void *rgn = NULL;
+        if (GetShape && SetShape && GetShape(cid, wid, &rgn) == 0 && rgn)
+            SetShape(cid, wid, 0, 0, rgn);
+        what = SetShape ? "CGSSetWindowShape (forme courante)" : "ABSENT";
+        break;
+    }
+    /* ★ makeKeyAndOrderFront RÉPARE (validé 29/07). Or l'ordre seul
+     * (CGSOrderWindow, AppKit orderWindow:) et l'activation d'app échouent :
+     * c'est la partie « fenêtre CLÉ » qui porte le remède. On cherche ici la
+     * forme MINIMALE — makeKeyWindow seul serait idéal (ne remonte pas la
+     * fenêtre au premier plan, donc ne vole pas le focus à une autre app). */
+    case 31:
+        [win makeKeyWindow];
+        what = "makeKeyWindow (sans remontée au premier plan)";
+        break;
+    case 32:
+        [win orderWindow:NSWindowAbove relativeTo:0];
+        what = "orderWindow:above (sans fenêtre clé)";
+        break;
+    case 33:
+        [win resignKeyWindow];
+        [win makeKeyWindow];
+        what = "resignKeyWindow puis makeKeyWindow";
+        break;
+    /* orderWindow:above RÉPARE alors que CGSOrderWindow (brut) NON : AppKit
+     * fait davantage en mettant la fenêtre en ordre. Hypothèse : la
+     * ré-attache du contexte GL au drawable (CGLUpdateContext), qui réarme la
+     * liste de surfaces de la fenêtre côté serveur. Ces deux candidats
+     * cherchent la forme minimale, SANS toucher à l'ordre des fenêtres. */
+    case 34:
+        [[self openGLContext] update];
+        what = "[[self openGLContext] update] (CGLUpdateContext)";
+        break;
+    case 35:
+        [[self openGLContext] setView:self];
+        what = "[[self openGLContext] setView:] (ré-attache du drawable)";
+        break;
+    /* ★ En PLEIN ÉCRAN, cliquer la vidéo ne répare pas, mais cliquer le
+     * PANNEAU DE CONTRÔLES (une AUTRE fenêtre) répare — et ça tient même
+     * après sa disparition. Le remède est donc un vrai CHANGEMENT DE LA LISTE
+     * DES FENÊTRES de l'application, pas une action sur la fenêtre vidéo
+     * elle-même (d'où l'échec de orderWindow:above en plein écran : la
+     * fenêtre y est déjà seule et devant, l'appel ne change rien).
+     * On fabrique donc ce changement avec une fenêtre auxiliaire 1×1
+     * entièrement transparente : ordonnée devant, puis retirée. */
+    case 36: {
+        NSWindow *h = [[NSWindow alloc]
+            initWithContentRect:NSMakeRect(0, 0, 1, 1)
+                      styleMask:NSBorderlessWindowMask
+                        backing:NSBackingStoreBuffered
+                          defer:NO];
+        [h setLevel:[win level] + 1];
+        [h setOpaque:NO];
+        [h setBackgroundColor:[NSColor clearColor]];
+        [h setHasShadow:NO];
+        [h orderFront:nil];
+        [h orderOut:nil];
+        [h release];
+        what = "fenêtre auxiliaire 1x1 ordonnée devant puis retirée";
+        break;
+    }
+    case 37: {   /* variante : ordonner la fenêtre VIDÉO au-dessus de l'auxiliaire */
+        NSWindow *h = [[NSWindow alloc]
+            initWithContentRect:NSMakeRect(0, 0, 1, 1)
+                      styleMask:NSBorderlessWindowMask
+                        backing:NSBackingStoreBuffered
+                          defer:NO];
+        [h setLevel:[win level]];
+        [h setOpaque:NO];
+        [h setBackgroundColor:[NSColor clearColor]];
+        [h setHasShadow:NO];
+        [h orderFront:nil];
+        [win orderWindow:NSWindowAbove relativeTo:[h windowNumber]];
+        [h orderOut:nil];
+        [h release];
+        what = "vidéo ordonnée au-dessus d'une fenêtre auxiliaire";
+        break;
+    }
+    /* En plein écran, seul le clic sur le PANNEAU DE CONTRÔLES répare. Ce
+     * panneau diffère de mes auxiliaires 1×1 sur deux points : il est OPAQUE
+     * et RECOUVRE la vidéo (donc il l'obscurcit puis la ré-expose), et il
+     * reçoit un VRAI clic. On sépare les deux ingrédients. */
+    case 38: {   /* recouvrement opaque SANS clic */
+        NSRect wf = [win frame];
+        NSRect hr = NSMakeRect(NSMidX(wf) - 60, NSMinY(wf) + 60, 120, 60);
+        NSWindow *h = [[NSWindow alloc]
+            initWithContentRect:hr styleMask:NSBorderlessWindowMask
+                        backing:NSBackingStoreBuffered defer:NO];
+        [h setLevel:[win level] + 1];
+        [h setBackgroundColor:[NSColor blackColor]];
+        [h setHasShadow:NO];
+        [h orderFront:nil];
+        [h display];
+        usleep(120000);
+        [h orderOut:nil];
+        [h release];
+        what = "recouvrement opaque de la vidéo, sans clic";
+        break;
+    }
+    case 39: {   /* recouvrement opaque AVEC un vrai clic dessus (inerte) */
+        NSRect wf = [win frame];
+        NSRect hr = NSMakeRect(NSMidX(wf) - 60, NSMinY(wf) + 60, 120, 60);
+        NSWindow *h = [[NSWindow alloc]
+            initWithContentRect:hr styleMask:NSBorderlessWindowMask
+                        backing:NSBackingStoreBuffered defer:NO];
+        [h setLevel:[win level] + 1];
+        [h setBackgroundColor:[NSColor blackColor]];
+        [h setHasShadow:NO];
+        [h orderFront:nil];
+        [h display];
+        float scr_h = [[[NSScreen screens] objectAtIndex:0] frame].size.height;
+        CGPoint p;
+        p.x = (float) NSMidX(hr);
+        p.y = scr_h - (float) NSMidY(hr);
+        CGPostMouseEvent(p, 1, 1, 1);
+        usleep(40000);
+        CGPostMouseEvent(p, 1, 1, 0);
+        usleep(40000);
+        [h orderOut:nil];
+        [h release];
+        what = "recouvrement opaque + vrai clic dessus";
+        break;
+    }
+    /* ★★ THÉORIE UNIFIÉE (29/07) : l'image n'est propre que TANT QU'UNE AUTRE
+     * FENÊTRE RECOUVRE la vidéo (panneau de contrôles en plein écran). Sinon
+     * le serveur prend le chemin RAPIDE : il donne la surface accélérée
+     * directement au framebuffer, et c'est CE chemin qui rend mal ici.
+     * `__CGXActivateSurfaces` refuse le chemin direct si (entre autres)
+     * l'ALPHA DE LA FENÊTRE EST < 1.0 — condition réglable par le client.
+     * On la pose donc EN PERMANENCE (0.99 : invisible à l'œil). */
+    case 40:
+        [win setAlphaValue:0.99f];
+        what = "alpha de fenêtre 0.99 PERMANENT (force la composition)";
+        break;
+    case 41:
+        [win setOpaque:NO];
+        what = "fenêtre marquée non opaque (persistant)";
+        break;
+    case 42:
+        [win setAlphaValue:1.0f];
+        [win setOpaque:YES];
+        what = "retour alpha 1.0 + opaque (annule 40/41)";
+        break;
+    /* ★ Piste « recouvrement permanent » : une fenêtre opaque, même minuscule,
+     * posée AU-DESSUS de la fenêtre vidéo interdit le chemin direct (la
+     * surface n'est plus intégralement visible) et force la composition — mais
+     * par simple COPIE, sans le mélange par pixel que coûte un alpha < 1.
+     * C'est exactement la situation « panneau de contrôles affiché », que la
+     * machine a montrée nette ET fluide. */
+    /* Le recouvrement OPAQUE, même visible à l'écran, ne suffit pas en plein
+     * écran alors que le PANNEAU DE CONTRÔLES, lui, suffit. Différences
+     * candidates : ombre portée, translucidité, taille/position. */
+    case 51:   /* ★ la recette du panneau de contrôles : NON OPAQUE + fond clair */
+        [self vlcHwEnsureCover];
+        [s_gl1_cover setOpaque:NO];
+        [s_gl1_cover setBackgroundColor:[NSColor clearColor]];
+        [s_gl1_cover setAlphaValue:1.0f];
+        [s_gl1_cover orderOut:nil];
+        [s_gl1_cover orderFront:nil];
+        what = "recouvrement NON OPAQUE à fond transparent (invisible)";
+        break;
+    case 48:
+        [self vlcHwEnsureCover];
+        [s_gl1_cover setHasShadow:YES];
+        [s_gl1_cover orderOut:nil];
+        [s_gl1_cover orderFront:nil];
+        what = "recouvrement AVEC ombre portée";
+        break;
+    case 49:
+        [self vlcHwEnsureCover];
+        [s_gl1_cover setAlphaValue:0.90f];
+        what = "recouvrement TRANSLUCIDE (alpha 0.9)";
+        break;
+    case 50: {   /* même gabarit que le panneau de contrôles */
+        [self vlcHwEnsureCover];
+        NSRect wf = [win frame];
+        NSRect fs = NSMakeRect(wf.origin.x + (wf.size.width - 315) / 2,
+                               wf.origin.y + 100, 315, 31);
+        [s_gl1_cover setFrame:fs display:YES];
+        [s_gl1_cover setHasShadow:YES];
+        [s_gl1_cover orderFront:nil];
+        what = "recouvrement au gabarit du panneau de contrôles";
+        break;
+    }
+    case 46: {   /* re-présenter le RECOUVREMENT (autre fenêtre) */
+        [self vlcHwEnsureCover];
+        [s_gl1_cover orderOut:nil];
+        [s_gl1_cover orderFront:nil];
+        what = "recouvrement retiré puis re-présenté";
+        break;
+    }
+    case 47: {   /* vrai clic SUR le recouvrement (= clic sur une autre fenêtre) */
+        [self vlcHwEnsureCover];
+        [s_gl1_cover setIgnoresMouseEvents:NO];
+        NSRect cf = [s_gl1_cover frame];
+        float scr_h = [[[NSScreen screens] objectAtIndex:0] frame].size.height;
+        CGPoint p;
+        p.x = (float) NSMidX(cf);
+        p.y = scr_h - (float) NSMidY(cf);
+        CGPostMouseEvent(p, 1, 1, 1);
+        usleep(40000);
+        CGPostMouseEvent(p, 1, 1, 0);
+        what = "clic synthétique sur le pixel de recouvrement";
+        break;
+    }
+    case 43: case 44: case 45: {   /* A/B de la TAILLE du recouvrement */
+        s_gl1_cover_side = (c == 43) ? 1 : (c == 44) ? 8 : 32;
+        if (s_gl1_cover != nil) {
+            [s_gl1_cover orderOut:nil];
+            [s_gl1_cover release];
+            s_gl1_cover = nil;
+        }
+        [self vlcHwEnsureCover];
+        what = "recouvrement du coin de la SURFACE (taille A/B)";
+        break;
+    }
+    default:
+        what = "candidat inconnu";
+        break;
+    }
+    fprintf(stderr, "REMEDE %d : %s (cid=%d wid=%d)\n", c, what, cid, wid);
+}
+
+/* ★★★ CORRECTIF DU SCINTILLEMENT (10.3, surface GPU en mode remplacement).
+ *
+ * Mécanisme établi par rétro-ingénierie de CoreGraphics 10.3 + essais sur
+ * machine : tant que la fenêtre vidéo est intégralement visible et opaque, le
+ * WindowServer donne notre surface accélérée DIRECTEMENT au framebuffer
+ * (chemin refusé par `__CGXActivateSurfaces` dès que la surface est
+ * partiellement masquée, la fenêtre translucide, zoomée ou transformée).
+ * Ce chemin direct affiche des images mêlées avec le pilote ATI de cette
+ * machine — d'où le « scintillement ». Vérifié à l'oeil : poser N'IMPORTE
+ * QUELLE fenêtre par-dessus l'image l'arrête instantanément, la retirer le
+ * ramène ; en plein écran, le panneau de contrôles joue ce rôle.
+ *
+ * Un alpha < 1 marche aussi mais coûte un mélange par pixel (saccadé sur G3).
+ * On masque donc UN SEUL PIXEL de la surface, dans son coin : la composition
+ * reprend, par simple copie, et le pixel est invisible à l'oeil. */
++ (void)vlcHideCursor
+{
+    VLCAssertMainThread();
+    [NSCursor setHiddenUntilMouseMoves:YES];
+    /* En PLEIN ÉCRAN le masquage ne tenait pas : le panneau de contrôles
+     * s'efface peu après (fondu, retrait de fenêtre) et AppKit réaffiche le
+     * pointeur au passage, alors que le coeur, lui, ne redemandera un
+     * masquage qu'après une nouvelle période d'inactivité. On ré-arme donc
+     * deux fois, à 1 et 2 s — sans effet si le pointeur a réellement bougé,
+     * puisque -setHiddenUntilMouseMoves: se désarme de lui-même. */
+    [self performSelector:@selector(vlcHideCursorAgain)
+               withObject:nil afterDelay:1.0];
+    [self performSelector:@selector(vlcHideCursorAgain)
+               withObject:nil afterDelay:2.0];
+}
+
++ (void)vlcHideCursorAgain
+{
+    VLCAssertMainThread();
+    [NSCursor setHiddenUntilMouseMoves:YES];
+}
+
+- (void)vlcHwEnsureCover
+{
+    VLCAssertMainThread();
+    NSWindow *win = [self window];
+    vout_display_t *v;
+    @synchronized (self) { v = vd; }
+    if (win == nil || v == NULL || ![win isVisible])
+        return;
+
+    int hx, hy, hw_, hh;
+    BOOL ok;
+    @synchronized (self) {
+        ok  = v->sys->hw_place_valid;
+        hx  = v->sys->hw_x;  hy = v->sys->hw_y;
+        hw_ = v->sys->hw_w;  hh = v->sys->hw_h;
+    }
+    if (!ok || hw_ <= 0 || hh <= 0)
+        return;
+
+    /* hx/hy sont en coordonnées FENÊTRE, origine en HAUT à gauche (ce sont
+     * celles passées à CGSSetSurfaceBounds) ; NSWindow travaille en origine
+     * BAS à gauche → on retourne verticalement. */
+    NSRect wf = [win frame];
+    NSRect cover = NSMakeRect(wf.origin.x + hx,
+                              wf.origin.y + wf.size.height - (hy + hh),
+                              s_gl1_cover_side, s_gl1_cover_side);
+
+    if (s_gl1_cover != nil) {
+        [s_gl1_cover setFrame:cover display:NO];
+        [s_gl1_cover setLevel:[win level] + 1];
+        if (![s_gl1_cover isVisible])
+            [s_gl1_cover orderFront:nil];
+        return;
+    }
+    s_gl1_cover = [[NSWindow alloc] initWithContentRect:cover
+                                              styleMask:NSBorderlessWindowMask
+                                                backing:NSBackingStoreBuffered
+                                                  defer:NO];
+    [s_gl1_cover setLevel:[win level] + 1];
+    /* ⚠ NON OPAQUE et fond TRANSPARENT — c'est le point décisif, et c'est
+     * aussi la recette du panneau de contrôles plein écran (VLCLegacyFSPanel),
+     * dont l'apparition suffisait à nettoyer l'image. Un recouvrement OPAQUE
+     * ne marche PAS : le serveur se contente alors de le découper et continue
+     * d'envoyer le reste de la surface directement au framebuffer (vérifié à
+     * l'oeil : carré noir bien visible, scintillement intact). Une fenêtre
+     * non opaque, elle, l'oblige à MÉLANGER, donc à composer la surface. */
+    [s_gl1_cover setOpaque:NO];
+    [s_gl1_cover setBackgroundColor:[NSColor clearColor]];
+    [s_gl1_cover setHasShadow:NO];
+    [s_gl1_cover setIgnoresMouseEvents:YES];
+    [s_gl1_cover orderFront:nil];
+}
+
+/* Le recouvrement seul ne suffit PAS : tant que le serveur n'a pas RECALCULÉ
+ * la visibilité des surfaces de la fenêtre, la surface continue d'être
+ * envoyée directement au framebuffer — au point d'écraser à l'écran le pixel
+ * de recouvrement lui-même (constaté : la fenêtre existe dans la liste mais
+ * reste invisible). `-[NSWindow orderWindow:relativeTo:]` provoque ce
+ * recalcul (l'appel CGS brut `CGSOrderWindow`, lui, ne suffit pas). Une fois
+ * le recalcul fait avec le recouvrement en place, la décision « composer »
+ * devient durable. */
+- (void)vlcHwCoverAndRefresh
+{
+    VLCAssertMainThread();
+    NSWindow *win = [self window];
+    if (win == nil)
+        return;
+    /* ⚠ Ne RIEN faire si la fenêtre vidéo n'est pas à l'écran : l'interface
+     * legacy la retire pour afficher la liste de lecture (elle héberge la vue
+     * vidéo), et `-orderWindow:` la ramènerait aussitôt — la vidéo reprenait
+     * le dessus dès le clic sur le bouton de la liste. */
+    if (![win isVisible])
+        return;
+    [self vlcHwEnsureCover];
+    [win orderWindow:NSWindowAbove relativeTo:0];
+}
+
+/* Fin du mode remplacement (lecture logicielle, fermeture du vout) : retirer
+ * le pixel de recouvrement et garantir une fenêtre pleinement opaque. */
+- (void)vlcHwRestoreOpaque
+{
+    VLCAssertMainThread();
+    if (s_gl1_cover != nil) {
+        [s_gl1_cover orderOut:nil];
+        [s_gl1_cover release];
+        s_gl1_cover = nil;
+    }
+    NSWindow *win = [self window];
+    if (win != nil && [win alphaValue] < 1.0f)
+        [win setAlphaValue:1.0f];
+}
+
 - (void)refreshSubsOverlay
 {
     VLCAssertMainThread();
@@ -2287,8 +3062,30 @@ static void OpenglSwap (vlc_gl_t *gl)
     }
 
     NSWindow *win = [self window];
-    if (win == nil)
+    if (win == nil) {
+        free (data);
         return;
+    }
+
+    /* ★★ PLEIN ÉCRAN : la vue vidéo CHANGE DE FENÊTRE. Sans fenêtre hôte
+     * (le cas sous 10.3), `-setVideoFullscreenFromNumber:` crée une fenêtre
+     * borderless et y déplace la vue. L'incrustation, elle, restait enfant de
+     * la fenêtre PRÉCÉDENTE : toujours au-dessus d'ELLE, mais sous la fenêtre
+     * plein écran — plus un seul sous-titre ni OSD à l'écran, alors que tout
+     * est composé et posé normalement. On la fait adopter par la fenêtre
+     * courante, et on repart d'un cadre NEUF : l'union avec l'ancien cadre,
+     * exprimé dans l'autre géométrie, aurait couvert n'importe quoi. */
+    if (_subsOverlay != nil && _subsOverlayParent != nil
+        && _subsOverlayParent != win) {
+        [_subsOverlayParent removeChildWindow:_subsOverlay];
+        [win addChildWindow:_subsOverlay ordered:NSWindowAbove];
+        _subsOverlayParent = win;
+        _subsOverlayRect = NSZeroRect;
+        @synchronized (self) {
+            if (vd) msg_Dbg (vd, "incrustation ré-adoptée par la fenêtre %d "
+                                 "(bascule plein écran)", (int) [win windowNumber]);
+        }
+    }
 
     /* Cadre = BOÎTE DU SOUS-TITRE, et rien de plus : une version couvrant en
      * permanence tout le rectangle vidéo a été essayée pour éviter les
@@ -2310,9 +3107,9 @@ static void OpenglSwap (vlc_gl_t *gl)
          * la fenêtre reste en place, transparente. Le sous-titre suivant occupe
          * en général exactement le même cadre (même bande de bas d'image) →
          * aucun redimensionnement du tout. Retirée au démontage seulement. */
-        [(VLCGL1SubsOverlayView *)[_subsOverlay contentView] setRep:nil
-                                                                data:NULL
-                                                                rect:NSZeroRect];
+        [(VLCGL1SubsOverlayView *)[_subsOverlay contentView] setImage:NULL
+                                                                 data:NULL
+                                                                 rect:NSZeroRect];
         /* On VIDE seulement : ni masquage (il fait disparaître la fenêtre
          * vidéo entière), ni changement de cadre. Chaque -setFrame: coûte un
          * aller-retour synchrone avec le WindowServer — mesuré à ~7 ms de coût
@@ -2354,61 +3151,74 @@ static void OpenglSwap (vlc_gl_t *gl)
         VLCGL1SubsOverlayView *ov = [[VLCGL1SubsOverlayView alloc]
             initWithFrame:NSMakeRect (0, 0, frame.size.width, frame.size.height)];
         [ov setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-        [ov setRep:nil data:NULL rect:NSZeroRect];
+        [ov setImage:NULL data:NULL rect:NSZeroRect];
         [_subsOverlay setContentView:ov];
         [ov release];
-        /* Fenêtre ENFANT : suit les déplacements de la fenêtre vidéo et reste
-         * juste au-dessus d'elle (y compris en plein écran). Une fenêtre
-         * indépendante placée par son niveau a été mesurée : même coût. */
-        [win addChildWindow:_subsOverlay ordered:NSWindowAbove];
+        /* ⚠ PAS d'-addChildWindow: ICI. Ajouter une fenêtre enfant à un parent
+         * visible l'ORDONNE À L'ÉCRAN sur-le-champ — donc avant que son tampon
+         * ait été peint : on voyait un FLASH BLANC pleine largeur au tout
+         * premier sous-titre. L'adoption a lieu à la fin, une fois le contenu
+         * dessiné (elle sert alors aussi de mise à l'écran). */
     }
-    /* ⚠ Deux détails qui font la différence entre 3 ms et 30 ms de -display sur
+    /* ⚠ Deux détails qui font la différence entre 3 ms et 30 ms de dessin sur
      * un G3 : alpha PRÉMULTIPLIÉ (seul chemin rapide de CoreGraphics) et espace
-     * colorimétrique PÉRIPHÉRIQUE — avec NSCalibratedRGBColorSpace, ColorSync
-     * convertit chaque pixel à l'affichage. */
-    /* The -bitmapFormat: initialiser is 10.4, and it is the ONLY way to
-     * declare alpha-first premultiplied data: its 10.0 ancestor always reads
-     * the buffer as non-premultiplied alpha-LAST, which would render these
-     * subtitles in the wrong colours rather than merely slower. Below 10.4
-     * the overlay is left empty and the caller falls back to the ordinary
-     * blended path. */
-    if (![NSBitmapImageRep instancesRespondToSelector:
-            @selector(initWithBitmapDataPlanes:pixelsWide:pixelsHigh:bitsPerSample:samplesPerPixel:hasAlpha:isPlanar:colorSpaceName:bitmapFormat:bytesPerRow:bitsPerPixel:)]) {
+     * colorimétrique PÉRIPHÉRIQUE — avec un espace calibré, ColorSync convertit
+     * chaque pixel à l'affichage. `CGImageCreate` donne les deux sur TOUTES les
+     * versions, là où seul l'initialiseur `bitmapFormat:` de NSBitmapImageRep
+     * (10.4) savait déclarer du prémultiplié alpha-en-tête (cf. le commentaire
+     * de VLCGL1SubsOverlayView).
+     * ⚠ HISTORIQUE : une garde `instancesRespondToSelector:` renvoyait tout de
+     * suite quand cet initialiseur 10.4 manquait — elle rendait le repli 10.3
+     * INATTEIGNABLE, et c'est ce qui laissait les sous-titres invisibles sur
+     * Panther alors que tout le reste de la chaîne fonctionnait. */
+    CGImageRef img = NULL;
+    {
+        CGDataProviderRef prov =
+            CGDataProviderCreateWithData (NULL, data, (size_t) bw * bh * 4, NULL);
+        CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB ();
+        /* ⚠⚠ PAS DE DRAPEAU D'ORDRE D'OCTETS. Le champ vaut `CGImageAlphaInfo`
+         * SEUL jusqu'à 10.3 : les `kCGBitmapByteOrder*` sont du 10.4, et sur
+         * Panther tout bit en trop fait échouer CGImageCreate silencieusement
+         * (NULL). Le poser sur 10.4 seulement — ce que je faisais — est la SEULE
+         * branche de ce chemin réservée à Tiger, et c'est elle qui a FIGÉ LE GPU
+         * de l'iBook trois fois de suite sous 10.4.11 (2026-07-30) alors que
+         * Panther tournait parfaitement avec le même binaire.
+         * Il est de toute façon REDONDANT partout où ce code tourne : sur
+         * PowerPC l'ordre natif EST ARGB big-endian, ce qui est exactement
+         * pourquoi son absence sur 10.2/10.3 ne change rien. Ne pas le remettre
+         * sans une raison petit-boutiste ET une validation sur 10.4. */
+        CGBitmapInfo info = kCGImageAlphaPremultipliedFirst;
+        if (prov != NULL && cs != NULL)
+            img = CGImageCreate ((size_t) bw, (size_t) bh, 8, 32,
+                                 (size_t) bw * 4, cs, info,
+                                 prov, NULL, false, kCGRenderingIntentDefault);
+        if (cs != NULL)   CGColorSpaceRelease (cs);
+        if (prov != NULL) CGDataProviderRelease (prov);
+    }
+    if (img == NULL) {
         free (data);
+        @synchronized (self) {
+            if (vd) msg_Warn (vd, "incrustation : CGImageCreate a échoué "
+                                  "(%dx%d) — sous-titres invisibles", bw, bh);
+        }
         return;
     }
 
-    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
-        initWithBitmapDataPlanes:&data
-                      pixelsWide:bw
-                      pixelsHigh:bh
-                   bitsPerSample:8
-                 samplesPerPixel:4
-                        hasAlpha:YES
-                        isPlanar:NO
-                  colorSpaceName:NSDeviceRGBColorSpace
-                    bitmapFormat:NSAlphaFirstBitmapFormat
-                     bytesPerRow:bw * 4
-                    bitsPerPixel:32];
-    /* Si la fenêtre est DÉJÀ affichée, cadre et contenu doivent apparaître d'un
-     * seul bloc, sinon le WindowServer compose la fenêtre redimensionnée avant
-     * qu'elle soit redessinée → scintillement d'une bande de la largeur du
-     * sous-titre. ⚠ Gel PAR FENÊTRE (-disableScreenUpdatesUntilFlush, levé par
-     * le -display) et NON NSDisableScreenUpdates(), qui fige TOUT l'écran,
-     * vidéo comprise. Si elle est masquée, il n'y a rien à geler : on la
-     * dessine puis on l'affiche, déjà à jour. */
     BOOL wasVisible = [_subsOverlay isVisible];
+    mtime_t t_frame = mdate ();
+    BOOL didSetFrame = NO;
     if (!NSEqualRects (frame, [_subsOverlay frame])) {
         if ([_subsOverlay respondsToSelector:
                 @selector(disableScreenUpdatesUntilFlush)])
             [_subsOverlay disableScreenUpdatesUntilFlush];
         [_subsOverlay setFrame:frame display:NO];
+        didSetFrame = YES;
     }
+    t_frame = mdate () - t_frame;
     _subsOverlayRect = frame;
-    [(VLCGL1SubsOverlayView *)[_subsOverlay contentView] setRep:rep
-                                                            data:data
-                                                            rect:repRect];
-    [rep release];
+    [(VLCGL1SubsOverlayView *)[_subsOverlay contentView] setImage:img
+                                                             data:data
+                                                             rect:repRect];
     [[_subsOverlay contentView] setNeedsDisplay:YES];
     /* Remonter la fenêtre SEULEMENT quand elle n'est pas déjà affichée : la
      * relation parent/enfant ne suffit pas depuis le chantier F (la vidéo vit
@@ -2419,14 +3229,28 @@ static void OpenglSwap (vlc_gl_t *gl)
      * géré par AppKit et fait remonter la fenêtre principale AU-DESSUS de la
      * vidéo plein écran. -orderFront: reste dans le groupe. */
     mtime_t t_draw = mdate ();
-    [_subsOverlay display];          /* dessiné AVANT d'être affiché */
-    if (!wasVisible)
-        [_subsOverlay orderFront:nil];
+    VLCGL1SubsOverlayView *ovv = (VLCGL1SubsOverlayView *) [_subsOverlay contentView];
+    ovv->_lastDrawUs = -1;
+    {
+        [_subsOverlay display];      /* dessiné AVANT d'être affiché */
+        /* Fenêtre ENFANT : elle suit les déplacements de la fenêtre vidéo et
+         * reste juste au-dessus d'elle (y compris en plein écran). Une fenêtre
+         * indépendante placée par son niveau a été mesurée : même coût.
+         * L'adoption ordonne aussi la fenêtre à l'écran — d'où sa place ICI,
+         * après le dessin (cf. le flash blanc du premier sous-titre). */
+        if (_subsOverlayParent != win) {
+            [win addChildWindow:_subsOverlay ordered:NSWindowAbove];
+            _subsOverlayParent = win;
+        } else if (!wasVisible)
+            [_subsOverlay orderFront:nil];
+    }
     @synchronized (self) {
         if (vd)
-            msg_Dbg (vd, "incrustation posée : %d us (dont display %d us, "
-                         "bitmap %dx%d)", (int) (mdate () - t_refresh),
-                     (int) (mdate () - t_draw), bw, bh);
+            msg_Dbg (vd, "incrustation posée : %d us (setFrame %d us%s, "
+                         "display %d us dont drawRect %d us, bitmap %dx%d)",
+                     (int) (mdate () - t_refresh), (int) t_frame,
+                     didSetFrame ? "" : " sauté", (int) (mdate () - t_draw),
+                     ovv->_lastDrawUs, bw, bh);
     }
 }
 
@@ -2439,7 +3263,8 @@ static void OpenglSwap (vlc_gl_t *gl)
     _subsOverlayRect = NSZeroRect;
     if (_subsOverlay == nil)
         return;
-    [[_subsOverlay parentWindow] removeChildWindow:_subsOverlay];
+    [_subsOverlayParent removeChildWindow:_subsOverlay];
+    _subsOverlayParent = nil;
     [_subsOverlay orderOut:nil];
     [_subsOverlay close];
     [_subsOverlay release];

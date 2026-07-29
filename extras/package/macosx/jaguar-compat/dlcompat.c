@@ -18,9 +18,16 @@
  *****************************************************************************/
 
 #include <mach-o/dyld.h>
+#include <mach-o/fat.h>
+#include <mach-o/loader.h>
+#include <mach/machine.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/types.h>
 
 #define RTLD_LAZY   0x1
 #define RTLD_NOW    0x2
@@ -59,6 +66,49 @@ char *dlerror(void)
     return returned;
 }
 
+/* NSCreateObjectFileImageFromFile() CRASHES the whole process on a thin 64-bit
+ * Mach-O: measured on 10.3.9, a thin arm64 file (cputype 0x0100000c) kills it
+ * with EXC_BAD_ACCESS inside NSCreateImageFromFileOrMemory(), before it ever
+ * gets a chance to return a code. A thin x86_64 file and every fat file --
+ * including one whose slices are all 64-bit, and one holding only ppc7400/
+ * ppc7450/ppc970 -- come back cleanly with NSObjectFileImageArch instead.
+ *
+ * This matters for the universal package and not for the per-arch ones: lipo
+ * leaves a plugin that exists on a single architecture as a THIN file of that
+ * architecture, and 7 of them (libaom, libvpx, libx265, libaudiotoolboxmidi,
+ * libcaopengllayer, the two chromecast ones) are arm64-only. The 10.2/10.3
+ * slices walk the same plugins directory as every other slice, so the first
+ * one of those killed the process at launch, with no log line at all.
+ *
+ * Whitelist rather than blacklist: what we refuse only costs a warning, what
+ * we let through wrongly costs the process. Accept a fat archive (dyld picks
+ * the slice itself, and reports its failure properly) and a thin big-endian
+ * 32-bit PowerPC image; refuse everything else. */
+static int dl_image_is_loadable(const char *path)
+{
+    uint32_t head[4];
+    int fd = open(path, O_RDONLY);
+    ssize_t got;
+
+    if (fd < 0)
+        return 1;   /* let dyld report the real errno */
+
+    got = read(fd, head, sizeof (head));
+    close(fd);
+
+    if (got < (ssize_t)sizeof (head))
+        return 1;   /* too short to be a Mach-O; dyld will say so */
+
+    /* We are big-endian here, so these load in file order. */
+    if (head[0] == FAT_MAGIC || head[0] == FAT_CIGAM)
+        return 1;
+
+    if (head[0] == MH_MAGIC)
+        return head[1] == CPU_TYPE_POWERPC;
+
+    return 0;
+}
+
 void *dlopen(const char *path, int mode)
 {
     NSObjectFileImage image;
@@ -71,6 +121,12 @@ void *dlopen(const char *path, int mode)
      * dlsym() below handles a NULL handle through the global symbol table. */
     if (path == NULL)
         return (void *)-1;
+
+    if (!dl_image_is_loadable(path))
+    {
+        dl_set_error("not a PowerPC Mach-O image");
+        return NULL;
+    }
 
     ret = NSCreateObjectFileImageFromFile(path, &image);
     if (ret != NSObjectFileImageSuccess)

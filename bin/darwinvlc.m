@@ -340,6 +340,27 @@ int main(int i_argc, const char *ppsz_argv[])
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     {
         if(NSApp == nil) {
+            /* CFRunLoopRun() returns AT ONCE when the main run loop owns no
+             * input source: measured on 10.3.9, it came back in 0 s, so every
+             * interface-less run (-I dummy, -I rc, any CLI use) fell straight
+             * through to libvlc_release() about a second into playback and
+             * the file was cut short. 10.4 and later keep a source of their
+             * own on that loop, which is why it never showed anywhere else.
+             *
+             * Give the loop a source that is never signalled: it then blocks
+             * like everywhere else, and +stopRunLoop's CFRunLoopStop() still
+             * ends it. Inert on 10.4+. */
+            CFRunLoopSourceContext keepAliveCtx;
+            memset(&keepAliveCtx, 0, sizeof (keepAliveCtx));
+
+            CFRunLoopSourceRef keepAlive =
+                CFRunLoopSourceCreate(kCFAllocatorDefault, 0, &keepAliveCtx);
+            if (keepAlive != NULL) {
+                CFRunLoopAddSource(CFRunLoopGetCurrent(), keepAlive,
+                                   kCFRunLoopDefaultMode);
+                CFRelease(keepAlive);   /* the run loop retains it */
+            }
+
             CFRunLoopRun();
 
         } else {

@@ -899,6 +899,17 @@ static void DvdnavCacheInhibitUpdate( demux_t *p_demux )
  * exactly the stock handler body, run only once the pipeline is empty. */
 static void DemuxProcessVtsChange( demux_t *p_demux )
 {
+    /* ★ Signal au décodeur MPEG-2 matériel (libmpeg2/ATI, PowerPC) : un
+     * changement de domaine (MENU→FILM notamment) n'émet ni redémarrage de
+     * décodeur ni discontinuité de bloc, et les horodatages restent continus —
+     * or un décodeur GPU ouvert sur le contenu du MENU tisse des champs
+     * croisés pour tout le film (images dédoublées, mesuré sur 10.3). On
+     * incrémente une génération de domaine sur le bus libvlc ; le décodeur la
+     * consulte et fait renaître son contexte matériel à l'image I suivante. */
+    var_Create( p_demux->obj.libvlc, "dvddriver-domain-gen", VLC_VAR_INTEGER );
+    var_SetInteger( p_demux->obj.libvlc, "dvddriver-domain-gen",
+        var_GetInteger( p_demux->obj.libvlc, "dvddriver-domain-gen" ) + 1 );
+
     demux_sys_t *p_sys = p_demux->p_sys;
     int32_t i_title = 0;
     int32_t i_part  = 0;
@@ -926,6 +937,18 @@ static void DemuxProcessVtsChange( demux_t *p_demux )
         }
         tk->b_configured = false;
     }
+
+    /* ★ BUG A (images dédoublées via les menus DVD) : la frontière de domaine
+     * ne portait AUCUN drapeau de bloc — le décodeur enchaînait menu→film sans
+     * flush et son association horodatage→picture (mpeg2_tag_picture) restait
+     * décalée pour tout le film (chaque image affichée à la date de sa voisine
+     * = ±40 ms de va-et-vient permanent, invisible aux compteurs internes).
+     * Marquer le premier bloc de chaque piste comme au CELL_CHANGE : converti
+     * en BLOCK_FLAG_DISCONTINUITY dès le premier bloc à DTS valide, il déclenche
+     * côté libmpeg2 SynchroReset + resynchronisation du tagging + renaissance
+     * du décodeur matériel. */
+    for( int i = 0; i < PS_TK_COUNT; i++ )
+        p_sys->tk[i].i_next_block_flags |= BLOCK_FLAG_CELL_DISCONTINUITY;
 
     uint32_t i_width, i_height;
     if( dvdnav_get_video_resolution( p_sys->dvdnav,

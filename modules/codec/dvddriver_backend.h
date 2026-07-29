@@ -81,8 +81,16 @@ void dvddriver_picture_mb_begin(dvddriver_ctx *ctx, int mb_type, int dct_type,
                                 const uint8_t *field_select);
 void dvddriver_picture_mb_block(dvddriver_ctx *ctx, const int16_t *dctblock,
                                 const uint8_t *scan);
+void dvddriver_picture_mb_block_rl(dvddriver_ctx *ctx, const int16_t (*rl)[2],
+                                   int n);
 void dvddriver_picture_mb_end(dvddriver_ctx *ctx);
 int  dvddriver_picture_submit(dvddriver_ctx *ctx);
+/* Soumission asynchrone : Decode sur un worker dédié, recouvert par la VLD de
+ * la picture suivante (profondeur 1). take_failure renvoie le coding_type d'un
+ * Decode échoué depuis la dernière interrogation (0 sinon) — l'équivalent
+ * différé du rc≠0 synchrone. */
+void dvddriver_set_async(dvddriver_ctx *ctx, bool on);
+int  dvddriver_async_take_failure(dvddriver_ctx *ctx);
 void dvddriver_present(dvddriver_ctx *ctx);
 
 /* M3 (sync/réordonnancement) : découple la présentation (ordre d'AFFICHAGE) de la
@@ -156,11 +164,19 @@ unsigned dvddriver_encode_block(const int16_t *dctblock, const uint8_t *scan,
 /* Histogramme des intervalles entre deux presents (ms) : [0]<25 [1]<33 [2]<37
  * [3]<43 [4]<50 [5]<60 [6]<100 [7]>=100, plus le total. Distingue une cadence
  * irrégulière de notre côté d'une saccade structurelle 25 fps / écran 60 Hz. */
+void dvddriver_decode_times(dvddriver_ctx *ctx, uint32_t out[8], uint32_t *n);
+unsigned long dvddriver_last_decode_us(dvddriver_ctx *ctx);
+unsigned long dvddriver_last_surf_wait_us(dvddriver_ctx *ctx);
+unsigned long dvddriver_submit_wait_us(dvddriver_ctx *ctx);
+unsigned long dvddriver_last_submit_wait_us(dvddriver_ctx *ctx);
+unsigned long dvddriver_surf_wait_total_us(dvddriver_ctx *ctx);
 void dvddriver_present_intervals(dvddriver_ctx *ctx, uint32_t out[8],
                                  uint32_t *total);
 
 /* Ferme le décodeur HW et libère les ressources. */
 void dvddriver_close(dvddriver_ctx *ctx);
+/* Escamote la surface (ordre Z sous le contenu) sans fermer le décodeur. */
+void dvddriver_set_surface_hidden(dvddriver_ctx *ctx, bool hidden);
 
 /* ── SP4 : sous-titres du disque incrustés par le GPU ───────────────────────
  * Le driver ATI possède un plan subpicture qu'il compose lui-même sur la vidéo
@@ -181,6 +197,18 @@ typedef struct
     uint16_t       colors;      /* commande SPU 0x03 — 4 index, 4 bits chacun */
     uint16_t       contrasts;   /* commande SPU 0x04 — 4 alphas, 4 bits chacun*/
     int64_t        hide_in_us;  /* durée d'affichage ; ≤ 0 = pas d'échéance   */
+    /* ── 10.2 SEULEMENT : le pilote décode le paquet LUI-MÊME ────────────────
+     * Relevé sur le DVD Player d'Apple avec un relais journalisant : il ne
+     * décode pas le RLE, il dépose le PAQUET SPU BRUT dans le tampon de la
+     * série b puis appelle `ApplySPDCSQ` une fois par commande, l'argument
+     * étant l'OFFSET de l'octet de commande DANS CE PAQUET. Le blit du pilote
+     * 10.2 exige ce paquet : il l'analyse pour en déduire la ligne de départ
+     * (ctx[0x1B4]). Le champ `bitmap` ci-dessus reste la voie de 10.3/10.4, où
+     * c'est bien à l'hôte de décoder. */
+    const uint8_t *packet;      /* paquet SPU brut, en-tête compris           */
+    unsigned       packet_size;
+    const uint16_t *cmd_off;    /* offsets des octets de commande, dans l'ordre*/
+    unsigned       cmd_count;
 } dvddriver_sp_picture;
 
 /* true si le plan SP est exploitable sur ce device (toutes les entrées résolues). */

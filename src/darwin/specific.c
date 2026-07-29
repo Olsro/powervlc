@@ -87,7 +87,51 @@ void system_Init(void)
             if ( CFArrayGetCount( preferred_locales ) )
             {
                 CFStringRef user_language_string_ref = CFArrayGetValueAtIndex( preferred_locales, 0 );
-                CFStringGetCString( user_language_string_ref, psz_locale, sizeof(psz_locale), kCFStringEncodingUTF8 );
+
+                /* ★ Sur Mac OS X 10.3 et antérieur, AppleLanguages contient
+                 * des NOMS de langues à l'ancienne (« French », « English »,
+                 * « German »…) et non des codes ISO comme depuis 10.4. Poser
+                 * LANG=French ne dit rien à gettext, qui retombait alors en
+                 * anglais alors que le système est en français. On canonicalise
+                 * donc en code de langue ; la fonction n'existant pas partout,
+                 * une petite table couvre les noms courants en dernier ressort. */
+                CFStringRef (*canonicalize)( CFAllocatorRef, CFStringRef ) =
+                    CFLocaleCreateCanonicalLanguageIdentifierFromString;
+                CFStringRef canonical = ( canonicalize != NULL )
+                    ? canonicalize( NULL, user_language_string_ref ) : NULL;
+
+                CFStringGetCString( canonical ? canonical
+                                              : user_language_string_ref,
+                                    psz_locale, sizeof(psz_locale),
+                                    kCFStringEncodingUTF8 );
+                if ( canonical != NULL )
+                    CFRelease( canonical );
+
+                /* Toujours un nom en clair (10.2, ou canonicalisation muette) ? */
+                if ( strlen( psz_locale ) > 3 && strchr( psz_locale, '_' ) == NULL )
+                {
+                    static const char *const ppsz_names[][2] = {
+                        { "English",    "en" }, { "French",     "fr" },
+                        { "German",     "de" }, { "Spanish",    "es" },
+                        { "Italian",    "it" }, { "Dutch",      "nl" },
+                        { "Japanese",   "ja" }, { "Portuguese", "pt" },
+                        { "Swedish",    "sv" }, { "Danish",     "da" },
+                        { "Finnish",    "fi" }, { "Norwegian",  "no" },
+                        { "Polish",     "pl" }, { "Russian",    "ru" },
+                        { "Korean",     "ko" }, { "Chinese",    "zh" },
+                        { "Czech",      "cs" }, { "Hungarian",  "hu" },
+                        { "Turkish",    "tr" }, { "Greek",      "el" },
+                        { "Catalan",    "ca" }, { "Ukrainian",  "uk" },
+                        { "Hebrew",     "he" }, { "Arabic",     "ar" },
+                        { "Thai",       "th" }, { "Romanian",   "ro" },
+                    };
+                    for ( size_t i = 0; i < ARRAY_SIZE(ppsz_names); i++ )
+                        if ( !strcasecmp( psz_locale, ppsz_names[i][0] ) )
+                        {
+                            strcpy( psz_locale, ppsz_names[i][1] );
+                            break;
+                        }
+                }
                 setenv( "LANG", psz_locale, 1 );
             }
             CFRelease( preferred_locales );

@@ -43,6 +43,7 @@
 
 #include <vlc_common.h>
 #include <sys/time.h>
+#include <sys/utsname.h>
 #include <vlc_plugin.h>
 #include <vlc_codec.h>
 #include <vlc_block_helper.h>
@@ -182,9 +183,62 @@ struct decoder_sys_t
      * connu, on saute la sonde : la reprise coûte un GOP au lieu de la sonde
      * complète plus un GOP. */
     bool             b_hw_reopen;
+    /* Modifications du portage 10.2 actives ? (cf. mpeg2-hwaccel-102mods) */
+    bool             b_102mods;
+    /* PERF Panther : horodatage du picture_begin (segment CPU vs Decode) */
+    unsigned long    i_hw_pic_t0;
+    bool             b_async;        /* soumission GPU asynchrone active */
+    unsigned         i_hw_open_fails; /* échecs d'ouverture consécutifs (retente aux I) */
+    /* ★ AUTO-RENAISSANCE (10.3, « dédoublement jusqu'au seek ») : la surface
+     * CGS créée à la 1re ouverture peut naître dans un état de composition
+     * défectueux (fenêtre en cours de résize 4:3→16:9 à la transition
+     * menu→film, app active…) : le WindowServer la double-bufferise et chaque
+     * flush alterne tampon frais/périmé → image N mêlée à N-1 à l'écran,
+     * INVISIBLE de tous les compteurs internes (present ~500 µs au lieu de
+     * ~2 ms — la bascule de tampon remplace la recomposition). Un seek répare
+     * en recréant la surface une fois la géométrie stable. On automatise :
+     * UNE renaissance différée ~2 s après chaque premier engagement. */
+    bool             b_hw_selfheal_done;
+    unsigned         i_hw_selfheal_pics;
+    int64_t          i_hw_domain_gen; /* génération de domaine dvdnav à l'ouverture */
     unsigned         i_probe_pb, i_probe_field, i_probe_pics;
 #endif
 };
+
+#ifdef __APPLE__
+/* Les modifications du chemin matériel apportées par le portage 10.2 sont-elles
+ * actives ? Elles ont toutes été mesurées sur Jaguar ; sur Darwin 8 et au-delà
+ * elles remplacent un comportement validé sur ce système-là. */
+static bool Hw102Mods( decoder_t *p_dec )
+{
+    int i_want = (int) var_InheritInteger( p_dec, "mpeg2-hwaccel-102mods" );
+    struct utsname uts;
+
+    if( i_want >= 0 )
+        return i_want != 0;
+
+    /* Darwin 6 (10.2 Jaguar) SEUL : c'est là qu'elles ont été mesurées. Sur
+     * Darwin 7 (10.3) elles coûtent 3 ms de plus par Decode et un tiers des
+     * images ; sur Darwin 8 (10.4) elles wedgent le GPU. */
+    return uname( &uts ) == 0 && atoi( uts.release ) > 0
+        && atoi( uts.release ) < 7;
+}
+
+/* Mode field effectif. -1 = automatique : mode 4 là où les modifications 10.2
+ * sont actives (il y a été mesuré), mode 1 ailleurs — c'est le défaut validé
+ * sur Tiger, et le commentaire d'origine du module qualifie le mode 4
+ * d'impasse. ⚠ Les DEUX lecteurs de l'option doivent passer par ici : la
+ * décision « entrelacé → matériel ou 100 % CPU » teste `> 0`, et un -1 non
+ * résolu y vaut « désactivé ». */
+static int HwFieldMode( decoder_t *p_dec, bool b_102mods )
+{
+    int i_field = (int) var_InheritInteger( p_dec, "mpeg2-hwaccel-field" );
+
+    if( i_field < 0 )
+        i_field = b_102mods ? 4 : 1;
+    return i_field;
+}
+#endif
 
 #ifdef __APPLE__
 /* 2a — nombre minimal de P/B à observer avant de trancher (assez pour voir la
@@ -258,6 +312,17 @@ static int DpbDisplayPicture( decoder_t *, picture_t * );
     "l'image décodée par le GPU. Sans cette option, la sortie matérielle " \
     "recouvre tout et les sous-titres restent invisibles. Ne concerne que la " \
     "vidéo affichée dans la fenêtre de VLC." )
+#define MPEG2_ASYNC_TEXT N_("Soumission GPU asynchrone (avancé)")
+#define MPEG2_ASYNC_LONGTEXT N_( \
+    "Fait l'appel DVDDriverDecode sur un thread dédié pour que la VLD de " \
+    "l'image suivante tourne pendant que le GPU travaille. Mesuré sur " \
+    "l'iBook G3 : Decode est du temps bloqué dans le pilote, le recouvrir " \
+    "supprime le déficit du budget de 40 ms par image." )
+#define MPEG2_102MODS_TEXT N_("Modifications du portage 10.2 sur le chemin matériel (avancé)")
+#define MPEG2_102MODS_LONGTEXT N_( \
+    "-1 = automatique (actives sur Mac OS X 10.2 et 10.3, inactives à partir " \
+    "de 10.4, où elles remplaçaient un comportement validé sur place), " \
+    "0 = inactives, 1 = actives." )
 #define MPEG2_HWSUBS_TEXT N_("Sous-titres DVD incrustés par le GPU")
 #define MPEG2_HWSUBS_LONGTEXT N_( \
     "Confie les sous-titres du DVD au plan subpicture du décodeur matériel ATI : " \
@@ -308,9 +373,31 @@ vlc_module_begin ()
      * le DVD de Chihiro (iBook G3, 10.2) : images affichées par tranche de 5 s
      * 113-116 → 117-121, retard moyen 1-2 ms → 0,3-0,6 ms, et surtout PIRE
      * retard 40 ms → 5 ms, ce qui est précisément la régularité qui manquait. */
-    add_integer( "mpeg2-hwaccel-field", 4, MPEG2_HWACCEL_FIELD_TEXT,
+    add_integer( "mpeg2-hwaccel-field", -1, MPEG2_HWACCEL_FIELD_TEXT,
                  MPEG2_HWACCEL_FIELD_LONGTEXT, true )
-        change_integer_range( 0, 4 )
+        change_integer_range( -1, 4 )
+        change_private()
+    /* ⚠ Interrupteur des modifications apportées au chemin matériel par le
+     * portage Mac OS X 10.2. Toutes ont été MESURÉES SUR JAGUAR puis appliquées
+     * à tous les systèmes, dont 10.4 — où elles ont remplacé un comportement
+     * qui y avait, lui, été validé. Résultat : la lecture DVD accélérée, fiable
+     * en 1.0.0 sur Tiger, y WEDGE le GPU dès les premières images (processus en
+     * état U inkillable, aucun present, « waiting decoder fifos to empty » en
+     * boucle ; reproduit deux fois machine fraîchement éteinte et rallumée).
+     * -1 = automatique : actives sous Darwin 8 (10.2/10.3), inactives à partir
+     * de 10.4 ; 0 = jamais ; 1 = toujours. Sert aussi à bisecter sans
+     * reconstruire. */
+    add_integer( "mpeg2-hwaccel-102mods", -1, MPEG2_102MODS_TEXT,
+                 MPEG2_102MODS_LONGTEXT, true )
+        change_integer_range( -1, 1 )
+        change_private()
+    /* ⚠ DÉFAUT OFF : mesuré sur Panther, le recouvrement fonctionne (l'attente
+     * de la fin du Decode précédent tombe à ~200 ms sur 35 s de lecture) mais
+     * n'apporte AUCUN gain de cadence — le goulot est le CPU, pas l'attente du
+     * GPU. Le laisser actif changerait un chemin validé sur Tiger contre rien.
+     * Conservé comme outil : il redeviendra utile si le coût CPU baisse. */
+    add_bool( "mpeg2-hwaccel-async", false, MPEG2_ASYNC_TEXT,
+              MPEG2_ASYNC_LONGTEXT, true )
         change_private()
     /* SP4/SP10 — sous-titres DVD incrustés par le plan subpicture MATÉRIEL.
      * Défaut ON depuis la validation sur iBook G3 : incrustation fiable
@@ -405,6 +492,10 @@ static int OpenDecoder( vlc_object_t *p_this )
     p_sys->b_hw_giveup = false;
     p_sys->b_hw_stale = false;
     p_sys->b_hw_reopen = false;
+    p_sys->b_102mods = Hw102Mods( p_dec );
+    p_sys->i_hw_open_fails = 0;
+    p_sys->b_hw_selfheal_done = false;
+    p_sys->i_hw_selfheal_pics = 0;
     p_sys->i_probe_pb = p_sys->i_probe_field = p_sys->i_probe_pics = 0;
     p_sys->i_probe_defers = 0;
     p_sys->b_hwaccel = var_InheritBool( p_dec, "mpeg2-hwaccel" )
@@ -415,6 +506,9 @@ static int OpenDecoder( vlc_object_t *p_this )
      * posés à l'ouverture du contexte, remis NULL au close. */
     var_Create( p_dec->obj.libvlc, DVDDRIVER_VAR_CTX,     VLC_VAR_ADDRESS );
     var_Create( p_dec->obj.libvlc, DVDDRIVER_VAR_PRESENT, VLC_VAR_ADDRESS );
+    var_Create( p_dec->obj.libvlc, DVDDRIVER_VAR_HIDE,    VLC_VAR_ADDRESS );
+    var_SetAddress( p_dec->obj.libvlc, DVDDRIVER_VAR_HIDE,
+                    (void *) dvddriver_set_surface_hidden );
     /* Chantier S — valeur RÉELLE posée par HwOpenContext (elle dépend aussi du
      * chemin d'affichage retenu) ; le vout ne la lit qu'au premier present
      * matériel, donc toujours après. Ici, seulement l'existence + un défaut sûr. */
@@ -422,8 +516,13 @@ static int OpenDecoder( vlc_object_t *p_this )
     var_SetBool( p_dec->obj.libvlc, DVDDRIVER_VAR_SUBS,   false );
     var_Create( p_dec->obj.libvlc, DVDDRIVER_VAR_HOLD,    VLC_VAR_BOOL );
     var_SetBool( p_dec->obj.libvlc, DVDDRIVER_VAR_HOLD,   false );
+    var_Create( p_dec->obj.libvlc, "dvddriver-domain-gen", VLC_VAR_INTEGER );
+    p_sys->i_hw_domain_gen = var_GetInteger( p_dec->obj.libvlc,
+                                             "dvddriver-domain-gen" );
     msg_Dbg( p_dec, "décodage MPEG-2 matériel (ATI DVDDriver) : %s",
              p_sys->b_hwaccel ? "disponible, sera tenté" : "non (repli libmpeg2 CPU)" );
+    msg_Dbg( p_dec, "modifications du portage 10.2 sur le chemin matériel : %s",
+             p_sys->b_102mods ? "ACTIVES" : "inactives (comportement 1.0.0)" );
 #endif
 
 #if defined( __i386__ ) || defined( __x86_64__ )
@@ -506,9 +605,22 @@ static void HwMbBegin( void *priv, int macroblock_modes, unsigned cbp,
                                 dvddriver_cbp_from_libmpeg2( cbp ),
                                 mv, field_select );
 }
+/* Capture run/level au fil de la VLD (slice.c du contrib) : quand elle est
+ * armée, les paires (position zigzag, valeur) du bloc courant sont déjà prêtes
+ * — plus de re-balayage des 64 positions du DCTblock (54 % du temps de
+ * mpeg2_slice au PC-sampling sur G3). /tmp/hw_norl rétablit l'ancien chemin
+ * pour l'A/B. */
+extern int16_t mpeg2_hw_rl[68][2];
+extern int     mpeg2_hw_rl_n;
+extern int     mpeg2_hw_rl_on;
+extern void    mpeg2_set_hw_rl( int on );
+
 static void HwBlock( void *priv, const int16_t *dctblock, const uint8_t *scan )
 {
-    dvddriver_picture_mb_block( priv, dctblock, scan );
+    if( mpeg2_hw_rl_on )
+        dvddriver_picture_mb_block_rl( priv, mpeg2_hw_rl, mpeg2_hw_rl_n );
+    else
+        dvddriver_picture_mb_block( priv, dctblock, scan );
 }
 static void HwMbEnd( void *priv )
 {
@@ -649,7 +761,7 @@ static bool HwOpenContext( decoder_t *p_dec, int i_replace )
      * /tmp/hw_carbon force l'ancien chemin. 0 → fenêtre Carbon séparée. */
     int i_ext_wid = HwForceCarbon() ? 0 : HwVoutWid( p_dec );
     /* Chantier 3 : mode field (option privée avancée, remplace /tmp/field_exp). */
-    int i_field = (int) var_InheritInteger( p_dec, "mpeg2-hwaccel-field" );
+    int i_field = HwFieldMode( p_dec, p_sys->b_102mods );
     /* Chantier S — sous-titres/OSD par-dessus la surface HW. Possible UNIQUEMENT
      * sur le chemin U4 (surface liée à la fenêtre VLC) : la vue GL de VLC ne
      * recouvre pas la fenêtre Carbon séparée, elle ne peut donc rien y dessiner. */
@@ -662,6 +774,20 @@ static bool HwOpenContext( decoder_t *p_dec, int i_replace )
                                   b_subs    /* sous-titres/OSD superposés */ );
     if( p_sys->p_hw == NULL )
     {
+        /* ★ NE PAS abandonner définitivement : après un seek dvdnav le
+         * décodeur est détruit/recréé et la NOUVELLE instance tente son
+         * ouverture pendant que l'ancienne n'a pas fini de fermer
+         * (s_dd_instances encore pris par les pictures en vol) → NULL une
+         * fois. Mesuré : « ATI actif » restait à 1 sur toute la session et le
+         * film continuait en CPU (le « ça lague après seek »). On retente aux
+         * images I suivantes, avec un plafond pour les vrais échecs. */
+        if( ++p_sys->i_hw_open_fails < 8 )
+        {
+            p_sys->b_hw_reopen = true;   /* nouvelle tentative à la prochaine I */
+            msg_Dbg( p_dec, "ouverture décodeur HW ATI KO (essai %u) → "
+                     "nouvelle tentative à la prochaine I", p_sys->i_hw_open_fails );
+            return false;
+        }
         p_sys->b_hwaccel = false;
         msg_Dbg( p_dec, "ouverture décodeur HW ATI KO → repli CPU" );
         return false;
@@ -669,6 +795,27 @@ static bool HwOpenContext( decoder_t *p_dec, int i_replace )
     p_sys->i_hw_width  = p_seq->width;
     p_sys->i_hw_height = p_seq->height;
     p_sys->i_hw_wid    = i_ext_wid;
+    p_sys->i_hw_open_fails = 0;
+    p_sys->i_hw_domain_gen = var_GetInteger( p_dec->obj.libvlc,
+                                             "dvddriver-domain-gen" );
+    /* Recouvrement VLD/Decode. Pas sous les modifications 10.2 : le pipeline
+     * Jaguar a été validé en séquentiel, ne pas le déstabiliser. */
+    {
+        bool b_async = var_InheritBool( p_dec, "mpeg2-hwaccel-async" )
+                    && !p_sys->b_102mods;
+        p_sys->b_async = b_async;
+        dvddriver_set_async( p_sys->p_hw, b_async );
+        if( b_async )
+            msg_Dbg( p_dec, "soumission GPU asynchrone active" );
+    }
+    {
+        FILE *f = fopen( "/tmp/hw_norl", "r" );
+        int b_rl = ( f == NULL );
+        if( f != NULL ) fclose( f );
+        mpeg2_set_hw_rl( b_rl );
+        msg_Dbg( p_dec, "capture run/level dans la VLD : %s",
+                 b_rl ? "active" : "désactivée (/tmp/hw_norl)" );
+    }
     mpeg2_hwaccel_t hw = { p_sys->p_hw, HwMbBegin, HwBlock, HwMbEnd };
     mpeg2_hwaccel( p_sys->p_mpeg2dec, &hw );
     mpeg2_set_hw_replace( i_replace );
@@ -960,6 +1107,33 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
              * JAMAIS atteint en cours de lecture, car libmpeg2 signale les en-têtes
              * de séquence identiques par STATE_SEQUENCE_REPEATED (non traité ici) —
              * d'où un plein écran toujours noir. */
+            /* ★ BUG A — changement de domaine dvdnav (MENU→FILM) : signalé par
+             * le demux via la génération sur le bus (aucune discontinuité de
+             * bloc, horodatages continus). Un matériel ouvert sur le MENU
+             * dédouble le film : renaissance, même mécanique que le flush. */
+            /* ★ AUTO-RENAISSANCE RETIRÉE (29/07 midi) : mesuré à
+             * l'instrumentation PRESENT split, le premier engagement est SAIN
+             * (flush ~1,4-2 ms par present) et c'est toute RÉOUVERTURE en cours
+             * de lecture qui atterrit en mode de composition cassé (flush
+             * ~420 µs, images mêlées à l'écran) — la renaissance « équivalent
+             * seek » CAUSAIT donc le scintillement qu'elle devait réparer.
+             * Règle : ne JAMAIS fermer/rouvrir le matériel en cours de lecture
+             * sans nécessité (le suivi de fenêtre reste le seul cas légitime). */
+            if( p_sys->p_hw != NULL )
+            {
+                int64_t gen = var_GetInteger( p_dec->obj.libvlc,
+                                              "dvddriver-domain-gen" );
+                if( gen != p_sys->i_hw_domain_gen )
+                {
+                    /* ★ Plus de fermeture/réouverture ici (29/07 midi, cf.
+                     * Reset()) : gel des références jusqu'à la prochaine I. */
+                    msg_Dbg( p_dec, "changement de domaine dvdnav : références "
+                             "matérielles périmées, gel jusqu'à la prochaine I" );
+                    p_sys->b_hw_picture = false;
+                    p_sys->b_hw_stale = true;
+                    p_sys->i_hw_domain_gen = gen;
+                }
+            }
             /* Réouverture différée demandée au changement de fenêtre : on la fait
              * à l'image I suivante (ce test est AVANT la détection ci-dessous,
              * sinon il se déclencherait sur l'image même où l'on vient de fermer). */
@@ -984,7 +1158,13 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                     /* Suspendre l'affichage AVANT de dépublier le contexte :
                      * les pictures déjà en file chez le vout portent encore un
                      * contexte matériel mais ne pourront plus être présentées. */
-                    var_SetBool( p_dec->obj.libvlc, DVDDRIVER_VAR_HOLD, true );
+                    /* ⚠ Regatée derrière 102mods le 2026-07-29 : dé-gater HOLD +
+                     * rejet de réouverture n'a PAS réparé la bascule plein écran
+                     * sur 10.3 et a coïncidé avec un retour du scintillement en
+                     * fenêtré. État connu-bon = gates d'origine. La bascule
+                     * plein écran reste un chantier ouvert (cf. mémoire). */
+                    if( p_sys->b_102mods )
+                        var_SetBool( p_dec->obj.libvlc, DVDDRIVER_VAR_HOLD, true );
                     var_SetAddress( p_dec->obj.libvlc, DVDDRIVER_VAR_CTX, NULL );
                     dvddriver_close( p_sys->p_hw );
                     p_sys->p_hw = NULL;
@@ -1089,8 +1269,7 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                          * Validé sur DVD PAL entrelacé : image propre à 5,4 ms/pic.
                          * =0 → l'entrelacé reste 100 % CPU (échappatoire si une
                          * source à vrai mouvement par champ déchire). */
-                        int i_field = (int)
-                            var_InheritInteger( p_dec, "mpeg2-hwaccel-field" );
+                        int i_field = HwFieldMode( p_dec, p_sys->b_102mods );
                         if( i_field > 0 && b_is_i )
                         {
                             msg_Info( p_dec, "décodage matériel : entrelacé accéléré "
@@ -1144,6 +1323,12 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                     /* begin pour I et P ; si la picture n'est finalement pas
                      * capturée par slice.c (P non frame-predicted, field), submit
                      * détecte mb_index != nb_mbs et saute proprement. */
+                    {
+                        struct timeval tv0;
+                        gettimeofday( &tv0, NULL );
+                        p_sys->i_hw_pic_t0 =
+                            (unsigned long) tv0.tv_sec * 1000000UL + tv0.tv_usec;
+                    }
                     if( dvddriver_picture_begin( p_sys->p_hw, i_coding, 3 /*frame*/,
                                                  nb_mbs ) == 0 )
                         p_sys->b_hw_picture = true;
@@ -1232,7 +1417,15 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
              * attachait un contexte matériel invalide — 174 fois sur 1208
              * pictures en 45 s, presque toutes des B. Rien à décoder, rien à
              * afficher : on désarme la picture matérielle. (Les B ne servent de
-             * référence à personne, la chaîne GPU reste intacte.) */
+             * référence à personne, la chaîne GPU reste intacte.)
+             * ⚠ Dé-gaté de b_102mods le 29/07 : gaté Jaguar-seulement lors du
+             * rollback en bloc des 102mods, alors que ce désarmement est
+             * bénéfique PARTOUT. Sans lui, la B sautée passe quand même par la
+             * soumission et ATTEND ~70 ms une surface libre qu'elle n'utilisera
+             * jamais (mesuré Panther, wait=48-73 ms sur chaque rc=-2) : jeter
+             * une image COÛTE plus qu'elle n'économise, d'où le cycle verrouillé
+             * « une B sur deux jetée » (cadence bimodale 40/80 ms perçue comme
+             * un dédoublement) dont seul un seek sortait. */
             if( p_sys->b_skip )
                 p_sys->b_hw_picture = false;
 #endif
@@ -1289,6 +1482,20 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                 return NULL;
             }
 
+#ifdef __APPLE__
+            /* ★ DISCONTINUITÉ (cellule/domaine dvdnav) : comme au flush, NE PAS
+             * fermer le matériel (29/07 midi — toute réouverture en cours de
+             * lecture atterrit en composition cassée, cf. Reset()). Références
+             * périmées → gel jusqu'à la prochaine I. */
+            if( (p_block->i_flags & BLOCK_FLAG_DISCONTINUITY)
+             && p_sys->p_hw != NULL )
+            {
+                msg_Dbg( p_dec, "discontinuité : références matérielles "
+                         "périmées, gel jusqu'à la prochaine I" );
+                p_sys->b_hw_picture = false;
+                p_sys->b_hw_stale = true;
+            }
+#endif
             if( (p_block->i_flags & (BLOCK_FLAG_DISCONTINUITY
                                       | BLOCK_FLAG_CORRUPTED)) &&
                 p_sys->p_synchro &&
@@ -1310,6 +1517,24 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                     decoder_SynchroDecode( p_sys->p_synchro );
                     decoder_SynchroEnd( p_sys->p_synchro, I_CODING_TYPE, 0 );
                 }
+#ifdef __APPLE__
+                /* ★ BUG A (dédoublement via les menus DVD) : la frontière
+                 * menu→film sans flush laisse l'association horodatage→picture
+                 * (mpeg2_tag_picture) décalée d'une picture pour tout le film —
+                 * chaque image porte la date de sa voisine, ±40 ms de
+                 * va-et-vient invisible aux compteurs. Un seek répare parce que
+                 * Reset() fait mpeg2_reset(,0)+DpbClean ; faire pareil ici,
+                 * seule cette resynchronisation manquait au chemin
+                 * discontinuité. Coût : au pire un GOP re-sondé (chaque GOP DVD
+                 * porte un en-tête de séquence). */
+                if( p_block->i_flags & BLOCK_FLAG_DISCONTINUITY )
+                {
+                    msg_Dbg( p_dec, "discontinuité : resynchronisation du "
+                             "tagging PTS (mpeg2_reset léger + DpbClean)" );
+                    mpeg2_reset( p_sys->p_mpeg2dec, 0 );
+                    DpbClean( p_dec );
+                }
+#endif
             }
 
             if( p_block->i_flags & BLOCK_FLAG_PREROLL )
@@ -1334,6 +1559,35 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                 mpeg2_tag_picture( p_sys->p_mpeg2dec,
                                    (uint32_t)p_block->i_pts,
                                    (uint32_t)p_block->i_dts );
+#endif
+#ifdef __APPLE__
+                /* ★ BUG A (dédoublement via les menus DVD) : le passage
+                 * MENU→FILM de dvdnav ne redémarre PAS le décodeur et n'émet
+                 * AUCUNE discontinuité de bloc — mais il SAUTE d'horloge (le
+                 * film repart sur une base de temps différente du menu). Un
+                 * décodeur matériel ouvert sur le contenu du MENU tisse alors
+                 * des champs croisés pour tout le film (sonde et mode field
+                 * décidés sur le menu). Détecter le saut ici et faire renaître
+                 * le matériel à la prochaine image I — même mécanique que le
+                 * flush, validée : après un seek, l'image redevient nette.
+                 * Seuil 2 s : les PTS d'un flux continu avancent d'un pas
+                 * d'image ; un vrai changement de domaine saute largement plus.
+                 * Coût d'un faux positif : une renaissance (≈ 1 GOP en CPU). */
+                if( p_sys->p_hw != NULL && p_block->i_dts
+                 && p_sys->i_current_dts )
+                {
+                    vlc_tick_t d = p_block->i_dts - p_sys->i_current_dts;
+                    if( d < -CLOCK_FREQ * 2 || d > CLOCK_FREQ * 2 )
+                    {
+                        /* ★ Plus de fermeture/réouverture (29/07 midi, cf.
+                         * Reset()) : gel jusqu'à la prochaine I. */
+                        msg_Dbg( p_dec, "saut d'horloge (%lld ms) : références "
+                                 "matérielles périmées, gel jusqu'à la prochaine I",
+                                 (long long)( d / 1000 ) );
+                        p_sys->b_hw_picture = false;
+                        p_sys->b_hw_stale = true;
+                    }
+                }
 #endif
                 p_sys->i_previous_pts = p_sys->i_current_pts;
                 p_sys->i_current_pts = p_block->i_pts;
@@ -1409,7 +1663,32 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
              * soumettre au GPU (DVDDriverDecode). Une seule fois par picture. */
             if( p_sys->b_hw_picture )
             {
+                /* Le temps passé à ATTENDRE une surface GPU libre (et, en
+                 * asynchrone, la fin du Decode précédent) n'est pas du travail
+                 * de décodage : c'est le contrôle de flux qui retient un
+                 * décodeur EN AVANCE. Laissé dans p_tau, il fait croire au
+                 * synchro qu'il ne tient pas le temps réel et lui fait jeter un
+                 * tiers des images alors que le budget est tenu. */
                 int i_hw_rc = dvddriver_picture_submit( p_sys->p_hw );
+                /* Exclusion active AUSSI en synchrone depuis le 29/07 : sur
+                 * Panther, l'attente de surface (~28 ms par P quand les 5
+                 * surfaces tournent à flux tendu) gonflait le tau et
+                 * verrouillait le synchro dans un cycle « une B sur deux
+                 * jetée » (cadence bimodale 40/80 ms, perçue comme un
+                 * dédoublement) dont seul un seek le sortait. Le « sans gain
+                 * mesuré » historique datait de l'époque où le pipeline était
+                 * réellement en retard (CPU-segment I à 85 ms) ; le budget est
+                 * tenu depuis les correctifs gettext/UI. /tmp/hw_noexcl
+                 * rétablit l'ancien comportement pour l'A/B sans rebuild. */
+                bool b_excl = true;
+                {
+                    FILE *fx = fopen( "/tmp/hw_noexcl", "r" );
+                    if( fx != NULL ) { b_excl = false; fclose( fx ); }
+                }
+                if( p_sys->p_synchro != NULL && ( p_sys->b_async || b_excl ) )
+                    decoder_SynchroExcludeTime( p_sys->p_synchro,
+                        (vlc_tick_t) dvddriver_last_surf_wait_us( p_sys->p_hw )
+                      + (vlc_tick_t) dvddriver_last_submit_wait_us( p_sys->p_hw ) );
                 if( i_hw_rc == -4 && !p_sys->b_hw_giveup )
                 {
                     /* Garde-fou anti-wedge déclenché côté backend : DVDDriverDecode
@@ -1426,6 +1705,16 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                     (p_sys->p_info->current_picture->flags & PIC_MASK_CODING_TYPE) : 0;
                 bool b_is_ref = ( i_ct_sub == PIC_FLAG_CODING_TYPE_I
                                || i_ct_sub == PIC_FLAG_CODING_TYPE_P );
+                /* Chemin asynchrone : l'échec d'un Decode remonte à la picture
+                 * SUIVANTE. Même politique que le rc≠0 synchrone : une
+                 * référence perdue gèle l'affichage jusqu'à la prochaine I. */
+                int i_async_fail = dvddriver_async_take_failure( p_sys->p_hw );
+                if( i_async_fail != 0 && i_async_fail != 3 /* pas une B */ )
+                {
+                    msg_Warn( p_dec, "Decode asynchrone échoué sur une référence "
+                              "(type %d) → gel jusqu'à la prochaine I", i_async_fail );
+                    p_sys->b_hw_stale = true;
+                }
                 if( i_hw_rc != 0 && b_is_ref )
                     p_sys->b_hw_stale = true;   /* chaîne de références rompue */
                 else if( i_hw_rc == 0 && i_ct_sub == PIC_FLAG_CODING_TYPE_I )
@@ -1488,10 +1777,23 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                             : i_ct2 == PIC_FLAG_CODING_TYPE_B ? 'B' : '?';
                 unsigned u_cap = 0, u_tot = 0;
                 dvddriver_last_progress( p_sys->p_hw, &u_cap, &u_tot );
-                msg_Dbg( p_dec, "DVDDriverDecode (matériel %c) rc=%d [%u/%u mb]%s%d",
-                         c_type, i_hw_rc, u_cap, u_tot,
-                         i_hw_rc == 0 ? " → surface " : " (rc≠0) ",
-                         i_hw_rc == 0 ? dvddriver_out_index( p_sys->p_hw ) : -1 );
+                {
+                    struct timeval tvn;
+                    gettimeofday( &tvn, NULL );
+                    unsigned long now = (unsigned long) tvn.tv_sec * 1000000UL
+                                      + tvn.tv_usec;
+                    unsigned long wall = now - p_sys->i_hw_pic_t0;
+                    unsigned long dec  = dvddriver_last_decode_us( p_sys->p_hw );
+                    unsigned long wait = dvddriver_last_surf_wait_us( p_sys->p_hw );
+                    /* cpu = mur - Decode - attente de surface : la part VLD +
+                     * hooks + encodage, celle qui n'est PAS recouvrable. */
+                    msg_Dbg( p_dec, "DVDDriverDecode (matériel %c) rc=%d [%u/%u mb]%s%d"
+                             " dt=%lu us cpu=%lu wait=%lu",
+                             c_type, i_hw_rc, u_cap, u_tot,
+                             i_hw_rc == 0 ? " → surface " : " (rc≠0) ",
+                             i_hw_rc == 0 ? dvddriver_out_index( p_sys->p_hw ) : -1,
+                             dec, wall > dec + wait ? wall - dec - wait : 0, wait );
+                }
                 /* PERF (chantier 720×576, temporaire) : attribution du budget par
                  * picture entre Decode (GPU) et present (ShowMPBuffer + CGS).
                  * Logué tous les 50 submits → un run court suffit, et le log
@@ -1539,7 +1841,7 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                  * de rien et sortent en bouillie (l'écran vert et les glitchs vus
                  * à la bascule). Elles n'ont aucune valeur : on les jette et la
                  * dernière image correcte reste affichée le temps du trou. */
-                if( p_sys->b_hw_reopen )
+                if( p_sys->b_hw_reopen && p_sys->b_102mods )
                 {
                     DpbUnlinkPicture( p_dec, p_pic );
                     p_pic = NULL;
@@ -1650,10 +1952,21 @@ static void CloseDecoder( vlc_object_t *p_this )
             msg_Info( p_dec, "cadence de présentation (%u images) : <25ms=%u "
                       "<33=%u <37=%u <43=%u <50=%u <60=%u <100=%u >=100=%u",
                       n, iv[0], iv[1], iv[2], iv[3], iv[4], iv[5], iv[6], iv[7] );
+        msg_Info( p_dec, "attentes cumulées : submit(fin du Decode précédent)=%lu ms, "
+                  "surface=%lu ms",
+                  dvddriver_submit_wait_us( p_sys->p_hw ) / 1000,
+                  dvddriver_surf_wait_total_us( p_sys->p_hw ) / 1000 );
+        uint32_t dh[8], dn = 0;
+        dvddriver_decode_times( p_sys->p_hw, dh, &dn );
+        if( dn > 0 )
+            msg_Info( p_dec, "durées de Decode (%u appels) : <4ms=%u <8=%u "
+                      "<12=%u <16=%u <24=%u <40=%u <80=%u >=80=%u",
+                      dn, dh[0], dh[1], dh[2], dh[3], dh[4], dh[5], dh[6], dh[7] );
         dvddriver_close( p_sys->p_hw );
     }
     var_Destroy( p_dec->obj.libvlc, DVDDRIVER_VAR_CTX );
     var_Destroy( p_dec->obj.libvlc, DVDDRIVER_VAR_PRESENT );
+    var_Destroy( p_dec->obj.libvlc, DVDDRIVER_VAR_HIDE );
     var_Destroy( p_dec->obj.libvlc, DVDDRIVER_VAR_SUBS );
     /* Le flag REMPLACEMENT est un global libmpeg2 (partagé entre instances de
      * décodeur). Le remettre à 0 pour qu'une instance suivante en CPU pur (flux
@@ -1676,6 +1989,24 @@ static void Reset( decoder_t *p_dec )
 #endif
     mpeg2_reset( p_sys->p_mpeg2dec, 0 );
     DpbClean( p_dec );
+
+#ifdef __APPLE__
+    /* ★ FLUSH (seek) : NE PAS fermer le décodeur matériel (29/07 midi).
+     * La fermeture/réouverture au flush datait de la théorie « matériel ouvert
+     * sur le menu » (réfutée : les vraies causes du dédoublement étaient le
+     * seuil DELTA du synchro et la réouverture elle-même — toute réouverture
+     * en cours de lecture atterrit dans un mode de composition WindowServer
+     * cassé, flush ~420 µs au lieu de ~2 ms, mesuré). On garde le matériel
+     * ouvert : les références GPU sont périmées après le seek, on gèle
+     * l'affichage jusqu'à la prochaine I (b_hw_stale), qui ne référence rien. */
+    if( p_sys->p_hw != NULL )
+    {
+        msg_Dbg( p_dec, "flush : références matérielles périmées, "
+                 "gel jusqu'à la prochaine I (décodeur conservé)" );
+        p_sys->b_hw_picture = false;
+        p_sys->b_hw_stale = true;
+    }
+#endif
 }
 
 /*****************************************************************************
@@ -1723,7 +2054,8 @@ static picture_t *GetNewPicture( decoder_t *p_dec )
      * pictures, which carry no hardware picture context: the vout then never
      * presents the GPU surface (measured on 10.2: "present matériel non
      * engagé ... context=0x0", 800 pictures in a row). */
-    p_pic->b_progressive = ( p_sys->b_hwaccel && p_sys->p_hw != NULL ) ? true
+    p_pic->b_progressive = ( p_sys->b_102mods && p_sys->b_hwaccel
+                             && p_sys->p_hw != NULL ) ? true
         : ( p_sys->p_info->current_picture != NULL ?
             p_sys->p_info->current_picture->flags & PIC_FLAG_PROGRESSIVE_FRAME
           : 1 );

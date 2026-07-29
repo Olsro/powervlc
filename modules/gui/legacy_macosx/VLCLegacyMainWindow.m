@@ -1336,8 +1336,16 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
 
     /* Periodic refresh; scheduled in the default run loop mode so it pauses
      * while a slider is being tracked (event-tracking mode) and thus never
-     * fights the user's drag. */
-    updateTimer = [NSTimer scheduledTimerWithTimeInterval:0.3
+     * fights the user's drag.
+     * ⚠ Cadence réduite sous Mac OS X 10.3 et avant : chaque tic qui déplace le
+     * slider salit la barre entière, et le redessin (fond + champs de temps)
+     * y coûte ~140 ms — le rendu de glyphes passe par un RPC au serveur de
+     * polices À CHAQUE passage (mesuré au PC-sampling sur l'iBook G3 : 43 %
+     * du temps mur du thread principal à 0,3 s d'intervalle, pendant que le
+     * décodage DVD se bat pour le même cœur). À 1 s le coût tombe au tiers ;
+     * 10.4+ garde la fluidité du slider de VLC 3.0. */
+    updateTimer = [NSTimer scheduledTimerWithTimeInterval:
+                       (VLCLegacyOSVersionAtLeast(10, 4, 0) ? 0.3 : 1.0)
                                                    target:self
                                                  selector:@selector(refresh:)
                                                  userInfo:nil
@@ -1628,8 +1636,10 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
 {
     [window makeKeyAndOrderFront:nil];
     if (videoActive && !VLCLegacyViewIsHidden(videoView)) {
+        playlistViewWanted = YES;
         VLCLegacySetViewHidden(videoView, YES);
         VLCLegacySetViewHidden(splitView, NO);
+        [self detachVideoHostWindow];   /* cf. -toggleView: */
     }
 }
 
@@ -1978,7 +1988,10 @@ static const struct {
 
     videoHostWindow = host;
     videoHostWindowedFrame = frame;
-    [window addChildWindow:videoHostWindow ordered:NSWindowAbove];
+    /* Idem : ne pas exposer la fenêtre hôte si l'utilisateur regarde la liste
+     * (un DVD recrée son vout à chaque transition menu/titre). */
+    if (!VLCLegacyViewIsHidden(videoView))
+        [window addChildWindow:videoHostWindow ordered:NSWindowAbove];
     [self syncVideoSubviews];
 }
 
@@ -1991,11 +2004,49 @@ static const struct {
  * une nouvelle vidéo arrive dans la foulée, il est annulé et rien ne bouge. */
 #define VLC_LEGACY_VIDEOHOST_HIDE_DELAY 1.0
 
+/* ⚠ Retirer la fenêtre hôte SANS emporter la fenêtre principale : tant qu'elle
+ * est fenêtre ENFANT, un simple -orderOut: ordonne tout le groupe hors écran et
+ * PowerVLC disparaît entièrement (constaté sur 10.4, au bouton Stop comme à la
+ * bascule vers la liste de lecture). On détache d'abord, puis on remonte la
+ * fenêtre principale. */
+- (void)detachVideoHostWindow
+{
+    if (videoHostWindow == nil)
+        return;
+    NSWindow *parent = [videoHostWindow parentWindow];
+    if (parent != nil)
+        [parent removeChildWindow:videoHostWindow];
+    [videoHostWindow orderOut:nil];
+    [window orderFront:nil];
+}
+
+/* Remettre la fenêtre hôte en place : ré-attachée à la principale (sinon elle
+ * ne suit plus ses déplacements) ET recalée sur la zone vidéo. */
+- (void)attachVideoHostWindow
+{
+    if (videoHostWindow == nil)
+        return;
+    if ([videoHostWindow parentWindow] == nil)
+        [window addChildWindow:videoHostWindow ordered:NSWindowAbove];
+    [self syncVideoHostFrame];
+    [self syncVideoSubviews];
+}
+
 - (void)hideVideoHostWindowNow
 {
     if (!videoHostWindow || videoActive)
         return;                       /* une nouvelle vidéo est arrivée */
-    [videoHostWindow orderOut:nil];
+    [self detachVideoHostWindow];
+    /* ⚠ Ne réinitialiser le choix « vue liste » QUE si la lecture est
+     * vraiment arrêtée. Un DVD fait disparaître sa vidéo plus d'une seconde à
+     * chaque transition (menu → titre, engagement du décodage matériel) : ce
+     * masquage différé s'exécute alors en pleine lecture, et remettre le
+     * drapeau à zéro faisait reprendre le dessus à la vidéo juste après. */
+    {
+        playlist_t *p_playlist = pl_Get(p_intf);
+        if (p_playlist != NULL && playlist_Status(p_playlist) == PLAYLIST_STOPPED)
+            playlistViewWanted = NO;
+    }
     /* La lecture s'est vraiment arrêtée : la liste de lecture reprend sa place
      * (c'est ici, et non dans -releaseVideoView, puisque ce dernier peut n'être
      * qu'une transition entre deux vouts du même DVD). */
@@ -2035,13 +2086,33 @@ static const struct {
 {
     if (!videoHostWindow || videoHostFullscreen)
         return;
+    /* Vue LISTE DE LECTURE : la fenêtre hôte a été retirée (cf. -toggleView:)
+     * et doit le rester. Sans ce garde-fou, un simple redimensionnement de la
+     * fenêtre la remettait à l'écran par -setFrame:display:YES, et la vidéo
+     * réapparaissait par-dessus la liste. */
+    if (VLCLegacyViewIsHidden(videoView))
+        return;
     NSRect frame = [self videoHostWindowedFrameForNow];
     if (frame.size.width < 1 || frame.size.height < 1)
         return;
     videoHostWindowedFrame = frame;
     if (!NSEqualRects(frame, [videoHostWindow frame]))
         [videoHostWindow setFrame:frame display:YES animate:NO];
+    /* ⚠ La vue vidéo vit DANS la fenêtre hôte : son cadre doit être celui du
+     * contenu de cette fenêtre, pas celui de la zone de liste (exprimé, lui,
+     * dans la fenêtre principale). Sans ce recalage, une relance après Stop
+     * réutilisait la fenêtre hôte avec une vue décalée de la hauteur de la
+     * barre de titre — image trop haute, bande noire en bas. */
+    if ([videoView window] == videoHostWindow)
+        [videoView setFrame:[[videoHostWindow contentView] bounds]];
     [self syncVideoSubviews];
+}
+
+- (NSView *)videoViewIfVisible
+{
+    if (videoView == nil || VLCLegacyViewIsHidden(videoView))
+        return nil;
+    return videoView;
 }
 
 - (NSView *)acquireVideoView
@@ -2061,8 +2132,14 @@ static const struct {
     if (VLCLegacyOSVersionAtLeast(10, 3, 0))
         [window setHasShadow:NO];
     [videoView setFrame:[splitView frame]];
-    VLCLegacySetViewHidden(videoView, NO);
-    VLCLegacySetViewHidden(splitView, YES);
+    /* ⚠ Ne PAS reprendre le dessus si l'utilisateur regarde la liste de
+     * lecture : un DVD recrée son vout à chaque transition (menu → titre,
+     * engagement du décodage matériel), et la vidéo revenait alors d'elle-même
+     * quelques secondes après la bascule. */
+    if (!playlistViewWanted) {
+        VLCLegacySetViewHidden(videoView, NO);
+        VLCLegacySetViewHidden(splitView, YES);
+    }
     [window makeKeyAndOrderFront:nil];
     if (videoHostWindow) {
         /* Réutilisation : le masquage différé est annulé, la vidéo reprend dans
@@ -2071,9 +2148,10 @@ static const struct {
         [NSObject cancelPreviousPerformRequestsWithTarget:self
                                                  selector:@selector(hideVideoHostWindowNow)
                                                    object:nil];
-        [self syncVideoHostFrame];
-        if (![videoHostWindow isVisible])
-            [videoHostWindow orderFront:nil];
+        if (playlistViewWanted)
+            [self detachVideoHostWindow];
+        else
+            [self attachVideoHostWindow];   /* ré-attache ET recale */
     } else if (var_InheritBool(p_intf, "legacy-macosx-childvideo")
             && VLCLegacyOSVersionAtLeast(10, 4, 0)) {
         /* ⚠ Mesuré sur 10.2.1 : la fenêtre enfant se crée, se place et
@@ -2458,8 +2536,21 @@ static const struct {
     if (!videoActive)
         return;
     BOOL showPlaylist = VLCLegacyViewIsHidden(videoView) == NO;
+    playlistViewWanted = showPlaylist;
     VLCLegacySetViewHidden(videoView, showPlaylist);
     VLCLegacySetViewHidden(splitView, !showPlaylist);
+    /* ⚠ Pendant la lecture, la vue vidéo n'est PAS dans la fenêtre principale :
+     * elle vit dans une FENÊTRE HÔTE posée pile sur la zone de la liste (cf.
+     * -openVideoHostWindow). Masquer la vue ne faisait donc que noircir cette
+     * fenêtre, qui continuait de recouvrir la liste de lecture — le bouton
+     * paraissait sans effet (constaté sur 10.4 ET 10.5, avec ou sans décodage
+     * matériel). Il faut retirer la fenêtre hôte, et la remettre au retour. */
+    if (videoHostWindow != nil) {
+        if (showPlaylist)
+            [self detachVideoHostWindow];
+        else
+            [self attachVideoHostWindow];
+    }
 }
 
 - (void)openFiles:(id)sender

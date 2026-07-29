@@ -2945,6 +2945,14 @@ static void EsOutCreateCCChannels( es_out_t *out, vlc_fourcc_t codec, uint64_t i
 
         msg_Dbg( p_input, "Adding CC track %d for es[%d]", 1+i, parent->i_id );
 
+        /* Traduire ICI et pas chez l'appelant : EsOutSend passe par ce chemin À
+         * CHAQUE BLOC, et sur Mac OS X 10.3 chaque résolution gettext refait un
+         * getcwd() qui MARCHE LE DISQUE en readdir — mesuré au PC-sampling sur
+         * l'iBook G3 : ~50 %% d'un cœur pendant une lecture DVD, pour une
+         * chaîne qui ne sert qu'à la création (rare, jamais sur un DVD) d'un
+         * canal de sous-titres CC. */
+        psz_descfmt = vlc_gettext( psz_descfmt );
+
         es_format_Init( &fmt, SPU_ES, codec );
         fmt.subs.cc.i_channel = i;
         fmt.i_group = parent->fmt.i_group;
@@ -3092,9 +3100,9 @@ static int EsOutSend( es_out_t *out, es_out_id_t *es, block_t *p_block )
     input_DecoderGetCcDesc( es->p_dec, &desc );
     if( var_InheritInteger( p_input, "captions" ) == 708 )
         EsOutCreateCCChannels( out, VLC_CODEC_CEA708, desc.i_708_channels,
-                               _("DTVCC Closed captions %u"), es );
+                               N_("DTVCC Closed captions %u"), es );
     EsOutCreateCCChannels( out, VLC_CODEC_CEA608, desc.i_608_channels,
-                           _("Closed captions %u"), es );
+                           N_("Closed captions %u"), es );
 
     vlc_mutex_unlock( &p_sys->lock );
 

@@ -106,6 +106,10 @@ typedef float CGFloat;
 
     /* embedded video */
     VLCLegacyVideoView *videoView;
+    /* L'utilisateur a demandé la LISTE DE LECTURE pendant la lecture : à
+     * respecter à chaque (re)démarrage de vout, sinon la vidéo reprend le
+     * dessus toute seule (transitions de menus, engagement matériel…). */
+    BOOL playlistViewWanted;
     NSWindow *fsVideoWindow;
     BOOL videoActive;
     /* Chantier F — fenêtre ENFANT hébergeant la vidéo intégrée (option
@@ -197,6 +201,8 @@ typedef float CGFloat;
  * when the window already hosts a video; the caller then falls back to a
  * standalone vout window. */
 - (NSView *)acquireVideoView;
+/* Vue vidéo si elle est réellement affichée, sinon nil (masquage du curseur). */
+- (NSView *)videoViewIfVisible;
 - (void)releaseVideoView;
 - (void)setVideoViewSizeFromValue:(NSValue *)size;
 - (void)setVideoFullscreenFromNumber:(NSNumber *)fullscreen;
