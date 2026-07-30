@@ -104,6 +104,10 @@ struct aout_sys_common
     size_t              i_underrun_size;
     bool                b_paused;
     bool                b_do_flush;
+    /* Vrai dès qu'une garde anti-gel a constaté que le rappel de rendu ne
+     * répond plus. Remis à faux par ca_Render : le rappel qui tire EST la
+     * preuve que la sortie est revenue, donc l'état se répare tout seul. */
+    bool                b_render_dead;
 
     size_t              i_out_max_size;
     size_t              i_out_size;

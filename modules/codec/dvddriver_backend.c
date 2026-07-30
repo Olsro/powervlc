@@ -3400,8 +3400,22 @@ void dvddriver_set_surface_hidden(dvddriver_ctx *ctx, bool hidden)
     if (ctx == NULL || ctx->OrderSurf == NULL || !ctx->ext_win)
         return;
     pthread_mutex_lock(&ctx->lock);
-    if (!ctx->closed)
+    if (!ctx->closed) {
         ctx->OrderSurf(ctx->cid, ctx->wid, ctx->sid, hidden ? -1 : 1, 0);
+        /* ★ MESURÉ sur 10.3 : cet ordre RÉUSSIT (rc=0) et ne retire rien de
+         * l'écran. Ce n'est pas l'empilement qui décide de la présence de la
+         * surface, c'est sa FORME sur le framebuffer — le désassemblage de
+         * CoreGraphics 10.3 montre le blit accéléré gouverné par des champs
+         * armés depuis IOAccelSetSurfaceFramebufferShape. On réduit donc les
+         * bounds à rien : le serveur n'a plus de région à envoyer. */
+        if (hidden && ctx->SetBounds)
+            ctx->SetBounds(ctx->cid, ctx->wid, ctx->sid,
+                           CGRectMake(0, 0, 0, 0));
+        /* ⚠ Le present saute CGSSetSurfaceBounds quand le rect n'a pas changé
+         * (cf. last_bounds). Sans cette invalidation, le retour de la vidéo
+         * garderait des bounds vides et l'image ne reviendrait jamais. */
+        ctx->has_bounds = false;
+    }
     pthread_mutex_unlock(&ctx->lock);
 }
 

@@ -757,6 +757,19 @@ fi
 # Everything else about them is unchanged -- same name, same exported symbol
 # list, and no table of contents needed, since NSLinkModule() resolves through
 # the symbol table rather than the TOC.
+#
+# Settle the autotools chain FIRST. AM_MAINTAINER_MODE is enabled, so when
+# configure.ac is newer than aclocal.m4 -- which is exactly what a version bump
+# leaves behind -- the *make* below re-runs aclocal, autoconf and
+# `config.status --recheck`, and config.status regenerates libtool. Patching
+# libtool before that happens silently loses the patch, and every plugin gets
+# linked MH_DYLIB again: on 10.3+ the bundle then builds and packages without a
+# single error, but no plugin loads at runtime and `--list` reports core alone.
+# `am--refresh` forces that regeneration now, so the patch below is the last
+# word on libtool.
+if [ -f Makefile ]; then
+    make am--refresh > $out 2>&1 || true
+fi
 case "$MINIMAL_OSX_VERSION" in
     10.0|10.1|10.2)
         if [ -f libtool ] && grep -q 'module_cmds=.*-dynamiclib' libtool; then

@@ -300,6 +300,7 @@ vlc_module_end ()
 + (void)vlcHideCursorAgain;
 - (void)vlcHwEnsureCover;
 - (void)vlcHwCoverAndRefresh;
+- (void)vlcHwRecomputeSurfaces;
 - (void)vlcHwRestoreOpaque;
 - (void)vlcTryRemedy:(NSNumber *)num;
 @end
@@ -2066,14 +2067,47 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
      * escamote donc la surface elle-même, et on la rend au retour. */
     if (hw != NULL) {
         static bool s_surf_hidden = false;
-        bool win_visible = ([sys->glView window] != nil
-                            && [[sys->glView window] isVisible]);
+        /* ⚠ Tester la FENÊTRE ne suffit que de 10.4 vers le haut, où le bouton
+         * retire la fenêtre hôte qui abrite la vue. En dessous, cette fenêtre
+         * hôte n'existe pas (openVideoHostWindow est gaté à 10.4+) : la vue
+         * vidéo reste dans la fenêtre principale, que l'interface se contente
+         * de MASQUER. La fenêtre demeurait donc « visible », la surface n'était
+         * jamais escamotée, et sur 10.3 le bouton « liste de lecture » n'avait
+         * aucun effet visible pendant un DVD accéléré — l'image GPU recouvrait
+         * la liste. (10.2 y échappait par accident : sans setHidden:, le helper
+         * de l'interface DÉTACHE la vue, et [glView window] tombe à nil.)
+         * On teste donc aussi la vue, ancêtres compris — le bouton masque
+         * `videoView`, pas la vue GL elle-même. */
+        NSView *glv = sys->glView;
+        NSWindow *glwin = [glv window];
+        bool view_hidden = false;
+        if (glv == nil)
+            view_hidden = true;
+        else if ([glv respondsToSelector:@selector(isHiddenOrHasHiddenAncestor)])
+            view_hidden = [glv isHiddenOrHasHiddenAncestor];
+        else if ([glv respondsToSelector:@selector(isHidden)])
+            view_hidden = [glv isHidden];
+        bool win_visible = (glwin != nil && [glwin isVisible] && !view_hidden);
         if (win_visible == s_surf_hidden) {
             dvddriver_hide_cb hide = (dvddriver_hide_cb)
                 var_GetAddress(vd->obj.libvlc, DVDDRIVER_VAR_HIDE);
+            msg_Dbg(vd, "escamotage de la surface : visible=%d "
+                    "vue masquée=%d", (int)win_visible, (int)view_hidden);
             if (hide != NULL) {
                 hide(hw, !win_visible);
                 s_surf_hidden = !win_visible;
+                /* ★ CGSOrderSurface RÉUSSIT (rc=0) et ne change RIEN à l'écran
+                 * tant que le serveur n'a pas recalculé la visibilité des
+                 * surfaces de la fenêtre : en régime d'affichage direct, il
+                 * continue d'envoyer la surface au framebuffer, et comme on
+                 * vient d'arrêter les presents, les derniers pixels restent
+                 * gravés — l'image se fige au lieu de disparaître. C'est le
+                 * même recalcul que réclame le correctif anti-scintillement
+                 * (cf. vlcHwCoverAndRefresh), et seul -[NSWindow orderWindow:]
+                 * le déclenche. */
+                [sys->glView
+                    performSelectorOnMainThread:@selector(vlcHwRecomputeSurfaces)
+                                     withObject:nil waitUntilDone:NO];
             }
         }
         if (!win_visible) {
@@ -3020,6 +3054,22 @@ static void OpenglSwap (vlc_gl_t *gl)
     if (![win isVisible])
         return;
     [self vlcHwEnsureCover];
+    [win orderWindow:NSWindowAbove relativeTo:0];
+}
+
+/* Forcer le serveur à RECALCULER la visibilité des surfaces de la fenêtre.
+ * Appelé après un CGSOrderSurface d'escamotage : sans ce recalcul l'ordre est
+ * accepté (rc=0) mais l'écran ne bouge pas. Contrairement à
+ * -vlcHwCoverAndRefresh, on ne (re)pose PAS le pixel de recouvrement : quand la
+ * vidéo est masquée il n'a plus rien à couvrir. Et pas de garde `isVisible`
+ * ici — sous 10.4 c'est justement la fenêtre PRINCIPALE, toujours à l'écran,
+ * qui héberge la vue vidéo masquée. */
+- (void)vlcHwRecomputeSurfaces
+{
+    VLCAssertMainThread();
+    NSWindow *win = [self window];
+    if (win == nil || ![win isVisible])
+        return;
     [win orderWindow:NSWindowAbove relativeTo:0];
 }
 
