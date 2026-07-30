@@ -201,6 +201,7 @@ public slots:
     void sectionNext();
     void sectionPrev();
     void sectionMenu();
+    void discPopupMenu();
     /* Program */
     void changeProgram( int );
     /* Teletext */

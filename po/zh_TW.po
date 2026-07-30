@@ -11904,55 +11904,6 @@ msgstr ""
 "您的字型快取重建中，請稍候。\n"
 "應該不會超過一分鐘。"
 
-#: modules/codec/libmpeg2.c:242
-msgid "Utiliser l'accélération matérielle MPEG2 si disponible"
-msgstr ""
-
-#: modules/codec/libmpeg2.c:244
-msgid ""
-"Décode les flux MPEG-2 sur le GPU (pipeline AppleVA du lecteur DVD d'Apple) "
-"quand un décodeur matériel est présent (ATI, Intel GMA950, nVidia), avec "
-"repli automatique sur le décodage logiciel libmpeg2. Réduit fortement la "
-"charge CPU sur les vieux Mac."
-msgstr ""
-
-#: modules/codec/libmpeg2.c:248
-msgid "Mode field du décodage MPEG-2 matériel (avancé)"
-msgstr ""
-
-#: modules/codec/libmpeg2.c:250
-msgid ""
-"Décodage matériel des macroblocs field-predicted (flux entrelacés, DVD). 0 = "
-"désactivé (l'entrelacé retombe sur le processeur) ; 4 = prédiction frame "
-"équivalente (défaut : le moteur par champ du GPU déchire en mouvement) ; "
-"1/2/3 = moteur par champ natif, réservés à la mise au point."
-msgstr ""
-
-#: modules/codec/libmpeg2.c:254
-msgid "Sous-titres et OSD par-dessus la vidéo accélérée"
-msgstr ""
-
-#: modules/codec/libmpeg2.c:256
-msgid ""
-"Compose les sous-titres (SPU du DVD) et l'affichage à l'écran par-dessus "
-"l'image décodée par le GPU. Sans cette option, la sortie matérielle recouvre "
-"tout et les sous-titres restent invisibles. Ne concerne que la vidéo "
-"affichée dans la fenêtre de VLC."
-msgstr ""
-
-#: modules/codec/libmpeg2.c:260
-msgid "Sous-titres DVD incrustés par le GPU"
-msgstr ""
-
-#: modules/codec/libmpeg2.c:262
-msgid ""
-"Confie les sous-titres du DVD au plan subpicture du décodeur matériel ATI : "
-"le GPU les compose lui-même sur l'image, sans aucun coût par image, là où "
-"l'incrustation par fenêtre coûte 15 à 50 ms sur ce matériel. Sans effet si "
-"le décodage matériel n'est pas actif — le rendu logiciel prend alors le "
-"relais."
-msgstr ""
-
 #: modules/codec/libmpeg2.c:272
 msgid "MPEG I/II video decoder (using libmpeg2)"
 msgstr "MPEG I/II 視訊解碼器 (使用 libmpeg2)"
@@ -18840,10 +18791,6 @@ msgid ""
 "Number of the screen to use by default to display videos in 'fullscreen'. "
 "The screen number correspondance can be found in the video device selection "
 "menu."
-msgstr ""
-
-#: modules/gui/legacy_macosx/macosx.c:131
-msgid "Vidéo intégrée dans une fenêtre enfant"
 msgstr ""
 
 #: modules/gui/legacy_macosx/macosx.c:132
@@ -29817,3 +29764,172 @@ msgstr "開啟 libbdplus 資料夾（藍光）"
 #, c-format
 msgid "The folder %s could not be opened."
 msgstr "無法開啟資料夾 %s。"
+
+#: include/vlc_intf_strings.h:66
+msgid "Blu-ray Pop-Up Menu"
+msgstr "藍光快顯選單"
+
+#: src/libvlc-module.c:1358
+msgid "Show the Blu-ray pop-up menu"
+msgstr "顯示藍光快顯選單"
+
+#: src/libvlc-module.c:1359
+msgid ""
+"Select the key that shows the pop-up menu a Blu-ray draws over the running "
+"movie (not the disc root menu)."
+msgstr "選擇用來顯示藍光在播放中影片上繪製的快顯選單的按鍵（而非光碟主選單）。"
+
+#: modules/access/bluray.c:82
+msgid "Use the main playlist from the key database"
+msgstr "使用金鑰資料庫中的主播放清單"
+
+#: modules/access/bluray.c:83
+msgid ""
+"Some discs hide the feature among hundreds of decoy playlists of the same "
+"length, so the longest one is not the right one. When playing without menus, "
+"start on the playlist your KEYDB.cfg records for this disc, if it records "
+"one. Titles are named after their .mpls file either way, so another one can "
+"still be picked."
+msgstr ""
+"有些光碟會把正片藏在數百個長度相同的誘餌播放清單之中，因此最長的那個並不是正確的。在不使用選單播放時，若您的 KEYDB.cfg "
+"為此光碟記錄了播放清單，便從該播放清單開始播放。無論如何，標題都以其 .mpls 檔案命名，因此仍可另選其他標題。"
+
+#: modules/access/bluray.c:2436
+#, c-format
+msgid "%05u.mpls (main playlist)"
+msgstr "%05u.mpls (主播放清單)"
+
+#: modules/access/bluray.c:3080
+msgid "Dynamic range"
+msgstr "動態範圍"
+
+#: modules/access/bluray.c:3098
+msgid "Dolby Vision tracks"
+msgstr "Dolby Vision 軌道"
+
+#: modules/access/bluray.c:3102
+msgid "SDR conversion notice"
+msgstr "SDR 轉換提示"
+
+#: modules/access/fs.c:43
+msgid "Bypass the system file cache"
+msgstr "略過系統檔案快取"
+
+#: modules/access/fs.c:44
+msgid ""
+"Read local files without going through the operating system's file cache "
+"(F_NOCACHE). On a Mac with little RAM this stops a large film from evicting "
+"the player's own memory mid-playback. It also disables kernel read-ahead, so "
+"leave it off on slow or network volumes."
+msgstr ""
+"讀取本機檔案時不經過作業系統的檔案快取 (F_NOCACHE)。在記憶體較少的 Mac "
+"上，這可避免大型影片在播放途中排擠播放器本身的記憶體。此選項同時會停用核心的預先讀取，因此在速度較慢的儲存區或網路儲存區上請保持關閉。"
+
+#: modules/codec/libmpeg2.c:297
+msgid "Use MPEG-2 hardware acceleration when available"
+msgstr "可用時使用 MPEG-2 硬體加速"
+
+#: modules/codec/libmpeg2.c:299
+msgid ""
+"Decode MPEG-2 streams on the GPU (the AppleVA pipeline of Apple's DVD "
+"Player) whenever a hardware decoder is present (ATI, Intel GMA950, nVidia), "
+"falling back to the libmpeg2 software decoder automatically. Cuts CPU load "
+"dramatically on old Macs."
+msgstr ""
+"當存在硬體解碼器 (ATI、Intel GMA950、nVidia) 時，在 GPU 上解碼 MPEG-2 串流 (Apple DVD 播放程式的 "
+"AppleVA 管線)，並在必要時自動退回 libmpeg2 軟體解碼器。可大幅降低舊款 Mac 的 CPU 負載。"
+
+#: modules/codec/libmpeg2.c:303
+msgid "Field mode of the MPEG-2 hardware decoder (advanced)"
+msgstr "MPEG-2 硬體解碼器的圖場模式 (進階)"
+
+#: modules/codec/libmpeg2.c:305
+msgid ""
+"Hardware decoding of field-predicted macroblocks (interlaced streams, DVD). "
+"0 = off (interlaced content falls back to the processor); 4 = equivalent "
+"frame prediction (the default: the field engine of the GPU tears on motion); "
+"1/2/3 = native field engine, for debugging only."
+msgstr ""
+"對圖場預測巨集區塊進行硬體解碼 (交錯式串流、DVD)。0 = 關閉 (交錯式內容退回處理器)；4 = 等效的畫面預測 (預設值：GPU "
+"的圖場引擎在動態畫面會出現撕裂)；1/2/3 = 原生圖場引擎，僅供偵錯。"
+
+#: modules/codec/libmpeg2.c:309
+msgid "Subtitles and OSD over hardware-accelerated video"
+msgstr "在硬體加速的視訊上顯示字幕與 OSD"
+
+#: modules/codec/libmpeg2.c:311
+msgid ""
+"Compose the subtitles (DVD SPU) and the on-screen display over the picture "
+"decoded by the GPU. Without this option the hardware output covers "
+"everything and subtitles stay invisible. Only affects the video shown in the "
+"VLC window."
+msgstr ""
+"將字幕 (DVD SPU) 與螢幕顯示疊加在 GPU 解碼的畫面之上。若未啟用此選項，硬體輸出會覆蓋一切，字幕將無法顯示。僅影響 VLC "
+"視窗中顯示的視訊。"
+
+#: modules/codec/libmpeg2.c:315
+msgid "Asynchronous GPU submission (advanced)"
+msgstr "非同步 GPU 提交 (進階)"
+
+#: modules/codec/libmpeg2.c:317
+msgid ""
+"Issue the DVDDriverDecode call on a dedicated thread, so that the VLD of the "
+"next picture runs while the GPU works. Measured on the iBook G3: Decode is "
+"time spent blocked in the driver, and overlapping it removes the shortfall "
+"in the 40 ms per picture budget."
+msgstr ""
+"在專用執行緒上執行 DVDDriverDecode 呼叫，讓下一張畫面的 VLD 能在 GPU 工作期間進行。在 iBook G3 "
+"上實測：Decode 是阻塞在驅動程式中的時間，將其重疊即可消除每張畫面 40 毫秒預算的缺口。"
+
+#: modules/codec/libmpeg2.c:321
+msgid "10.2 port changes on the hardware path (advanced)"
+msgstr "硬體路徑上的 10.2 移植變更 (進階)"
+
+#: modules/codec/libmpeg2.c:323
+msgid ""
+"-1 = automatic (on under Mac OS X 10.2 and 10.3, off from 10.4 on, where "
+"they replaced behaviour validated on the machine itself), 0 = off, 1 = on."
+msgstr ""
+"-1 = 自動 (在 Mac OS X 10.2 與 10.3 上啟用，自 10.4 起停用；在 10.4 "
+"上它們取代的是已在實機驗證過的行為)，0 = 停用，1 = 啟用。"
+
+#: modules/codec/libmpeg2.c:326
+msgid "DVD subtitles drawn by the GPU"
+msgstr "由 GPU 繪製的 DVD 字幕"
+
+#: modules/codec/libmpeg2.c:328
+msgid ""
+"Hand the DVD subtitles to the subpicture plane of the ATI hardware decoder: "
+"the GPU composes them onto the picture itself, at no per-picture cost, where "
+"drawing them through a window costs 15 to 50 ms on this hardware. No effect "
+"while hardware decoding is off, as software rendering then takes over."
+msgstr ""
+"將 DVD 字幕交給 ATI 硬體解碼器的 subpicture 平面：GPU "
+"會自行將字幕合成到畫面上，不產生每張畫面的成本；而透過視窗繪製在此硬體上需要 15 至 50 毫秒。硬體解碼關閉時此選項無效，屆時改由軟體算繪處理。"
+
+#: modules/gui/legacy_macosx/macosx.c:131
+msgid "Embedded video in a child window"
+msgstr "在子視窗中嵌入視訊"
+
+#: modules/gui/legacy_macosx/macosx.c:132
+msgid ""
+"Host the embedded video in a borderless child window: switching to "
+"fullscreen is instant and does not interrupt accelerated decoding. Turning "
+"this off restores the former behaviour (a separate fullscreen window). No "
+"effect under Mac OS X 10.4, where a child window displays nothing."
+msgstr ""
+"將嵌入的視訊置於無邊框子視窗中：切換全螢幕是瞬間完成的，且不會中斷加速解碼。關閉後會恢復先前的行為 (獨立的全螢幕視窗)。在 Mac OS X "
+"10.4 上無效，該系統下子視窗不會顯示任何內容。"
+
+#: modules/gui/legacy_macosx/macosx.c:143
+msgid "Open a window at startup (debugging)"
+msgstr "啟動時開啟一個視窗 (偵錯)"
+
+#: modules/gui/legacy_macosx/macosx.c:144
+msgid ""
+"Name of the window to open at startup, like the VLC_LEGACY_SHOW environment "
+"variable: prefs, prefsadv, mediainfo, errors, about, bookmarks, messages, "
+"tracksync, effects, videoeffects, convert, fspanel, open0..3."
+msgstr ""
+"啟動時要開啟的視窗名稱，與環境變數 VLC_LEGACY_SHOW "
+"相同：prefs、prefsadv、mediainfo、errors、about、bookmarks、messages、tracksync、effects、videoeffects、convert、fspanel、open0..3。"

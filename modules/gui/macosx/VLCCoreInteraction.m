@@ -1021,6 +1021,27 @@ static int BossCallback(vlc_object_t *p_this, const char *psz_var,
     vlc_object_release(p_input_thread);
 }
 
+- (BOOL)hasDiscPopupMenu
+{
+    input_thread_t *p_input_thread = pl_CurrentInput(getIntf());
+    if (p_input_thread == NULL)
+        return NO;
+
+    BOOL b_available = input_HasPopupMenu(p_input_thread) ? YES : NO;
+    vlc_object_release(p_input_thread);
+    return b_available;
+}
+
+- (void)showDiscPopupMenu
+{
+    input_thread_t *p_input_thread = pl_CurrentInput(getIntf());
+    if (p_input_thread == NULL)
+        return;
+
+    input_ShowPopupMenu(p_input_thread);
+    vlc_object_release(p_input_thread);
+}
+
 - (void)moveMenuFocusLeft
 {
     input_thread_t *p_input_thread = pl_CurrentInput(getIntf());

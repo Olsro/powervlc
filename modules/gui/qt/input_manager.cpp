@@ -821,6 +821,16 @@ void InputManager::sectionMenu()
     }
 }
 
+/* Blu-ray pop-up menu, drawn over the running movie (unlike the disc root
+ * menu of sectionMenu()) */
+void InputManager::discPopupMenu()
+{
+    if( hasInput() )
+    {
+        input_ShowPopupMenu( p_input );
+    }
+}
+
 /*
  *  Teletext Functions
  */

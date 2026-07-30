@@ -1660,7 +1660,52 @@ asm volatile("maskmovq %%mm1,%%mm2"::"r"(p):"mm1", "mm2");
     have_mmxext="yes"
   ])
 ])
+dnl The MMX I420->RGB converter asks for far more operands at once than the
+dnl plain "does MMX assemble" probe above: four "r" inputs plus ten "m" ones in
+dnl a single asm statement (see MMX_CALL in modules/video_chroma/i420_rgb_mmx.h).
+dnl On 32-bit x86 that no longer fits -- GCC 13 rejects it with
+dnl   error: 'asm' operand has impossible constraints
+dnl and it is not the PIC base register: -fno-pic fails identically. The other
+dnl MMX chroma converters (i420_yuy2, i422_yuy2) and the SSE2 build of this very
+dnl file are unaffected, so gate this one converter rather than all of MMX.
+dnl
+dnl Measured on i686-apple-darwin8 / GCC 13.4: the plugin has never been in a
+dnl shipped bundle, because the target's build directory predated the probe
+dnl above answering "yes". Recreating that build directory turned a silent
+dnl absence into a hard build failure, which is what this test prevents.
+dnl A synthetic asm block of the same shape is NOT enough to reproduce this --
+dnl one was tried and compiled happily on the very compiler that rejects the
+dnl real thing. So compile the real macro out of the real header, in the loop
+dnl shape its caller uses (i420_rgb16_x86.c keeps the four pointers live across
+dnl iterations, which is what tips the allocator over).
+AS_IF([test "${have_mmx}" = "yes"], [
+  AC_CACHE_CHECK([if $CC groks the MMX I420->RGB asm], [ac_cv_mmx_i420_rgb], [
+    VLC_SAVE_FLAGS
+    CFLAGS="${CFLAGS} -mmmx"
+    CPPFLAGS="${CPPFLAGS} -I${srcdir}/modules"
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
+#include <stdint.h>
+#define CAN_COMPILE_MMX 1
+#include "video_chroma/i420_rgb_mmx.h"
+]],[[
+uint8_t *p_y = 0, *p_u = 0, *p_v = 0; uint16_t *p_buffer = 0;
+for (int i = 2; i--; ) {
+    MMX_CALL (MMX_INIT_16 MMX_YUV_MUL MMX_YUV_ADD MMX_UNPACK_15);
+    p_y += 8; p_u += 4; p_v += 4; p_buffer += 8;
+}
+]])
+    ], [
+      ac_cv_mmx_i420_rgb=yes
+    ], [
+      ac_cv_mmx_i420_rgb=no
+    ])
+    VLC_RESTORE_FLAGS
+  ])
+], [
+  ac_cv_mmx_i420_rgb=no
+])
 AM_CONDITIONAL([HAVE_MMX], [test "${have_mmx}" = "yes"])
+AM_CONDITIONAL([HAVE_MMX_I420_RGB], [test "${ac_cv_mmx_i420_rgb}" = "yes"])
 AM_CONDITIONAL([HAVE_MMXEXT], [test "${have_mmxext}" = "yes"])
 
 dnl  Check for fully workin SSE2 intrinsics

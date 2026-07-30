@@ -38,6 +38,11 @@ $(TARBALLS)/libaacs-$(AACS_VERSION).tar.bz2:
 
 aacs: libaacs-$(AACS_VERSION).tar.bz2 .sum-aacs
 	$(UNPACK)
+	# The read path opened a libgcrypt handle per 6144-byte unit, and every
+	# open fast-polls the CSPRNG (a getrusage() and a clock() syscall). Worth
+	# 19% of the time spent decrypting on a 10.6 Core 2 Duo. Not Darwin
+	# specific, so applied everywhere.
+	$(APPLY) $(SRC)/aacs/libaacs-powervlc-reuse-cipher-handle.patch
 ifdef HAVE_DARWIN_OS
 	$(APPLY) $(SRC)/aacs/libaacs-powervlc-tiger-and-external-mmc.patch
 ifneq ($(call darwin_min_os_at_least, 10.7), true)

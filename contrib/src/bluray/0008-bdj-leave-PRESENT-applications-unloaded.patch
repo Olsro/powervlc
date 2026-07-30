@@ -1,0 +1,59 @@
+BD-J: leave applications signalled PRESENT in the NOT_LOADED state
+
+BDJLoader loads every application of the BDJO up front: AUTOSTART ones are
+started, and everything signalled PRESENT gets proxys[i].init(). init() queues
+CMD_INIT, which runs the Xlet's initXlet() and moves the proxy to PAUSED
+(BDJAppProxy.java, "state = PAUSED").
+
+A control code of PRESENT means the application is *available* in this title,
+not that it should be loaded. Initialising it anyway is observable through
+org.dvb.application.AppProxy.getState(), and a disc that inspects that state
+before starting an application sees PAUSED where the specification leads it to
+expect NOT_LOADED.
+
+Measured on a retail BD-J disc (Rio, org 0x7fff646c). Its first-play title
+autostarts a single application, com.macrovision.bdplus.Handshake, whose job is
+to hand over to the real menu Xlet. Disassembling it (77000.jar) shows:
+
+    atts = AppsDatabase.getAppsDatabase()
+              .getAppAttributes(new CurrentServiceFilter());
+    ... match by AppAttributes.getName() ...
+    proxy = AppsDatabase.getAppProxy(id);
+    if (proxy != null)
+        if (proxy.getState() == NOT_LOADED) { "Starting other Xlet"; proxy.start(); }
+        else                                  "ERROR: Application state wasn't
+                                               NOT_LOADED. Can't load it."
+
+Because libbluray had already initialised com.foxbd.dds.rio.fp.StandardMenuXlet
+("Init xlet 4: ..."), its state is PAUSED and the handshake takes the error
+branch. Macrovision's own logging is off on this disc, so nothing is printed:
+the menu Xlet is simply never started. No AWT component is ever created (there
+is no AWT-EventQueue thread in a thread dump, and all five BDJAppProxy threads
+sit in Object.wait()), nothing is drawn, and the root window therefore refuses
+to open the overlay:
+
+    java.awt.BDRootWindow: sync() ignored (overlay not open, empty overlay)
+
+which is why the player shows no menu at all while BD-J itself is running
+perfectly.
+
+Leave PRESENT applications alone. They are still in the apps database, still
+enumerable, and still startable through AppProxy.start(), which loads and
+initialises them on demand -- CMD_START goes through doStart(), not doInit().
+
+--- a/src/libbluray/bdj/java/org/videolan/BDJLoader.java
++++ b/src/libbluray/bdj/java/org/videolan/BDJLoader.java
+@@ -293,8 +293,11 @@
+                     logger.info("Autostart xlet " + i + ": " + appTable[i].getInitialClass());
+                     proxys[i].start();
+                 } else if (code == AppEntry.PRESENT) {
+-                    logger.info("Init xlet " + i + ": " + appTable[i].getInitialClass());
+-                    proxys[i].init();
++                    /* Present, not loaded: leave the proxy in NOT_LOADED so
++                     * that getState() tells the truth to whoever asks. It is
++                     * started on demand through AppProxy.start(), which loads
++                     * and initialises it itself. */
++                    logger.info("Present xlet " + i + ": " + appTable[i].getInitialClass());
+                 } else {
+                     logger.info("Unsupported xlet code (" +code+") xlet " + i + ": " + appTable[i].getInitialClass());
+                 }

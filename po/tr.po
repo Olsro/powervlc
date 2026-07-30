@@ -12557,55 +12557,6 @@ msgstr ""
 "Lütfen yazı türü ön belleğiniz oluşturulurken bekleyin.\n"
 "Bu işlem bir dakikadan az sürmelidir."
 
-#: modules/codec/libmpeg2.c:242
-msgid "Utiliser l'accélération matérielle MPEG2 si disponible"
-msgstr ""
-
-#: modules/codec/libmpeg2.c:244
-msgid ""
-"Décode les flux MPEG-2 sur le GPU (pipeline AppleVA du lecteur DVD d'Apple) "
-"quand un décodeur matériel est présent (ATI, Intel GMA950, nVidia), avec "
-"repli automatique sur le décodage logiciel libmpeg2. Réduit fortement la "
-"charge CPU sur les vieux Mac."
-msgstr ""
-
-#: modules/codec/libmpeg2.c:248
-msgid "Mode field du décodage MPEG-2 matériel (avancé)"
-msgstr ""
-
-#: modules/codec/libmpeg2.c:250
-msgid ""
-"Décodage matériel des macroblocs field-predicted (flux entrelacés, DVD). 0 = "
-"désactivé (l'entrelacé retombe sur le processeur) ; 4 = prédiction frame "
-"équivalente (défaut : le moteur par champ du GPU déchire en mouvement) ; "
-"1/2/3 = moteur par champ natif, réservés à la mise au point."
-msgstr ""
-
-#: modules/codec/libmpeg2.c:254
-msgid "Sous-titres et OSD par-dessus la vidéo accélérée"
-msgstr ""
-
-#: modules/codec/libmpeg2.c:256
-msgid ""
-"Compose les sous-titres (SPU du DVD) et l'affichage à l'écran par-dessus "
-"l'image décodée par le GPU. Sans cette option, la sortie matérielle recouvre "
-"tout et les sous-titres restent invisibles. Ne concerne que la vidéo "
-"affichée dans la fenêtre de VLC."
-msgstr ""
-
-#: modules/codec/libmpeg2.c:260
-msgid "Sous-titres DVD incrustés par le GPU"
-msgstr ""
-
-#: modules/codec/libmpeg2.c:262
-msgid ""
-"Confie les sous-titres du DVD au plan subpicture du décodeur matériel ATI : "
-"le GPU les compose lui-même sur l'image, sans aucun coût par image, là où "
-"l'incrustation par fenêtre coûte 15 à 50 ms sur ce matériel. Sans effet si "
-"le décodage matériel n'est pas actif — le rendu logiciel prend alors le "
-"relais."
-msgstr ""
-
 #: modules/codec/libmpeg2.c:272
 msgid "MPEG I/II video decoder (using libmpeg2)"
 msgstr "MPEG I/II görüntü kod çözücüsü (libmpeg2 kullanır)"
@@ -19866,10 +19817,6 @@ msgstr ""
 "Görüntüleri tam ekranda oynatırken varsayılan olarak kullanılacak ekran "
 "sayısı. Ekran sayılarının neye karşı geldiği görüntü aygıtı seçimi menüsünde "
 "bulunabilir."
-
-#: modules/gui/legacy_macosx/macosx.c:131
-msgid "Vidéo intégrée dans une fenêtre enfant"
-msgstr ""
 
 #: modules/gui/legacy_macosx/macosx.c:132
 msgid ""
@@ -31431,3 +31378,197 @@ msgstr "libbdplus klasörünü aç (Blu-Ray)"
 #, c-format
 msgid "The folder %s could not be opened."
 msgstr "%s klasörü açılamadı."
+
+#: include/vlc_intf_strings.h:66
+msgid "Blu-ray Pop-Up Menu"
+msgstr "Blu-ray açılır menüsü"
+
+#: src/libvlc-module.c:1358
+msgid "Show the Blu-ray pop-up menu"
+msgstr "Blu-ray açılır menüsünü görüntüle"
+
+#: src/libvlc-module.c:1359
+msgid ""
+"Select the key that shows the pop-up menu a Blu-ray draws over the running "
+"movie (not the disc root menu)."
+msgstr ""
+"Bir Blu-ray diskin oynatılan filmin üzerine çizdiği açılır menüyü "
+"görüntüleyecek tuşu seçin (diskin ana menüsü değil)."
+
+#: modules/access/bluray.c:82
+msgid "Use the main playlist from the key database"
+msgstr "Anahtar veritabanındaki ana oynatma listesi kullanılsın"
+
+#: modules/access/bluray.c:83
+msgid ""
+"Some discs hide the feature among hundreds of decoy playlists of the same "
+"length, so the longest one is not the right one. When playing without menus, "
+"start on the playlist your KEYDB.cfg records for this disc, if it records "
+"one. Titles are named after their .mpls file either way, so another one can "
+"still be picked."
+msgstr ""
+"Bazı diskler filmi aynı uzunlukta yüzlerce sahte oynatma listesi arasında "
+"gizler; bu yüzden en uzun olan doğru olan değildir. Menüsüz oynatırken, "
+"KEYDB.cfg dosyanız bu disk için bir oynatma listesi belirtiyorsa o "
+"listeden başlanır. Başlıklar her durumda .mpls dosyalarının adını "
+"taşıdığından başka bir tanesi de seçilebilir."
+
+#: modules/access/bluray.c:2436
+#, c-format
+msgid "%05u.mpls (main playlist)"
+msgstr "%05u.mpls (ana oynatma listesi)"
+
+#: modules/access/bluray.c:3080
+msgid "Dynamic range"
+msgstr "Dinamik aralık"
+
+#: modules/access/bluray.c:3098
+msgid "Dolby Vision tracks"
+msgstr "Dolby Vision kayıtları"
+
+#: modules/access/bluray.c:3102
+msgid "SDR conversion notice"
+msgstr "SDR dönüşümü bildirimi"
+
+#: modules/access/fs.c:43
+msgid "Bypass the system file cache"
+msgstr "Sistemin dosya ön belleği atlansın"
+
+#: modules/access/fs.c:44
+msgid ""
+"Read local files without going through the operating system's file cache "
+"(F_NOCACHE). On a Mac with little RAM this stops a large film from evicting "
+"the player's own memory mid-playback. It also disables kernel read-ahead, so "
+"leave it off on slow or network volumes."
+msgstr ""
+"Yerel dosyalar işletim sisteminin dosya ön belleğinden geçmeden okunur "
+"(F_NOCACHE). Belleği az olan bir Mac'te bu, büyük bir filmin oynatma "
+"sırasında oynatıcının kendi belleğini dışarı atmasını önler. Ayrıca "
+"çekirdeğin ileri okumasını da devre dışı bırakır; bu nedenle yavaş ya da "
+"ağ birimlerinde kapalı bırakın."
+
+#: modules/codec/libmpeg2.c:297
+msgid "Use MPEG-2 hardware acceleration when available"
+msgstr "Varsa MPEG-2 donanım hızlandırması kullanılsın"
+
+#: modules/codec/libmpeg2.c:299
+msgid ""
+"Decode MPEG-2 streams on the GPU (the AppleVA pipeline of Apple's DVD "
+"Player) whenever a hardware decoder is present (ATI, Intel GMA950, nVidia), "
+"falling back to the libmpeg2 software decoder automatically. Cuts CPU load "
+"dramatically on old Macs."
+msgstr ""
+"Bir donanım kod çözücü bulunduğunda (ATI, Intel GMA950, nVidia) MPEG-2 "
+"akışları grafik işlemcide çözülür (Apple DVD Oynatıcı'nın AppleVA hattı); "
+"gerektiğinde kendiliğinden libmpeg2 yazılım kod çözücüsüne dönülür. Eski "
+"Mac bilgisayarlarda işlemci yükünü büyük ölçüde azaltır."
+
+#: modules/codec/libmpeg2.c:303
+msgid "Field mode of the MPEG-2 hardware decoder (advanced)"
+msgstr "MPEG-2 donanım kod çözücüsünün alan kipi (gelişmiş)"
+
+#: modules/codec/libmpeg2.c:305
+msgid ""
+"Hardware decoding of field-predicted macroblocks (interlaced streams, DVD). "
+"0 = off (interlaced content falls back to the processor); 4 = equivalent "
+"frame prediction (the default: the field engine of the GPU tears on motion); "
+"1/2/3 = native field engine, for debugging only."
+msgstr ""
+"Alan öngörülü makro blokların donanımla kod çözümü (taramalı akışlar, "
+"DVD). 0 = kapalı (taramalı içerik işlemciye döner); 4 = eşdeğer kare "
+"öngörüsü (varsayılan: grafik işlemcinin alan motoru harekette yırtılma "
+"yapar); 1/2/3 = özgün alan motoru, yalnızca hata ayıklama için."
+
+#: modules/codec/libmpeg2.c:309
+msgid "Subtitles and OSD over hardware-accelerated video"
+msgstr ""
+"Donanımla hızlandırılmış görüntünün üzerinde alt yazı ve ekran üzerinde "
+"gösterim"
+
+#: modules/codec/libmpeg2.c:311
+msgid ""
+"Compose the subtitles (DVD SPU) and the on-screen display over the picture "
+"decoded by the GPU. Without this option the hardware output covers "
+"everything and subtitles stay invisible. Only affects the video shown in the "
+"VLC window."
+msgstr ""
+"Alt yazıları (DVD SPU) ve ekran üzerindeki bilgileri, grafik işlemcinin "
+"çözdüğü görüntünün üzerine yerleştirir. Bu seçenek olmadan donanım çıkışı "
+"her şeyin üzerini kapatır ve alt yazılar görünmez kalır. Yalnızca VLC "
+"penceresinde gösterilen görüntüyü etkiler."
+
+#: modules/codec/libmpeg2.c:315
+msgid "Asynchronous GPU submission (advanced)"
+msgstr "Eşzamansız grafik işlemci gönderimi (gelişmiş)"
+
+#: modules/codec/libmpeg2.c:317
+msgid ""
+"Issue the DVDDriverDecode call on a dedicated thread, so that the VLD of the "
+"next picture runs while the GPU works. Measured on the iBook G3: Decode is "
+"time spent blocked in the driver, and overlapping it removes the shortfall "
+"in the 40 ms per picture budget."
+msgstr ""
+"DVDDriverDecode çağrısını ayrı bir iş parçacığında yapar; böylece grafik "
+"işlemci çalışırken sonraki görüntünün VLD işlemi sürer. iBook G3 üzerinde "
+"ölçüldü: Decode, sürücüde bloke geçen süredir ve bunu örtüştürmek görüntü "
+"başına 40 ms bütçesindeki açığı kapatır."
+
+#: modules/codec/libmpeg2.c:321
+msgid "10.2 port changes on the hardware path (advanced)"
+msgstr "Donanım yolundaki 10.2 uyarlama değişiklikleri (gelişmiş)"
+
+#: modules/codec/libmpeg2.c:323
+msgid ""
+"-1 = automatic (on under Mac OS X 10.2 and 10.3, off from 10.4 on, where "
+"they replaced behaviour validated on the machine itself), 0 = off, 1 = on."
+msgstr ""
+"-1 = otomatik (Mac OS X 10.2 ve 10.3 üzerinde etkin, 10.4 ve sonrasında "
+"etkisiz; orada makinenin kendisinde doğrulanmış bir davranışın yerini "
+"alıyorlardı), 0 = etkisiz, 1 = etkin."
+
+#: modules/codec/libmpeg2.c:326
+msgid "DVD subtitles drawn by the GPU"
+msgstr "Grafik işlemci tarafından çizilen DVD alt yazıları"
+
+#: modules/codec/libmpeg2.c:328
+msgid ""
+"Hand the DVD subtitles to the subpicture plane of the ATI hardware decoder: "
+"the GPU composes them onto the picture itself, at no per-picture cost, where "
+"drawing them through a window costs 15 to 50 ms on this hardware. No effect "
+"while hardware decoding is off, as software rendering then takes over."
+msgstr ""
+"DVD alt yazılarını ATI donanım kod çözücüsünün subpicture düzlemine "
+"bırakır: grafik işlemci bunları görüntü başına hiçbir maliyet olmadan "
+"kendisi görüntüye yerleştirir; oysa bir pencere üzerinden çizmek bu "
+"donanımda 15 ila 50 ms tutar. Donanımla kod çözme kapalıyken etkisizdir, "
+"o durumda yazılımla çizim devreye girer."
+
+#: modules/gui/legacy_macosx/macosx.c:131
+msgid "Embedded video in a child window"
+msgstr "Alt pencerede gömülü görüntü"
+
+#: modules/gui/legacy_macosx/macosx.c:132
+msgid ""
+"Host the embedded video in a borderless child window: switching to "
+"fullscreen is instant and does not interrupt accelerated decoding. Turning "
+"this off restores the former behaviour (a separate fullscreen window). No "
+"effect under Mac OS X 10.4, where a child window displays nothing."
+msgstr ""
+"Gömülü görüntüyü kenarlıksız bir alt pencerede barındırır: tam ekrana "
+"geçiş anında olur ve hızlandırılmış kod çözmeyi kesmez. Kapatmak eski "
+"davranışı geri getirir (ayrı bir tam ekran penceresi). Mac OS X 10.4 "
+"üzerinde etkisizdir; orada alt pencere hiçbir şey göstermez."
+
+#: modules/gui/legacy_macosx/macosx.c:143
+msgid "Open a window at startup (debugging)"
+msgstr "Başlangıçta bir pencere açılsın (hata ayıklama)"
+
+#: modules/gui/legacy_macosx/macosx.c:144
+msgid ""
+"Name of the window to open at startup, like the VLC_LEGACY_SHOW environment "
+"variable: prefs, prefsadv, mediainfo, errors, about, bookmarks, messages, "
+"tracksync, effects, videoeffects, convert, fspanel, open0..3."
+msgstr ""
+"VLC_LEGACY_SHOW ortam değişkeninde olduğu gibi, başlangıçta açılacak "
+"pencerenin adı: prefs, prefsadv, mediainfo, errors, about, bookmarks, "
+"messages, tracksync, effects, videoeffects, convert, fspanel, open0..3."

@@ -281,9 +281,10 @@ int main(int i_argc, const char *ppsz_argv[])
         }
     }
     if (lang && strncmp( lang, "auto", 4 )) {
-        char tmp[11];
-        snprintf(tmp, 11, "LANG%s", lang);
-        putenv(tmp);
+        /* lang points at the "=..." of "--language=xx"; skip the separator.
+         * setenv() copies, unlike the putenv() of a stack buffer this used to
+         * do. */
+        setenv("LANG", lang + 1, 1);
     }
 
     if (!lang) {
@@ -293,14 +294,21 @@ int main(int i_argc, const char *ppsz_argv[])
         if (language) {
             lang = FromCFString(language, kCFStringEncodingUTF8);
             if (strncmp( lang, "auto", 4 )) {
-                char tmp[11];
-                snprintf(tmp, 11, "LANG=%s", lang);
-                putenv(tmp);
+                /* setenv(), not putenv(): putenv() keeps the caller's pointer,
+                 * and the buffer this used to build was on the stack -- the
+                 * environment entry dangled as soon as the block returned.
+                 * The buffer was also 11 bytes, which truncated anything past
+                 * a two-letter code plus "LANG=". */
+                setenv("LANG", lang, 1);
             }
             free(lang);
             CFRelease(language);
         }
     }
+
+    /* When nothing above asked for a language, LANG is left unset on purpose:
+     * system_Init() (src/darwin/specific.c) derives it from the user's
+     * preferred localisations, and skips itself when LANG is already set. */
 
     ppsz_argv++; i_argc--; /* skip executable path */
 

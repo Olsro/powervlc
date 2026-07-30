@@ -251,6 +251,7 @@
 
 - (IBAction)quitAfterPlayback:(id)sender;
 - (IBAction)toggleRecord:(id)sender;
+- (IBAction)showDiscPopupMenu:(id)sender;
 - (void)updateRecordState:(BOOL)b_value;
 - (IBAction)setPlaybackRate:(id)sender;
 - (void)updatePlaybackRate;

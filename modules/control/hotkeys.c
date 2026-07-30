@@ -971,6 +971,9 @@ static int PutAction( intf_thread_t *p_intf, input_thread_t *p_input,
             if( p_input )
                 var_SetInteger( p_input, "title  0", 2 );
             break;
+        case ACTIONID_DISC_POPUP_MENU:
+            input_ShowPopupMenu( p_input );
+            break;
         case ACTIONID_NAV_ACTIVATE:
             if( p_input )
                 input_Control( p_input, INPUT_NAV_ACTIVATE, NULL );

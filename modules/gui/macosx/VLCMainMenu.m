@@ -27,6 +27,7 @@
 #import <vlc_common.h>
 #import <vlc_playlist.h>
 #import <vlc_input.h>
+#import <vlc_intf_strings.h>
 #import <vlc_modules.h>
 
 #import "VLCAboutWindowController.h"
@@ -66,6 +67,12 @@
     NSTimer *_cancelRendererDiscoveryTimer;
 
     NSMenu *_playlistTableColumnsContextMenu;
+
+    /* Blu-ray Pop-Up Menu, built in -awakeFromNib rather than carried by
+     * MainMenu.xib. Two items, one per menu: an NSMenuItem cannot live in two
+     * menus at once. */
+    NSMenuItem *_discPopupMenuItem;     /* Playback menu */
+    NSMenuItem *_voutDiscPopupMenuItem; /* right-click on the video */
 
     __strong VLCTimeSelectionPanelController *_timeSelectionPanel;
 }
@@ -114,6 +121,40 @@
     intf_thread_t *p_intf = getIntf();
 
     [self initStrings];
+
+    /* Blu-ray pop-up menu, at the end of the Playback menu right below
+     * Chapter, and in the video contextual menu -- the only menu within reach
+     * in fullscreen. Added here instead of in MainMenu.xib so that the entry,
+     * its wiring and its enable rule live in one place, next to the other
+     * three interfaces doing exactly the same. */
+    NSMenu *playbackMenu = [_chapter menu];
+    if (playbackMenu) {
+        _discPopupMenuItem = [[NSMenuItem alloc]
+            initWithTitle:_NS(I_MENU_DISC_POPUP)
+                   action:@selector(showDiscPopupMenu:)
+            keyEquivalent:@""];
+        [_discPopupMenuItem setTarget:self];
+        [playbackMenu insertItem:_discPopupMenuItem
+                         atIndex:[playbackMenu indexOfItem:_chapter] + 1];
+    }
+    if (_voutMenu) {
+        _voutDiscPopupMenuItem = [[NSMenuItem alloc]
+            initWithTitle:_NS(I_MENU_DISC_POPUP)
+                   action:@selector(showDiscPopupMenu:)
+            keyEquivalent:@""];
+        [_voutDiscPopupMenuItem setTarget:self];
+        /* set apart by a separator: it acts on the disc, not on our playback */
+        NSInteger snapshotIndex = [_voutMenu indexOfItem:_voutMenusnapshot];
+        if (snapshotIndex < 0) {
+            [_voutMenu addItem:[NSMenuItem separatorItem]];
+            [_voutMenu addItem:_voutDiscPopupMenuItem];
+        } else {
+            [_voutMenu insertItem:[NSMenuItem separatorItem]
+                          atIndex:snapshotIndex + 1];
+            [_voutMenu insertItem:_voutDiscPopupMenuItem
+                          atIndex:snapshotIndex + 2];
+        }
+    }
 
     /* interface switcher, below Preferences and its separator (only when
      * this build also ships the legacy interface) */
@@ -848,6 +889,11 @@
 - (IBAction)toggleRecord:(id)sender
 {
     [[VLCCoreInteraction sharedInstance] toggleRecord];
+}
+
+- (IBAction)showDiscPopupMenu:(id)sender
+{
+    [[VLCCoreInteraction sharedInstance] showDiscPopupMenu];
 }
 
 - (void)updateRecordState:(BOOL)b_value
@@ -1813,6 +1859,9 @@
     } else if (mi == _openSubtitleFile) {
         enabled = [mi isEnabled];
         [self setupMenus]; /* Make sure subtitles menu is up to date */
+    } else if (mi == _discPopupMenuItem || mi == _voutDiscPopupMenuItem) {
+        /* only the Blu-ray titles that carry a pop-up menu offer one */
+        enabled = [[VLCCoreInteraction sharedInstance] hasDiscPopupMenu];
     } else {
         NSMenuItem *_parent = [mi parentItem];
         if (_parent == _subtitle_size || mi == _subtitle_size           ||

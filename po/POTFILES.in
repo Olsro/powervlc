@@ -499,7 +499,7 @@ modules/gui/legacy_macosx/VLCLegacyOutput.m
 modules/gui/legacy_macosx/VLCLegacyPrefs.h
 modules/gui/legacy_macosx/VLCLegacyPrefs.m
 modules/gui/legacy_macosx/VLCLegacySystemVolume.h
-modules/gui/legacy_macosx/VLCLegacySystemVolume.m
+modules/gui/legacy_macosx/VLCLegacySystemVolume.c
 modules/gui/legacy_macosx/VLCLegacyTrackSync.h
 modules/gui/legacy_macosx/VLCLegacyTrackSync.m
 modules/gui/legacy_macosx/VLCLegacyVideoEffects.h

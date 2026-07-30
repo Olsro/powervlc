@@ -41,6 +41,7 @@
 #include <vlc_playlist.h>
 #include <vlc_modules.h>
 #include <vlc_input.h>
+#include <vlc_intf_strings.h>
 #include <vlc_vout.h>
 #include <vlc_aout.h>
 #include <vlc_actions.h>
@@ -582,6 +583,11 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     programMenu = [self addDynamicMenuTo:playMenu title:_NS("Program")];
     titleMenu = [self addDynamicMenuTo:playMenu title:_NS("Title")];
     chapterMenu = [self addDynamicMenuTo:playMenu title:_NS("Chapter")];
+    /* Blu-ray pop-up menu: drawn by the disc over the running movie, so it is
+     * a plain item next to Title/Chapter rather than a submenu. Greyed out
+     * unless the title being played carries one (see -validateMenuItem:). */
+    [self addItemTo:playMenu title:_NS(I_MENU_DISC_POPUP)
+             action:@selector(showDiscPopupMenu:) key:@""];
 
     /* --- Audio --- */
     NSMenu *audioMenu = [self addMenuTo:menubar title:_NS("Audio")];
@@ -842,6 +848,12 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
                                           title:_NS("Video Track")];
     voutSubtitleTrackMenu = [self addDynamicMenuTo:voutMenu
                                              title:_NS("Subtitles Track")];
+    /* the only way to reach the Blu-ray pop-up menu in fullscreen, where the
+     * menu bar is out of reach (besides the key-disc-popup-menu hotkey); set
+     * apart by a separator, it acts on the disc and not on our playback */
+    [voutMenu addItem:[NSMenuItem separatorItem]];
+    [self addItemTo:voutMenu title:_NS(I_MENU_DISC_POPUP)
+             action:@selector(showDiscPopupMenu:) key:@""];
     [voutMenu addItem:[NSMenuItem separatorItem]];
     [self addItemTo:voutMenu title:_NS("Fullscreen")
              action:@selector(toggleFullscreen:) key:@""];
@@ -1359,6 +1371,17 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
 - (void)jump:(id)sender               { [core jumpWithSeconds:(int)[sender tag]]; }
 - (void)jumpToTime:(id)sender         { [mainWindow showJumpToTimePanel]; }
 - (void)toggleRecord:(id)sender       { [core toggleRecord]; }
+
+/* Blu-ray pop-up menu (INPUT_NAV_POPUP), not the disc root menu */
+- (void)showDiscPopupMenu:(id)sender
+{
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (!p_input)
+        return;
+    input_ShowPopupMenu(p_input);
+    vlc_object_release(p_input);
+}
+
 - (void)toggleAtoBLoop:(id)sender     { [core setAtoB]; }
 - (void)showConvertAndSave:(id)sender { [convertAndSave showWindow]; }
 
@@ -1641,6 +1664,18 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     return YES;
 }
 
+/* Only the Blu-ray titles carrying a pop-up menu offer one; the demuxer
+ * publishes it on the input (see INPUT_POPUP_MENU_VAR). */
+- (BOOL)hasDiscPopupMenu
+{
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (!p_input)
+        return NO;
+    BOOL b_available = input_HasPopupMenu(p_input) ? YES : NO;
+    vlc_object_release(p_input);
+    return b_available;
+}
+
 - (BOOL)hasVout
 {
     input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
@@ -1734,6 +1769,8 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
             || action == @selector(snapshot:)
             || action == @selector(toggleFullscreen:)) {
         return [self hasVout];
+    } else if (action == @selector(showDiscPopupMenu:)) {
+        return [self hasDiscPopupMenu];
     } else if (action == @selector(addSubtitleFile:)
             || action == @selector(inputDependentParent:)) {
         return [self hasInput];

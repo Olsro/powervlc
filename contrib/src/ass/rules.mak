@@ -15,8 +15,11 @@ WITH_FONTCONFIG = 0
 WITH_HARFBUZZ = 0
 else
 ifdef HAVE_DARWIN_OS
-WITH_FONTCONFIG = 0
-WITH_CORETEXT = 1
+# Was 0 while the contrib was stuck on fontconfig 2.12.3, which aborts on a
+# current macOS (see contrib/src/fontconfig). With 2.16.0 libass can use the
+# system fonts here like it does everywhere else, instead of falling back to
+# whatever the subtitle track happens to embed.
+WITH_FONTCONFIG = 1
 else
 ifdef HAVE_WINSTORE
 WITH_FONTCONFIG = 0

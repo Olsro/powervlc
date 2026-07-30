@@ -726,6 +726,12 @@ QMenu *VLCMenuBar::NavigMenu( intf_thread_t *p_intf, QMenu *menu )
     submenu->setTearOffEnabled( true );
     addActionWithSubmenu( menu, "program", qtr( "&Program" ) );
 
+    /* Blu-ray pop-up menu: enabled by RebuildNavigMenu() only while the disc
+     * actually offers one */
+    action = addMIMStaticEntry( p_intf, menu, qtr( I_MENU_DISC_POPUP ), "",
+                                SLOT( discPopupMenu() ) );
+    action->setObjectName( "disc-popup-menu" );
+
     submenu = new QMenu( qtr( I_MENU_BOOKMARK ), menu );
     submenu->setTearOffEnabled( true );
     addDPStaticEntry( submenu, qtr( "&Manage" ), "",
@@ -769,6 +775,13 @@ QMenu *VLCMenuBar::RebuildNavigMenu( intf_thread_t *p_intf, QMenu *menu, bool b_
 
     /* */
     EnableStaticEntries( menu, (p_object != NULL ) );
+
+    /* A Blu-ray only draws its pop-up menu over the titles that carry one;
+     * everything else (files, DVDs) never has one. */
+    QAction *popupAction = menu->findChild<QAction *>( "disc-popup-menu" );
+    if( popupAction )
+        popupAction->setEnabled( input_HasPopupMenu( p_object ) );
+
     Populate( p_intf, menu, varnames, objects );
 
     /* Remove playback actions to recreate them */

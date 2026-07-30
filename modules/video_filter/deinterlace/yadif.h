@@ -40,7 +40,26 @@ const ATTR_USED alignas (16) xmm_reg pw_1 = {
     0x0001000100010001ULL, 0x0001000100010001ULL
 };
 
-#ifdef CAN_COMPILE_SSSE3
+/* None of the x86 instantiations below can be built for 32-bit x86 with a
+ * modern compiler. yadif_template.h's FILTER keeps eight named operands plus
+ * the four frame pointers live at once, which needs more general registers
+ * than i386 has; GCC 13 rejects every instantiation with
+ *   yadif_template.h:134: error: 'asm' operand has impossible constraints
+ * (measured on i686-apple-darwin8 / GCC 13.4: SSSE3 first, then SSE2 once
+ * SSSE3 was excluded -- so it is the register pressure, not one instruction
+ * set). The C fallback further down is used instead, which is what this
+ * target has always shipped: CAN_COMPILE_* were never set in its old build
+ * directory, so the asm was silently absent rather than broken.
+ *
+ * Guarded per instantiation rather than around the whole block so that x86_64
+ * and every other target keep all three. */
+#if defined(__i386__)
+# define VLC_YADIF_X86_ASM 0
+#else
+# define VLC_YADIF_X86_ASM 1
+#endif
+
+#if defined(CAN_COMPILE_SSSE3) && VLC_YADIF_X86_ASM
 #if defined(__SSE__) || defined(__GNUC__) || defined(__clang__)
 // ================ SSSE3 =================
 #define HAVE_YADIF_SSSE3
@@ -56,7 +75,7 @@ const ATTR_USED alignas (16) xmm_reg pw_1 = {
 #endif
 #endif
 
-#ifdef CAN_COMPILE_SSE2
+#if defined(CAN_COMPILE_SSE2) && VLC_YADIF_X86_ASM
 #if defined(__SSE__) || defined(__GNUC__) || defined(__clang__)
 // ================= SSE2 =================
 #define HAVE_YADIF_SSE2
@@ -70,7 +89,7 @@ const ATTR_USED alignas (16) xmm_reg pw_1 = {
 #endif
 #endif
 
-#ifdef CAN_COMPILE_MMX
+#if defined(CAN_COMPILE_MMX) && VLC_YADIF_X86_ASM
 #if defined(__MMX__) || defined(__GNUC__) || defined(__clang__)
 // ================ MMX =================
 #define HAVE_YADIF_MMX

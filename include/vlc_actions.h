@@ -244,6 +244,9 @@ typedef enum vlc_action_id {
     /* Combo Actions */
     ACTIONID_COMBO_VOL_FOV_UP,
     ACTIONID_COMBO_VOL_FOV_DOWN,
+    /* Blu-ray pop-up menu (drawn over the running movie, unlike the disc
+     * root menu of ACTIONID_DISC_MENU) */
+    ACTIONID_DISC_POPUP_MENU,
 
 } vlc_action_id_t;
 

@@ -10,11 +10,33 @@ ifeq ($(call need_pkg,"libbluray >= 1.0.0"),)
 PKGS_FOUND += bluray
 endif
 
+# fontconfig is what resolves a BD-J font *family* ("SansSerif", the name a
+# menu asks for) to a font *file*. Without it
+# Java_java_awt_BDFontMetrics_resolveFontN() has no backend on Darwin -- there
+# is a Win32 one, and nothing else -- so it logs "BD-J font config support not
+# compiled in" and returns NULL for every lookup. Discs that ship their own
+# fonts in BDMV/AUXDATA are unaffected, but the ones that rely on the player's
+# (measured: BDMV/AUXDATA is empty on the BD-J disc tested here) then draw
+# their menus with no text at all.
+#
+# On Darwin this is a prerequisite for BD-J menus, not a nicety. Measured on a
+# BD-J disc whose BDMV/AUXDATA is empty (so it carries no font of its own):
+# with fontconfig off, resolveFontN() has no backend at all on this platform
+# -- there is a Win32 one and nothing else -- so every family lookup returns
+# NULL, BD-J falls back to the JVM's own Lucida fonts which modern JDKs no
+# longer ship, and the menu xlet ends up unable to draw a single pixel:
+#   24 x "ERROR: Can't resolve font ..."  (the only errors in the whole log)
+#   BDRootWindow: sync() ignored (overlay not open, empty overlay)
+# libbluray deliberately withholds the overlay until something is drawn, so
+# nothing is ever displayed even though BD-J itself started correctly.
+#
+# Switching it on was blocked until now by fontconfig 2.12.3 crashing on a
+# current macOS; contrib/src/fontconfig moved to 2.16.0 for this.
 ifdef HAVE_ANDROID
 WITH_FONTCONFIG = 0
 else
 ifdef HAVE_DARWIN_OS
-WITH_FONTCONFIG = 0
+WITH_FONTCONFIG = 1
 else
 ifdef HAVE_WIN32
 WITH_FONTCONFIG = 0
@@ -173,6 +195,10 @@ bluray: libbluray-$(BLURAY_VERSION).tar.xz .sum-bluray
 	$(APPLY) $(SRC)/bluray/0003-macos-load-Apple-Java-6-through-the-JavaVM-framework.patch
 	$(APPLY) $(SRC)/bluray/0004-bdj-run-on-java-5.patch
 	$(APPLY) $(SRC)/bluray/0005-add-bd_open_stream_dev.patch
+	$(APPLY) $(SRC)/bluray/0006-macos-java_home-probe-survives-a-host-that-reaps-children.patch
+	$(APPLY) $(SRC)/bluray/0007-macos-find-libjli-in-the-modern-jdk-layout.patch
+	$(APPLY) $(SRC)/bluray/0008-bdj-leave-PRESENT-applications-unloaded.patch
+	$(APPLY) $(SRC)/bluray/0009-bdj-materialise-bd-rom-files-without-a-security-manager.patch
 	$(MOVE)
 
 .bluray: MESON_EXTRA_ENV = $(BLURAY_JAVA_ENV)

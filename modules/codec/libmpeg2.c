@@ -294,41 +294,42 @@ static void DpbUnlinkPicture( decoder_t *, picture_t * );
 static int DpbDisplayPicture( decoder_t *, picture_t * );
 
 #ifdef __APPLE__
-#define MPEG2_HWACCEL_TEXT N_("Utiliser l'accélération matérielle MPEG2 si disponible")
+#define MPEG2_HWACCEL_TEXT N_("Use MPEG-2 hardware acceleration when available")
 #define MPEG2_HWACCEL_LONGTEXT N_( \
-    "Décode les flux MPEG-2 sur le GPU (pipeline AppleVA du lecteur DVD d'Apple) " \
-    "quand un décodeur matériel est présent (ATI, Intel GMA950, nVidia), avec " \
-    "repli automatique sur le décodage logiciel libmpeg2. Réduit fortement la " \
-    "charge CPU sur les vieux Mac." )
-#define MPEG2_HWACCEL_FIELD_TEXT N_("Mode field du décodage MPEG-2 matériel (avancé)")
+    "Decode MPEG-2 streams on the GPU (the AppleVA pipeline of Apple's DVD " \
+    "Player) whenever a hardware decoder is present (ATI, Intel GMA950, " \
+    "nVidia), falling back to the libmpeg2 software decoder automatically. " \
+    "Cuts CPU load dramatically on old Macs." )
+#define MPEG2_HWACCEL_FIELD_TEXT N_("Field mode of the MPEG-2 hardware decoder (advanced)")
 #define MPEG2_HWACCEL_FIELD_LONGTEXT N_( \
-    "Décodage matériel des macroblocs field-predicted (flux entrelacés, DVD). " \
-    "0 = désactivé (l'entrelacé retombe sur le processeur) ; 4 = prédiction " \
-    "frame équivalente (défaut : le moteur par champ du GPU déchire en " \
-    "mouvement) ; 1/2/3 = moteur par champ natif, réservés à la mise au point." )
-#define MPEG2_HWACCEL_SUBS_TEXT N_("Sous-titres et OSD par-dessus la vidéo accélérée")
+    "Hardware decoding of field-predicted macroblocks (interlaced streams, " \
+    "DVD). 0 = off (interlaced content falls back to the processor); " \
+    "4 = equivalent frame prediction (the default: the field engine of the " \
+    "GPU tears on motion); 1/2/3 = native field engine, for debugging only." )
+#define MPEG2_HWACCEL_SUBS_TEXT N_("Subtitles and OSD over hardware-accelerated video")
 #define MPEG2_HWACCEL_SUBS_LONGTEXT N_( \
-    "Compose les sous-titres (SPU du DVD) et l'affichage à l'écran par-dessus " \
-    "l'image décodée par le GPU. Sans cette option, la sortie matérielle " \
-    "recouvre tout et les sous-titres restent invisibles. Ne concerne que la " \
-    "vidéo affichée dans la fenêtre de VLC." )
-#define MPEG2_ASYNC_TEXT N_("Soumission GPU asynchrone (avancé)")
+    "Compose the subtitles (DVD SPU) and the on-screen display over the " \
+    "picture decoded by the GPU. Without this option the hardware output " \
+    "covers everything and subtitles stay invisible. Only affects the video " \
+    "shown in the VLC window." )
+#define MPEG2_ASYNC_TEXT N_("Asynchronous GPU submission (advanced)")
 #define MPEG2_ASYNC_LONGTEXT N_( \
-    "Fait l'appel DVDDriverDecode sur un thread dédié pour que la VLD de " \
-    "l'image suivante tourne pendant que le GPU travaille. Mesuré sur " \
-    "l'iBook G3 : Decode est du temps bloqué dans le pilote, le recouvrir " \
-    "supprime le déficit du budget de 40 ms par image." )
-#define MPEG2_102MODS_TEXT N_("Modifications du portage 10.2 sur le chemin matériel (avancé)")
+    "Issue the DVDDriverDecode call on a dedicated thread, so that the VLD " \
+    "of the next picture runs while the GPU works. Measured on the iBook G3: " \
+    "Decode is time spent blocked in the driver, and overlapping it removes " \
+    "the shortfall in the 40 ms per picture budget." )
+#define MPEG2_102MODS_TEXT N_("10.2 port changes on the hardware path (advanced)")
 #define MPEG2_102MODS_LONGTEXT N_( \
-    "-1 = automatique (actives sur Mac OS X 10.2 et 10.3, inactives à partir " \
-    "de 10.4, où elles remplaçaient un comportement validé sur place), " \
-    "0 = inactives, 1 = actives." )
-#define MPEG2_HWSUBS_TEXT N_("Sous-titres DVD incrustés par le GPU")
+    "-1 = automatic (on under Mac OS X 10.2 and 10.3, off from 10.4 on, " \
+    "where they replaced behaviour validated on the machine itself), " \
+    "0 = off, 1 = on." )
+#define MPEG2_HWSUBS_TEXT N_("DVD subtitles drawn by the GPU")
 #define MPEG2_HWSUBS_LONGTEXT N_( \
-    "Confie les sous-titres du DVD au plan subpicture du décodeur matériel ATI : " \
-    "le GPU les compose lui-même sur l'image, sans aucun coût par image, là où " \
-    "l'incrustation par fenêtre coûte 15 à 50 ms sur ce matériel. Sans effet si " \
-    "le décodage matériel n'est pas actif — le rendu logiciel prend alors le relais." )
+    "Hand the DVD subtitles to the subpicture plane of the ATI hardware " \
+    "decoder: the GPU composes them onto the picture itself, at no per-picture " \
+    "cost, where drawing them through a window costs 15 to 50 ms on this " \
+    "hardware. No effect while hardware decoding is off, as software rendering " \
+    "then takes over." )
 #endif
 
 /*****************************************************************************

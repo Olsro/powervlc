@@ -259,7 +259,8 @@ access_LTLIBRARIES += $(LTLIBdvdread)
 EXTRA_LTLIBRARIES += libdvdread_plugin.la
 
 liblibbluray_plugin_la_SOURCES = access/bluray.c demux/mpeg/timestamps.h \
-	access/bluray_darwin_disc.c access/bluray_darwin_disc.h
+	access/bluray_darwin_disc.c access/bluray_darwin_disc.h \
+	access/bluray_keydb.c access/bluray_keydb.h
 liblibbluray_plugin_la_CFLAGS = $(AM_CFLAGS) $(BLURAY_CFLAGS)
 liblibbluray_plugin_la_LIBADD = $(BLURAY_LIBS)
 liblibbluray_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(accessdir)'

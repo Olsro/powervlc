@@ -14,11 +14,28 @@ libmpeg2 (modules/codec/libmpeg2.c + dvddriver_backend.c):
                                         predictions, for the HW descriptors
   - mb_begin gains "mv" and "field_select" arguments
 
+  - mpeg2_hw_rl / mpeg2_hw_rl_n / mpeg2_hw_rl_on / mpeg2_set_hw_rl()
+                                        run/level pairs captured during the
+                                        VLD itself, so the backend does not
+                                        have to rescan the 64 DCTblock
+                                        positions per block (PC-sampled at
+                                        54 % of mpeg2_slice on the iBook G3)
+
 Until now these lived only as hand edits inside the per-triple contrib
 staging directories, so any contrib clean silently reverted the hardware
 decoder to a state where modules/codec/libmpeg2.c fails to compile
 ("unknown type name 'mpeg2_hwaccel_t'").  Keeping them here makes every
 contrib prefix reproducible from a clean tree.
+
+The run/level part was still one of those hand edits as of 2026-07-30: the
+five legacy prefixes (i686 and the four PowerPC ones) carried it in their
+unpacked slice.c while no committed patch did, even though
+modules/codec/libmpeg2.c already declares the four symbols extern and calls
+them.  It only kept building because the libmpeg2 codec plugin is built for
+exactly those slices and not for arm64/x86_64 -- a clean tree, another build
+machine, or deleting a .libmpeg2 stamp would all have produced an
+undefined-symbol link failure.  Regenerated here from the contrib sources so
+the patch reproduces them byte for byte.
 
 --- a/include/mpeg2.h
 +++ b/include/mpeg2.h
@@ -103,11 +120,10 @@ contrib prefix reproducible from a clean tree.
  
  #include "mpeg2.h"
  #include "attributes.h"
-@@ -36,6 +39,56 @@
- 				uint8_t * dest, int stride);
+@@ -37,6 +40,80 @@
  extern void (* mpeg2_cpu_state_save) (cpu_state_t * state);
  extern void (* mpeg2_cpu_state_restore) (cpu_state_t * state);
-+
+ 
 +/* PowerVLC : enregistre (ou retire, hw==NULL) les callbacks de capture pour le
 + * décodage MPEG-2 accéléré matériel (AppleVA). Cf. mpeg2.h / mpeg2_internal.h. */
 +void mpeg2_hwaccel (mpeg2dec_t * mpeg2dec, const mpeg2_hwaccel_t * hw)
@@ -138,6 +154,30 @@ contrib prefix reproducible from a clean tree.
 +static int mpeg2_hw_replace = 0;
 +void mpeg2_set_hw_replace (int on) { mpeg2_hw_replace = on; }
 +
++/* PowerVLC — capture run/level AU FIL de la VLD (chemin materiel).
++ * Mesure au PC-sampling sur l'iBook G3 : 54 % du temps de mpeg2_slice partait
++ * dans le re-balayage des 64 positions du DCTblock par dvddriver_encode_block.
++ * La VLD produit deja (position zigzag, valeur dequantifiee) : on les range ici
++ * au moment du store, le backend les consomme tels quels. Un seul decodeur
++ * materiel a la fois (garanti cote backend) -> globals sans verrou. */
++int16_t mpeg2_hw_rl[68][2];
++int     mpeg2_hw_rl_n = 0;
++int     mpeg2_hw_rl_on = 0;
++static int mpeg2_hw_rl_want = 0;
++void mpeg2_set_hw_rl (int on) { mpeg2_hw_rl_want = on; }
++#define HW_RL_PUT(pos, v) do { if (mpeg2_hw_rl_on && mpeg2_hw_rl_n < 66) { \
++	mpeg2_hw_rl[mpeg2_hw_rl_n][0] = (int16_t)(pos); \
++	mpeg2_hw_rl[mpeg2_hw_rl_n][1] = (int16_t)(v); mpeg2_hw_rl_n++; } } while (0)
++/* Le controle de parite MPEG-2 peut basculer dest[63] APRES la boucle :
++ * resynchroniser la paire 63 sur la valeur finale (zigzag 63 == raster 63
++ * dans les deux ordres de scan). */
++#define HW_RL_FIX63(d) do { if (mpeg2_hw_rl_on) { \
++	if (mpeg2_hw_rl_n > 0 && mpeg2_hw_rl[mpeg2_hw_rl_n-1][0] == 63) \
++	    mpeg2_hw_rl[mpeg2_hw_rl_n-1][1] = (d)[63]; \
++	else if ((d)[63] != 0 && mpeg2_hw_rl_n < 66) { \
++	    mpeg2_hw_rl[mpeg2_hw_rl_n][0] = 63; \
++	    mpeg2_hw_rl[mpeg2_hw_rl_n][1] = (d)[63]; mpeg2_hw_rl_n++; } } } while (0)
++
 +/* PowerVLC 2a — classification progressif/entrelacé au niveau HEADER (voir
 + * mpeg2.h). frame_pred_frame_dct est posé par header.c au parse de la picture
 + * coding extension, AVANT tout décodage de slice → disponible et exact à
@@ -157,10 +197,94 @@ contrib prefix reproducible from a clean tree.
 +static mpeg2_mc_fct * const mpeg2_hw_mc_noop[8] = {
 +    mpeg2_mc_noop, mpeg2_mc_noop, mpeg2_mc_noop, mpeg2_mc_noop,
 +    mpeg2_mc_noop, mpeg2_mc_noop, mpeg2_mc_noop, mpeg2_mc_noop };
- 
++
  #include "vlc.h"
  
-@@ -951,7 +1004,21 @@
+ static inline int get_macroblock_modes (mpeg2_decoder_t * const decoder)
+@@ -384,6 +461,7 @@
+ 	    SATURATE (val);
+ 	    dest[j] = val;
+ 	    mismatch ^= val;
++	    HW_RL_PUT (i, val);
+ 
+ 	    bit_buf <<= 1;
+ 	    NEEDBITS (bit_buf, bits, bit_ptr);
+@@ -413,6 +491,7 @@
+ 	    SATURATE (val);
+ 	    dest[j] = val;
+ 	    mismatch ^= val;
++	    HW_RL_PUT (i, val);
+ 
+ 	    DUMPBITS (bit_buf, bits, 12);
+ 	    NEEDBITS (bit_buf, bits, bit_ptr);
+@@ -445,6 +524,7 @@
+ 	break;	/* illegal, check needed to avoid buffer overflow */
+     }
+     dest[63] ^= mismatch & 16;
++    HW_RL_FIX63 (dest);
+     DUMPBITS (bit_buf, bits, tab->len);	/* dump end of block code */
+     decoder->bitstream_buf = bit_buf;
+     decoder->bitstream_bits = bits;
+@@ -494,6 +574,7 @@
+ 		SATURATE (val);
+ 		dest[j] = val;
+ 		mismatch ^= val;
++		HW_RL_PUT (i, val);
+ 
+ 		bit_buf <<= 1;
+ 		NEEDBITS (bit_buf, bits, bit_ptr);
+@@ -522,6 +603,7 @@
+ 		SATURATE (val);
+ 		dest[j] = val;
+ 		mismatch ^= val;
++		HW_RL_PUT (i, val);
+ 
+ 		DUMPBITS (bit_buf, bits, 12);
+ 		NEEDBITS (bit_buf, bits, bit_ptr);
+@@ -555,6 +637,7 @@
+ 	break;	/* illegal, check needed to avoid buffer overflow */
+     }
+     dest[63] ^= mismatch & 16;
++    HW_RL_FIX63 (dest);
+     DUMPBITS (bit_buf, bits, tab->len);	/* dump end of block code */
+     decoder->bitstream_buf = bit_buf;
+     decoder->bitstream_bits = bits;
+@@ -611,6 +694,7 @@
+ 	    SATURATE (val);
+ 	    dest[j] = val;
+ 	    mismatch ^= val;
++	    HW_RL_PUT (i, val);
+ 
+ 	    bit_buf <<= 1;
+ 	    NEEDBITS (bit_buf, bits, bit_ptr);
+@@ -644,6 +728,7 @@
+ 	    SATURATE (val);
+ 	    dest[j] = val;
+ 	    mismatch ^= val;
++	    HW_RL_PUT (i, val);
+ 
+ 	    DUMPBITS (bit_buf, bits, 12);
+ 	    NEEDBITS (bit_buf, bits, bit_ptr);
+@@ -676,6 +761,7 @@
+ 	break;	/* illegal, check needed to avoid buffer overflow */
+     }
+     dest[63] ^= mismatch & 16;
++    HW_RL_FIX63 (dest);
+     DUMPBITS (bit_buf, bits, tab->len);	/* dump end of block code */
+     decoder->bitstream_buf = bit_buf;
+     decoder->bitstream_bits = bits;
+@@ -944,6 +1030,10 @@
+ 	decoder->DCTblock[0] =
+ 	    decoder->dc_dct_pred[cc] += get_chroma_dc_dct_diff (decoder);
+ 
++    mpeg2_hw_rl_n = 0;
++    mpeg2_hw_rl_on = (mpeg2_hw_rl_want && decoder->hw_block != 0
++		      && decoder->hw_capture && !decoder->mpeg1);
++    HW_RL_PUT (0, decoder->DCTblock[0]);	/* DC intra, meme nul (dc_bias) */
+     if (decoder->mpeg1) {
+ 	if (decoder->coding_type != D_TYPE)
+ 	    get_mpeg1_intra_block (decoder);
+@@ -951,7 +1041,21 @@
  	get_intra_block_B15 (decoder, decoder->quantizer_matrix[cc ? 2 : 0]);
      else
  	get_intra_block_B14 (decoder, decoder->quantizer_matrix[cc ? 2 : 0]);
@@ -183,7 +307,15 @@ contrib prefix reproducible from a clean tree.
  #undef bit_buf
  #undef bits
  #undef bit_ptr
-@@ -968,7 +1035,17 @@
+@@ -963,12 +1067,25 @@
+ {
+     int last;
+ 
++    mpeg2_hw_rl_n = 0;
++    mpeg2_hw_rl_on = (mpeg2_hw_rl_want && decoder->hw_block != 0
++		      && decoder->hw_capture && !decoder->mpeg1);
+     if (decoder->mpeg1)
+ 	last = get_mpeg1_non_intra_block (decoder);
      else
  	last = get_non_intra_block (decoder,
  				    decoder->quantizer_matrix[cc ? 3 : 1]);
@@ -202,7 +334,7 @@ contrib prefix reproducible from a clean tree.
  }
  
  #define MOTION_420(table,ref,motion_x,motion_y,size,y)			      \
-@@ -1326,6 +1403,7 @@
+@@ -1326,6 +1443,7 @@
      /* motion_y = bound_motion_vector (motion_y, motion->f_code[1]); */	      \
      motion->pmv[0][1] = motion_y << 1;					      \
  									      \
@@ -210,7 +342,7 @@ contrib prefix reproducible from a clean tree.
      MOTION_FIELD (table, motion->ref[0], motion_x, motion_y, 0, & ~1, field); \
  									      \
      NEEDBITS (bit_buf, bits, bit_ptr);					      \
-@@ -1343,6 +1421,7 @@
+@@ -1343,6 +1461,7 @@
      /* motion_y = bound_motion_vector (motion_y, motion->f_code[1]); */	      \
      motion->pmv[1][1] = motion_y << 1;					      \
  									      \
@@ -218,7 +350,7 @@ contrib prefix reproducible from a clean tree.
      MOTION_FIELD (table, motion->ref[0], motion_x, motion_y, 1, & ~1, field); \
  }									      \
  									      \
-@@ -1552,14 +1631,22 @@
+@@ -1552,14 +1671,22 @@
  #undef bits
  #undef bit_ptr
  
@@ -243,7 +375,7 @@ contrib prefix reproducible from a clean tree.
  } while (0)
  
  #define NEXT_MACROBLOCK							\
-@@ -1784,6 +1871,10 @@
+@@ -1784,6 +1911,10 @@
  #undef bit_ptr
  }
  
@@ -254,7 +386,7 @@ contrib prefix reproducible from a clean tree.
  void mpeg2_slice (mpeg2_decoder_t * const decoder, const int code,
  		  const uint8_t * const buffer)
  {
-@@ -1797,6 +1888,18 @@
+@@ -1797,6 +1928,18 @@
      if (slice_init (decoder, code))
  	return;
  
@@ -273,7 +405,7 @@ contrib prefix reproducible from a clean tree.
      if (mpeg2_cpu_state_save)
  	mpeg2_cpu_state_save (&cpu_state);
  
-@@ -1819,6 +1922,11 @@
+@@ -1819,6 +1962,11 @@
  	    int offset;
  	    uint8_t * dest_y;
  
@@ -285,7 +417,7 @@ contrib prefix reproducible from a clean tree.
  	    if (decoder->concealment_motion_vectors) {
  		if (decoder->picture_structure == FRAME_PICTURE)
  		    motion_fr_conceal (decoder);
-@@ -1880,6 +1988,7 @@
+@@ -1880,6 +2028,7 @@
  	} else {
  
  	    motion_parser_t * parser;
@@ -293,11 +425,10 @@ contrib prefix reproducible from a clean tree.
  
  	    if (   ((macroblock_modes >> MOTION_TYPE_SHIFT) < 0)
                  || ((macroblock_modes >> MOTION_TYPE_SHIFT) >=
-@@ -1892,6 +2001,34 @@
- 	    parser =
+@@ -1893,6 +2042,34 @@
  		decoder->motion_parser[macroblock_modes >> MOTION_TYPE_SHIFT];
  	    MOTION_CALL (parser, macroblock_modes);
-+
+ 
 +	    /* PowerVLC : MV du MB courant (demi-pel ; pmv accumulé par MOTION_CALL).
 +	     * Ordre driver : fwd0.xy, bwd0.xy, fwd1.xy, bwd1.xy. */
 +	    if (decoder->hw_capture) {
@@ -325,10 +456,11 @@ contrib prefix reproducible from a clean tree.
 +		    hw_fsel[3] = (uint8_t) decoder->b_motion.hw_fsel[1];
 +		}
 +	    }
- 
++
  	    if (macroblock_modes & MACROBLOCK_PATTERN) {
  		int coded_block_pattern;
-@@ -1907,6 +2044,13 @@
+ 		int DCT_offset, DCT_stride;
+@@ -1907,6 +2084,13 @@
  
  		coded_block_pattern = get_coded_block_pattern (decoder);
  
@@ -342,7 +474,7 @@ contrib prefix reproducible from a clean tree.
  		if (likely (decoder->chroma_format == 0)) {
  		    int offset = decoder->offset;
  		    uint8_t * dest_y = decoder->dest[0] + offset;
-@@ -2021,11 +2165,21 @@
+@@ -2021,11 +2205,21 @@
  					     DCT_stride);
  		}
  	    }
@@ -364,7 +496,7 @@ contrib prefix reproducible from a clean tree.
  	NEXT_MACROBLOCK;
  
  	NEEDBITS (bit_buf, bits, bit_ptr);
-@@ -2062,11 +2216,42 @@
+@@ -2062,11 +2256,42 @@
  		do {
  		    MOTION_CALL (decoder->motion_parser[0],
  				 MACROBLOCK_MOTION_FORWARD);

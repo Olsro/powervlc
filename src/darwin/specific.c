@@ -95,17 +95,36 @@ void system_Init(void)
                  * anglais alors que le système est en français. On canonicalise
                  * donc en code de langue ; la fonction n'existant pas partout,
                  * une petite table couvre les noms courants en dernier ressort. */
-                CFStringRef (*canonicalize)( CFAllocatorRef, CFStringRef ) =
-                    CFLocaleCreateCanonicalLanguageIdentifierFromString;
-                CFStringRef canonical = ( canonicalize != NULL )
-                    ? canonicalize( NULL, user_language_string_ref ) : NULL;
-
-                CFStringGetCString( canonical ? canonical
-                                              : user_language_string_ref,
+                CFStringGetCString( user_language_string_ref,
                                     psz_locale, sizeof(psz_locale),
                                     kCFStringEncodingUTF8 );
-                if ( canonical != NULL )
-                    CFRelease( canonical );
+
+                /* ⚠ Ne canonicaliser QUE si l'on a bien un nom en clair, et
+                 * jamais un identifiant qui est déjà utilisable.
+                 * CFLocaleCreateCanonicalLanguageIdentifierFromString() rend un
+                 * identifiant BCP-47 : sur un système moderne elle transforme
+                 * le « fr_FR » parfaitement valable renvoyé au-dessus en
+                 * « fr-FR », et gettext ne découpe que sur '_', '.' et '@' --
+                 * il cherche alors share/locale/fr-FR/, qui n'existe pas (seul
+                 * fr/ existe) et retombe en anglais. Mesuré : un Mac réglé en
+                 * français affichait un lecteur en anglais. */
+                if ( strlen( psz_locale ) > 3
+                  && strchr( psz_locale, '_' ) == NULL
+                  && strchr( psz_locale, '-' ) == NULL )
+                {
+                    CFStringRef (*canonicalize)( CFAllocatorRef, CFStringRef ) =
+                        CFLocaleCreateCanonicalLanguageIdentifierFromString;
+                    CFStringRef canonical = ( canonicalize != NULL )
+                        ? canonicalize( NULL, user_language_string_ref ) : NULL;
+
+                    if ( canonical != NULL )
+                    {
+                        CFStringGetCString( canonical, psz_locale,
+                                            sizeof(psz_locale),
+                                            kCFStringEncodingUTF8 );
+                        CFRelease( canonical );
+                    }
+                }
 
                 /* Toujours un nom en clair (10.2, ou canonicalisation muette) ? */
                 if ( strlen( psz_locale ) > 3 && strchr( psz_locale, '_' ) == NULL )
@@ -132,6 +151,18 @@ void system_Init(void)
                             break;
                         }
                 }
+                /* Filet de sécurité : quoi qu'il arrive, gettext veut un nom
+                 * POSIX. Une étiquette BCP-47 qui aurait survécu ("fr-FR",
+                 * "zh-Hans-CN") est ramenée à language[_TERRITORY]. */
+                char *p_sep = strchr( psz_locale, '-' );
+                if ( p_sep != NULL )
+                {
+                    *p_sep = '_';
+                    char *p_next = strchr( p_sep + 1, '-' );
+                    if ( p_next != NULL )
+                        *p_next = '\0';
+                }
+
                 setenv( "LANG", psz_locale, 1 );
             }
             CFRelease( preferred_locales );

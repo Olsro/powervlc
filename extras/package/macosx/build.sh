@@ -592,6 +592,17 @@ make .bluray
 make .aacs
 make .bdplus
 
+# fontconfig and libass for the same reason, and specifically because both
+# changed with the move to fontconfig 2.16.0: libbluray needs fontconfig to
+# resolve BD-J menu fonts on Darwin (without it a disc that ships no font of
+# its own draws its menus with no text at all), and libass was switched from
+# "no font provider on this platform" to using the system fonts like it does
+# everywhere else. Neither is rebuilt by anything above in the non -c path, so
+# a prefix built before the change would keep a fontconfig-less libass and a
+# libbluray that cannot link against the new one.
+make .fontconfig
+make .ass
+
 # Same reasoning for ffmpeg, which carries the PowerPC H.264 patches in
 # contrib/src/ffmpeg/000*-ppc-*: without this the prefix built before those
 # patches existed is reused for ever, and the build still reports success --
@@ -678,6 +689,25 @@ fi
 #
 
 CONFIGFLAGS=""
+
+# VLC's configure turns AltiVec on for every host_cpu matching powerpc*, which
+# is wrong for the G3 (750): it has no vector unit, and this target is built
+# with -mcpu=750 and no -maltivec. The probe still succeeds -- it only asks the
+# *assembler* about "vperm", and that answers yes (via -Wa,-maltivec) -- so
+# CAN_COMPILE_ALTIVEC gets defined and the C intrinsics are then compiled
+# without -maltivec:
+#   i420_yuy2.c: implicit declaration of function 'vec_ld'
+#   algo_x.c:    AltiVec argument passed to unprototyped function
+# The G4/G5 slices are unaffected: they set LEGACY_PPC_ALTIVEC and do pass
+# -maltivec. So gate on that rather than on the CPU family.
+case "$HOST_TRIPLET" in
+    powerpc-*)
+        if [ "$LEGACY_PPC_ALTIVEC" != "yes" ]; then
+            CONFIGFLAGS="$CONFIGFLAGS --disable-altivec"
+        fi
+        ;;
+esac
+
 if [ ! -z "$BREAKPAD" ]; then
      CONFIGFLAGS="$CONFIGFLAGS --with-breakpad=$BREAKPAD"
 fi
