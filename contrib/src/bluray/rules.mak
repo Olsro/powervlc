@@ -1,6 +1,6 @@
 # LIBBLURAY
 
-BLURAY_VERSION := 1.4.0
+BLURAY_VERSION := 1.5.0
 BLURAY_URL := $(VIDEOLAN)/libbluray/$(BLURAY_VERSION)/libbluray-$(BLURAY_VERSION).tar.xz
 
 ifdef BUILD_DISCS
@@ -35,16 +35,25 @@ DEPS_bluray = libxml2 $(DEPS_libxml2) freetype2 $(DEPS_freetype2)
 #
 # Two independent things have to line up for that.
 #
-# 1. The bytecode version. libbluray defaults java_src_version to 1.5 and only
-#    raises it when the java9 option is on, in which case it derives it from
-#    whichever javac it finds:
-#      javac 9..11 -> 1.6   javac 12..17 -> 1.7   javac >= 18 -> 1.8
-#    (see src/libbluray/bdj/meson.build). So java9 is turned off below, and the
-#    JDK is pinned here rather than taken from the ambient PATH -- otherwise
-#    the runtime requirement of a release would depend on the build host.
-#    javac 9 dropped -source/-target 1.5, so this needs a JDK 8; without one
-#    (and ant) BD-J is switched off explicitly rather than silently producing a
-#    jar the old machines cannot load.
+# 1. The bytecode version. libbluray derives it from whichever javac it finds
+#    (see src/libbluray/bdj/meson.build):
+#      javac < 9 -> 1.4 (BD-J) / 1.5 (asm)   javac 9..11 -> 1.6
+#      javac 12..17 -> 1.7                   javac >= 18 -> 1.8
+#    Up to 1.4.0 that derivation was gated behind a "java9" option which, when
+#    off, left both at 1.5; libbluray 1.5.0 removed the option and the
+#    derivation now always runs. So the only lever left is the compiler, and
+#    the JDK is pinned here rather than taken from the ambient PATH --
+#    otherwise the runtime requirement of a release would depend on the build
+#    host. javac 9 dropped -source/-target 1.5, so this needs a JDK 8; without
+#    one (and ant) BD-J is switched off explicitly rather than silently
+#    producing a jar the old machines cannot load.
+#
+#    With a JDK 8 the BD-J classes now come out as class file v48 (Java 1.4)
+#    instead of v49 (Java 5) -- below the floor this contrib cares about, which
+#    is what upstream's "Improve Java 1.4 compatibility" work in 1.4.1 aimed
+#    for. The checks at the bottom of this file are unchanged: proving the jars
+#    stay inside the Java 5 API also proves they stay loadable, whichever of
+#    the two versions the bytecode carries.
 #
 # 2. The JDK internals the BD-J code replaces. java.io.FileSystem,
 #    java.awt.peer.ComponentPeer and FramePeer changed shape between Java 5 and
@@ -129,9 +138,9 @@ endif
 BLURAY_CONF = -Dfreetype=enabled -Dlibxml2=enabled
 
 ifdef BLURAY_BDJ
-# java9=false leaves libbluray's java_src_version at its 1.5 default instead of
-# deriving it from the javac version; see the comment block above.
-BLURAY_CONF += -Dbdj_jar=enabled -Dbdj_type=j2se -Djava9=false \
+# The bytecode version follows from BLURAY_JDK_HOME alone -- libbluray 1.5.0
+# dropped the java9 option that used to override it; see the comment block above.
+BLURAY_CONF += -Dbdj_jar=enabled -Dbdj_type=j2se \
 	-Dbdj_bootclasspath="$(BLURAY_BDJ_BOOTCLASSPATH)"
 # javac/ant are resolved through PATH by both meson (compiler probe) and ant
 # (actual compilation), and ant additionally requires JAVA_HOME.
@@ -160,7 +169,6 @@ $(TARBALLS)/libbluray-$(BLURAY_VERSION).tar.xz:
 
 bluray: libbluray-$(BLURAY_VERSION).tar.xz .sum-bluray
 	$(UNPACK)
-	$(APPLY) $(SRC)/bluray/0001-Link-with-gdi32-when-using-freetype-in-Windows.patch
 	$(APPLY) $(SRC)/bluray/0002-darwin-dont-define-POSIX_C_SOURCE.patch
 	$(APPLY) $(SRC)/bluray/0003-macos-load-Apple-Java-6-through-the-JavaVM-framework.patch
 	$(APPLY) $(SRC)/bluray/0004-bdj-run-on-java-5.patch

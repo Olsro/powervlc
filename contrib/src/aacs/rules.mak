@@ -1,6 +1,6 @@
 # LIBAACS
 
-AACS_VERSION := 0.11.1
+AACS_VERSION := 0.12.0
 AACS_URL := $(VIDEOLAN)/libaacs/$(AACS_VERSION)/libaacs-$(AACS_VERSION).tar.bz2
 
 # libbluray never links against libaacs: it dlopen()s it at runtime under a
@@ -53,11 +53,18 @@ endif
 
 DEPS_aacs = gcrypt $(DEPS_gcrypt)
 
-# The keydb parser is generated at build time: libaacs' dist-hook deletes
-# keydbcfg-{lexer,parser}.c, so flex and bison (or lex/yacc) are needed on the
-# build machine. Both ship with Xcode's command line tools and with every
-# distribution's build-essential; the generated code is host-independent, so
-# cross builds use the build machine's copies.
+# The keydb lexer and parser no longer have to be generated here: up to 0.11.1
+# libaacs' dist-hook deleted keydbcfg-{lexer,parser}.c from the tarball, which
+# made flex and bison (or lex/yacc) a build requirement; 0.12.0 dropped that
+# hook and ships them pre-generated, newer than the .l/.y they come from, so
+# make leaves them alone. configure still probes for lex and yacc
+# (AM_PROG_LEX / AC_PROG_YACC), it just no longer needs to find them -- and
+# both ship with Xcode's command line tools anyway.
+#
+# $(RECONF) does gain a requirement in exchange: 0.12.0 prefers pkg-config over
+# the bundled m4 macros for libgcrypt and gpg-error, and libaacs does not ship
+# pkg.m4, so aclocal has to find the build machine's copy. It is there whenever
+# pkg-config is, which every other contrib already needs.
 #
 # --disable-static --enable-shared comes after HOSTCONF, which asks for the
 # opposite: last option wins with autoconf.

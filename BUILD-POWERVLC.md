@@ -306,9 +306,10 @@ it:
 make -C contrib/contrib-aarch64-apple-darwin24 .aacs
 ```
 
-Note that libaacs generates its key-database parser at build time: **flex and
-bison** must be on the build machine (Xcode's command line tools provide both;
-the Docker images already install them).
+libaacs used to generate its key-database parser at build time, which made
+**flex and bison** a build requirement; since 0.12.0 the tarball ships the
+generated lexer and parser and neither tool is needed (Xcode's command line
+tools provide both anyway, and the Docker images already install them).
 
 No keys are shipped — that is the user's business. PowerVLC only makes
 installing them painless: opening a `keydb.cfg` file offers to import it into
