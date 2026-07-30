@@ -35,7 +35,7 @@ mkdir -p "$OUT"
 # PowerVLC product version, for AppImage filenames (the Windows targets derive
 # their own version from configure/git).
 PVLC_VER="$(sed -n 's/^POWERVLC_VERSION="\(.*\)"/\1/p' "$REPO/configure.ac" | head -1)"
-[ -n "$PVLC_VER" ] || PVLC_VER="1.0.0"
+[ -n "$PVLC_VER" ] || PVLC_VER="1.1.0"
 
 # VLC derives its revision string from git; /work is not a git repo (the clean
 # copy excludes .git), so compute it here and drop it into src/revision.txt,
