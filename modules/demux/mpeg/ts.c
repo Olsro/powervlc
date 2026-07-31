@@ -1418,10 +1418,105 @@ static block_t * ConvertPESBlock( demux_t *p_demux, ts_es_t *p_es,
 }
 
 /****************************************************************************
+ * HDMV PGS forced-caption track detection.
+ *
+ * A Blu-ray PG stream carries no track-level "forced" attribute: the flag
+ * only exists per composition object, inside the Presentation Composition
+ * Segments of the stream itself.  Discs authored with a dedicated
+ * forced-captions track can therefore only be recognized by watching the
+ * stream go by.  Each PES payload of a display set starts with its PCS, so
+ * peeking at the head of every payload is enough.  Once every composition
+ * seen so far is forced (and at least one was), the track is marked forced
+ * (fmt.subs.b_forced): the UI can label it and the pgssub decoder then only
+ * renders forced compositions, which for such a track changes nothing.  The
+ * first non-forced composition definitively marks the track as normal.
+ ****************************************************************************/
+#define TS_PGS_FORCED_DETECT_UNKNOWN 0 /* nothing conclusive seen yet */
+#define TS_PGS_FORCED_DETECT_FORCED  1 /* marked forced, still watched */
+#define TS_PGS_FORCED_DETECT_NORMAL  2 /* saw a non-forced composition, final */
+
+static void ProbePGSForcedFlags( demux_t *p_demux, ts_es_t *p_es,
+                                 const block_t *p_chain )
+{
+    /* Walk the segments at the head of each PES payload; only the PCS
+     * (segment type 0x16) matters and it comes first in a display set */
+    for( const block_t *p_block = p_chain; p_block; p_block = p_block->p_next )
+    {
+        const uint8_t *p = p_block->p_buffer;
+        size_t i_left = p_block->i_buffer;
+
+        if( i_left < 3 || p[0] != 0x16 )
+            continue;
+
+        const size_t i_seg = GetWBE( &p[1] );
+        if( i_seg > i_left - 3 )
+            continue;
+        p += 3;
+
+        /* PCS: video_descriptor(5) composition_descriptor(3)
+         * palette_update_flag(1) palette_id(1) composition_count(1) */
+        if( i_seg < 11 )
+            continue;
+        const uint8_t i_pcs_objects = p[10];
+        if( i_pcs_objects == 0 )
+            continue; /* display clear, neutral */
+        uint8_t i_objects = i_pcs_objects;
+        p += 11;
+        size_t i_object_bytes = i_seg - 11;
+
+        bool b_all_forced = true;
+        while( i_objects > 0 && i_object_bytes >= 8 )
+        {
+            /* object_id(2) window_id(1) flags(1) x(2) y(2) [crop(8)] */
+            const uint8_t i_flags = p[3];
+            if( !(i_flags & 0x40 /* forced_on_flag */) )
+                b_all_forced = false;
+            const size_t i_entry = (i_flags & 0x80 /* cropped */) ? 16 : 8;
+            if( i_entry > i_object_bytes )
+                break;
+            p += i_entry;
+            i_object_bytes -= i_entry;
+            i_objects--;
+        }
+
+        if( i_objects > 0 )
+            continue; /* truncated parse, don't conclude either way */
+
+        if( !b_all_forced )
+        {
+            if( p_es->bdpg.detection == TS_PGS_FORCED_DETECT_FORCED )
+            {
+                /* Mixed track after all: revert the mark */
+                msg_Dbg( p_demux, "PGS track pid has non-forced compositions, unmarking" );
+                p_es->fmt.subs.b_forced = false;
+                es_out_Control( p_demux->out, ES_OUT_SET_ES_FMT,
+                                p_es->id, &p_es->fmt );
+            }
+            p_es->bdpg.detection = TS_PGS_FORCED_DETECT_NORMAL;
+        }
+        else if( p_es->bdpg.detection == TS_PGS_FORCED_DETECT_UNKNOWN )
+        {
+            msg_Dbg( p_demux, "PGS track carries only forced compositions, "
+                     "marking it as forced" );
+            p_es->bdpg.detection = TS_PGS_FORCED_DETECT_FORCED;
+            p_es->fmt.subs.b_forced = true;
+            if( p_es->fmt.psz_description == NULL )
+                p_es->fmt.psz_description = strdup( _("Forced subtitles") );
+            es_out_Control( p_demux->out, ES_OUT_SET_ES_FMT,
+                            p_es->id, &p_es->fmt );
+        }
+    }
+}
+
+/****************************************************************************
  * fanouts current block to all subdecoders / shared pid es
  ****************************************************************************/
 static void SendDataChain( demux_t *p_demux, ts_es_t *p_es, block_t *p_chain )
 {
+    if( p_es->fmt.i_codec == VLC_CODEC_BD_PG && p_es->id &&
+        p_es->bdpg.detection != TS_PGS_FORCED_DETECT_NORMAL )
+        ProbePGSForcedFlags( p_demux, p_es, p_chain );
+
     while( p_chain )
     {
         block_t *p_block = p_chain;

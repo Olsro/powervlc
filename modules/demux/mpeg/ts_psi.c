@@ -1508,6 +1508,12 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
             if (( b_registration_applied = PMTSetupEsHDMV( p_demux, p_pes->p_es, p_dvbpsies ) ))
                 msg_Dbg( p_demux, "    + HDMV registration applied to pid %d type 0x%x",
                          p_dvbpsies->i_pid, p_dvbpsies->i_type );
+            /* PG streams must be received even while unselected so the
+             * forced-caption track detection can watch their PCS (their
+             * bitrate is negligible), see ProbePGSForcedFlags() */
+            if( b_registration_applied &&
+                p_pes->p_es->fmt.i_codec == VLC_CODEC_BD_PG )
+                p_pes->b_always_receive = true;
         }
         else
         {

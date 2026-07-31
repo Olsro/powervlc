@@ -79,6 +79,10 @@
 #define BD_REGION_TEXT      N_("Region code")
 #define BD_REGION_LONGTEXT  N_("Blu-Ray player region code. "\
                                 "Some discs can be played only with a correct region code.")
+#define BD_FORCED_SUBS_TEXT     N_("Show forced subtitles")
+#define BD_FORCED_SUBS_LONGTEXT N_("When the disc hides the subtitle stream, "\
+                                "keep decoding it and display only its forced "\
+                                "captions, as a standalone Blu-ray player does.")
 #define BD_KEYDB_PL_TEXT     N_("Use the main playlist from the key database")
 #define BD_KEYDB_PL_LONGTEXT N_("Some discs hide the feature among hundreds of "\
                                 "decoy playlists of the same length, so the longest "\
@@ -118,6 +122,7 @@ vlc_module_begin ()
     set_subcategory(SUBCAT_INPUT_ACCESS)
     set_capability("access_demux", 200)
     add_bool("bluray-menu", true, BD_MENU_TEXT, BD_MENU_LONGTEXT, false)
+    add_bool("bluray-forced-subs", true, BD_FORCED_SUBS_TEXT, BD_FORCED_SUBS_LONGTEXT, false)
     add_string("bluray-region", ppsz_region_code[REGION_DEFAULT], BD_REGION_TEXT, BD_REGION_LONGTEXT, false)
         change_string_list(ppsz_region_code, ppsz_region_code_text)
     add_bool("bluray-keydb-playlist", true, BD_KEYDB_PL_TEXT, BD_KEYDB_PL_LONGTEXT, false)
@@ -1448,6 +1453,7 @@ typedef struct
     bool b_discontinuity;
     bool b_disable_output;
     bool b_lowdelay;
+    bool b_forced_subs; /* show forced captions of a hidden PG stream */
     vlc_mutex_t lock;
     struct
     {
@@ -1460,6 +1466,7 @@ enum
 {
     BLURAY_ES_OUT_CONTROL_SET_ES_BY_PID = ES_OUT_PRIVATE_START,
     BLURAY_ES_OUT_CONTROL_UNSET_ES_BY_PID,
+    BLURAY_ES_OUT_CONTROL_SET_SPU_VISIBILITY,
     BLURAY_ES_OUT_CONTROL_FLAG_DISCONTINUITY,
     BLURAY_ES_OUT_CONTROL_ENABLE_OUTPUT,
     BLURAY_ES_OUT_CONTROL_DISABLE_OUTPUT,
@@ -1496,7 +1503,20 @@ static es_out_id_t *bluray_esOutAdd(es_out_t *p_out, const es_format_t *p_fmt)
         setStreamLang(p_sys, &fmt);
         break ;
     case SPU_ES:
-        b_select = (esout_sys->selected.i_spu_pid == p_fmt->i_id && p_sys->b_spu_enable);
+        if (esout_sys->selected.i_spu_pid == p_fmt->i_id)
+        {
+            if (p_sys->b_spu_enable)
+                b_select = true;
+            else if (esout_sys->b_forced_subs)
+            {
+                /* BD semantics: a hidden PG stream still displays its
+                 * forced captions. Keep it selected and mark the track
+                 * forced so the decoder only renders those (see
+                 * avcodec/subtitle.c). */
+                b_select = true;
+                fmt.subs.b_forced = true;
+            }
+        }
         fmt.i_priority = ES_PRIORITY_NOT_SELECTABLE;
         setStreamLang(p_sys, &fmt);
         break ;
@@ -1660,6 +1680,39 @@ static int bluray_esOutControl(es_out_t *p_out, int i_query, va_list args)
             break;
         };
 
+        case BLURAY_ES_OUT_CONTROL_SET_SPU_VISIBILITY:
+        {
+            const bool b_visible = va_arg(args, int);
+            es_pair_t *p_pair = getEsPairByPID(&esout_sys->es,
+                                               esout_sys->selected.i_spu_pid);
+            if (unlikely(!p_pair))
+            {
+                i_ret = VLC_EGENERIC;
+                break;
+            }
+
+            if (!b_visible && !esout_sys->b_forced_subs)
+            {
+                /* forced captions disabled: plain hide */
+                i_ret = es_out_Control(esout_sys->p_dst_out,
+                                       ES_OUT_SET_ES_STATE, p_pair->p_es, false);
+                break;
+            }
+
+            /* Visible: full display. Hidden: keep the track selected but
+             * marked forced, the decoder then only renders the forced
+             * captions (BD semantics). */
+            const bool b_forced_only = !b_visible;
+            if (p_pair->fmt.subs.b_forced != b_forced_only)
+            {
+                p_pair->fmt.subs.b_forced = b_forced_only;
+                es_out_Control(esout_sys->p_dst_out, ES_OUT_SET_ES_FMT,
+                               p_pair->p_es, &p_pair->fmt);
+            }
+            i_ret = es_out_Control(esout_sys->p_dst_out, ES_OUT_SET_ES,
+                                   p_pair->p_es);
+        } break;
+
         case BLURAY_ES_OUT_CONTROL_FLAG_DISCONTINUITY:
         {
             esout_sys->b_discontinuity = true;
@@ -1691,6 +1744,43 @@ static int bluray_esOutControl(es_out_t *p_out, int i_query, va_list args)
         case ES_OUT_SET_ES_STATE:
             i_ret = VLC_EGENERIC;
             break;
+
+        case ES_OUT_SET_ES_FMT:
+        {
+            /* A sub-demuxer (ts.c PGS forced-caption detection) updates the
+             * format: re-apply our own adjustments (language, priority,
+             * forced-only display of a hidden PG stream) before forwarding,
+             * or they would be lost on the core side. */
+            es_out_id_t *p_esid = va_arg(args, es_out_id_t *);
+            es_format_t *p_updfmt = va_arg(args, es_format_t *);
+            es_pair_t *p_pair = getEsPairByES(&esout_sys->es, p_esid);
+            if (p_pair == NULL)
+            {
+                i_ret = es_out_Control(esout_sys->p_dst_out, ES_OUT_SET_ES_FMT,
+                                       p_esid, p_updfmt);
+                break;
+            }
+
+            demux_t *p_demux = esout_sys->priv;
+            demux_sys_t *p_sys = p_demux->p_sys;
+            es_format_t fmt;
+            es_format_Copy(&fmt, p_updfmt);
+            if (fmt.i_cat == AUDIO_ES || fmt.i_cat == SPU_ES)
+            {
+                fmt.i_priority = ES_PRIORITY_NOT_SELECTABLE;
+                setStreamLang(p_sys, &fmt);
+            }
+            if (fmt.i_cat == SPU_ES &&
+                esout_sys->selected.i_spu_pid == fmt.i_id &&
+                !p_sys->b_spu_enable && esout_sys->b_forced_subs)
+                fmt.subs.b_forced = true;
+
+            i_ret = es_out_Control(esout_sys->p_dst_out, ES_OUT_SET_ES_FMT,
+                                   p_esid, &fmt);
+            es_format_Clean(&p_pair->fmt);
+            es_format_Copy(&p_pair->fmt, &fmt);
+            es_format_Clean(&fmt);
+        } break;
 
         case ES_OUT_GET_ES_STATE:
             va_arg(args, es_out_id_t *);
@@ -1746,6 +1836,7 @@ static es_out_t *esOutNew(vlc_object_t *p_obj, es_out_t *p_dst_out, void *priv)
     esout_sys->b_entered_recycling = false;
     esout_sys->b_restart_decoders_on_reuse = true;
     esout_sys->b_lowdelay = false;
+    esout_sys->b_forced_subs = var_InheritBool(p_obj, "bluray-forced-subs");
     esout_sys->selected.i_audio_pid = -1;
     esout_sys->selected.i_spu_pid = -1;
     vlc_mutex_init(&esout_sys->lock);
@@ -3042,10 +3133,13 @@ static void blurayOnStreamSelectedEvent(demux_t *p_demux, uint32_t i_type, uint3
 
     if (i_pid > 0)
     {
-        if (i_type == BD_EVENT_PG_TEXTST_STREAM && !p_sys->b_spu_enable)
-            es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_UNSET_ES_BY_PID, (int)i_type, i_pid);
-        else
-            es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_SET_ES_BY_PID, (int)i_type, i_pid);
+        es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_SET_ES_BY_PID, (int)i_type, i_pid);
+        if (i_type == BD_EVENT_PG_TEXTST_STREAM)
+            /* apply the display flag: a hidden PG stream stays selected in
+             * forced-captions-only mode (or is plainly deselected when
+             * bluray-forced-subs is off) */
+            es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_SET_SPU_VISIBILITY,
+                           (int)p_sys->b_spu_enable);
     }
 }
 
@@ -3341,6 +3435,9 @@ static void blurayHandleEvent(demux_t *p_demux, const BD_EVENT *e, bool b_delaye
      */
     case BD_EVENT_PG_TEXTST:
         p_sys->b_spu_enable = e->param;
+        /* the display toggle may come without a following stream event */
+        es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_SET_SPU_VISIBILITY,
+                       (int)e->param);
         break;
     case BD_EVENT_AUDIO_STREAM:
     case BD_EVENT_PG_TEXTST_STREAM:
