@@ -31766,3 +31766,55 @@ msgstr ""
 "Nombre de la ventana que se abrirá al inicio, como la variable de entorno "
 "VLC_LEGACY_SHOW: prefs, prefsadv, mediainfo, errors, about, bookmarks, "
 "messages, tracksync, effects, videoeffects, convert, fspanel, open0..3."
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr "Audio para personas con discapacidad visual"
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr "Comentarios del director"
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr "Comentarios alternativos del director"
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr "Para niños"
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr "Subtítulos para sordos"
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr "Subtítulos para sordos (grandes)"
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr "Subtítulos para sordos (niños)"
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr "Subtítulos forzados"
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr "Comentarios del director (grandes)"
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr "Comentarios del director (niños)"
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr "Subtítulos forzados"
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr "Mostrar subtítulos forzados"
+
+#: modules/access/bluray.c:83
+msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgstr "Cuando el disco oculta el flujo de subtítulos, seguir decodificándolo y mostrar solo sus subtítulos forzados, como hace un reproductor Blu-ray de sobremesa."

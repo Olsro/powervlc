@@ -30431,3 +30431,55 @@ msgid ""
 msgstr ""
 "启动时要打开的窗口名称，与环境变量 VLC_LEGACY_SHOW "
 "相同：prefs、prefsadv、mediainfo、errors、about、bookmarks、messages、tracksync、effects、videoeffects、convert、fspanel、open0..3。"
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr "视障人士音频"
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr "导演评论"
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr "导演备选评论"
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr "儿童版"
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr "隐藏式字幕"
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr "隐藏式字幕（大字体）"
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr "隐藏式字幕（儿童）"
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr "强制字幕"
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr "导演评论（大字体）"
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr "导演评论（儿童）"
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr "强制字幕"
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr "显示强制字幕"
+
+#: modules/access/bluray.c:83
+msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgstr "当光盘隐藏字幕流时，继续解码并仅显示其中的强制字幕，与独立蓝光播放机的行为一致。"

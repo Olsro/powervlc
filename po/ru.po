@@ -31531,3 +31531,55 @@ msgstr ""
 "Имя окна, открываемого при запуске, как в переменной окружения "
 "VLC_LEGACY_SHOW: prefs, prefsadv, mediainfo, errors, about, bookmarks, "
 "messages, tracksync, effects, videoeffects, convert, fspanel, open0..3."
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr "Аудио для слабовидящих"
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr "Комментарии режиссёра"
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr "Альтернативные комментарии режиссёра"
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr "Для детей"
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr "Субтитры для слабослышащих"
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr "Субтитры для слабослышащих (крупные)"
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr "Субтитры для слабослышащих (детские)"
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr "Форсированные субтитры"
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr "Комментарии режиссёра (крупные)"
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr "Комментарии режиссёра (детские)"
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr "Форсированные субтитры"
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr "Показывать форсированные субтитры"
+
+#: modules/access/bluray.c:83
+msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgstr "Если диск скрывает поток субтитров, продолжать его декодировать и показывать только форсированные субтитры, как это делает бытовой Blu-ray-плеер."

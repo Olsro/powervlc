@@ -31101,3 +31101,55 @@ msgstr ""
 "VLC_LEGACY_SHOW 환경 변수와 마찬가지로, 시작할 때 열 창의 이름: prefs, prefsadv, mediainfo, "
 "errors, about, bookmarks, messages, tracksync, effects, videoeffects, "
 "convert, fspanel, open0..3"
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr "시각 장애인용 오디오"
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr "감독 코멘터리"
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr "감독 대체 코멘터리"
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr "어린이용"
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr "청각 장애인용 자막"
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr "청각 장애인용 자막 (큰 글씨)"
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr "청각 장애인용 자막 (어린이)"
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr "강제 자막"
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr "감독 코멘터리 (큰 글씨)"
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr "감독 코멘터리 (어린이)"
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr "강제 자막"
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr "강제 자막 표시"
+
+#: modules/access/bluray.c:83
+msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgstr ""

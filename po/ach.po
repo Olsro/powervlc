@@ -29363,3 +29363,55 @@ msgstr "Yab boc pa libbdplus (Blu-ray)"
 #, c-format
 msgid "The folder %s could not be opened."
 msgstr "Boc %s pe onongo twero yabbe."
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr ""
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr ""
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr ""
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr ""
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr ""
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr ""
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr ""
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr ""
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr ""
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr ""
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr ""
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr ""
+
+#: modules/access/bluray.c:83
+msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgstr ""

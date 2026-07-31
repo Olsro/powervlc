@@ -31716,3 +31716,55 @@ msgstr ""
 "omgevingsvariabele VLC_LEGACY_SHOW: prefs, prefsadv, mediainfo, errors, "
 "about, bookmarks, messages, tracksync, effects, videoeffects, convert, "
 "fspanel, open0..3."
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr "Audio voor slechtzienden"
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr "Commentaar van de regisseur"
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr "Alternatief commentaar van de regisseur"
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr "Voor kinderen"
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr "Ondertiteling voor doven"
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr "Ondertiteling voor doven (groot)"
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr "Ondertiteling voor doven (kinderen)"
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr "Geforceerde ondertiteling"
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr "Commentaar van de regisseur (groot)"
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr "Commentaar van de regisseur (kinderen)"
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr "Geforceerde ondertiteling"
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr "Geforceerde ondertiteling tonen"
+
+#: modules/access/bluray.c:83
+msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgstr ""

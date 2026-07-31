@@ -31889,3 +31889,55 @@ msgstr "No s'ha pogut obrir la carpeta %s."
 
 #~ msgid "Missing AACS configuration file!"
 #~ msgstr "Falta el fitxer de configuració de l'AACS!"
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr "Àudio per a persones amb discapacitat visual"
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr "Comentaris del director"
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr "Comentaris alternatius del director"
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr "Per a infants"
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr "Subtítols per a sords"
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr "Subtítols per a sords (grans)"
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr "Subtítols per a sords (infants)"
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr "Subtítols forçats"
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr "Comentaris del director (grans)"
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr "Comentaris del director (infants)"
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr "Subtítols forçats"
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr "Mostra els subtítols forçats"
+
+#: modules/access/bluray.c:83
+msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgstr ""

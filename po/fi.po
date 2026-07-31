@@ -31430,3 +31430,55 @@ msgstr "Kansiota %s ei voitu avata."
 
 #~ msgid "Missing AACS configuration file!"
 #~ msgstr "Puuttuu AACS-määritystiedosto!"
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr "Ääni näkövammaisille"
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr "Ohjaajan kommentit"
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr "Ohjaajan vaihtoehtoiset kommentit"
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr "Lapsille"
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr "Tekstitys kuulovammaisille"
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr "Tekstitys kuulovammaisille (suuri)"
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr "Tekstitys kuulovammaisille (lapsille)"
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr "Pakotettu tekstitys"
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr "Ohjaajan kommentit (suuri)"
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr "Ohjaajan kommentit (lapsille)"
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr "Pakotettu tekstitys"
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr "Näytä pakotettu tekstitys"
+
+#: modules/access/bluray.c:83
+msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgstr ""

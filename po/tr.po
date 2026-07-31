@@ -31572,3 +31572,55 @@ msgstr ""
 "VLC_LEGACY_SHOW ortam değişkeninde olduğu gibi, başlangıçta açılacak "
 "pencerenin adı: prefs, prefsadv, mediainfo, errors, about, bookmarks, "
 "messages, tracksync, effects, videoeffects, convert, fspanel, open0..3."
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr "Görme engelliler için ses"
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr "Yönetmen yorumları"
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr "Alternatif yönetmen yorumları"
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr "Çocuklar için"
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr "İşitme engelliler için altyazı"
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr "İşitme engelliler için altyazı (büyük)"
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr "İşitme engelliler için altyazı (çocuklar)"
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr "Zorunlu altyazı"
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr "Yönetmen yorumları (büyük)"
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr "Yönetmen yorumları (çocuklar)"
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr "Zorunlu altyazılar"
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr "Zorunlu altyazıları göster"
+
+#: modules/access/bluray.c:83
+msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgstr ""

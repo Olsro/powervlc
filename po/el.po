@@ -31945,3 +31945,55 @@ msgstr "Δεν ήταν δυνατό το άνοιγμα του φακέλου %
 
 #~ msgid "Missing AACS configuration file!"
 #~ msgstr "Λείπει το αρχείο ρυθμίσεων AACS!"
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr "Ήχος για άτομα με προβλήματα όρασης"
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr "Σχόλια σκηνοθέτη"
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr "Εναλλακτικά σχόλια σκηνοθέτη"
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr "Για παιδιά"
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr "Υπότιτλοι για κωφούς"
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr "Υπότιτλοι για κωφούς (μεγάλοι)"
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr "Υπότιτλοι για κωφούς (παιδιά)"
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr "Αναγκαστικοί υπότιτλοι"
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr "Σχόλια σκηνοθέτη (μεγάλα)"
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr "Σχόλια σκηνοθέτη (παιδιά)"
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr "Αναγκαστικοί υπότιτλοι"
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr "Εμφάνιση αναγκαστικών υποτίτλων"
+
+#: modules/access/bluray.c:83
+msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgstr ""

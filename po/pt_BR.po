@@ -31713,3 +31713,55 @@ msgstr ""
 "Nome da janela a ser aberta ao iniciar, como a variável de ambiente "
 "VLC_LEGACY_SHOW: prefs, prefsadv, mediainfo, errors, about, bookmarks, "
 "messages, tracksync, effects, videoeffects, convert, fspanel, open0..3."
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr "Áudio para deficientes visuais"
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr "Comentários do diretor"
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr "Comentários alternativos do diretor"
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr "Para crianças"
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr "Legendas para surdos"
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr "Legendas para surdos (grandes)"
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr "Legendas para surdos (crianças)"
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr "Legendas forçadas"
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr "Comentários do diretor (grandes)"
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr "Comentários do diretor (crianças)"
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr "Legendas forçadas"
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr "Mostrar legendas forçadas"
+
+#: modules/access/bluray.c:83
+msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgstr "Quando o disco oculta o fluxo de legendas, continuar a decodificá-lo e exibir apenas as legendas forçadas, como faz um reprodutor de Blu-ray de mesa."

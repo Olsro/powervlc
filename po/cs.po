@@ -31495,3 +31495,55 @@ msgstr ""
 "prostředí VLC_LEGACY_SHOW: prefs, prefsadv, mediainfo, errors, about, "
 "bookmarks, messages, tracksync, effects, videoeffects, convert, fspanel, "
 "open0..3."
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr "Zvuk pro zrakově postižené"
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr "Komentář režiséra"
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr "Alternativní komentář režiséra"
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr "Pro děti"
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr "Titulky pro neslyšící"
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr "Titulky pro neslyšící (velké)"
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr "Titulky pro neslyšící (pro děti)"
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr "Vynucené titulky"
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr "Komentář režiséra (velký)"
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr "Komentář režiséra (pro děti)"
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr "Vynucené titulky"
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr "Zobrazovat vynucené titulky"
+
+#: modules/access/bluray.c:83
+msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgstr ""

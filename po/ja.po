@@ -31358,3 +31358,55 @@ msgstr ""
 "環境変数VLC_LEGACY_SHOWと同様に、起動時に開くウィンドウの名前: prefs, prefsadv, mediainfo, "
 "errors, about, bookmarks, messages, tracksync, effects, videoeffects, "
 "convert, fspanel, open0..3"
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr "視覚障害者向け音声"
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr "監督のコメント"
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr "監督の別コメント"
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr "子供向け"
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr "クローズドキャプション"
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr "クローズドキャプション（大）"
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr "クローズドキャプション（子供向け）"
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr "強制字幕"
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr "監督のコメント（大）"
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr "監督のコメント（子供向け）"
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr "強制字幕"
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr "強制字幕を表示"
+
+#: modules/access/bluray.c:83
+msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgstr "ディスクが字幕ストリームを非表示にしても、デコードを続けて強制字幕のみを表示します（据え置き型Blu-rayプレーヤーと同じ動作）。"

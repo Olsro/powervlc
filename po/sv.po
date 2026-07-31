@@ -31567,3 +31567,55 @@ msgstr ""
 "Namn på fönstret som ska öppnas vid start, som miljövariabeln "
 "VLC_LEGACY_SHOW: prefs, prefsadv, mediainfo, errors, about, bookmarks, "
 "messages, tracksync, effects, videoeffects, convert, fspanel, open0..3."
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr "Ljud för synskadade"
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr "Regissörens kommentarer"
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr "Regissörens alternativa kommentarer"
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr "För barn"
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr "Undertexter för hörselskadade"
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr "Undertexter för hörselskadade (stora)"
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr "Undertexter för hörselskadade (barn)"
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr "Tvingade undertexter"
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr "Regissörens kommentarer (stora)"
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr "Regissörens kommentarer (barn)"
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr "Tvingade undertexter"
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr "Visa tvingade undertexter"
+
+#: modules/access/bluray.c:83
+msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgstr ""

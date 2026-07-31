@@ -31488,3 +31488,55 @@ msgstr "A(z) %s mappát nem sikerült megnyitni."
 
 #~ msgid "Missing AACS configuration file!"
 #~ msgstr "Hiányzik az AACS konfigurációs fájl!"
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr "Hang látássérülteknek"
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr "Rendezői kommentár"
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr "Alternatív rendezői kommentár"
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr "Gyerekeknek"
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr "Felirat hallássérülteknek"
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr "Felirat hallássérülteknek (nagy)"
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr "Felirat hallássérülteknek (gyerekeknek)"
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr "Kényszerített felirat"
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr "Rendezői kommentár (nagy)"
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr "Rendezői kommentár (gyerekeknek)"
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr "Kényszerített feliratok"
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr "Kényszerített feliratok megjelenítése"
+
+#: modules/access/bluray.c:83
+msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgstr ""
