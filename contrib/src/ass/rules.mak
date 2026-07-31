@@ -44,12 +44,26 @@ $(TARBALLS)/libass-$(ASS_VERSION).tar.xz:
 libass: libass-$(ASS_VERSION).tar.xz .sum-ass
 	$(UNPACK)
 	$(UPDATE_AUTOCONFIG)
+ifdef HAVE_MACOSX
+	# ass_compat.h defines strndup to its fallback BEFORE <string.h> is
+	# seen, which textually renames the SDK declaration too -- and its
+	# 10.7 availability attribute then lands on the fallback's name.
+	# Pull <string.h> in first so the SDK keeps its own symbol.
+	perl -pi -e 's/^#ifndef HAVE_STRNDUP$$/#include <string.h>\n#ifndef HAVE_STRNDUP/' \
+	    $(UNPACK_DIR)/libass/ass_compat.h
+endif
 	$(call pkg_static,"libass.pc.in")
 	$(MOVE)
 
 DEPS_ass = freetype2 $(DEPS_freetype2) fribidi $(DEPS_fribidi) iconv $(DEPS_iconv) harfbuzz $(DEPS_harfbuzz)
 
 ASS_CONF = --disable-test
+ifdef HAVE_MACOSX
+ifneq ($(call darwin_min_os_at_least, 10.7), true)
+# strndup() is 10.7+; libass carries its own fallback behind this check
+ASS_CONF += ac_cv_func_strndup=no
+endif
+endif
 ifneq ($(WITH_FONTCONFIG), 0)
 DEPS_ass += fontconfig $(DEPS_fontconfig)
 else

@@ -44,6 +44,7 @@ gnutls: gnutls-$(GNUTLS_VERSION).tar.xz .sum-gnutls
 
 	# emulate _Thread_local with pthread keys when targeting Mac OS X < 10.7
 	$(APPLY) $(SRC)/gnutls/0001-emulate-thread-local-with-pthread-keys-on-old-macOS.patch
+	$(APPLY) $(SRC)/gnutls/0002-audit-emulate-thread-local-with-pthread-key-on-old-m.patch
 
 	# replace HANDLE_FLAG_INHERIT which may not be available in older UWP
 	sed -i.orig -e s/HANDLE_FLAG_INHERIT/0x1/g $(UNPACK_DIR)/gl/fcntl.c

@@ -12,7 +12,11 @@ DEPS_libarchive = zlib $(DEPS_zlib)
 LIBARCHIVE_CONF := \
 		-DENABLE_CPIO=OFF -DENABLE_TAR=OFF -DENABLE_CAT=OFF \
 		-DENABLE_LIBXML2=OFF -DENABLE_LZMA=OFF -DENABLE_ICONV=OFF -DENABLE_EXPAT=OFF \
-		-DENABLE_TEST=OFF -DENABLE_WERROR=OFF
+		-DENABLE_TEST=OFF -DENABLE_WERROR=OFF \
+		-DENABLE_LIBB2=OFF -DENABLE_LZ4=OFF -DENABLE_LZO=OFF -DENABLE_ZSTD=OFF
+# ^ find_library() is not confined to the contrib prefix, so a host (Homebrew)
+# libb2/lz4/lzo/zstd would be picked up and recorded in libarchive.pc (-lb2 and
+# -lzstd leaked into every consumer on macOS); none is needed for VLC's use.
 
 # CNG enables bcrypt on Windows and useless otherwise, it's not used when building for XP
 LIBARCHIVE_CONF +=-DENABLE_CNG=ON

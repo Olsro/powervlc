@@ -70,8 +70,24 @@ mingw64: mingw-w64-v$(MINGW64_VERSION).tar.bz2 .sum-mingw64
 	touch $@
 
 .winpthreads: mingw64
+	# The toolchain may carry older mingw-w64 headers than these winpthreads
+	# sources (Debian bullseye ships v8, which lacks struct _timespec64):
+	# configure the matching headers into a private prefix and compile
+	# winpthreads against them. The resulting library only depends on
+	# msvcrt/kernel32, so it links fine with the older toolchain.
+	cd $< && rm -rf vlc_build_headers vlc_private_headers && \
+	    mkdir vlc_build_headers && cd vlc_build_headers && \
+	    ../mingw-w64-headers/configure --host=$(HOST) \
+	        --prefix=$(abspath $<)/vlc_private_headers && \
+	    $(MAKE) install
+	# The v14 headers declare _set_errno() as a msvcrt dllimport, but the
+	# import library of an older toolchain does not carry it: shadow it
+	# with the equivalent errno assignment after <errno.h> is in.
+	printf '#ifndef __ASSEMBLER__\n#include <errno.h>\n#undef _set_errno\n#define _set_errno(e) ((errno = (e)), 0)\n#endif\n' \
+	    > $(abspath $<)/vlc_set_errno_compat.h
 	$(MAKEBUILDDIR)
-	$(MAKECONFDIR)/mingw-w64-libraries/winpthreads/configure $(HOSTCONF)
+	$(MAKECONFDIR)/mingw-w64-libraries/winpthreads/configure $(HOSTCONF) \
+	    CPPFLAGS="$(CPPFLAGS) -isystem $(abspath $<)/vlc_private_headers/include -include $(abspath $<)/vlc_set_errno_compat.h"
 	+$(MAKEBUILD)
 	+$(MAKEBUILD) install
 	touch $@

@@ -76,10 +76,12 @@ endif
 
 DEPS_fontconfig = freetype2 $(DEPS_freetype2) libxml2 $(DEPS_libxml2)
 
+# No RECONF anywhere any more (it used to run on win32 only, for the two
+# Windows patches above): 2.16.0's shipped configure works as-is, and an
+# autoreconf would regenerate the po/ infrastructure against whatever gettext
+# macros happen to sit in the contrib prefix — "gettext infrastructure
+# mismatch" when they differ from the one the tarball was rolled with.
 .fontconfig: fontconfig
-ifdef HAVE_WIN32
-	$(RECONF)
-endif
 	cd $< && $(FONTCONFIG_ENV) ./configure $(HOSTCONF) $(FONTCONFIG_CONF)
 	$(MAKE) -C $<
 ifndef HAVE_MACOSX

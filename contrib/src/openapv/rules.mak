@@ -3,7 +3,15 @@
 OPENAPV_VERSION := 0.2.0.4
 OPENAPV_URL := $(GITHUB)/AcademySoftwareFoundation/openapv/archive/refs/tags/v$(OPENAPV_VERSION).tar.gz
 
+ifdef HAVE_MACOSX
+# the runtime AVX detection (xgetbv) does not assemble with the legacy
+# cctools as, and APV is pointless on the pre-10.7 machines anyway
+ifeq ($(call darwin_min_os_at_least, 10.7), true)
 PKGS += openapv
+endif
+else
+PKGS += openapv
+endif
 ifeq ($(call need_pkg,"oapv >= 0.2"),)
 PKGS_FOUND += openapv
 endif

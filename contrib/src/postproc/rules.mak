@@ -96,6 +96,14 @@ else
 POSTPROC_CONF += --arch=$(ARCH)
 endif
 POSTPROC_CONF += --target-os=darwin --extra-cflags="$(CFLAGS)"
+ifeq ($(call darwin_sdk_at_most, 10.8), true)
+# assert.h in the pre-10.9 SDKs predates C11: no static_assert macro
+# (same workaround as the ffmpeg contrib)
+POSTPROC_CONF += --extra-cflags="-Dstatic_assert=_Static_assert"
+endif
+ifeq ($(ARCH),ppc)
+POSTPROC_CONF += --enable-pic
+endif
 ifeq ($(ARCH),x86_64)
 POSTPROC_CONF += --cpu=core2
 endif
@@ -174,12 +182,23 @@ postproc: postproc-$(POSTPROC_GITVERSION).tar.xz .sum-postproc
 	$(UNPACK)
 	$(APPLY) $(SRC)/postproc/0001-force-using-external-libavutil.patch
 	$(APPLY) $(SRC)/postproc/0002-add-missing-libavcodec-headers.patch
+ifdef HAVE_MACOSX
+	# same as the ffmpeg contrib: Darwin malloc is 16-byte aligned and
+	# mem.c keeps the fallback, the configure guard is moot here
+	sed -i.orig1 's/if ! enabled_any memalign posix_memalign aligned_malloc; then/if false; then # PowerVLC: Darwin malloc is 16-byte aligned/' $(UNPACK_DIR)/configure
+endif
 	$(MOVE)
 
 .postproc: postproc
 	$(REQUIRE_GPL)
 	$(MAKEBUILDDIR)
 	$(MAKECONFDIR)/configure $(POSTPROC_CONF)
+ifdef HAVE_MACOSX
+ifneq ($(call darwin_min_os_at_least, 10.6), true)
+	# posix_memalign is absent before Mac OS X 10.6 (see ffmpeg contrib)
+	sed -i.orig -e 's/#define HAVE_POSIX_MEMALIGN 1/#define HAVE_POSIX_MEMALIGN 0/' $(BUILD_DIR)/config.h
+endif
+endif
 	+$(MAKEBUILD)
 	+$(MAKEBUILD) install-libs install-headers
 	touch $@

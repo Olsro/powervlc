@@ -15,6 +15,14 @@ endif
 libgpg-error: libgpg-error-$(GPGERROR_VERSION).tar.bz2 .sum-gpg-error
 	$(UNPACK)
 	$(call pkg_static,"src/gpg-error.pc.in")
+ifdef HAVE_MACOSX
+ifneq ($(call darwin_min_os_at_least, 10.5), true)
+	# On the 10.4 SDK unsetenv() returns void (pre-POSIX-2008 Apple
+	# prototype), so `if (unsetenv(name))` does not compile
+	sed -i.orig -e 's/if (unsetenv (name))/unsetenv (name); if (0)/' \
+	    $(UNPACK_DIR)/src/sysutils.c
+endif
+endif
 	# gpg-error doesn't know about mingw32uwp but it's the same as mingw32
 	$(APPLY) $(SRC)/gpg-error/gpg-error-uwp-fix.patch
 

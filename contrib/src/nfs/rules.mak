@@ -29,6 +29,14 @@ nfs: libnfs-$(NFS_VERSION).tar.gz .sum-nfs
 	$(APPLY) $(SRC)/nfs/0001-cmake-export-the-necessary-library-in-the-pkg-config.patch
 	$(APPLY) $(SRC)/nfs/0007-tls-add-support-for-kernel-without-TLS_1_3_VERSION.patch
 	$(APPLY) $(SRC)/nfs/0008-tls-define-TLS_RX-if-it-s-missing.patch
+ifdef HAVE_MACOSX
+ifneq ($(call darwin_min_os_at_least, 10.7), true)
+	# strndup() is 10.7+: give libnfs a self-contained fallback (appended
+	# to the private header every source includes)
+	printf '\n#if defined(__APPLE__)\n#include <stdlib.h>\n#include <string.h>\nstatic inline char *vlc_nfs_strndup(const char *s, size_t n)\n{\n    size_t l = 0;\n    while (l < n && s[l]) l++;\n    char *r = malloc(l + 1);\n    if (r) { memcpy(r, s, l); r[l] = 0; }\n    return r;\n}\n#define strndup vlc_nfs_strndup\n#endif\n' \
+	    >> $(UNPACK_DIR)/include/libnfs-private.h
+endif
+endif
 	$(MOVE)
 
 NFS_CONF :=

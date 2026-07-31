@@ -18,7 +18,7 @@ index a8e6b143b..a84df13bd 100755
  	elseif(ARM64 OR CROSS_COMPILE_ARM64)
      # compile ARM64 arch asm files here
          enable_language(ASM)
-+        if(APPLE)
++        if(APPLE AND CMAKE_OSX_ARCHITECTURES)
 +            set(ARM_ARGS ${ARM_ARGS} -arch ${CMAKE_OSX_ARCHITECTURES})
 +        endif()
          foreach(ASM ${ARM_ASMS})

@@ -4,7 +4,15 @@ LIBRIST_VERSION := v0.2.18
 LIBRIST_URL := $(VIDEOLAN_GIT)/rist/librist/-/archive/$(LIBRIST_VERSION)/librist-$(LIBRIST_VERSION).tar.gz
 
 ifdef BUILD_NETWORK
+ifdef HAVE_MACOSX
+# librist uses strnlen()/clock APIs that only exist since Mac OS X 10.7;
+# the legacy targets simply lose the (niche) RIST protocol
+ifeq ($(call darwin_min_os_at_least, 10.7), true)
 PKGS += librist
+endif
+else
+PKGS += librist
+endif
 endif
 
 DEPS_librist =

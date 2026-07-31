@@ -64,9 +64,14 @@ endif
 DEPS_ffmpeg = zlib $(DEPS_zlib) gsm $(DEPS_gsm)
 
 ifndef USE_LIBAV
+# VLC_FFMPEG_NO_OPENJPEG: the AppImage containers have no cmake to build
+# the openjpeg contrib; ffmpeg 8's native JPEG 2000 decoder covers
+# playback there.
+ifndef VLC_FFMPEG_NO_OPENJPEG
 FFMPEGCONF += \
 	--enable-libopenjpeg
 DEPS_ffmpeg += openjpeg
+endif
 endif
 
 # Optional dependencies

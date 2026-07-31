@@ -48,6 +48,10 @@ qt: qt-$(QT_VERSION).tar.xz .sum-qt
 	$(APPLY) $(SRC)/qt/0022-Don-t-error-out-on-preprocessor-concatenation-of-two.patch
 	$(APPLY) $(SRC)/qt/0023-moc-get-the-system-defines-from-the-compiler-itself.patch
 	$(APPLY) $(SRC)/qt/systray-no-sound.patch
+	# moc must not crawl the toolchain's libstdc++ headers: against GCC 10's
+	# C++20 <bits/iterator_concepts.h> the Qt 5.6 moc parser dies on the
+	# "ranges" concepts. Qt's own headers never need the system include dirs.
+	sed -i.orig -e 's/ \$$\$$QMAKE_DEFAULT_INCDIRS//' $(UNPACK_DIR)/mkspecs/features/moc.prf
 	$(APPLY) $(SRC)/qt/0001-qDecodeDataUrl-fix-precondition-violation-in-call-to.patch
 	$(APPLY) $(SRC)/qt/0002-QFileSystemEngine-Win-Use-GetTempPath2-when-availabl.patch
 	$(APPLY) $(SRC)/qt/0003-QXmlStreamReader-change-fastScanName-to-take-a-Value.patch

@@ -38,6 +38,10 @@ ifdef HAVE_DARWIN_OS
 ifneq ($(call darwin_min_os_at_least, 10.5), true)
 FLAC_CONF += -DWITH_STACK_PROTECTOR=OFF
 endif
+ifeq ($(ARCH),i386)
+# the legacy cctools as cannot assemble the AVX2 intrinsics objects
+FLAC_CONF += -DWITH_AVX=OFF
+endif
 endif
 
 DEPS_flac = ogg $(DEPS_ogg)

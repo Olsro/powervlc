@@ -16,6 +16,16 @@ gcrypt: libgcrypt-$(GCRYPT_VERSION).tar.bz2 .sum-gcrypt
 	$(UNPACK)
 	$(call pkg_static,"src/libgcrypt.pc.in")
 	$(APPLY) $(SRC)/gcrypt/disable-tests-compilation.patch
+ifdef HAVE_MACOSX
+ifneq ($(call darwin_min_os_at_least, 10.7), true)
+	# __thread needs Mac OS X 10.7; VLC never enables FIPS mode, so a
+	# process-wide context is an acceptable stand-in for the per-thread
+	# FIPS service indicator on the legacy targets
+	sed -i.orig -e 's/^#ifdef HAVE_GCC_STORAGE_CLASS__THREAD$$/#if 1/' \
+	    -e 's/^static __thread struct gcry_thread_context/static struct gcry_thread_context/' \
+	    $(UNPACK_DIR)/src/fips.c
+endif
+endif
 	$(APPLY) $(SRC)/gcrypt/0007-random-don-t-use-API-s-that-are-forbidden-in-UWP-app.patch
 	$(APPLY) $(SRC)/gcrypt/0008-random-only-use-wincrypt-in-UWP-builds-if-WINSTORECO.patch
 	$(APPLY) $(SRC)/gcrypt/0001-hwfeatures-call-SHGetFolderPathA-directly.patch

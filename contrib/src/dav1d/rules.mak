@@ -3,8 +3,8 @@
 DAV1D_VERSION := 1.5.4
 DAV1D_URL := $(VIDEOLAN)/dav1d/$(DAV1D_VERSION)/dav1d-$(DAV1D_VERSION).tar.xz
 
-# aligned-allocation functions absent before Mac OS X 10.6 are worked
-# around by 0001-mem-manual-aligned-alloc-fallback.patch
+# aligned-allocation functions absent before Mac OS X 10.6: dav1d >= 1.5.4
+# carries the manual malloc fallback upstream (former PowerVLC patch 0001)
 PKGS += dav1d
 ifeq ($(call need_pkg,"dav1d"),)
 PKGS_FOUND += dav1d
@@ -58,7 +58,6 @@ $(TARBALLS)/dav1d-$(DAV1D_VERSION).tar.xz:
 # to the 1.5.4 that port carries. 0008 is ours; see the note above.
 dav1d: dav1d-$(DAV1D_VERSION).tar.xz .sum-dav1d
 	$(UNPACK)
-	$(APPLY) $(SRC)/dav1d/0001-mem-manual-aligned-alloc-fallback.patch
 	$(APPLY) $(SRC)/dav1d/0002-ppc-support-altivec.patch
 	$(APPLY) $(SRC)/dav1d/0003-ppc-altivec-inverse-transform.patch
 	$(APPLY) $(SRC)/dav1d/0004-ppc-altivec-mc-blend.patch

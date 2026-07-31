@@ -96,6 +96,12 @@ package_zip() { # package_zip <label> <glob relative to $OUT>
 
 build_windows() { # build_windows <arch-flags> <name-glob>
   WORK_VOL="powervlc-build-windows"
+  # Only (re)build the image when it does not exist yet: the docker build
+  # is not reproducible offline (bionic-era apt repositories move), and a
+  # pruned build cache would otherwise force a full re-run of it.
+  # (retry once: a busy daemon can fail a first inspect transiently)
+  docker image inspect powervlc-win >/dev/null 2>&1 || \
+  { sleep 3; docker image inspect powervlc-win >/dev/null 2>&1; } || \
   docker build --platform linux/arm64 -t powervlc-win \
     -f "$DOCKER_DIR/Dockerfile.windows" "$DOCKER_DIR"
   docker_run linux/arm64 powervlc-win \
@@ -121,16 +127,36 @@ build_windows() { # build_windows <arch-flags> <name-glob>
 build_linux_appimage() { # build_linux_appimage <platform> <base-image> <appimage-arch>
   arch_tag="$(echo "$1" | tr '/' '-')"
   WORK_VOL="powervlc-build-$arch_tag"
+  # See build_windows: reuse the existing image rather than re-running an
+  # apt-get against end-of-life repositories.
+  docker image inspect "powervlc-linux-$arch_tag" >/dev/null 2>&1 || \
+  { sleep 3; docker image inspect "powervlc-linux-$arch_tag" >/dev/null 2>&1; } || \
   docker build --platform "$1" --build-arg BASE="$2" -t "powervlc-linux-$arch_tag" \
     -f "$DOCKER_DIR/Dockerfile.linux" "$DOCKER_DIR"
   docker_run "$1" "powervlc-linux-$arch_tag" \
     "$SEED
+     # Build the FFmpeg 8.1 contrib (static) instead of linking the
+     # distribution's ancient one: same decoders (ATRAC9, APV, the 8.x
+     # improvements) in the AppImages as in every other target. The
+     # contrib state persists in the work volume, so this is a one-off.
+     # ffmpeg's x86 assembly needs nasm, absent from the image: build it
+     # with the in-tree tools (no-op when the tool already exists).
+     ( cd extras/tools && ./bootstrap && make .buildnasm 2>/dev/null || make .nasm || true )
+     export PATH=\"/work/extras/tools/build/bin:\$PATH\"
+     ( cd contrib && mkdir -p native && cd native && \
+       ../bootstrap && VLC_FFMPEG_NO_OPENJPEG=1 make .ffmpeg .postproc )
+     CONTRIB_PREFIX=\$(ls -d /work/contrib/*-linux-gnu* 2>/dev/null | grep -v contrib- | head -1)
+     export PKG_CONFIG_PATH=\"\$CONTRIB_PREFIX/lib/pkgconfig\${PKG_CONFIG_PATH:+:\$PKG_CONFIG_PATH}\"
      ./bootstrap
      # --disable-update-check: no integrated updater in the fork. It is
      # already configure's default, stated here so it stays off.
      ./configure --disable-wayland --enable-merge-ffmpeg \
                  --disable-update-check --prefix=/usr
      make -j\$(nproc)
+     # Stale AppImages from previous runs (older version strings) linger in
+     # the persistent volume and would be copied out and zipped alongside
+     # the fresh one: keep only what this run produces.
+     rm -f /work/PowerVLC-*.AppImage
      VERSION=\"\$PVLC_VER\" BUILDDIR=/work WORKDIR=/work \
        extras/package/appimage/build-appimage.sh
      cp -v /work/PowerVLC-*.AppImage /out/"

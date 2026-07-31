@@ -38,12 +38,29 @@ srt: srt-$(SRT_VERSION).tar.gz .sum-srt
 	$(call pkg_static,"scripts/srt.pc.in")
 ifdef HAVE_MACOSX
 	# The 10.4 SDK's <sys/param.h> defines a BSD isset() macro that
-	# clashes with LogDispatcher::isset(); rename the method.
-	sed -i.orig -e 's/isset(/isSetFlag(/g' $(UNPACK_DIR)/srtcore/logging.h $(UNPACK_DIR)/srtcore/common.cpp
+	# clashes with LogDispatcher::isset(); rename the method (1.5.6
+	# grew a third user in logging.cpp).
+	sed -i.orig -e 's/isset(/isSetFlag(/g' $(UNPACK_DIR)/srtcore/logging.h \
+	    $(UNPACK_DIR)/srtcore/logging.cpp $(UNPACK_DIR)/srtcore/common.cpp
+ifneq ($(call darwin_min_os_at_least, 10.6), true)
+	# pthread_get/setname_np are 10.6+ and the Find module unset()s any
+	# cache preset before re-probing (the probe only compiles, so the
+	# availability error never fires there): short-circuit it, srt then
+	# uses its dummy ThreadName implementation
+	perl -pi -e 's/^function\(FindPThreadGetSetName\)$$/function(FindPThreadGetSetName)\n   return()/' \
+	    $(UNPACK_DIR)/scripts/FindPThreadGetSetName.cmake
+endif
 endif
 	$(MOVE)
 
 SRT_CONF := -DENABLE_SHARED=OFF -DUSE_ENCLIB=gnutls -DENABLE_CXX11=OFF -DENABLE_APPS=OFF
+ifdef HAVE_MACOSX
+ifneq ($(call darwin_min_os_at_least, 10.6), true)
+# pthread_get/setname_np are 10.6+; without them srt falls back to its
+# dummy ThreadName implementation
+SRT_CONF += -DHAVE_PTHREAD_GETNAME_NP:INTERNAL= -DHAVE_PTHREAD_SETNAME_NP:INTERNAL=
+endif
+endif
 
 .srt: srt toolchain.cmake
 	$(CMAKECLEAN)
