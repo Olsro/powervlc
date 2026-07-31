@@ -20,6 +20,11 @@ ifdef HAVE_DARWIN_OS
 # system fonts here like it does everywhere else, instead of falling back to
 # whatever the subtitle track happens to embed.
 WITH_FONTCONFIG = 1
+# CoreText only exists since Mac OS X 10.5 (and libass' provider uses
+# 10.6-era APIs); the legacy 10.4-and-earlier slices must not compile it.
+ifeq ($(call darwin_min_os_at_least, 10.6), true)
+WITH_CORETEXT = 1
+endif
 else
 ifdef HAVE_WINSTORE
 WITH_FONTCONFIG = 0
@@ -45,17 +50,6 @@ libass: libass-$(ASS_VERSION).tar.xz .sum-ass
 DEPS_ass = freetype2 $(DEPS_freetype2) fribidi $(DEPS_fribidi) iconv $(DEPS_iconv) harfbuzz $(DEPS_harfbuzz)
 
 ASS_CONF = --disable-test
-
-ifdef HAVE_MACOSX
-# strndup() is only available since macOS 10.7; force the built-in fallback
-# and demote the availability diagnostic (the fallback rename inherits the
-# SDK declaration's 10.7 availability attribute, but the implementation
-# linked is libass' own)
-ifneq ($(call darwin_min_os_at_least, 10.7), true)
-ASS_CONF += ac_cv_func_strndup=no \
-	CFLAGS="$(CFLAGS) $(WNO_PARTIAL_AVAILABILITY)"
-endif
-endif
 ifneq ($(WITH_FONTCONFIG), 0)
 DEPS_ass += fontconfig $(DEPS_fontconfig)
 else

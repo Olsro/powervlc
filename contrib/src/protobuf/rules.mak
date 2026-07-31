@@ -1,5 +1,5 @@
 # protobuf
-PROTOBUF_VERSION := 3.1.0
+PROTOBUF_VERSION := 3.4.1
 PROTOBUF_URL := $(GITHUB)/google/protobuf/releases/download/v$(PROTOBUF_VERSION)/protobuf-cpp-$(PROTOBUF_VERSION).tar.gz
 
 ifdef HAVE_MACOSX
@@ -15,7 +15,7 @@ endif
 ifdef CAN_BUILD_PROTOBUF
 PKGS += protobuf
 endif
-ifeq ($(call need_pkg, "protobuf-lite >= 3.1.0 protobuf-lite < 3.2.0"),)
+ifeq ($(call need_pkg, "protobuf-lite = $(PROTOBUF_VERSION)"),)
 PKGS_FOUND += protobuf
 endif
 
@@ -25,21 +25,27 @@ $(TARBALLS)/protobuf-$(PROTOBUF_VERSION)-cpp.tar.gz:
 .sum-protobuf: protobuf-$(PROTOBUF_VERSION)-cpp.tar.gz
 
 DEPS_protobuf = zlib $(DEPS_zlib)
-ifdef HAVE_WIN32
-DEPS_protobuf += pthreads $(DEPS_pthreads)
-endif
 
-PROTOBUFVARS := DIST_LANG="cpp"
+PROTOBUF_COMMON_CONF := -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_DEBUG_POSTFIX:STRING= -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+PROTOBUF_CONF := $(PROTOBUF_COMMON_CONF)
 
 protobuf: protobuf-$(PROTOBUF_VERSION)-cpp.tar.gz .sum-protobuf
 	$(UNPACK)
+	$(RM) -Rf $(UNPACK_DIR)
 	mv protobuf-$(PROTOBUF_VERSION) protobuf-$(PROTOBUF_VERSION)-cpp
-	$(APPLY) $(SRC)/protobuf/dont-build-protoc.patch
-	$(APPLY) $(SRC)/protobuf/include-algorithm.patch
+	$(APPLY) $(SRC)/protobuf/0001-don-t-build-and-install-protoc-libprotoc.patch
+	$(APPLY) $(SRC)/protobuf/missing-includes.patch
+	# don't build libprotoc
+	sed -i.orig -e 's,include(libprotoc,#include(libprotoc,' $(UNPACK_DIR)/cmake/CMakeLists.txt
+	# don't build protoc
+	sed -i.orig -e 's,include(protoc,#include(protoc,' $(UNPACK_DIR)/cmake/CMakeLists.txt
+	# force include <algorithm>
+	sed -i.orig 's,#ifdef _MSC_VER,#if 1,' "$(UNPACK_DIR)/src/google/protobuf/repeated_field.h"
 	$(MOVE)
 
-.protobuf: protobuf
-	$(RECONF)
-	cd $< && $(HOSTVARS) $(PROTOBUFVARS) ./configure $(HOSTCONF) --with-protoc="$(PROTOC)"
-	$(MAKE) -C $< && $(MAKE) -C $< install
+.protobuf: protobuf toolchain.cmake
+	$(CMAKECLEAN)
+	$(HOSTVARS_CMAKE) $(CMAKE) -S $</cmake $(PROTOBUF_CONF)
+	+$(CMAKEBUILD)
+	$(CMAKEINSTALL)
 	touch $@

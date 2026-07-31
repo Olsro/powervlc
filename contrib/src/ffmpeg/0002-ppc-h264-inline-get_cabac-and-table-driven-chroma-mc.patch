@@ -34,7 +34,7 @@ for).
      return get_cabac_inline(c,state);
  }
  
--static int av_unused get_cabac(CABACContext *c, uint8_t * const state){
+-av_unused static int get_cabac(CABACContext *c, uint8_t * const state){
 +#if ARCH_PPC
 +/* PowerPC has no asm CABAC reader, so get_cabac_inline() is the whole entropy
 + * decoder -- and GCC refuses to inline it here: it emits a real out-of-line
@@ -49,7 +49,7 @@ for).
 +#define av_cabac_get_inline
 +#endif
 +
-+static av_cabac_get_inline int av_unused get_cabac(CABACContext *c, uint8_t * const state){
++av_unused static av_cabac_get_inline int get_cabac(CABACContext *c, uint8_t * const state){
      return get_cabac_inline(c,state);
  }
  

@@ -1,6 +1,6 @@
 # LIBARCHIVE
-LIBARCHIVE_VERSION := 3.8.0
-LIBARCHIVE_URL := $(GITHUB)/libarchive/libarchive/releases/download/v$(LIBARCHIVE_VERSION)/libarchive-$(LIBARCHIVE_VERSION).tar.gz
+LIBARCHIVE_VERSION := 3.8.8
+LIBARCHIVE_URL := $(GITHUB)/libarchive/libarchive/releases/download/v$(LIBARCHIVE_VERSION)/libarchive-$(LIBARCHIVE_VERSION).tar.xz
 
 PKGS += libarchive
 ifeq ($(call need_pkg,"libarchive >= 3.2.0"),)
@@ -8,14 +8,9 @@ PKGS_FOUND += libarchive
 endif
 
 DEPS_libarchive = zlib $(DEPS_zlib)
-ifdef HAVE_WINSTORE
-# libarchive uses CreateHardLinkW
-DEPS_libarchive += alloweduwp $(DEPS_alloweduwp)
-endif
 
 LIBARCHIVE_CONF := \
 		-DENABLE_CPIO=OFF -DENABLE_TAR=OFF -DENABLE_CAT=OFF \
-		-DENABLE_NETTLE=OFF \
 		-DENABLE_LIBXML2=OFF -DENABLE_LZMA=OFF -DENABLE_ICONV=OFF -DENABLE_EXPAT=OFF \
 		-DENABLE_TEST=OFF -DENABLE_WERROR=OFF
 
@@ -24,10 +19,6 @@ LIBARCHIVE_CONF +=-DENABLE_CNG=ON
 
 # bsdunzip doesn't build on macos, android and emscripten and it's disabled on Windows
 LIBARCHIVE_CONF +=-DENABLE_UNZIP=OFF
-
-ifdef HAVE_WIN32
-LIBARCHIVE_CONF += -DENABLE_OPENSSL=OFF
-endif
 
 ifdef HAVE_MACOSX
 # these functions are detected as present but there are not until macOS 10.10
@@ -42,23 +33,26 @@ LIBARCHIVE_CONF += -DHAVE_STRNLEN:INTERNAL= -DHAVE_ARC4RANDOM_BUF:INTERNAL=
 endif
 endif
 
-$(TARBALLS)/libarchive-$(LIBARCHIVE_VERSION).tar.gz:
+$(TARBALLS)/libarchive-$(LIBARCHIVE_VERSION).tar.xz:
 	$(call download_pkg,$(LIBARCHIVE_URL),libarchive)
 
-.sum-libarchive: libarchive-$(LIBARCHIVE_VERSION).tar.gz
+.sum-libarchive: libarchive-$(LIBARCHIVE_VERSION).tar.xz
 
-libarchive: libarchive-$(LIBARCHIVE_VERSION).tar.gz .sum-libarchive
+libarchive: libarchive-$(LIBARCHIVE_VERSION).tar.xz .sum-libarchive
 	$(UNPACK)
 	$(APPLY) $(SRC)/libarchive/0001-zstd-use-GetNativeSystemInfo-to-get-the-number-of-th.patch
-	$(APPLY) $(SRC)/libarchive/0001-cmake-add-uuid-library-when-using-xmllite.patch
-	$(APPLY) $(SRC)/libarchive/38ac49553d430f1b28c7624e5e9788125fdad187.patch
+	# Do not use WINAPI_PARTITION_SYSTEM, It's not handled properly by the mingw64 macro
+	sed -i.orig 's, | WINAPI_PARTITION_SYSTEM,,' $(UNPACK_DIR)/libarchive/archive_write_disk_windows.c
+	# don't use CreateHardLinkW on old UWP
+	$(APPLY) $(SRC)/libarchive/0001-Disable-CreateHardLinkW-usage-on-old-UWP-targets.patch
+	$(APPLY) $(SRC)/libarchive/0003-Use-VirtualAllocFromApp-for-old-UWP-targets.patch
 	$(APPLY) $(SRC)/libarchive/0001-cryptor-require-deployment-target-10.7-for-CommonCrypto.patch
 	$(call pkg_static,"build/pkgconfig/libarchive.pc.in")
 	$(MOVE)
 
 .libarchive: libarchive toolchain.cmake
 	$(CMAKECLEAN)
-	$(HOSTVARS) $(CMAKE) $(LIBARCHIVE_CONF)
+	$(HOSTVARS_CMAKE) $(CMAKE) $(LIBARCHIVE_CONF)
 	+$(CMAKEBUILD)
 	$(CMAKEINSTALL)
 	touch $@

@@ -266,7 +266,7 @@ halfword stores per macroblock swamped the rest. It is not kept.
  av_cold void ff_h264dsp_init_ppc(H264DSPContext *c, const int bit_depth,
                                   const int chroma_format_idc)
  {
-@@ -918,6 +1123,12 @@
+@@ -1124,6 +1329,12 @@
          return;
  
      if (bit_depth == 8) {
@@ -274,8 +274,8 @@ halfword stores per macroblock swamped the rest. It is not kept.
 +        /* Non-NULL is what lets ff_h264_filter_mb_fast() run at all: without
 +         * it every macroblock goes down ff_h264_filter_mb(), which recomputes
 +         * the same strengths one 4x4 edge at a time. */
-+        c->h264_loop_filter_strength = h264_loop_filter_strength_altivec;
++        c->loop_filter_strength = h264_loop_filter_strength_altivec;
 +#endif
-         c->h264_idct_add = h264_idct_add_altivec;
+         c->idct_add = h264_idct_add_altivec;
          if (chroma_format_idc <= 1)
-             c->h264_idct_add8 = h264_idct_add8_altivec;
+             c->idct_add8 = h264_idct_add8_altivec;

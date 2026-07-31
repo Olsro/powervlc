@@ -56,7 +56,7 @@ and read it back, which resisted every reformulation tried.
 + * four taps; folding the halves together at the end costs one rotate.
 + *
 + * this code assume that stride % 16 == 0 (so one lvsl serves every row) */
-+static void PREFIX_h264_chroma_mc4_altivec(uint8_t *dst, uint8_t *src,
++static void PREFIX_h264_chroma_mc4_altivec(uint8_t *dst, const uint8_t *src,
 +                                           ptrdiff_t stride, int h,
 +                                           int x, int y)
 +{
