@@ -87,6 +87,9 @@ struct es_out_id_t
 
     /* */
     bool b_scrambled;
+    /* Selection was forced (user or demux request): the automatic
+     * default-selection must not steal it for a higher-priority track */
+    bool b_forced_selection;
 
     /* Channel in the track type */
     int         i_channel;
@@ -2500,6 +2503,7 @@ static es_out_id_t *EsOutAddSlave( es_out_t *out, const es_format_t *fmt, es_out
     es->i_id = es->fmt.i_id;
     es->i_meta_id = p_sys->i_id++; /* always incremented */
     es->b_scrambled = false;
+    es->b_forced_selection = false;
 
     switch( es->fmt.i_cat )
     {
@@ -2770,6 +2774,8 @@ static void EsUnselect( es_out_t *out, es_out_id_t *es, bool b_update )
         EsDestroyDecoder( out, es );
     }
 
+    es->b_forced_selection = false;
+
     if( !b_update )
         return;
 
@@ -2886,9 +2892,11 @@ static void EsOutSelect( es_out_t *out, es_out_id_t *es, bool b_force )
                         {
                             wanted_es = es;
                         }
-                        /* Otherwise, fallback by priority */
+                        /* Otherwise, fallback by priority (never stealing a
+                         * forced selection, see #24815) */
                         else if( p_esprops->p_main_es == NULL ||
-                                 es->fmt.i_priority > p_esprops->p_main_es->fmt.i_priority )
+                                 ( !p_esprops->p_main_es->b_forced_selection &&
+                                   es->fmt.i_priority > p_esprops->p_main_es->fmt.i_priority ) )
                         {
                             if( p_esprops->b_autoselect )
                                 wanted_es = es;
@@ -2905,7 +2913,8 @@ static void EsOutSelect( es_out_t *out, es_out_id_t *es, bool b_force )
             wanted_es = es;
         }
         else if( p_esprops->p_main_es == NULL ||
-                 es->fmt.i_priority > p_esprops->p_main_es->fmt.i_priority )
+                 ( !p_esprops->p_main_es->b_forced_selection &&
+                   es->fmt.i_priority > p_esprops->p_main_es->fmt.i_priority ) )
         {
             if( p_esprops->b_autoselect )
                 wanted_es = es;
@@ -2919,6 +2928,9 @@ static void EsOutSelect( es_out_t *out, es_out_id_t *es, bool b_force )
             EsSelect( out, es );
         }
     }
+
+    if( b_force )
+        es->b_forced_selection = true;
 
     /* FIXME TODO handle priority here */
     if( p_esprops && p_sys->i_mode == ES_OUT_MODE_AUTO && EsIsSelected( es ) )
