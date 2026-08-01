@@ -78,6 +78,11 @@ if BUILD_LUA
 endif
 	## HRTFs
 	cp -r $(srcdir)/share/hrtfs $@/Contents/MacOS/share/
+	## fontconfig configuration: the contrib library's compiled-in default
+	## points at the build prefix, absent on target machines. The core sets
+	## FONTCONFIG_FILE to this bundled file (see src/darwin/specific.c).
+	mkdir -p $@/Contents/MacOS/share/fontconfig
+	cp $(srcdir)/share/fontconfig/fonts.conf $@/Contents/MacOS/share/fontconfig/
 	## Root CA bundle: gnutls cannot read a system trust store on Mac OS X
 	## before 10.6, so the gnutls module falls back to this file in the
 	## data dir (see modules/misc/gnutls.c) for HTTPS/TLS streams.

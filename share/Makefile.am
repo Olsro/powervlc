@@ -305,3 +305,6 @@ DIST_solid = \
 
 EXTRA_DIST += \
         hrtfs/dodeca_and_7channel_3DSL_HRTF.sofa
+
+EXTRA_DIST += \
+        fontconfig/fonts.conf

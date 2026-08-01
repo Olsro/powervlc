@@ -29,8 +29,10 @@
 #endif
 
 #include <vlc_common.h>
+#include <vlc_configuration.h>                        /* config_GetDataDir() */
 #include "../libvlc.h"
 #include <dirent.h>                                                /* *dir() */
+#include <unistd.h>                                              /* access() */
 #include <CoreFoundation/CoreFoundation.h>
 
 #include <locale.h>
@@ -171,6 +173,32 @@ void system_Init(void)
             CFRelease( all_locales );
     }
 #endif
+
+    /* ★ La libfontconfig des contribs est compilée avec son fichier de
+     * configuration par défaut sous le préfixe de BUILD, inexistant sur les
+     * machines cibles : chaque utilisateur de fontconfig (libass, résolution
+     * de polices BD-J dans libbluray) imprimait « Fontconfig error: Cannot
+     * load default config file » sur stderr avant de se replier sur la
+     * configuration intégrée. On pointe FONTCONFIG_FILE sur le fonts.conf
+     * embarqué dans le bundle (share/fontconfig/) -- ici, car system_Init()
+     * précède le chargement des greffons et fontconfig ne lit la variable
+     * qu'à sa première initialisation, bien plus tard. setenv(…, 0) laisse
+     * la main à un réglage utilisateur préexistant. */
+    if( getenv( "FONTCONFIG_FILE" ) == NULL )
+    {
+        char *datadir = config_GetDataDir();
+        if( datadir != NULL )
+        {
+            char *conf;
+            if( asprintf( &conf, "%s/fontconfig/fonts.conf", datadir ) != -1 )
+            {
+                if( access( conf, R_OK ) == 0 )
+                    setenv( "FONTCONFIG_FILE", conf, 0 );
+                free( conf );
+            }
+            free( datadir );
+        }
+    }
 }
 
 /*****************************************************************************
