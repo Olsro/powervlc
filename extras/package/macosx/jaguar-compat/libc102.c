@@ -612,7 +612,11 @@ locale_t newlocale(int mask, const char *locale, locale_t base)
 locale_t uselocale(locale_t loc)
 {
     (void) loc;
-    return C_LOCALE_DUMMY;
+    /* There is never a thread-specific locale here. Answering the dummy
+     * handle instead makes gettext's thread-locale probe (uselocale(NULL)
+     * then querylocale()) believe the thread is pinned to "C", which turns
+     * every translation off. */
+    return LC_GLOBAL_LOCALE;
 }
 
 int freelocale(locale_t loc)
