@@ -11620,6 +11620,55 @@ msgid ""
 "This should take less than a minute."
 msgstr ""
 
+#: modules/codec/libmpeg2.c:242
+msgid "Utiliser l'accélération matérielle MPEG2 si disponible"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:244
+msgid ""
+"Décode les flux MPEG-2 sur le GPU (pipeline AppleVA du lecteur DVD d'Apple) "
+"quand un décodeur matériel est présent (ATI, Intel GMA950, nVidia), avec "
+"repli automatique sur le décodage logiciel libmpeg2. Réduit fortement la "
+"charge CPU sur les vieux Mac."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:248
+msgid "Mode field du décodage MPEG-2 matériel (avancé)"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:250
+msgid ""
+"Décodage matériel des macroblocs field-predicted (flux entrelacés, DVD). 0 = "
+"désactivé (l'entrelacé retombe sur le processeur) ; 4 = prédiction frame "
+"équivalente (défaut : le moteur par champ du GPU déchire en mouvement) ; "
+"1/2/3 = moteur par champ natif, réservés à la mise au point."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:254
+msgid "Sous-titres et OSD par-dessus la vidéo accélérée"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:256
+msgid ""
+"Compose les sous-titres (SPU du DVD) et l'affichage à l'écran par-dessus "
+"l'image décodée par le GPU. Sans cette option, la sortie matérielle recouvre "
+"tout et les sous-titres restent invisibles. Ne concerne que la vidéo "
+"affichée dans la fenêtre de VLC."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:260
+msgid "Sous-titres DVD incrustés par le GPU"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:262
+msgid ""
+"Confie les sous-titres du DVD au plan subpicture du décodeur matériel ATI : "
+"le GPU les compose lui-même sur l'image, sans aucun coût par image, là où "
+"l'incrustation par fenêtre coûte 15 à 50 ms sur ce matériel. Sans effet si "
+"le décodage matériel n'est pas actif — le rendu logiciel prend alors le "
+"relais."
+msgstr ""
+
 #: modules/codec/libmpeg2.c:272
 msgid "MPEG I/II video decoder (using libmpeg2)"
 msgstr ""
@@ -18500,6 +18549,10 @@ msgid ""
 "Number of the screen to use by default to display videos in 'fullscreen'. "
 "The screen number correspondance can be found in the video device selection "
 "menu."
+msgstr ""
+
+#: modules/gui/legacy_macosx/macosx.c:131
+msgid "Vidéo intégrée dans une fenêtre enfant"
 msgstr ""
 
 #: modules/gui/legacy_macosx/macosx.c:132
@@ -29378,14 +29431,12 @@ msgid "Media Manager List"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyMenu.m:806
-#: modules/gui/macosx/VLCMainMenu.m:143
-#: modules/gui/qt/menus.cpp:810
+#: modules/gui/macosx/VLCMainMenu.m:143 modules/gui/qt/menus.cpp:810
 msgid "Open the libaacs folder (Blu-ray)"
 msgstr "د libaacs پوښۍ پرانیستل (Blu-ray)"
 
 #: modules/gui/legacy_macosx/VLCLegacyMenu.m:808
-#: modules/gui/macosx/VLCMainMenu.m:150
-#: modules/gui/qt/menus.cpp:815
+#: modules/gui/macosx/VLCMainMenu.m:150 modules/gui/qt/menus.cpp:815
 msgid "Open the libbdplus folder (Blu-ray)"
 msgstr "د libbdplus پوښۍ پرانیستل (Blu-ray)"
 
@@ -29445,5 +29496,7 @@ msgid "Show forced subtitles"
 msgstr ""
 
 #: modules/access/bluray.c:83
-msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgid ""
+"When the disc hides the subtitle stream, keep decoding it and display only "
+"its forced captions, as a standalone Blu-ray player does."
 msgstr ""

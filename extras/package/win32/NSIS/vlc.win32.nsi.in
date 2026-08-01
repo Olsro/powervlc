@@ -89,8 +89,8 @@ RequestExecutionLevel admin
 
 ; MUI Settings
   !define MUI_ABORTWARNING
-  !define MUI_ICON "vlc.ico"
-  !define MUI_UNICON "vlc.ico"
+  !define MUI_ICON "powervlc.ico"
+  !define MUI_UNICON "powervlc.ico"
   !define MUI_COMPONENTSPAGE_SMALLDESC
 
   ; Banner (welcome and finish page) for installer
@@ -383,8 +383,6 @@ ${MementoSection} "$(Name_Section02a)" SEC02a
     "$INSTDIR\powervlc.exe" "-Iskins"
   CreateShortCut "$SMPROGRAMS\PowerVLC\Documentation.lnk" \
     "$INSTDIR\Documentation.url"
-  CreateShortCut "$SMPROGRAMS\PowerVLC\Release Notes.lnk" \
-    "$INSTDIR\NEWS.txt" ""
   CreateShortCut "$SMPROGRAMS\PowerVLC\${PRODUCT_GROUP} Website.lnk" \
     "$INSTDIR\${PRODUCT_GROUP} Website.url"
   CreateShortCut "$SMPROGRAMS\PowerVLC\PowerVLC - reset preferences and cache files.lnk" \

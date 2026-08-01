@@ -36,6 +36,17 @@ $(TARBALLS)/librist-$(LIBRIST_VERSION).tar.gz:
 
 librist: librist-$(LIBRIST_VERSION).tar.gz .sum-librist
 	$(UNPACK)
+ifdef HAVE_WIN32
+ifeq ($(ARCH),i386)
+	# The bundled mbedtls calls vsnprintf_s() whenever _TRUNCATE is defined,
+	# but that "secure CRT" entry point only reached msvcrt.dll with Windows
+	# Vista and the win32 slice targets XP SP3 (a DLL importing it does not
+	# load at all). Fall back to the plain vsnprintf() branch right below it,
+	# which already does the truncation by hand.
+	sed -i.orig -e 's/^#if defined(_TRUNCATE)$$/#if 0 \/* PowerVLC: no secure CRT on Windows XP *\//' \
+	    $(UNPACK_DIR)/contrib/mbedtls/library/platform.c
+endif
+endif
 	$(MOVE)
 
 .librist: librist crossfile.meson

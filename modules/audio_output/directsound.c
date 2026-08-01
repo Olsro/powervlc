@@ -43,6 +43,9 @@
 #include <mmdeviceapi.h>
 
 #define DS_BUF_SIZE (6*1024*1024)
+/* Smallest secondary buffer worth falling back to: ~1.5 s of 16-bit stereo
+ * at 44.1 kHz, still a comfortable cushion for the eraser thread. */
+#define DS_BUF_SIZE_MIN (256*1024)
 
 static int  Open( vlc_object_t * );
 static void Close( vlc_object_t * );
@@ -115,6 +118,7 @@ typedef struct aout_stream_sys
 
     size_t  i_write;
     size_t  i_last_read;
+    size_t  i_buf_size;             /*< Buffer size the device agreed to play */
     int64_t i_data;
 
     bool b_playing;
@@ -164,7 +168,7 @@ static HRESULT TimeGet( aout_stream_sys_t *sys, vlc_tick_t *delay )
     if( size ==  0 )
         return DSERR_GENERIC ;
     else if( size < 0 )
-      size += DS_BUF_SIZE;
+      size += sys->i_buf_size;
 
     sys->i_data -= size;
     sys->i_last_read = read;
@@ -196,7 +200,7 @@ static int OutputTimeGet( audio_output_t *aout, vlc_tick_t *delay )
 static HRESULT FillBuffer( vlc_object_t *obj, aout_stream_sys_t *p_sys,
                            block_t *p_buffer )
 {
-    size_t towrite = (p_buffer != NULL) ? p_buffer->i_buffer : DS_BUF_SIZE;
+    size_t towrite = (p_buffer != NULL) ? p_buffer->i_buffer : p_sys->i_buf_size;
     void *p_write_position, *p_wrap_around;
     unsigned long l_bytes1, l_bytes2;
     HRESULT dsresult;
@@ -262,7 +266,7 @@ static HRESULT FillBuffer( vlc_object_t *obj, aout_stream_sys_t *p_sys,
                                p_wrap_around, l_bytes2 );
 
     p_sys->i_write += towrite;
-    p_sys->i_write %= DS_BUF_SIZE;
+    p_sys->i_write %= p_sys->i_buf_size;
     p_sys->i_data += towrite;
     vlc_mutex_unlock( &p_sys->lock );
 
@@ -444,8 +448,16 @@ static HRESULT CreateDSBuffer( vlc_object_t *obj, aout_stream_sys_t *sys,
     dsbdesc.dwSize = sizeof(DSBUFFERDESC);
     dsbdesc.dwFlags = DSBCAPS_GETCURRENTPOSITION2 /* Better position accuracy */
                     | DSBCAPS_GLOBALFOCUS         /* Allows background playing */
-                    | DSBCAPS_CTRLVOLUME          /* Allows volume control */
-                    | DSBCAPS_CTRLPOSITIONNOTIFY; /* Allow position notifications */
+                    | DSBCAPS_CTRLVOLUME;         /* Allows volume control */
+    /* No DSBCAPS_CTRLPOSITIONNOTIFY. VLC asked for it, queried
+     * IDirectSoundNotify and then never called SetNotificationPositions --
+     * the interface was acquired and released without a single use. It came
+     * back with 21e2557b1c (2013), which is also where the 6 MiB buffer
+     * appeared; before that, 1cffaf8dff (2005) had deliberately dropped
+     * position notification, its message reading "since even microsoft says
+     * it's buggy. That should solve all known issues with the directx audio
+     * output". Asking for a capability we do not use can only narrow what the
+     * driver is willing to give us. */
 
     /* Only use the new WAVE_FORMAT_EXTENSIBLE format for multichannel audio */
     if( i_nb_channels <= 2 )
@@ -462,28 +474,66 @@ static HRESULT CreateDSBuffer( vlc_object_t *obj, aout_stream_sys_t *sys,
         dsbdesc.dwFlags |= DSBCAPS_LOCHARDWARE;
     }
 
-    dsbdesc.dwBufferBytes = DS_BUF_SIZE; /* buffer size */
     dsbdesc.lpwfxFormat = (WAVEFORMATEX *)&waveformat;
 
     /* CreateSoundBuffer doesn't allow volume control for non-PCM buffers */
     if ( i_format == VLC_CODEC_SPDIFL )
         dsbdesc.dwFlags &= ~DSBCAPS_CTRLVOLUME;
 
-    hr = IDirectSound_CreateSoundBuffer( sys->p_dsobject, &dsbdesc,
-                                         &sys->p_dsbuffer, NULL );
-    if( FAILED(hr) )
+    /* DS_BUF_SIZE is 6 MiB -- about 36 seconds of 16-bit stereo at 44.1 kHz,
+     * an enormous secondary buffer. It arrived with 21e2557b1c (2013), and on
+     * some Windows XP machines the driver accepts a buffer that size and then
+     * refuses to Play() it, returning E_OUTOFMEMORY forever. Rather than pick
+     * a smaller constant and hope, ask the driver: halve until it agrees to
+     * play, and keep the size it accepted. Machines that are happy with 6 MiB
+     * are unaffected -- they answer yes on the first try. */
+    for( size_t size = DS_BUF_SIZE; ; size /= 2 )
     {
-        if( !(dsbdesc.dwFlags & DSBCAPS_LOCHARDWARE) )
-            return hr;
+        dsbdesc.dwBufferBytes = size;
 
-        /* Try without DSBCAPS_LOCHARDWARE */
-        dsbdesc.dwFlags &= ~DSBCAPS_LOCHARDWARE;
         hr = IDirectSound_CreateSoundBuffer( sys->p_dsobject, &dsbdesc,
                                              &sys->p_dsbuffer, NULL );
-        if( FAILED(hr) )
+        if( FAILED(hr) && (dsbdesc.dwFlags & DSBCAPS_LOCHARDWARE) )
+        {
+            /* Try without DSBCAPS_LOCHARDWARE */
+            dsbdesc.dwFlags &= ~DSBCAPS_LOCHARDWARE;
+            hr = IDirectSound_CreateSoundBuffer( sys->p_dsobject, &dsbdesc,
+                                                 &sys->p_dsbuffer, NULL );
+            if( SUCCEEDED(hr) && !b_probe )
+                msg_Dbg( obj, "couldn't use hardware sound buffer" );
+        }
+
+        if( SUCCEEDED(hr) )
+        {
+            /* Being allowed to create a buffer is not being allowed to play
+             * it, and the difference is only visible here. The buffer is
+             * freshly created and therefore silent, so this is inaudible. */
+            HRESULT play = IDirectSoundBuffer_Play( sys->p_dsbuffer, 0, 0,
+                                                    DSBPLAY_LOOPING );
+            if( SUCCEEDED(play) )
+            {
+                IDirectSoundBuffer_Stop( sys->p_dsbuffer );
+                IDirectSoundBuffer_SetCurrentPosition( sys->p_dsbuffer, 0 );
+                sys->i_buf_size = size;
+                if( !b_probe && size != DS_BUF_SIZE )
+                    msg_Dbg( obj, "device refused a %zu KiB buffer, playing "
+                             "from %zu KiB", (size_t) DS_BUF_SIZE / 1024,
+                             size / 1024 );
+                break;
+            }
+            hr = play;
+            IDirectSoundBuffer_Release( sys->p_dsbuffer );
+            sys->p_dsbuffer = NULL;
+        }
+
+        if( size / 2 < DS_BUF_SIZE_MIN )
+        {
+            if( !b_probe )
+                msg_Err( obj, "no buffer size between %zu KiB and %zu KiB can "
+                         "be played (hr=0x%lX)", (size_t) DS_BUF_SIZE_MIN / 1024,
+                         (size_t) DS_BUF_SIZE / 1024, hr );
             return hr;
-        if( !b_probe )
-            msg_Dbg( obj, "couldn't use hardware sound buffer" );
+        }
     }
 
     /* Stop here if we were just probing */
@@ -502,14 +552,10 @@ static HRESULT CreateDSBuffer( vlc_object_t *obj, aout_stream_sys_t *sys,
     if( sys->chans_to_reorder )
         msg_Dbg( obj, "channel reordering needed" );
 
-    hr = IDirectSoundBuffer_QueryInterface( sys->p_dsbuffer,
-                                            &IID_IDirectSoundNotify,
-                                            (void **) &sys->p_notify );
-    if( hr != DS_OK )
-    {
-        msg_Err( obj, "Couldn't query IDirectSoundNotify" );
-        sys->p_notify = NULL;
-    }
+    /* IDirectSoundNotify went with DSBCAPS_CTRLPOSITIONNOTIFY above: nothing
+     * ever called SetNotificationPositions on it, so querying it only logged
+     * an error on devices that do not offer it. */
+    sys->p_notify = NULL;
 
     FillBuffer( obj, sys, NULL );
     return DS_OK;
@@ -794,6 +840,7 @@ static HRESULT Start( vlc_object_t *obj, aout_stream_sys_t *sys,
             msg_Err( obj, "cannot open directx audio device" );
             goto error;
         }
+
     }
 
     int ret = vlc_clone(&sys->eraser_thread, PlayedDataEraser, (void*) obj,
@@ -1143,9 +1190,9 @@ static void * PlayedDataEraser( void * data )
             int64_t max = (int64_t) i_read - (int64_t) p_sys->i_write;
             tosleep = -max;
             if( max <= 0 )
-                max += DS_BUF_SIZE;
+                max += p_sys->i_buf_size;
             else
-                tosleep += DS_BUF_SIZE;
+                tosleep += p_sys->i_buf_size;
             toerase = max;
             tosleep = ( tosleep / p_sys->i_bytes_per_sample ) * CLOCK_FREQ / p_sys->i_rate;
         }

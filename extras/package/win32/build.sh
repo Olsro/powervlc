@@ -507,7 +507,15 @@ fi
 if [ -n "$DISABLEGUI" ]; then
     CONFIGFLAGS="$CONFIGFLAGS --disable-vlc --disable-qt --disable-skins2"
 else
-    CONFIGFLAGS="$CONFIGFLAGS --enable-qt --enable-skins2 --enable-update-check"
+    # No --enable-update-check: the fork ships no integrated updater, and this
+    # line used to silently override the --disable-update-check that
+    # extras/package/win32/configure.sh already asks for. With it on, Windows
+    # offered to look for updates at first launch and kept a "Check for
+    # Updates" entry in the Help menu, both pointing at videolan.org releases
+    # that have nothing to do with PowerVLC. The Linux and macOS targets have
+    # always been built without it. It is also what dragged libgcrypt (and so
+    # libgpg-error) into libvlccore.
+    CONFIGFLAGS="$CONFIGFLAGS --enable-qt --enable-skins2"
 fi
 if [ -n "$WINSTORE" ]; then
     CONFIGFLAGS="$CONFIGFLAGS --enable-winstore-app"

@@ -267,16 +267,20 @@ int libvlc_InternalInit( libvlc_int_t *p_libvlc, int i_argc,
      * returns control to the application (DESIGN BUG!), all these variables
      * must be created (in place of libvlc_new()) and set to VLC defaults
      * (in place of VLC main()) *here*. */
+    /* Identify as PowerVLC, with the product version: a server looking at
+     * these strings is being told which player is talking to it, and this one
+     * is not VLC 3.0.24. PACKAGE_VERSION stays what it is elsewhere -- it is
+     * the upstream base the fork tracks, not the thing the user installed. */
     var_Create( p_libvlc, "user-agent", VLC_VAR_STRING );
     var_SetString( p_libvlc, "user-agent",
-                   "VLC media player (LibVLC "VERSION")" );
+                   "PowerVLC media player (LibPowerVLC "POWERVLC_VERSION")" );
     var_Create( p_libvlc, "http-user-agent", VLC_VAR_STRING );
     var_SetString( p_libvlc, "http-user-agent",
-                   "VLC/"PACKAGE_VERSION" LibVLC/"PACKAGE_VERSION );
+                   "PowerVLC/"POWERVLC_VERSION" LibPowerVLC/"POWERVLC_VERSION );
     var_Create( p_libvlc, "app-icon-name", VLC_VAR_STRING );
-    var_SetString( p_libvlc, "app-icon-name", PACKAGE_NAME );
+    var_SetString( p_libvlc, "app-icon-name", "powervlc" );
     var_Create( p_libvlc, "app-id", VLC_VAR_STRING );
-    var_SetString( p_libvlc, "app-id", "org.VideoLAN.VLC" );
+    var_SetString( p_libvlc, "app-id", "com.github.PowerVLC" );
     var_Create( p_libvlc, "app-version", VLC_VAR_STRING );
     var_SetString( p_libvlc, "app-version", PACKAGE_VERSION );
 

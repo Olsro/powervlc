@@ -138,7 +138,7 @@ fi
 # The install prefix inside the tree is typically /usr or /usr/local; the
 # desktop file and icon are what linuxdeploy uses to build the AppImage.
 DESKTOP_FILE="$(find "$APPDIR" -name 'vlc.desktop' -print -quit)"
-ICON_FILE="$(find "$APPDIR" -path '*icons/hicolor/256x256/apps/vlc.png' -print -quit)"
+ICON_FILE="$(find "$APPDIR" -path '*icons/hicolor/256x256/apps/powervlc.png' -print -quit)"
 
 if [ -z "$DESKTOP_FILE" ]; then
     echo "Could not find vlc.desktop under $APPDIR - did 'make install' run?" >&2
@@ -146,7 +146,7 @@ if [ -z "$DESKTOP_FILE" ]; then
 fi
 if [ -z "$ICON_FILE" ]; then
     # Fall back to any installed vlc icon.
-    ICON_FILE="$(find "$APPDIR" -name 'vlc.png' -print -quit)"
+    ICON_FILE="$(find "$APPDIR" -name 'powervlc.png' -print -quit)"
 fi
 
 echo "  desktop file: $DESKTOP_FILE"

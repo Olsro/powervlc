@@ -12696,6 +12696,55 @@ msgstr ""
 "caractères.\n"
 "Ceci devrait prendre moins d’une minute."
 
+#: modules/codec/libmpeg2.c:242
+msgid "Utiliser l'accélération matérielle MPEG2 si disponible"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:244
+msgid ""
+"Décode les flux MPEG-2 sur le GPU (pipeline AppleVA du lecteur DVD d'Apple) "
+"quand un décodeur matériel est présent (ATI, Intel GMA950, nVidia), avec "
+"repli automatique sur le décodage logiciel libmpeg2. Réduit fortement la "
+"charge CPU sur les vieux Mac."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:248
+msgid "Mode field du décodage MPEG-2 matériel (avancé)"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:250
+msgid ""
+"Décodage matériel des macroblocs field-predicted (flux entrelacés, DVD). 0 = "
+"désactivé (l'entrelacé retombe sur le processeur) ; 4 = prédiction frame "
+"équivalente (défaut : le moteur par champ du GPU déchire en mouvement) ; "
+"1/2/3 = moteur par champ natif, réservés à la mise au point."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:254
+msgid "Sous-titres et OSD par-dessus la vidéo accélérée"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:256
+msgid ""
+"Compose les sous-titres (SPU du DVD) et l'affichage à l'écran par-dessus "
+"l'image décodée par le GPU. Sans cette option, la sortie matérielle recouvre "
+"tout et les sous-titres restent invisibles. Ne concerne que la vidéo "
+"affichée dans la fenêtre de VLC."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:260
+msgid "Sous-titres DVD incrustés par le GPU"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:262
+msgid ""
+"Confie les sous-titres du DVD au plan subpicture du décodeur matériel ATI : "
+"le GPU les compose lui-même sur l'image, sans aucun coût par image, là où "
+"l'incrustation par fenêtre coûte 15 à 50 ms sur ce matériel. Sans effet si "
+"le décodage matériel n'est pas actif — le rendu logiciel prend alors le "
+"relais."
+msgstr ""
+
 #: modules/codec/libmpeg2.c:272
 msgid "MPEG I/II video decoder (using libmpeg2)"
 msgstr "Décodeur vidéo MPEG I/II (utilisant libmpeg2)"
@@ -19975,6 +20024,10 @@ msgstr ""
 "Numéro de l’écran à utiliser par défaut pour afficher les vidéos en plein "
 "écran. La correspondance des numéros d’écrans se trouve dans le menu de "
 "sélection du périphérique vidéo."
+
+#: modules/gui/legacy_macosx/macosx.c:131
+msgid "Vidéo intégrée dans une fenêtre enfant"
+msgstr ""
 
 #: modules/gui/legacy_macosx/macosx.c:132
 msgid ""
@@ -31579,230 +31632,6 @@ msgstr "Ouvrir le dossier de libbdplus (Blu-rays)"
 msgid "The folder %s could not be opened."
 msgstr "Le dossier %s n'a pas pu être ouvert."
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "VLC version %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "Lancement de vlc avec l’interface par défaut. Utiliser « cvlc » pour "
-#~ "démarrer VLC sans interface."
-
-#~ msgid ""
-#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
-#~ "not have it."
-#~ msgstr ""
-#~ "Ce disque Blu-ray a besoin d’une bibliothèque de décodage AACS, et votre "
-#~ "système ne l’a pas."
-
-#~ msgid "Missing AACS configuration file!"
-#~ msgstr "Fichier de configuration AACS manquant !"
-
-#~ msgid ""
-#~ "Note: this mode disables the look-ahead decode cache below (GPU-mapped "
-#~ "pictures cannot be buffered deeply enough to make a useful cache)."
-#~ msgstr ""
-#~ "Note : ce mode désactive le cache de décodage en avance ci-dessous (les "
-#~ "images en mémoire GPU ne peuvent pas s'accumuler assez pour un cache "
-#~ "utile)."
-
-#: include/vlc_intf_strings.h:66
-msgid "Blu-ray Pop-Up Menu"
-msgstr "Menu Pop-Up Blu-ray"
-
-#: src/libvlc-module.c:1358
-msgid "Show the Blu-ray pop-up menu"
-msgstr "Afficher le menu pop-up Blu-ray"
-
-#: src/libvlc-module.c:1359
-msgid ""
-"Select the key that shows the pop-up menu a Blu-ray draws over the running "
-"movie (not the disc root menu)."
-msgstr ""
-"Choisissez la touche qui affiche le menu pop-up qu'un Blu-ray dessine "
-"par-dessus le film en cours (et non le menu principal du disque)."
-
-#: modules/access/bluray.c:82
-msgid "Use the main playlist from the key database"
-msgstr "Utiliser la liste de lecture principale de la base de clés"
-
-#: modules/access/bluray.c:83
-msgid ""
-"Some discs hide the feature among hundreds of decoy playlists of the same "
-"length, so the longest one is not the right one. When playing without menus, "
-"start on the playlist your KEYDB.cfg records for this disc, if it records "
-"one. Titles are named after their .mpls file either way, so another one can "
-"still be picked."
-msgstr ""
-"Certains disques cachent le film parmi des centaines de listes de lecture "
-"leurres de même durée : la plus longue n'est donc pas la bonne. En "
-"lecture sans menus, démarrer sur la liste de lecture que votre KEYDB.cfg "
-"indique pour ce disque, s'il en indique une. Les titres portent de toute "
-"façon le nom de leur fichier .mpls, il reste donc possible d'en choisir "
-"un autre."
-
-#: modules/access/bluray.c:2436
-#, c-format
-msgid "%05u.mpls (main playlist)"
-msgstr "%05u.mpls (liste de lecture principale)"
-
-#: modules/access/bluray.c:3080
-msgid "Dynamic range"
-msgstr "Plage dynamique"
-
-#: modules/access/bluray.c:3098
-msgid "Dolby Vision tracks"
-msgstr "Pistes Dolby Vision"
-
-#: modules/access/bluray.c:3102
-msgid "SDR conversion notice"
-msgstr "Avis de conversion SDR"
-
-#: modules/access/fs.c:43
-msgid "Bypass the system file cache"
-msgstr "Contourner le cache de fichiers du système"
-
-#: modules/access/fs.c:44
-msgid ""
-"Read local files without going through the operating system's file cache "
-"(F_NOCACHE). On a Mac with little RAM this stops a large film from evicting "
-"the player's own memory mid-playback. It also disables kernel read-ahead, so "
-"leave it off on slow or network volumes."
-msgstr ""
-"Lire les fichiers locaux sans passer par le cache de fichiers du système "
-"d'exploitation (F_NOCACHE). Sur un Mac peu doté en mémoire, cela évite "
-"qu'un film volumineux n'évince la mémoire du lecteur lui-même en pleine "
-"lecture. Cela désactive aussi la lecture anticipée du noyau : à laisser "
-"inactif sur les volumes lents ou en réseau."
-
-#: modules/codec/libmpeg2.c:297
-msgid "Use MPEG-2 hardware acceleration when available"
-msgstr "Utiliser l'accélération matérielle MPEG-2 si disponible"
-
-#: modules/codec/libmpeg2.c:299
-msgid ""
-"Decode MPEG-2 streams on the GPU (the AppleVA pipeline of Apple's DVD "
-"Player) whenever a hardware decoder is present (ATI, Intel GMA950, nVidia), "
-"falling back to the libmpeg2 software decoder automatically. Cuts CPU load "
-"dramatically on old Macs."
-msgstr ""
-"Décode les flux MPEG-2 sur le GPU (pipeline AppleVA du lecteur DVD "
-"d'Apple) quand un décodeur matériel est présent (ATI, Intel GMA950, "
-"nVidia), avec repli automatique sur le décodage logiciel libmpeg2. Réduit "
-"fortement la charge CPU sur les vieux Mac."
-
-#: modules/codec/libmpeg2.c:303
-msgid "Field mode of the MPEG-2 hardware decoder (advanced)"
-msgstr "Mode field du décodage MPEG-2 matériel (avancé)"
-
-#: modules/codec/libmpeg2.c:305
-msgid ""
-"Hardware decoding of field-predicted macroblocks (interlaced streams, DVD). "
-"0 = off (interlaced content falls back to the processor); 4 = equivalent "
-"frame prediction (the default: the field engine of the GPU tears on motion); "
-"1/2/3 = native field engine, for debugging only."
-msgstr ""
-"Décodage matériel des macroblocs field-predicted (flux entrelacés, DVD). "
-"0 = désactivé (l'entrelacé retombe sur le processeur) ; 4 = prédiction "
-"frame équivalente (défaut : le moteur par champ du GPU déchire en "
-"mouvement) ; 1/2/3 = moteur par champ natif, réservés à la mise au point."
-
-#: modules/codec/libmpeg2.c:309
-msgid "Subtitles and OSD over hardware-accelerated video"
-msgstr "Sous-titres et OSD par-dessus la vidéo accélérée"
-
-#: modules/codec/libmpeg2.c:311
-msgid ""
-"Compose the subtitles (DVD SPU) and the on-screen display over the picture "
-"decoded by the GPU. Without this option the hardware output covers "
-"everything and subtitles stay invisible. Only affects the video shown in the "
-"VLC window."
-msgstr ""
-"Compose les sous-titres (SPU du DVD) et l'affichage à l'écran par-dessus "
-"l'image décodée par le GPU. Sans cette option, la sortie matérielle "
-"recouvre tout et les sous-titres restent invisibles. Ne concerne que la "
-"vidéo affichée dans la fenêtre de VLC."
-
-#: modules/codec/libmpeg2.c:315
-msgid "Asynchronous GPU submission (advanced)"
-msgstr "Soumission GPU asynchrone (avancé)"
-
-#: modules/codec/libmpeg2.c:317
-msgid ""
-"Issue the DVDDriverDecode call on a dedicated thread, so that the VLD of the "
-"next picture runs while the GPU works. Measured on the iBook G3: Decode is "
-"time spent blocked in the driver, and overlapping it removes the shortfall "
-"in the 40 ms per picture budget."
-msgstr ""
-"Fait l'appel DVDDriverDecode sur un thread dédié pour que la VLD de "
-"l'image suivante tourne pendant que le GPU travaille. Mesuré sur l'iBook "
-"G3 : Decode est du temps bloqué dans le pilote, le recouvrir supprime le "
-"déficit du budget de 40 ms par image."
-
-#: modules/codec/libmpeg2.c:321
-msgid "10.2 port changes on the hardware path (advanced)"
-msgstr "Modifications du portage 10.2 sur le chemin matériel (avancé)"
-
-#: modules/codec/libmpeg2.c:323
-msgid ""
-"-1 = automatic (on under Mac OS X 10.2 and 10.3, off from 10.4 on, where "
-"they replaced behaviour validated on the machine itself), 0 = off, 1 = on."
-msgstr ""
-"-1 = automatique (actives sur Mac OS X 10.2 et 10.3, inactives à partir "
-"de 10.4, où elles remplaçaient un comportement validé sur place), 0 = "
-"inactives, 1 = actives."
-
-#: modules/codec/libmpeg2.c:326
-msgid "DVD subtitles drawn by the GPU"
-msgstr "Sous-titres DVD incrustés par le GPU"
-
-#: modules/codec/libmpeg2.c:328
-msgid ""
-"Hand the DVD subtitles to the subpicture plane of the ATI hardware decoder: "
-"the GPU composes them onto the picture itself, at no per-picture cost, where "
-"drawing them through a window costs 15 to 50 ms on this hardware. No effect "
-"while hardware decoding is off, as software rendering then takes over."
-msgstr ""
-"Confie les sous-titres du DVD au plan subpicture du décodeur matériel ATI "
-": le GPU les compose lui-même sur l'image, sans aucun coût par image, là "
-"où l'incrustation par fenêtre coûte 15 à 50 ms sur ce matériel. Sans "
-"effet tant que le décodage matériel n'est pas actif, le rendu logiciel "
-"prenant alors le relais."
-
-#: modules/gui/legacy_macosx/macosx.c:131
-msgid "Embedded video in a child window"
-msgstr "Vidéo intégrée dans une fenêtre enfant"
-
-#: modules/gui/legacy_macosx/macosx.c:132
-msgid ""
-"Host the embedded video in a borderless child window: switching to "
-"fullscreen is instant and does not interrupt accelerated decoding. Turning "
-"this off restores the former behaviour (a separate fullscreen window). No "
-"effect under Mac OS X 10.4, where a child window displays nothing."
-msgstr ""
-"Héberge la vidéo intégrée dans une fenêtre enfant sans bordure : le "
-"passage en plein écran est instantané et n'interrompt pas le décodage "
-"accéléré. Désactiver rétablit l'ancien comportement (fenêtre de plein "
-"écran séparée). Sans effet sous Mac OS X 10.4, où une fenêtre enfant "
-"n'affiche rien."
-
-#: modules/gui/legacy_macosx/macosx.c:143
-msgid "Open a window at startup (debugging)"
-msgstr "Ouvrir une fenêtre au démarrage (débogage)"
-
-#: modules/gui/legacy_macosx/macosx.c:144
-msgid ""
-"Name of the window to open at startup, like the VLC_LEGACY_SHOW environment "
-"variable: prefs, prefsadv, mediainfo, errors, about, bookmarks, messages, "
-"tracksync, effects, videoeffects, convert, fspanel, open0..3."
-msgstr ""
-"Nom de la fenêtre à ouvrir au lancement, comme la variable "
-"d'environnement VLC_LEGACY_SHOW : prefs, prefsadv, mediainfo, errors, "
-"about, bookmarks, messages, tracksync, effects, videoeffects, convert, "
-"fspanel, open0..3."
-
 #: modules/access/dvd_description.h:30
 msgid "Audio for visually impaired"
 msgstr "Audio pour malvoyants"
@@ -31852,5 +31681,210 @@ msgid "Show forced subtitles"
 msgstr "Afficher les sous-titres forcés"
 
 #: modules/access/bluray.c:83
-msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
-msgstr "Quand le disque masque le flux de sous-titres, continuer à le décoder et n'afficher que ses sous-titres forcés, comme le fait une platine Blu-ray de salon."
+msgid ""
+"When the disc hides the subtitle stream, keep decoding it and display only "
+"its forced captions, as a standalone Blu-ray player does."
+msgstr ""
+"Quand le disque masque le flux de sous-titres, continuer à le décoder et "
+"n'afficher que ses sous-titres forcés, comme le fait une platine Blu-ray de "
+"salon."
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "VLC version %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "Lancement de vlc avec l’interface par défaut. Utiliser « cvlc » pour "
+#~ "démarrer VLC sans interface."
+
+#~ msgid ""
+#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
+#~ "not have it."
+#~ msgstr ""
+#~ "Ce disque Blu-ray a besoin d’une bibliothèque de décodage AACS, et votre "
+#~ "système ne l’a pas."
+
+#~ msgid "Missing AACS configuration file!"
+#~ msgstr "Fichier de configuration AACS manquant !"
+
+#~ msgid ""
+#~ "Note: this mode disables the look-ahead decode cache below (GPU-mapped "
+#~ "pictures cannot be buffered deeply enough to make a useful cache)."
+#~ msgstr ""
+#~ "Note : ce mode désactive le cache de décodage en avance ci-dessous (les "
+#~ "images en mémoire GPU ne peuvent pas s'accumuler assez pour un cache "
+#~ "utile)."
+
+#~ msgid "Blu-ray Pop-Up Menu"
+#~ msgstr "Menu Pop-Up Blu-ray"
+
+#~ msgid "Show the Blu-ray pop-up menu"
+#~ msgstr "Afficher le menu pop-up Blu-ray"
+
+#~ msgid ""
+#~ "Select the key that shows the pop-up menu a Blu-ray draws over the "
+#~ "running movie (not the disc root menu)."
+#~ msgstr ""
+#~ "Choisissez la touche qui affiche le menu pop-up qu'un Blu-ray dessine par-"
+#~ "dessus le film en cours (et non le menu principal du disque)."
+
+#~ msgid "Use the main playlist from the key database"
+#~ msgstr "Utiliser la liste de lecture principale de la base de clés"
+
+#~ msgid ""
+#~ "Some discs hide the feature among hundreds of decoy playlists of the same "
+#~ "length, so the longest one is not the right one. When playing without "
+#~ "menus, start on the playlist your KEYDB.cfg records for this disc, if it "
+#~ "records one. Titles are named after their .mpls file either way, so "
+#~ "another one can still be picked."
+#~ msgstr ""
+#~ "Certains disques cachent le film parmi des centaines de listes de lecture "
+#~ "leurres de même durée : la plus longue n'est donc pas la bonne. En "
+#~ "lecture sans menus, démarrer sur la liste de lecture que votre KEYDB.cfg "
+#~ "indique pour ce disque, s'il en indique une. Les titres portent de toute "
+#~ "façon le nom de leur fichier .mpls, il reste donc possible d'en choisir "
+#~ "un autre."
+
+#, c-format
+#~ msgid "%05u.mpls (main playlist)"
+#~ msgstr "%05u.mpls (liste de lecture principale)"
+
+#~ msgid "Dynamic range"
+#~ msgstr "Plage dynamique"
+
+#~ msgid "Dolby Vision tracks"
+#~ msgstr "Pistes Dolby Vision"
+
+#~ msgid "SDR conversion notice"
+#~ msgstr "Avis de conversion SDR"
+
+#~ msgid "Bypass the system file cache"
+#~ msgstr "Contourner le cache de fichiers du système"
+
+#~ msgid ""
+#~ "Read local files without going through the operating system's file cache "
+#~ "(F_NOCACHE). On a Mac with little RAM this stops a large film from "
+#~ "evicting the player's own memory mid-playback. It also disables kernel "
+#~ "read-ahead, so leave it off on slow or network volumes."
+#~ msgstr ""
+#~ "Lire les fichiers locaux sans passer par le cache de fichiers du système "
+#~ "d'exploitation (F_NOCACHE). Sur un Mac peu doté en mémoire, cela évite "
+#~ "qu'un film volumineux n'évince la mémoire du lecteur lui-même en pleine "
+#~ "lecture. Cela désactive aussi la lecture anticipée du noyau : à laisser "
+#~ "inactif sur les volumes lents ou en réseau."
+
+#~ msgid "Use MPEG-2 hardware acceleration when available"
+#~ msgstr "Utiliser l'accélération matérielle MPEG-2 si disponible"
+
+#~ msgid ""
+#~ "Decode MPEG-2 streams on the GPU (the AppleVA pipeline of Apple's DVD "
+#~ "Player) whenever a hardware decoder is present (ATI, Intel GMA950, "
+#~ "nVidia), falling back to the libmpeg2 software decoder automatically. "
+#~ "Cuts CPU load dramatically on old Macs."
+#~ msgstr ""
+#~ "Décode les flux MPEG-2 sur le GPU (pipeline AppleVA du lecteur DVD "
+#~ "d'Apple) quand un décodeur matériel est présent (ATI, Intel GMA950, "
+#~ "nVidia), avec repli automatique sur le décodage logiciel libmpeg2. Réduit "
+#~ "fortement la charge CPU sur les vieux Mac."
+
+#~ msgid "Field mode of the MPEG-2 hardware decoder (advanced)"
+#~ msgstr "Mode field du décodage MPEG-2 matériel (avancé)"
+
+#~ msgid ""
+#~ "Hardware decoding of field-predicted macroblocks (interlaced streams, "
+#~ "DVD). 0 = off (interlaced content falls back to the processor); 4 = "
+#~ "equivalent frame prediction (the default: the field engine of the GPU "
+#~ "tears on motion); 1/2/3 = native field engine, for debugging only."
+#~ msgstr ""
+#~ "Décodage matériel des macroblocs field-predicted (flux entrelacés, DVD). "
+#~ "0 = désactivé (l'entrelacé retombe sur le processeur) ; 4 = prédiction "
+#~ "frame équivalente (défaut : le moteur par champ du GPU déchire en "
+#~ "mouvement) ; 1/2/3 = moteur par champ natif, réservés à la mise au point."
+
+#~ msgid "Subtitles and OSD over hardware-accelerated video"
+#~ msgstr "Sous-titres et OSD par-dessus la vidéo accélérée"
+
+#~ msgid ""
+#~ "Compose the subtitles (DVD SPU) and the on-screen display over the "
+#~ "picture decoded by the GPU. Without this option the hardware output "
+#~ "covers everything and subtitles stay invisible. Only affects the video "
+#~ "shown in the VLC window."
+#~ msgstr ""
+#~ "Compose les sous-titres (SPU du DVD) et l'affichage à l'écran par-dessus "
+#~ "l'image décodée par le GPU. Sans cette option, la sortie matérielle "
+#~ "recouvre tout et les sous-titres restent invisibles. Ne concerne que la "
+#~ "vidéo affichée dans la fenêtre de VLC."
+
+#~ msgid "Asynchronous GPU submission (advanced)"
+#~ msgstr "Soumission GPU asynchrone (avancé)"
+
+#~ msgid ""
+#~ "Issue the DVDDriverDecode call on a dedicated thread, so that the VLD of "
+#~ "the next picture runs while the GPU works. Measured on the iBook G3: "
+#~ "Decode is time spent blocked in the driver, and overlapping it removes "
+#~ "the shortfall in the 40 ms per picture budget."
+#~ msgstr ""
+#~ "Fait l'appel DVDDriverDecode sur un thread dédié pour que la VLD de "
+#~ "l'image suivante tourne pendant que le GPU travaille. Mesuré sur l'iBook "
+#~ "G3 : Decode est du temps bloqué dans le pilote, le recouvrir supprime le "
+#~ "déficit du budget de 40 ms par image."
+
+#~ msgid "10.2 port changes on the hardware path (advanced)"
+#~ msgstr "Modifications du portage 10.2 sur le chemin matériel (avancé)"
+
+#~ msgid ""
+#~ "-1 = automatic (on under Mac OS X 10.2 and 10.3, off from 10.4 on, where "
+#~ "they replaced behaviour validated on the machine itself), 0 = off, 1 = on."
+#~ msgstr ""
+#~ "-1 = automatique (actives sur Mac OS X 10.2 et 10.3, inactives à partir "
+#~ "de 10.4, où elles remplaçaient un comportement validé sur place), 0 = "
+#~ "inactives, 1 = actives."
+
+#~ msgid "DVD subtitles drawn by the GPU"
+#~ msgstr "Sous-titres DVD incrustés par le GPU"
+
+#~ msgid ""
+#~ "Hand the DVD subtitles to the subpicture plane of the ATI hardware "
+#~ "decoder: the GPU composes them onto the picture itself, at no per-picture "
+#~ "cost, where drawing them through a window costs 15 to 50 ms on this "
+#~ "hardware. No effect while hardware decoding is off, as software rendering "
+#~ "then takes over."
+#~ msgstr ""
+#~ "Confie les sous-titres du DVD au plan subpicture du décodeur matériel "
+#~ "ATI : le GPU les compose lui-même sur l'image, sans aucun coût par image, "
+#~ "là où l'incrustation par fenêtre coûte 15 à 50 ms sur ce matériel. Sans "
+#~ "effet tant que le décodage matériel n'est pas actif, le rendu logiciel "
+#~ "prenant alors le relais."
+
+#~ msgid "Embedded video in a child window"
+#~ msgstr "Vidéo intégrée dans une fenêtre enfant"
+
+#~ msgid ""
+#~ "Host the embedded video in a borderless child window: switching to "
+#~ "fullscreen is instant and does not interrupt accelerated decoding. "
+#~ "Turning this off restores the former behaviour (a separate fullscreen "
+#~ "window). No effect under Mac OS X 10.4, where a child window displays "
+#~ "nothing."
+#~ msgstr ""
+#~ "Héberge la vidéo intégrée dans une fenêtre enfant sans bordure : le "
+#~ "passage en plein écran est instantané et n'interrompt pas le décodage "
+#~ "accéléré. Désactiver rétablit l'ancien comportement (fenêtre de plein "
+#~ "écran séparée). Sans effet sous Mac OS X 10.4, où une fenêtre enfant "
+#~ "n'affiche rien."
+
+#~ msgid "Open a window at startup (debugging)"
+#~ msgstr "Ouvrir une fenêtre au démarrage (débogage)"
+
+#~ msgid ""
+#~ "Name of the window to open at startup, like the VLC_LEGACY_SHOW "
+#~ "environment variable: prefs, prefsadv, mediainfo, errors, about, "
+#~ "bookmarks, messages, tracksync, effects, videoeffects, convert, fspanel, "
+#~ "open0..3."
+#~ msgstr ""
+#~ "Nom de la fenêtre à ouvrir au lancement, comme la variable "
+#~ "d'environnement VLC_LEGACY_SHOW : prefs, prefsadv, mediainfo, errors, "
+#~ "about, bookmarks, messages, tracksync, effects, videoeffects, convert, "
+#~ "fspanel, open0..3."

@@ -12225,6 +12225,55 @@ msgstr ""
 "Espera mentanto se reconstrúi'l caxé de fontes.\n"
 "Esto pue llevar menos d'un minutu."
 
+#: modules/codec/libmpeg2.c:242
+msgid "Utiliser l'accélération matérielle MPEG2 si disponible"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:244
+msgid ""
+"Décode les flux MPEG-2 sur le GPU (pipeline AppleVA du lecteur DVD d'Apple) "
+"quand un décodeur matériel est présent (ATI, Intel GMA950, nVidia), avec "
+"repli automatique sur le décodage logiciel libmpeg2. Réduit fortement la "
+"charge CPU sur les vieux Mac."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:248
+msgid "Mode field du décodage MPEG-2 matériel (avancé)"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:250
+msgid ""
+"Décodage matériel des macroblocs field-predicted (flux entrelacés, DVD). 0 = "
+"désactivé (l'entrelacé retombe sur le processeur) ; 4 = prédiction frame "
+"équivalente (défaut : le moteur par champ du GPU déchire en mouvement) ; "
+"1/2/3 = moteur par champ natif, réservés à la mise au point."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:254
+msgid "Sous-titres et OSD par-dessus la vidéo accélérée"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:256
+msgid ""
+"Compose les sous-titres (SPU du DVD) et l'affichage à l'écran par-dessus "
+"l'image décodée par le GPU. Sans cette option, la sortie matérielle recouvre "
+"tout et les sous-titres restent invisibles. Ne concerne que la vidéo "
+"affichée dans la fenêtre de VLC."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:260
+msgid "Sous-titres DVD incrustés par le GPU"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:262
+msgid ""
+"Confie les sous-titres du DVD au plan subpicture du décodeur matériel ATI : "
+"le GPU les compose lui-même sur l'image, sans aucun coût par image, là où "
+"l'incrustation par fenêtre coûte 15 à 50 ms sur ce matériel. Sans effet si "
+"le décodage matériel n'est pas actif — le rendu logiciel prend alors le "
+"relais."
+msgstr ""
+
 #: modules/codec/libmpeg2.c:272
 msgid "MPEG I/II video decoder (using libmpeg2)"
 msgstr "Decodificador de videu I/II (usando libmpeg2)"
@@ -19272,6 +19321,10 @@ msgstr ""
 "Númberu de la pantalla a usar de forma predetrerminada p'amosar vídeos a "
 "pantalla completa». La correspondencia de númberos de pantalla pue topase "
 "nel menú de seleición de preséu de videu."
+
+#: modules/gui/legacy_macosx/macosx.c:131
+msgid "Vidéo intégrée dans une fenêtre enfant"
+msgstr ""
 
 #: modules/gui/legacy_macosx/macosx.c:132
 msgid ""
@@ -30487,17 +30540,6 @@ msgstr "Abrir la carpeta de libbdplus (Blu-ray)"
 msgid "The folder %s could not be opened."
 msgstr "Nun pudo abrise la carpeta %s."
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "Versión de VLC %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "Executar vlc cola interfaz predeterminada. Usa «cvlc» pa usar vlc ensin "
-#~ "interfaz."
-
 #: modules/access/dvd_description.h:30
 msgid "Audio for visually impaired"
 msgstr ""
@@ -30547,5 +30589,18 @@ msgid "Show forced subtitles"
 msgstr ""
 
 #: modules/access/bluray.c:83
-msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgid ""
+"When the disc hides the subtitle stream, keep decoding it and display only "
+"its forced captions, as a standalone Blu-ray player does."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "Versión de VLC %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "Executar vlc cola interfaz predeterminada. Usa «cvlc» pa usar vlc ensin "
+#~ "interfaz."

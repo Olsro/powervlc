@@ -117,7 +117,13 @@ build_windows() { # build_windows <arch-flags> <name-glob>
      # whatever language the user picks in the preferences (the NSIS
      # 'InstallFolderOptional locale' uses File /nonfatal, so the empty
      # folder is skipped in silence rather than failing the package).
-     extras/package/win32/build.sh $1 -l -i r
+     # -r is RELEASE MODE, and is not the same thing as the 'r' of -i (which
+     # only names the installer flavour). Without it win32/build.sh adds
+     # --enable-debug, so every Windows installer shipped before this was a
+     # debug build: assertions live, NDEBUG unset. On Windows XP that showed
+     # up as a Microsoft Visual C++ Runtime Library assertion box on every
+     # quit (src/modules/entry.c). macOS has always defined NDEBUG.
+     extras/package/win32/build.sh $1 -r -l -i r
      found=\$(find /work -maxdepth 2 -name 'PowerVLC-*-$2*.exe' -o -maxdepth 2 -name 'vlc-*-$2*.exe' | head -20)
      [ -n \"\$found\" ] || { echo 'ERROR: no $2 installer produced'; exit 1; }
      for f in \$found; do cp -v \"\$f\" /out/; done"

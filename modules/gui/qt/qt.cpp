@@ -598,7 +598,7 @@ static void *ThreadPlatform( void *obj, char *platform_name )
             QSettings::UserScope, "vlc", "vlc-qt-interface" );
 
     if( QDate::currentDate().dayOfYear() >= QT_XMAS_JOKE_DAY && var_InheritBool( p_intf, "qt-icon-change" ) )
-        app.setWindowIcon( QIcon::fromTheme( "vlc-xmas", QIcon( ":/logo/vlc128-xmas.png" ) ) );
+        app.setWindowIcon( QIcon::fromTheme( "powervlc-xmas", QIcon( ":/logo/vlc128-xmas.png" ) ) );
     else
         app.setWindowIcon( QIcon::fromTheme( "vlc", QIcon( ":/logo/vlc256.png" ) ) );
 

@@ -261,9 +261,9 @@ int WINAPI WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance,
     vlc = libvlc_new (argc, (const char **)argv);
     if (vlc != NULL)
     {
-        libvlc_set_app_id (vlc, "org.VideoLAN.VLC", PACKAGE_VERSION,
-                           PACKAGE_NAME);
-        libvlc_set_user_agent (vlc, "VLC media player", "VLC/"PACKAGE_VERSION);
+        libvlc_set_app_id (vlc, "com.github.PowerVLC", POWERVLC_VERSION,
+                           "powervlc");
+        libvlc_set_user_agent (vlc, "PowerVLC media player", "PowerVLC/"POWERVLC_VERSION);
         libvlc_add_intf (vlc, "hotkeys,none");
         libvlc_add_intf (vlc, "globalhotkeys,none");
         libvlc_add_intf (vlc, NULL);

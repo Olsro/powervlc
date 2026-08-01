@@ -53,9 +53,16 @@ endif
 ifdef HAVE_WIN32
 CACA_CONF += --disable-ncurses \
     ac_cv_func_sprintf=yes \
-    ac_cv_func_vsnprintf_s=yes \
-    ac_cv_func_vsnprintf=yes \
-    ac_cv_func_sprintf_s=yes
+    ac_cv_func_vsnprintf=yes
+ifeq ($(ARCH),i386)
+# The *_s "secure CRT" functions only reached msvcrt.dll with Windows Vista.
+# The win32 slice targets XP SP3, where a DLL importing them cannot be loaded
+# at all ("the procedure entry point ... could not be located in msvcrt.dll"),
+# so let libcaca use its plain vsnprintf()/sprintf() paths there.
+CACA_CONF += ac_cv_func_vsnprintf_s=no ac_cv_func_sprintf_s=no
+else
+CACA_CONF += ac_cv_func_vsnprintf_s=yes ac_cv_func_sprintf_s=yes
+endif
 endif
 ifdef HAVE_LINUX
 CACA_CONF += --disable-ncurses

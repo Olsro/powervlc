@@ -3,13 +3,13 @@
 # vector master powervlc.svg.
 #
 # Outputs (into $OUTDIR, default ./out next to this script):
-#   vlc.png            256x256 RGBA — the canonical Linux/desktop PNG
-#   vlc.ico            multi-size Windows icon (16/32/48/64/128/256)
+#   powervlc.png            256x256 RGBA — the canonical Linux/desktop PNG
+#   powervlc.ico            multi-size Windows icon (16/32/48/64/128/256)
 #   png/vlc-<N>.png    the individual rasters (16/32/48/128/256/512)
 #
-# The two files vlc.ico and vlc.png are named to match the paths the Windows
+# The two files powervlc.ico and powervlc.png are named to match the paths the Windows
 # NSIS/MSI packaging and the Linux desktop entry already reference
-# (share/icons/vlc.ico, share/icons/vlc.png), so installing is a plain copy —
+# (share/icons/powervlc.ico, share/icons/powervlc.png), so installing is a plain copy —
 # no packaging path changes. See README.md for the copy step.
 #
 # The script detects whatever SVG->raster + ICO tooling is present and fails
@@ -94,7 +94,7 @@ for sz in $ALL_SIZES; do
 done
 
 # --- canonical standalone PNG (256px) ---------------------------------------
-cp "$PNGDIR/vlc-256.png" "$OUTDIR/vlc.png"
+cp "$PNGDIR/vlc-256.png" "$OUTDIR/powervlc.png"
 
 # --- assemble the .ico -------------------------------------------------------
 ICO_INPUTS=""
@@ -104,31 +104,31 @@ done
 
 case "$ICO" in
     magick)  # shellcheck disable=SC2086
-             magick $ICO_INPUTS "$OUTDIR/vlc.ico" ;;
+             magick $ICO_INPUTS "$OUTDIR/powervlc.ico" ;;
     convert) # shellcheck disable=SC2086
-             convert $ICO_INPUTS "$OUTDIR/vlc.ico" ;;
+             convert $ICO_INPUTS "$OUTDIR/powervlc.ico" ;;
     png2ico) # shellcheck disable=SC2086
-             png2ico "$OUTDIR/vlc.ico" $ICO_INPUTS ;;
+             png2ico "$OUTDIR/powervlc.ico" $ICO_INPUTS ;;
     icotool) # shellcheck disable=SC2086
-             icotool -c -o "$OUTDIR/vlc.ico" $ICO_INPUTS ;;
+             icotool -c -o "$OUTDIR/powervlc.ico" $ICO_INPUTS ;;
 esac
-[ -s "$OUTDIR/vlc.ico" ] || die "ICO assembler produced an empty file"
+[ -s "$OUTDIR/powervlc.ico" ] || die "ICO assembler produced an empty file"
 
 # --- sanity check ------------------------------------------------------------
 if have file; then
     echo "generate-icons.sh: validating with 'file':"
-    file "$OUTDIR/vlc.ico" "$OUTDIR/vlc.png" | sed 's/^/  /'
-    file "$OUTDIR/vlc.ico" | grep -qi 'icon resource' \
-        || die "vlc.ico did not validate as a Windows icon resource"
-    file "$OUTDIR/vlc.png" | grep -qi 'PNG image' \
-        || die "vlc.png did not validate as a PNG image"
+    file "$OUTDIR/powervlc.ico" "$OUTDIR/powervlc.png" | sed 's/^/  /'
+    file "$OUTDIR/powervlc.ico" | grep -qi 'icon resource' \
+        || die "powervlc.ico did not validate as a Windows icon resource"
+    file "$OUTDIR/powervlc.png" | grep -qi 'PNG image' \
+        || die "powervlc.png did not validate as a PNG image"
 fi
 
 echo "generate-icons.sh: done."
-echo "  $OUTDIR/vlc.ico"
-echo "  $OUTDIR/vlc.png"
+echo "  $OUTDIR/powervlc.ico"
+echo "  $OUTDIR/powervlc.png"
 echo "  $PNGDIR/vlc-<size>.png"
 echo
 echo "To install the branded art into the packaging paths, copy:"
-echo "  cp \"$OUTDIR/vlc.ico\" \"$SCRIPT_DIR/../../../share/icons/vlc.ico\""
-echo "  cp \"$OUTDIR/vlc.png\" \"$SCRIPT_DIR/../../../share/icons/vlc.png\""
+echo "  cp \"$OUTDIR/powervlc.ico\" \"$SCRIPT_DIR/../../../share/icons/powervlc.ico\""
+echo "  cp \"$OUTDIR/powervlc.png\" \"$SCRIPT_DIR/../../../share/icons/powervlc.png\""

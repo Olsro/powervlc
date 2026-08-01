@@ -34,14 +34,14 @@ icons128dir = $(iconsdatadir)/128x128/apps
 icons256dir = $(iconsdatadir)/256x256/apps
 
 if !HAVE_WIN32
-dist_vlcdata_DATA = icons/vlc.ico
-dist_icons16_DATA = icons/16x16/vlc.png icons/16x16/vlc.xpm
-dist_icons32_DATA = icons/32x32/vlc.png icons/32x32/vlc.xpm \
-			icons/32x32/vlc-xmas.xpm
-dist_icons48_DATA = icons/48x48/vlc.png icons/48x48/vlc-xmas.png
-dist_icons128_DATA = icons/128x128/vlc.png icons/128x128/vlc-xmas.png \
-                     icons/128x128/vlc-kb.png
-dist_icons256_DATA = icons/256x256/vlc.png
+dist_vlcdata_DATA = icons/powervlc.ico
+dist_icons16_DATA = icons/16x16/powervlc.png icons/16x16/powervlc.xpm
+dist_icons32_DATA = icons/32x32/powervlc.png icons/32x32/powervlc.xpm \
+			icons/32x32/powervlc-xmas.xpm
+dist_icons48_DATA = icons/48x48/powervlc.png icons/48x48/powervlc-xmas.png
+dist_icons128_DATA = icons/128x128/powervlc.png icons/128x128/powervlc-xmas.png \
+                     icons/128x128/powervlc-kb.png
+dist_icons256_DATA = icons/256x256/powervlc.png
 
 nobase_dist_vlcdata_SCRIPTS = \
 	utils/gnome-vlc-default.sh \

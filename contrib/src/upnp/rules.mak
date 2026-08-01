@@ -54,6 +54,31 @@ endif
 	$(APPLY) $(SRC)/upnp/0001-Don-t-assume-strndup-to-be-missing-on-Windows.patch
 	$(APPLY) $(SRC)/upnp/0001-Do-not-use-missing-OnLinkPrefixLength-when-compiling.patch
 	$(APPLY) $(SRC)/upnp/0001-UpnpString-compat-strndup-strnlen-for-old-macOS.patch
+ifdef HAVE_WIN32
+ifeq ($(ARCH),i386)
+	# pupnp takes the "secure CRT" spelling of a handful of calls whenever
+	# _WIN32 is defined, but those entry points only reached msvcrt.dll with
+	# Windows Vista: on XP SP3 -- the floor of the win32 slice -- the plugin
+	# fails to load outright. Every one of these has a plain equivalent right
+	# next to it in the #else branch, and none of the sscanf() formats uses
+	# %s or %c, so the size arguments the _s forms carry are not needed.
+	cd $(UNPACK_DIR) && sed -i.orig \
+	    -e 's/sscanf_s(/sscanf(/g' \
+	    -e 's/fopen_s(&\([A-Za-z_][A-Za-z0-9_]*\), \(.*\));/\1 = fopen(\2);/' \
+	    upnp/src/genlib/net/http/webserver.c \
+	    upnp/src/genlib/net/http/httpparser.c \
+	    upnp/src/genlib/net/http/httpreadwrite.c \
+	    upnp/src/genlib/net/uri/uri.c \
+	    upnp/src/api/upnpapi.c \
+	    upnp/src/api/upnpdebug.c \
+	    ixml/src/ixmlparser.c
+	# wcstombs_s() spans several lines; its first argument only receives the
+	# converted length, which pupnp discards anyway (it frees a NULL pointer).
+	cd $(UNPACK_DIR) && perl -0pi -e \
+	    's/wcstombs_s\(\s*s\s*,\s*([^,]+),\s*sizeof\([^)]*\),\s*([^,]+),\s*(sizeof\([^)]*\))\);/wcstombs($$1, $$2, $$3);/gs' \
+	    upnp/src/api/upnpapi.c
+endif
+endif
 	$(MOVE)
 
 .upnp: upnp toolchain.cmake

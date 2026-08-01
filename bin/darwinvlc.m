@@ -330,8 +330,8 @@ int main(int i_argc, const char *ppsz_argv[])
 
     int ret = 1;
     libvlc_set_exit_handler(vlc, vlc_terminate, NULL);
-    libvlc_set_app_id(vlc, "org.VideoLAN.VLC", PACKAGE_VERSION, PACKAGE_NAME);
-    libvlc_set_user_agent(vlc, "VLC media player", "VLC/"PACKAGE_VERSION);
+    libvlc_set_app_id(vlc, "com.github.PowerVLC", POWERVLC_VERSION, "powervlc");
+    libvlc_set_user_agent(vlc, "PowerVLC media player", "PowerVLC/"POWERVLC_VERSION);
 
     libvlc_add_intf(vlc, "hotkeys,none");
 

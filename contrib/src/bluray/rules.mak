@@ -199,6 +199,17 @@ bluray: libbluray-$(BLURAY_VERSION).tar.xz .sum-bluray
 	$(APPLY) $(SRC)/bluray/0007-macos-find-libjli-in-the-modern-jdk-layout.patch
 	$(APPLY) $(SRC)/bluray/0008-bdj-leave-PRESENT-applications-unloaded.patch
 	$(APPLY) $(SRC)/bluray/0009-bdj-materialise-bd-rom-files-without-a-security-manager.patch
+ifdef HAVE_WIN32
+ifeq ($(ARCH),i386)
+	# The bundled libudfread maps strtok_r() onto strtok_s(), a "secure CRT"
+	# entry point that only reached msvcrt.dll with Windows Vista. The win32
+	# slice targets XP SP3, where importing it stops the Blu-ray plugin from
+	# loading at all, so carry a local strtok_r() instead. (Not strtok():
+	# udfread walks a path while the caller may hold another tokenizer.)
+	sed -i.orig -e 's/^#define strtok_r strtok_s$$/static char *udfread_strtok_r(char *s, const char *d, char **p)\n{\n    if (!s) s = *p;\n    if (!s) return NULL;\n    s += strspn(s, d);\n    if (!*s) { *p = NULL; return NULL; }\n    { char *e = s + strcspn(s, d); if (*e) *e++ = 0; *p = e; }\n    return s;\n}\n#define strtok_r udfread_strtok_r/' \
+	    $(UNPACK_DIR)/contrib/libudfread/src/udfread.c
+endif
+endif
 	$(MOVE)
 
 .bluray: MESON_EXTRA_ENV = $(BLURAY_JAVA_ENV)

@@ -12130,6 +12130,55 @@ msgstr ""
 "សូម​រង់ចាំ ខណៈពេល​ដែល​​ឃ្លាំង​សម្ងាត់​ពុម្ពអក្សរ​របស់​អ្នក​ត្រូវ​បាន​ស្ថាបនា ។\n"
 "វា​គួរ​តែ​ចំណាយ​ពេល​តិច​ជាង​មួយ​នាទី ។"
 
+#: modules/codec/libmpeg2.c:242
+msgid "Utiliser l'accélération matérielle MPEG2 si disponible"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:244
+msgid ""
+"Décode les flux MPEG-2 sur le GPU (pipeline AppleVA du lecteur DVD d'Apple) "
+"quand un décodeur matériel est présent (ATI, Intel GMA950, nVidia), avec "
+"repli automatique sur le décodage logiciel libmpeg2. Réduit fortement la "
+"charge CPU sur les vieux Mac."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:248
+msgid "Mode field du décodage MPEG-2 matériel (avancé)"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:250
+msgid ""
+"Décodage matériel des macroblocs field-predicted (flux entrelacés, DVD). 0 = "
+"désactivé (l'entrelacé retombe sur le processeur) ; 4 = prédiction frame "
+"équivalente (défaut : le moteur par champ du GPU déchire en mouvement) ; "
+"1/2/3 = moteur par champ natif, réservés à la mise au point."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:254
+msgid "Sous-titres et OSD par-dessus la vidéo accélérée"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:256
+msgid ""
+"Compose les sous-titres (SPU du DVD) et l'affichage à l'écran par-dessus "
+"l'image décodée par le GPU. Sans cette option, la sortie matérielle recouvre "
+"tout et les sous-titres restent invisibles. Ne concerne que la vidéo "
+"affichée dans la fenêtre de VLC."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:260
+msgid "Sous-titres DVD incrustés par le GPU"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:262
+msgid ""
+"Confie les sous-titres du DVD au plan subpicture du décodeur matériel ATI : "
+"le GPU les compose lui-même sur l'image, sans aucun coût par image, là où "
+"l'incrustation par fenêtre coûte 15 à 50 ms sur ce matériel. Sans effet si "
+"le décodage matériel n'est pas actif — le rendu logiciel prend alors le "
+"relais."
+msgstr ""
+
 #: modules/codec/libmpeg2.c:272
 msgid "MPEG I/II video decoder (using libmpeg2)"
 msgstr "ឌិកូឌ័រ​វីដេអូ MPEG I/II (ដោយប្រើ libmpeg2)"
@@ -19185,6 +19234,10 @@ msgid ""
 msgstr ""
 "ចំនួន​អេក្រង់​ដែល​ត្រូវ​ប្រើ​ជា​លំនាំដើម​ដើម្បី​បង្ហាញ​វីដេអូ 'ពេញ​អេក្រង់' ។ លេខ​អេក្រង់​ដែល​ទាក់ទង អាច​រក​ឃើញ​"
 "នៅ​ក្នុង​ម៉ឺនុយ​ជម្រើស​ឧបករណ៍​វីដេអូ ។"
+
+#: modules/gui/legacy_macosx/macosx.c:131
+msgid "Vidéo intégrée dans une fenêtre enfant"
+msgstr ""
 
 #: modules/gui/legacy_macosx/macosx.c:132
 msgid ""
@@ -30421,26 +30474,6 @@ msgstr "បើកថត libbdplus (Blu-ray)"
 msgid "The folder %s could not be opened."
 msgstr "មិនអាចបើកថត %s បានទេ។"
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "VLC កំណែ %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "ដំណើរការ vlc ដោយ​ប្រើ​ចំណុច​ប្រទាក់​លំនាំដើម ។ ប្រើ 'cvlc' ដើម្បី​ប្រើ vlc ដោយ​គ្មាន​ចំណុច​ប្រទាក់ "
-#~ "។"
-
-#~ msgid ""
-#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
-#~ "not have it."
-#~ msgstr ""
-#~ "ថាស Blu-ray នេះ​ត្រូវការ​បណ្ណាល័យ​សម្រាប់​ការ​ដោះ​លេខ​កូដ AACS ហើយ​ប្រព័ន្ធ​របស់​អ្នក​មិន​មាន។"
-
-#~ msgid "Missing AACS configuration file!"
-#~ msgstr "បាត់​ឯកសារ​កំណត់​រចនាសម្ព័ន្ធ AACS!"
-
 #: modules/access/dvd_description.h:30
 msgid "Audio for visually impaired"
 msgstr ""
@@ -30490,5 +30523,27 @@ msgid "Show forced subtitles"
 msgstr ""
 
 #: modules/access/bluray.c:83
-msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgid ""
+"When the disc hides the subtitle stream, keep decoding it and display only "
+"its forced captions, as a standalone Blu-ray player does."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "VLC កំណែ %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "ដំណើរការ vlc ដោយ​ប្រើ​ចំណុច​ប្រទាក់​លំនាំដើម ។ ប្រើ 'cvlc' ដើម្បី​ប្រើ vlc ដោយ​គ្មាន​ចំណុច​ប្រទាក់ "
+#~ "។"
+
+#~ msgid ""
+#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
+#~ "not have it."
+#~ msgstr ""
+#~ "ថាស Blu-ray នេះ​ត្រូវការ​បណ្ណាល័យ​សម្រាប់​ការ​ដោះ​លេខ​កូដ AACS ហើយ​ប្រព័ន្ធ​របស់​អ្នក​មិន​មាន។"
+
+#~ msgid "Missing AACS configuration file!"
+#~ msgstr "បាត់​ឯកសារ​កំណត់​រចនាសម្ព័ន្ធ AACS!"

@@ -12347,6 +12347,55 @@ msgstr ""
 "글꼴 캐쉬를 재생성하는 동안 잠시 기다리세요.\n"
 "1분 이내로 끝날 것입니다."
 
+#: modules/codec/libmpeg2.c:242
+msgid "Utiliser l'accélération matérielle MPEG2 si disponible"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:244
+msgid ""
+"Décode les flux MPEG-2 sur le GPU (pipeline AppleVA du lecteur DVD d'Apple) "
+"quand un décodeur matériel est présent (ATI, Intel GMA950, nVidia), avec "
+"repli automatique sur le décodage logiciel libmpeg2. Réduit fortement la "
+"charge CPU sur les vieux Mac."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:248
+msgid "Mode field du décodage MPEG-2 matériel (avancé)"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:250
+msgid ""
+"Décodage matériel des macroblocs field-predicted (flux entrelacés, DVD). 0 = "
+"désactivé (l'entrelacé retombe sur le processeur) ; 4 = prédiction frame "
+"équivalente (défaut : le moteur par champ du GPU déchire en mouvement) ; "
+"1/2/3 = moteur par champ natif, réservés à la mise au point."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:254
+msgid "Sous-titres et OSD par-dessus la vidéo accélérée"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:256
+msgid ""
+"Compose les sous-titres (SPU du DVD) et l'affichage à l'écran par-dessus "
+"l'image décodée par le GPU. Sans cette option, la sortie matérielle recouvre "
+"tout et les sous-titres restent invisibles. Ne concerne que la vidéo "
+"affichée dans la fenêtre de VLC."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:260
+msgid "Sous-titres DVD incrustés par le GPU"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:262
+msgid ""
+"Confie les sous-titres du DVD au plan subpicture du décodeur matériel ATI : "
+"le GPU les compose lui-même sur l'image, sans aucun coût par image, là où "
+"l'incrustation par fenêtre coûte 15 à 50 ms sur ce matériel. Sans effet si "
+"le décodage matériel n'est pas actif — le rendu logiciel prend alors le "
+"relais."
+msgstr ""
+
 #: modules/codec/libmpeg2.c:272
 msgid "MPEG I/II video decoder (using libmpeg2)"
 msgstr "MPEG I/II 동영상 디코더 (libmpeg2 사용)"
@@ -19511,6 +19560,10 @@ msgid ""
 msgstr ""
 "기본으로 '전체화면' 에서 동영상 표시에 사용할 화면 개수. 화면 번호 대응은 동"
 "영상 장치 선택 메뉴에서 찾을수 있습니다."
+
+#: modules/gui/legacy_macosx/macosx.c:131
+msgid "Vidéo intégrée dans une fenêtre enfant"
+msgstr ""
 
 #: modules/gui/legacy_macosx/macosx.c:132
 msgid ""
@@ -30906,202 +30959,6 @@ msgstr "libbdplus 폴더 열기 (블루레이)"
 msgid "The folder %s could not be opened."
 msgstr "%s 폴더를 열 수 없습니다."
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "VLC 버전 %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "기본 인터페이스로 vlc 실행. vlc 인터페이스 없이 사용하려면 'cvlc' 을 사용"
-#~ "하세요."
-
-#~ msgid ""
-#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
-#~ "not have it."
-#~ msgstr ""
-#~ "이 블루레이 디스크는 AACS 디코딩 라이브러리가 필요한데 사용자의 시스템에"
-#~ "는 없습니다."
-
-#~ msgid "Missing AACS configuration file!"
-#~ msgstr "AACS 구성 파일이 없습니다!"
-
-#: include/vlc_intf_strings.h:66
-msgid "Blu-ray Pop-Up Menu"
-msgstr "블루레이 팝업 메뉴"
-
-#: src/libvlc-module.c:1358
-msgid "Show the Blu-ray pop-up menu"
-msgstr "블루레이 팝업 메뉴 표시"
-
-#: src/libvlc-module.c:1359
-msgid ""
-"Select the key that shows the pop-up menu a Blu-ray draws over the running "
-"movie (not the disc root menu)."
-msgstr "블루레이가 재생 중인 영상 위에 그리는 팝업 메뉴를 표시할 키를 선택하세요(디스크 최상위 메뉴가 아닙니다)."
-
-#: modules/access/bluray.c:82
-msgid "Use the main playlist from the key database"
-msgstr "키 데이터베이스의 주 재생목록 사용"
-
-#: modules/access/bluray.c:83
-msgid ""
-"Some discs hide the feature among hundreds of decoy playlists of the same "
-"length, so the longest one is not the right one. When playing without menus, "
-"start on the playlist your KEYDB.cfg records for this disc, if it records "
-"one. Titles are named after their .mpls file either way, so another one can "
-"still be picked."
-msgstr ""
-"일부 디스크는 길이가 같은 수백 개의 미끼 재생목록 사이에 본편을 숨겨 두므로 가장 긴 것이 올바른 것은 아닙니다. 메뉴 없이 "
-"재생할 때, KEYDB.cfg에 이 디스크의 재생목록이 기록되어 있으면 해당 재생목록에서 시작합니다. 어느 경우든 제목은 해당 "
-".mpls 파일 이름을 따르므로 다른 것을 선택할 수도 있습니다."
-
-#: modules/access/bluray.c:2436
-#, c-format
-msgid "%05u.mpls (main playlist)"
-msgstr "%05u.mpls (주 재생목록)"
-
-#: modules/access/bluray.c:3080
-msgid "Dynamic range"
-msgstr "다이내믹 레인지"
-
-#: modules/access/bluray.c:3098
-msgid "Dolby Vision tracks"
-msgstr "Dolby Vision 트랙"
-
-#: modules/access/bluray.c:3102
-msgid "SDR conversion notice"
-msgstr "SDR 변환 알림"
-
-#: modules/access/fs.c:43
-msgid "Bypass the system file cache"
-msgstr "시스템 파일 캐시 우회"
-
-#: modules/access/fs.c:44
-msgid ""
-"Read local files without going through the operating system's file cache "
-"(F_NOCACHE). On a Mac with little RAM this stops a large film from evicting "
-"the player's own memory mid-playback. It also disables kernel read-ahead, so "
-"leave it off on slow or network volumes."
-msgstr ""
-"운영체제의 파일 캐시를 거치지 않고 로컬 파일을 읽습니다(F_NOCACHE). 메모리가 적은 Mac에서는 큰 영화가 재생 도중 "
-"재생기 자체의 메모리를 밀어내는 것을 막아 줍니다. 커널의 미리 읽기도 함께 비활성화되므로 느린 볼륨이나 네트워크 볼륨에서는 꺼 "
-"두세요."
-
-#: modules/codec/libmpeg2.c:297
-msgid "Use MPEG-2 hardware acceleration when available"
-msgstr "가능한 경우 MPEG-2 하드웨어 가속 사용"
-
-#: modules/codec/libmpeg2.c:299
-msgid ""
-"Decode MPEG-2 streams on the GPU (the AppleVA pipeline of Apple's DVD "
-"Player) whenever a hardware decoder is present (ATI, Intel GMA950, nVidia), "
-"falling back to the libmpeg2 software decoder automatically. Cuts CPU load "
-"dramatically on old Macs."
-msgstr ""
-"하드웨어 디코더(ATI, Intel GMA950, nVidia)가 있으면 MPEG-2 스트림을 GPU에서 디코딩합니다(Apple "
-"DVD 플레이어의 AppleVA 파이프라인). 사용할 수 없으면 libmpeg2 소프트웨어 디코더로 자동 전환됩니다. 오래된 "
-"Mac에서 CPU 사용량을 크게 줄여 줍니다."
-
-#: modules/codec/libmpeg2.c:303
-msgid "Field mode of the MPEG-2 hardware decoder (advanced)"
-msgstr "MPEG-2 하드웨어 디코더의 필드 모드(고급)"
-
-#: modules/codec/libmpeg2.c:305
-msgid ""
-"Hardware decoding of field-predicted macroblocks (interlaced streams, DVD). "
-"0 = off (interlaced content falls back to the processor); 4 = equivalent "
-"frame prediction (the default: the field engine of the GPU tears on motion); "
-"1/2/3 = native field engine, for debugging only."
-msgstr ""
-"필드 예측 매크로블록의 하드웨어 디코딩(인터레이스 스트림, DVD). 0 = 끔(인터레이스 영상은 프로세서로 넘어감), 4 = "
-"동등한 프레임 예측(기본값: GPU의 필드 엔진은 움직임에서 찢어짐이 발생), 1/2/3 = 기본 필드 엔진, 디버깅 전용."
-
-#: modules/codec/libmpeg2.c:309
-msgid "Subtitles and OSD over hardware-accelerated video"
-msgstr "하드웨어 가속 영상 위에 자막과 OSD 표시"
-
-#: modules/codec/libmpeg2.c:311
-msgid ""
-"Compose the subtitles (DVD SPU) and the on-screen display over the picture "
-"decoded by the GPU. Without this option the hardware output covers "
-"everything and subtitles stay invisible. Only affects the video shown in the "
-"VLC window."
-msgstr ""
-"GPU가 디코딩한 화면 위에 자막(DVD SPU)과 화면 표시를 합성합니다. 이 옵션이 없으면 하드웨어 출력이 모든 것을 덮어 "
-"자막이 보이지 않습니다. VLC 창에 표시되는 영상에만 적용됩니다."
-
-#: modules/codec/libmpeg2.c:315
-msgid "Asynchronous GPU submission (advanced)"
-msgstr "비동기 GPU 제출(고급)"
-
-#: modules/codec/libmpeg2.c:317
-msgid ""
-"Issue the DVDDriverDecode call on a dedicated thread, so that the VLD of the "
-"next picture runs while the GPU works. Measured on the iBook G3: Decode is "
-"time spent blocked in the driver, and overlapping it removes the shortfall "
-"in the 40 ms per picture budget."
-msgstr ""
-"DVDDriverDecode 호출을 전용 스레드에서 실행하여 GPU가 작업하는 동안 다음 화면의 VLD가 진행되도록 합니다. "
-"iBook G3에서 측정한 결과 Decode는 드라이버에서 차단된 시간이며, 이를 겹치면 화면당 40 ms 예산의 부족분이 "
-"사라집니다."
-
-#: modules/codec/libmpeg2.c:321
-msgid "10.2 port changes on the hardware path (advanced)"
-msgstr "하드웨어 경로의 10.2 이식 변경 사항(고급)"
-
-#: modules/codec/libmpeg2.c:323
-msgid ""
-"-1 = automatic (on under Mac OS X 10.2 and 10.3, off from 10.4 on, where "
-"they replaced behaviour validated on the machine itself), 0 = off, 1 = on."
-msgstr ""
-"-1 = 자동(Mac OS X 10.2와 10.3에서는 켜짐, 10.4부터는 꺼짐. 10.4 이후에는 실제 기기에서 검증된 동작을 "
-"대체하고 있었습니다), 0 = 끔, 1 = 켬."
-
-#: modules/codec/libmpeg2.c:326
-msgid "DVD subtitles drawn by the GPU"
-msgstr "GPU가 그리는 DVD 자막"
-
-#: modules/codec/libmpeg2.c:328
-msgid ""
-"Hand the DVD subtitles to the subpicture plane of the ATI hardware decoder: "
-"the GPU composes them onto the picture itself, at no per-picture cost, where "
-"drawing them through a window costs 15 to 50 ms on this hardware. No effect "
-"while hardware decoding is off, as software rendering then takes over."
-msgstr ""
-"DVD 자막을 ATI 하드웨어 디코더의 subpicture 평면에 맡깁니다. GPU가 화면당 비용 없이 직접 화면에 합성하는 반면, "
-"창을 통해 그리면 이 하드웨어에서는 15~50 ms가 듭니다. 하드웨어 디코딩이 꺼져 있는 동안에는 효과가 없으며, 이때는 "
-"소프트웨어 렌더링이 대신합니다."
-
-#: modules/gui/legacy_macosx/macosx.c:131
-msgid "Embedded video in a child window"
-msgstr "하위 창에 삽입된 영상"
-
-#: modules/gui/legacy_macosx/macosx.c:132
-msgid ""
-"Host the embedded video in a borderless child window: switching to "
-"fullscreen is instant and does not interrupt accelerated decoding. Turning "
-"this off restores the former behaviour (a separate fullscreen window). No "
-"effect under Mac OS X 10.4, where a child window displays nothing."
-msgstr ""
-"삽입된 영상을 테두리 없는 하위 창에 배치합니다. 전체화면 전환이 즉시 이루어지고 가속 디코딩도 중단되지 않습니다. 끄면 이전 "
-"동작(별도의 전체화면 창)으로 되돌아갑니다. 하위 창이 아무것도 표시하지 않는 Mac OS X 10.4에서는 효과가 없습니다."
-
-#: modules/gui/legacy_macosx/macosx.c:143
-msgid "Open a window at startup (debugging)"
-msgstr "시작할 때 창 열기(디버그)"
-
-#: modules/gui/legacy_macosx/macosx.c:144
-msgid ""
-"Name of the window to open at startup, like the VLC_LEGACY_SHOW environment "
-"variable: prefs, prefsadv, mediainfo, errors, about, bookmarks, messages, "
-"tracksync, effects, videoeffects, convert, fspanel, open0..3."
-msgstr ""
-"VLC_LEGACY_SHOW 환경 변수와 마찬가지로, 시작할 때 열 창의 이름: prefs, prefsadv, mediainfo, "
-"errors, about, bookmarks, messages, tracksync, effects, videoeffects, "
-"convert, fspanel, open0..3"
-
 #: modules/access/dvd_description.h:30
 msgid "Audio for visually impaired"
 msgstr "시각 장애인용 오디오"
@@ -31151,5 +31008,191 @@ msgid "Show forced subtitles"
 msgstr "강제 자막 표시"
 
 #: modules/access/bluray.c:83
-msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
+msgid ""
+"When the disc hides the subtitle stream, keep decoding it and display only "
+"its forced captions, as a standalone Blu-ray player does."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "VLC 버전 %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "기본 인터페이스로 vlc 실행. vlc 인터페이스 없이 사용하려면 'cvlc' 을 사용"
+#~ "하세요."
+
+#~ msgid ""
+#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
+#~ "not have it."
+#~ msgstr ""
+#~ "이 블루레이 디스크는 AACS 디코딩 라이브러리가 필요한데 사용자의 시스템에"
+#~ "는 없습니다."
+
+#~ msgid "Missing AACS configuration file!"
+#~ msgstr "AACS 구성 파일이 없습니다!"
+
+#~ msgid "Blu-ray Pop-Up Menu"
+#~ msgstr "블루레이 팝업 메뉴"
+
+#~ msgid "Show the Blu-ray pop-up menu"
+#~ msgstr "블루레이 팝업 메뉴 표시"
+
+#~ msgid ""
+#~ "Select the key that shows the pop-up menu a Blu-ray draws over the "
+#~ "running movie (not the disc root menu)."
+#~ msgstr ""
+#~ "블루레이가 재생 중인 영상 위에 그리는 팝업 메뉴를 표시할 키를 선택하세요"
+#~ "(디스크 최상위 메뉴가 아닙니다)."
+
+#~ msgid "Use the main playlist from the key database"
+#~ msgstr "키 데이터베이스의 주 재생목록 사용"
+
+#~ msgid ""
+#~ "Some discs hide the feature among hundreds of decoy playlists of the same "
+#~ "length, so the longest one is not the right one. When playing without "
+#~ "menus, start on the playlist your KEYDB.cfg records for this disc, if it "
+#~ "records one. Titles are named after their .mpls file either way, so "
+#~ "another one can still be picked."
+#~ msgstr ""
+#~ "일부 디스크는 길이가 같은 수백 개의 미끼 재생목록 사이에 본편을 숨겨 두므"
+#~ "로 가장 긴 것이 올바른 것은 아닙니다. 메뉴 없이 재생할 때, KEYDB.cfg에 이 "
+#~ "디스크의 재생목록이 기록되어 있으면 해당 재생목록에서 시작합니다. 어느 경"
+#~ "우든 제목은 해당 .mpls 파일 이름을 따르므로 다른 것을 선택할 수도 있습니"
+#~ "다."
+
+#, c-format
+#~ msgid "%05u.mpls (main playlist)"
+#~ msgstr "%05u.mpls (주 재생목록)"
+
+#~ msgid "Dynamic range"
+#~ msgstr "다이내믹 레인지"
+
+#~ msgid "Dolby Vision tracks"
+#~ msgstr "Dolby Vision 트랙"
+
+#~ msgid "SDR conversion notice"
+#~ msgstr "SDR 변환 알림"
+
+#~ msgid "Bypass the system file cache"
+#~ msgstr "시스템 파일 캐시 우회"
+
+#~ msgid ""
+#~ "Read local files without going through the operating system's file cache "
+#~ "(F_NOCACHE). On a Mac with little RAM this stops a large film from "
+#~ "evicting the player's own memory mid-playback. It also disables kernel "
+#~ "read-ahead, so leave it off on slow or network volumes."
+#~ msgstr ""
+#~ "운영체제의 파일 캐시를 거치지 않고 로컬 파일을 읽습니다(F_NOCACHE). 메모리"
+#~ "가 적은 Mac에서는 큰 영화가 재생 도중 재생기 자체의 메모리를 밀어내는 것"
+#~ "을 막아 줍니다. 커널의 미리 읽기도 함께 비활성화되므로 느린 볼륨이나 네트"
+#~ "워크 볼륨에서는 꺼 두세요."
+
+#~ msgid "Use MPEG-2 hardware acceleration when available"
+#~ msgstr "가능한 경우 MPEG-2 하드웨어 가속 사용"
+
+#~ msgid ""
+#~ "Decode MPEG-2 streams on the GPU (the AppleVA pipeline of Apple's DVD "
+#~ "Player) whenever a hardware decoder is present (ATI, Intel GMA950, "
+#~ "nVidia), falling back to the libmpeg2 software decoder automatically. "
+#~ "Cuts CPU load dramatically on old Macs."
+#~ msgstr ""
+#~ "하드웨어 디코더(ATI, Intel GMA950, nVidia)가 있으면 MPEG-2 스트림을 GPU에"
+#~ "서 디코딩합니다(Apple DVD 플레이어의 AppleVA 파이프라인). 사용할 수 없으"
+#~ "면 libmpeg2 소프트웨어 디코더로 자동 전환됩니다. 오래된 Mac에서 CPU 사용량"
+#~ "을 크게 줄여 줍니다."
+
+#~ msgid "Field mode of the MPEG-2 hardware decoder (advanced)"
+#~ msgstr "MPEG-2 하드웨어 디코더의 필드 모드(고급)"
+
+#~ msgid ""
+#~ "Hardware decoding of field-predicted macroblocks (interlaced streams, "
+#~ "DVD). 0 = off (interlaced content falls back to the processor); 4 = "
+#~ "equivalent frame prediction (the default: the field engine of the GPU "
+#~ "tears on motion); 1/2/3 = native field engine, for debugging only."
+#~ msgstr ""
+#~ "필드 예측 매크로블록의 하드웨어 디코딩(인터레이스 스트림, DVD). 0 = 끔(인"
+#~ "터레이스 영상은 프로세서로 넘어감), 4 = 동등한 프레임 예측(기본값: GPU의 "
+#~ "필드 엔진은 움직임에서 찢어짐이 발생), 1/2/3 = 기본 필드 엔진, 디버깅 전"
+#~ "용."
+
+#~ msgid "Subtitles and OSD over hardware-accelerated video"
+#~ msgstr "하드웨어 가속 영상 위에 자막과 OSD 표시"
+
+#~ msgid ""
+#~ "Compose the subtitles (DVD SPU) and the on-screen display over the "
+#~ "picture decoded by the GPU. Without this option the hardware output "
+#~ "covers everything and subtitles stay invisible. Only affects the video "
+#~ "shown in the VLC window."
+#~ msgstr ""
+#~ "GPU가 디코딩한 화면 위에 자막(DVD SPU)과 화면 표시를 합성합니다. 이 옵션"
+#~ "이 없으면 하드웨어 출력이 모든 것을 덮어 자막이 보이지 않습니다. VLC 창에 "
+#~ "표시되는 영상에만 적용됩니다."
+
+#~ msgid "Asynchronous GPU submission (advanced)"
+#~ msgstr "비동기 GPU 제출(고급)"
+
+#~ msgid ""
+#~ "Issue the DVDDriverDecode call on a dedicated thread, so that the VLD of "
+#~ "the next picture runs while the GPU works. Measured on the iBook G3: "
+#~ "Decode is time spent blocked in the driver, and overlapping it removes "
+#~ "the shortfall in the 40 ms per picture budget."
+#~ msgstr ""
+#~ "DVDDriverDecode 호출을 전용 스레드에서 실행하여 GPU가 작업하는 동안 다음 "
+#~ "화면의 VLD가 진행되도록 합니다. iBook G3에서 측정한 결과 Decode는 드라이버"
+#~ "에서 차단된 시간이며, 이를 겹치면 화면당 40 ms 예산의 부족분이 사라집니다."
+
+#~ msgid "10.2 port changes on the hardware path (advanced)"
+#~ msgstr "하드웨어 경로의 10.2 이식 변경 사항(고급)"
+
+#~ msgid ""
+#~ "-1 = automatic (on under Mac OS X 10.2 and 10.3, off from 10.4 on, where "
+#~ "they replaced behaviour validated on the machine itself), 0 = off, 1 = on."
+#~ msgstr ""
+#~ "-1 = 자동(Mac OS X 10.2와 10.3에서는 켜짐, 10.4부터는 꺼짐. 10.4 이후에는 "
+#~ "실제 기기에서 검증된 동작을 대체하고 있었습니다), 0 = 끔, 1 = 켬."
+
+#~ msgid "DVD subtitles drawn by the GPU"
+#~ msgstr "GPU가 그리는 DVD 자막"
+
+#~ msgid ""
+#~ "Hand the DVD subtitles to the subpicture plane of the ATI hardware "
+#~ "decoder: the GPU composes them onto the picture itself, at no per-picture "
+#~ "cost, where drawing them through a window costs 15 to 50 ms on this "
+#~ "hardware. No effect while hardware decoding is off, as software rendering "
+#~ "then takes over."
+#~ msgstr ""
+#~ "DVD 자막을 ATI 하드웨어 디코더의 subpicture 평면에 맡깁니다. GPU가 화면당 "
+#~ "비용 없이 직접 화면에 합성하는 반면, 창을 통해 그리면 이 하드웨어에서는 "
+#~ "15~50 ms가 듭니다. 하드웨어 디코딩이 꺼져 있는 동안에는 효과가 없으며, 이"
+#~ "때는 소프트웨어 렌더링이 대신합니다."
+
+#~ msgid "Embedded video in a child window"
+#~ msgstr "하위 창에 삽입된 영상"
+
+#~ msgid ""
+#~ "Host the embedded video in a borderless child window: switching to "
+#~ "fullscreen is instant and does not interrupt accelerated decoding. "
+#~ "Turning this off restores the former behaviour (a separate fullscreen "
+#~ "window). No effect under Mac OS X 10.4, where a child window displays "
+#~ "nothing."
+#~ msgstr ""
+#~ "삽입된 영상을 테두리 없는 하위 창에 배치합니다. 전체화면 전환이 즉시 이루"
+#~ "어지고 가속 디코딩도 중단되지 않습니다. 끄면 이전 동작(별도의 전체화면 창)"
+#~ "으로 되돌아갑니다. 하위 창이 아무것도 표시하지 않는 Mac OS X 10.4에서는 효"
+#~ "과가 없습니다."
+
+#~ msgid "Open a window at startup (debugging)"
+#~ msgstr "시작할 때 창 열기(디버그)"
+
+#~ msgid ""
+#~ "Name of the window to open at startup, like the VLC_LEGACY_SHOW "
+#~ "environment variable: prefs, prefsadv, mediainfo, errors, about, "
+#~ "bookmarks, messages, tracksync, effects, videoeffects, convert, fspanel, "
+#~ "open0..3."
+#~ msgstr ""
+#~ "VLC_LEGACY_SHOW 환경 변수와 마찬가지로, 시작할 때 열 창의 이름: prefs, "
+#~ "prefsadv, mediainfo, errors, about, bookmarks, messages, tracksync, "
+#~ "effects, videoeffects, convert, fspanel, open0..3"
