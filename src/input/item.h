@@ -30,6 +30,10 @@
 void input_item_SetErrorWhenReading( input_item_t *p_i, bool b_error );
 void input_item_UpdateTracksInfo( input_item_t *item, const es_format_t *fmt );
 bool input_item_ShouldPreparseSubItems( input_item_t *p_i );
+/* "Curated Name ||| Stream Title" combining for stream-provided titles;
+ * returns NULL when plain replacement should apply.  Item lock held. */
+char *input_item_CombineCuratedTitle( input_item_t *p_item,
+                                      const char *psz_title );
 
 typedef struct input_item_owner
 {

@@ -48,6 +48,10 @@
     __weak NSOutlineView *_outlineView;
 
     NSUInteger _retainedRowSelection;
+
+    /* active search string, so items appended while the filter is on
+     * (e.g. a radio directory still loading) get filtered too */
+    NSString *_latestSearchString;
 }
 
 - (void)VLCPLItemAppended:(NSArray *)valueArray;
@@ -331,6 +335,24 @@ static int VolumeUpdated(vlc_object_t *p_this, const char *psz_var,
         return;
     }
 
+    /* a search is active: filter the new arrival like searchUpdate: would
+     * have, both for the display and for the core (playback advance must
+     * not fall back on items the view does not show) */
+    if ([_latestSearchString length] > 0 && p_item->i_children == -1) {
+        BOOL b_matches = NO;
+        char *psz_title = input_item_GetTitleFbName(p_item->p_input);
+        if (psz_title) {
+            b_matches = [toNSStr(psz_title) rangeOfString:_latestSearchString
+                                                  options:NSCaseInsensitiveSearch].location != NSNotFound;
+            free(psz_title);
+        }
+        if (!b_matches) {
+            p_item->i_flags |= PLAYLIST_DBL_FLAG;
+            PL_UNLOCK;
+            return;
+        }
+    }
+
     int pos;
     for(pos = p_item->p_parent->i_children - 1; pos >= 0; pos--)
         if(p_item->p_parent->pp_children[pos] == p_item)
@@ -470,6 +492,7 @@ static int VolumeUpdated(vlc_object_t *p_this, const char *psz_var,
 
 - (void)searchUpdate:(NSString *)o_search
 {
+    _latestSearchString = [o_search length] > 0 ? [o_search copy] : nil;
     PL_LOCK;
     playlist_item_t *p_root = playlist_ItemGetById(p_playlist, [_rootItem plItemId]);
     if (!p_root) {
@@ -497,7 +520,16 @@ static int VolumeUpdated(vlc_object_t *p_this, const char *psz_var,
 
 - (BOOL)outlineView:(NSOutlineView *)outlineView isItemExpandable:(id)item
 {
-    return !item ? YES : [[item children] count] > 0;
+    if (!item)
+        return YES;
+    if ([[item children] count] > 0)
+        return YES;
+
+    /* unbrowsed directories (file browser folders, radio directory
+     * countries...) get their disclosure triangle right away: expanding
+     * them triggers the browse (see outlineViewItemDidExpand:) */
+    input_item_t *p_input = [item input];
+    return p_input && p_input->i_type == ITEM_TYPE_DIRECTORY;
 }
 
 - (id)outlineView:(NSOutlineView *)outlineView child:(NSInteger)index ofItem:(id)item

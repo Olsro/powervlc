@@ -142,13 +142,64 @@ void input_item_SetArtFetched( input_item_t *p_i, bool b_art_fetched )
     vlc_mutex_unlock( &p_i->lock );
 }
 
+/* An item named by a playlist or an on-line directory (webradio
+ * directories...) must not lose that curated name when the stream
+ * announces its own title (ICY names are often raw mount points): keep
+ * the curated name as a prefix, "Curated Name ||| Stream Title", so the
+ * entry remains recognizable and searchable.  Returns NULL when the
+ * default behavior (plain title replacement) should apply.
+ * The item lock must be held. */
+char *input_item_CombineCuratedTitle( input_item_t *p_item,
+                                      const char *psz_title )
+{
+    const char *psz_name = p_item->psz_name;
+    if( !psz_name || !*psz_name || !p_item->psz_uri )
+        return NULL;
+
+    /* a name merely derived from the URI is not curated */
+    if( strstr( p_item->psz_uri, psz_name ) )
+        return NULL;
+    const char *psz_file = strrchr( p_item->psz_uri, '/' );
+    if( psz_file && psz_file[1] )
+    {
+        char *psz_decoded = strdup( psz_file + 1 );
+        if( psz_decoded )
+        {
+            vlc_uri_decode( psz_decoded );
+            bool b_derived = !strcmp( psz_decoded, psz_name );
+            free( psz_decoded );
+            if( b_derived )
+                return NULL;
+        }
+    }
+
+    /* one contains the other: keep the more complete of the two */
+    if( vlc_strcasestr( psz_title, psz_name ) )
+        return strdup( psz_title );
+    if( vlc_strcasestr( psz_name, psz_title ) )
+        return strdup( psz_name );
+
+    char *psz_combined;
+    if( asprintf( &psz_combined, "%s ||| %s", psz_name, psz_title ) == -1 )
+        return NULL;
+    return psz_combined;
+}
+
 void input_item_SetMeta( input_item_t *p_i, vlc_meta_type_t meta_type, const char *psz_val )
 {
+    char *psz_combined = NULL;
     vlc_mutex_lock( &p_i->lock );
     if( !p_i->p_meta )
         p_i->p_meta = vlc_meta_New();
+    if( meta_type == vlc_meta_Title && psz_val != NULL )
+    {
+        psz_combined = input_item_CombineCuratedTitle( p_i, psz_val );
+        if( psz_combined )
+            psz_val = psz_combined;
+    }
     vlc_meta_Set( p_i->p_meta, meta_type, psz_val );
     vlc_mutex_unlock( &p_i->lock );
+    free( psz_combined );
 
     /* Notify interested third parties */
     vlc_event_send( &p_i->event_manager, &(vlc_event_t) {

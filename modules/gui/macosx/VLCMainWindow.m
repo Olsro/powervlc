@@ -169,6 +169,22 @@ static NSString *defaultWindowTitle(void)
 
 - (BOOL)performKeyEquivalent:(NSEvent *)o_event
 {
+    /* when a list (playlist outline, sidebar) has keyboard focus, the
+     * plain Left/Right arrows belong to it (fold/unfold), not to the
+     * core hotkeys (key-nav-*).  DVD menu navigation still gets them
+     * whenever the video view has focus.  Up/Down, Delete and Return
+     * are already let through by hasDefinedShortcutKey:force:. */
+    if (!([o_event modifierFlags] & (NSControlKeyMask | NSAlternateKeyMask
+                                   | NSShiftKeyMask | NSCommandKeyMask))
+     && [[self firstResponder] isKindOfClass:[NSTableView class]]) {
+        NSString *characters = [o_event charactersIgnoringModifiers];
+        if ([characters length] > 0) {
+            unichar key = [characters characterAtIndex:0];
+            if (key == NSLeftArrowFunctionKey || key == NSRightArrowFunctionKey)
+                return NO; /* regular dispatch: the focused list handles it */
+        }
+    }
+
     BOOL b_force = NO;
     // these are key events which should be handled by vlc core, but are attached to a main menu item
     if (![self isEvent: o_event forKey: "key-vol-up"] &&
@@ -1057,8 +1073,52 @@ static NSString *defaultWindowTitle(void)
     //Set the label text to represent the new selection
     if ([item sdtype] > -1 && [[item identifier] length] > 0) {
         BOOL sd_loaded = playlist_IsServicesDiscoveryLoaded(p_playlist, [[item identifier] UTF8String]);
-        if (!sd_loaded)
+        if (!sd_loaded) {
             playlist_ServicesDiscoveryAdd(p_playlist, [[item identifier] UTF8String]);
+        } else {
+            /* an on-line service left empty (network hiccup during its
+             * one-shot discovery) has no other way to retry: selecting
+             * it again restarts the module, in the background (removing
+             * a service joins its thread, which may sit in a network
+             * fetch — doing that here would freeze the UI) */
+            static BOOL s_sdReloadInFlight = NO;
+            BOOL b_empty = NO;
+            PL_LOCK;
+            playlist_item_t *pl_node = playlist_ChildSearchName(&p_playlist->root,
+                                                                [[item title] UTF8String]);
+            if (pl_node) {
+                if (pl_node->i_children <= 0)
+                    b_empty = YES;
+                else if (pl_node->i_children == 1) {
+                    /* only the error placeholder a service script adds
+                     * after a failed discovery */
+                    playlist_item_t *pl_child = pl_node->pp_children[0];
+                    b_empty = pl_child->i_children < 0 && pl_child->p_input
+                           && pl_child->p_input->psz_uri
+                           && !strcmp(pl_child->p_input->psz_uri, "vlc://nop");
+                }
+            }
+            PL_UNLOCK;
+            if (b_empty && !s_sdReloadInFlight) {
+                s_sdReloadInFlight = YES;
+                NSString *sdName = [item identifier];
+                NSString *sdTitle = [item title];
+                dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                    playlist_ServicesDiscoveryRemove(p_playlist, [sdName UTF8String]);
+                    playlist_ServicesDiscoveryAdd(p_playlist, [sdName UTF8String]);
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        /* root the view on the recreated node */
+                        PL_LOCK;
+                        playlist_item_t *pl_new = playlist_ChildSearchName(&p_playlist->root,
+                                                                           [sdTitle UTF8String]);
+                        if (pl_new)
+                            [[[[VLCMain sharedInstance] playlist] model] changeRootItem:pl_new];
+                        PL_UNLOCK;
+                        s_sdReloadInFlight = NO;
+                    });
+                });
+            }
+        }
     }
 
     [_categoryLabel setStringValue:[item title]];

@@ -58,6 +58,57 @@ static void ArtCacheCreateDir( const char *psz_dir )
     vlc_mkdir( psz_dir, 0700 );
 }
 
+/* Longest single path component we are willing to create. Filesystems cap a
+ * name at 255 bytes (HFS+, ext4, NTFS), so stay well below that. */
+#define ART_COMPONENT_MAX 128
+
+/**
+ * Turns a meta field into one directory name of the art cache.
+ *
+ * Values can be arbitrarily long: a tag repeated in a file gets concatenated
+ * into a single field, so one artist can easily span several hundred bytes.
+ * Such a name makes mkdir() fail with ENAMETOOLONG and the artwork is then
+ * never cached at all, so fold the overflowing tail into a digest rather than
+ * truncating it, which would make distinct values collide.
+ */
+static char *ArtCacheComponent( const char *psz_value )
+{
+    char *psz = strdup( psz_value );
+    if( unlikely( !psz ) )
+        return NULL;
+
+    filename_sanitize( psz );
+
+    size_t i_len = strlen( psz );
+    if( i_len <= ART_COMPONENT_MAX )
+        return psz;
+
+    struct md5_s md5;
+    InitMD5( &md5 );
+    AddMD5( &md5, psz, i_len );
+    EndMD5( &md5 );
+
+    char *psz_hash = psz_md5_hash( &md5 );
+    if( unlikely( !psz_hash ) )
+    {
+        free( psz );
+        return NULL;
+    }
+
+    /* Keep a readable prefix, without cutting an UTF-8 sequence in half. */
+    size_t i_keep = ART_COMPONENT_MAX - strlen( psz_hash ) - 1;
+    while( i_keep > 0 && (psz[i_keep] & 0xC0) == 0x80 )
+        i_keep--;
+
+    char *psz_short;
+    if( asprintf( &psz_short, "%.*s-%s", (int)i_keep, psz, psz_hash ) == -1 )
+        psz_short = NULL;
+
+    free( psz_hash );
+    free( psz );
+    return psz_short;
+}
+
 static char* ArtCacheGetDirPath( const char *psz_arturl, const char *psz_artist,
                                  const char *psz_album,  const char *psz_title )
 {
@@ -66,11 +117,10 @@ static char* ArtCacheGetDirPath( const char *psz_arturl, const char *psz_artist,
 
     if( !EMPTY_STR(psz_artist) && !EMPTY_STR(psz_album) )
     {
-        char *psz_album_sanitized = strdup( psz_album );
-        filename_sanitize( psz_album_sanitized );
-        char *psz_artist_sanitized = strdup( psz_artist );
-        filename_sanitize( psz_artist_sanitized );
-        if( asprintf( &psz_dir, "%s" DIR_SEP "art" DIR_SEP "artistalbum"
+        char *psz_album_sanitized = ArtCacheComponent( psz_album );
+        char *psz_artist_sanitized = ArtCacheComponent( psz_artist );
+        if( !psz_album_sanitized || !psz_artist_sanitized ||
+            asprintf( &psz_dir, "%s" DIR_SEP "art" DIR_SEP "artistalbum"
                       DIR_SEP "%s" DIR_SEP "%s", psz_cachedir,
                       psz_artist_sanitized, psz_album_sanitized ) == -1 )
             psz_dir = NULL;

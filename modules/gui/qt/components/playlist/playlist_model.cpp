@@ -39,6 +39,7 @@
 #include "sorting.h"
 
 #include <cassert>
+#include <QDateTime>
 #include <QFont>
 #include <QAction>
 #include <QStack>
@@ -510,6 +511,56 @@ int PLModel::rowCount( const QModelIndex &parent ) const
 {
     PLItem *parentItem = parent.isValid() ? getItem( parent ) : rootItem;
     return parentItem->childCount();
+}
+
+bool PLModel::hasChildren( const QModelIndex &parent ) const
+{
+    if( rowCount( parent ) > 0 )
+        return true;
+    if( !parent.isValid() )
+        return false;
+
+    /* unbrowsed directories (file browser folders, radio directory
+     * countries...) get their expand decoration right away: expanding
+     * them triggers the browse (see ensureBrowsed()) */
+    input_item_t *p_input = getInputItem( parent );
+    return p_input != NULL && p_input->i_type == ITEM_TYPE_DIRECTORY;
+}
+
+void PLModel::ensureBrowsed( const QModelIndex &index )
+{
+    if( !index.isValid() || rowCount( index ) > 0 )
+        return;
+
+    input_item_t *p_input = getInputItem( index );
+    if( p_input == NULL || p_input->i_type != ITEM_TYPE_DIRECTORY )
+        return;
+
+    /* a directory still childless once its request is surely over
+     * (failed fetch) can be retried by folding and unfolding it again */
+    int i_id = itemId( index );
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if( browseRequestedIds.contains( i_id )
+     && now - browseRequestedIds.value( i_id ) < 150000 )
+        return;
+
+    /* expanding an unbrowsed directory sends it to the preparser: its
+     * sub-items reach the model through the regular playlist callbacks.
+     * The network scope is required for on-line directories (radio
+     * directory countries...), else the preparser silently skips them;
+     * the explicit timeout replaces the 5-second preparse default, far
+     * too short for the biggest countries of an on-line radio directory. */
+    playlist_Lock( p_playlist );
+    playlist_item_t *p_item = playlist_ItemGetById( p_playlist, i_id );
+    /* i_children on the core item: the view may just be filtering
+     * everything out, which is no reason to fetch again */
+    if( p_item != NULL && p_item->p_input != NULL && p_item->i_children <= 0 )
+    {
+        browseRequestedIds.insert( i_id, now );
+        libvlc_MetadataRequest( p_intf->obj.libvlc, p_item->p_input,
+                                META_REQUEST_OPTION_SCOPE_ANY, 120000, p_item );
+    }
+    playlist_Unlock( p_playlist );
 }
 
 /************************* Lookups *****************************/

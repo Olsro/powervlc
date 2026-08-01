@@ -39,6 +39,7 @@
 #include <QSignalMapper>
 #include <QMimeData>
 #include <QAbstractItemModel>
+#include <QSet>
 #include <QVariant>
 #include <QModelIndex>
 #include <QAction>
@@ -76,6 +77,7 @@ public:
     QVariant data( const QModelIndex &index, const int role ) const Q_DECL_OVERRIDE;
     bool setData( const QModelIndex &index, const QVariant & value, int role = Qt::EditRole ) Q_DECL_OVERRIDE;
     int rowCount( const QModelIndex &parent = QModelIndex() ) const Q_DECL_OVERRIDE;
+    bool hasChildren( const QModelIndex &parent = QModelIndex() ) const Q_DECL_OVERRIDE;
     Qt::ItemFlags flags( const QModelIndex &index ) const Q_DECL_OVERRIDE;
     QModelIndex index( const int r, const int c, const QModelIndex &parent ) const Q_DECL_OVERRIDE;
     QModelIndex parent( const QModelIndex &index ) const Q_DECL_OVERRIDE;
@@ -159,8 +161,14 @@ private:
     QString latestSearch;
     QFont   customFont;
 
+    /* id -> tick (ms) of the last expand-to-browse preparse, so a
+     * collapse/expand cycle does not re-request a directory while its
+     * fetch may still be running — but can retry a failed one */
+    QHash<int, qint64> browseRequestedIds;
+
 public slots:
     virtual void activateItem( const QModelIndex &index ) Q_DECL_OVERRIDE;
+    void ensureBrowsed( const QModelIndex &index ) Q_DECL_OVERRIDE;
 
 private slots:
     void processInputItemUpdate( input_item_t *);

@@ -150,8 +150,12 @@ typedef float CGFloat;
     int refreshTicks;       /* safety-net counter for snapshot rebuilds */
     int lastSeenChangeCount;/* playlist change burst detection */
     int burstTicks;         /* ticks since the current burst started */
-    NSMutableSet *browseRequestedIds;  /* directories already sent to the
-                                        * preparser (expand-to-browse) */
+    NSMutableDictionary *browseRequestedIds; /* id -> NSDate of the last
+                                        * expand-to-browse preparse; lets a
+                                        * failed directory be retried once
+                                        * the request is surely over */
+    BOOL searchFlagsWereSet;           /* core-side search flags are up, so
+                                        * an emptied search must clean them */
     NSMutableDictionary *dirCheckCache;/* path -> NSNumber(isDirectory) */
 
     NSMutableDictionary *fileSizeCache;  /* path -> formatted size */

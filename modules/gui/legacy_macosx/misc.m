@@ -767,6 +767,53 @@ void VLCLegacyResizeLastColumnOnly(NSTableView *table)
 
 @implementation VLCLegacyStripedOutlineView
 
+/* Return plays the selection, like a double-click, and Left/Right fold
+ * and unfold it: the AppKit of the oldest supported systems has no
+ * native keyboard handling for the disclosure triangles (the host
+ * window lets the plain navigation keys through when a list has focus) */
+- (void)keyDown:(NSEvent *)event
+{
+    NSString *chars = [event charactersIgnoringModifiers];
+    unichar key = [chars length] ? [chars characterAtIndex:0] : 0;
+    if ((key == NSEnterCharacter || key == NSCarriageReturnCharacter)
+     && [self selectedRow] >= 0 && [self doubleAction]
+     && [NSApp sendAction:[self doubleAction] to:[self target] from:self])
+        return;
+    if (key == NSRightArrowFunctionKey || key == NSLeftArrowFunctionKey) {
+        NSInteger row = [self selectedRow];
+        if (row < 0) {
+            [super keyDown:event];
+            return;
+        }
+        id item = [self itemAtRow:row];
+        if (key == NSRightArrowFunctionKey) {
+            if ([self isExpandable:item]) {
+                if (![self isItemExpanded:item])
+                    [self expandItem:item];
+                else if (row + 1 < [self numberOfRows]) {
+                    /* already open: step onto its first child */
+                    VLCLegacySelectRow(self, row + 1);
+                    [self scrollRowToVisible:row + 1];
+                }
+            }
+        } else {
+            if ([self isExpandable:item] && [self isItemExpanded:item])
+                [self collapseItem:item];
+            else {
+                /* fold onto the parent, Finder-like */
+                id parent = [self parentForItem:item];
+                NSInteger parentRow = parent ? [self rowForItem:parent] : -1;
+                if (parentRow >= 0) {
+                    VLCLegacySelectRow(self, parentRow);
+                    [self scrollRowToVisible:parentRow];
+                }
+            }
+        }
+        return;
+    }
+    [super keyDown:event];
+}
+
 - (void)highlightSelectionInClipRect:(NSRect)clipRect
 {
     /* From 10.3 on AppKit does this itself, and better (it follows the

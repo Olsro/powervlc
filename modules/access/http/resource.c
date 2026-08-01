@@ -68,6 +68,11 @@ vlc_http_res_req(const struct vlc_http_resource *res, void *opaque)
     if (res->referrer != NULL) /* TODO: validate URL */
         vlc_http_msg_add_header(req, "Referer", "%s", res->referrer);
 
+    /* SHOUTcast/Icecast in-band metadata. Servers that do not know about it
+     * simply ignore the header line, so it costs nothing to always ask. */
+    if (res->icy)
+        vlc_http_msg_add_header(req, "Icy-MetaData", "1");
+
     vlc_http_msg_add_cookies(req, vlc_http_mgr_get_jar(res->manager));
 
     /* TODO: vlc_http_msg_add_header(req, "TE", "gzip, deflate"); */
@@ -208,6 +213,7 @@ int vlc_http_res_init(struct vlc_http_resource *restrict res,
     res->secure = secure;
     res->negotiate = true;
     res->failure = false;
+    res->icy = false;
     res->host = strdup(url.psz_host);
     res->port = url.i_port;
     res->authority = vlc_http_authority(url.psz_host, url.i_port);

@@ -47,6 +47,29 @@
 #include <vlc_playlist.h>
 #include <vlc_services_discovery.h>
 
+/* Reloading a services discovery joins its thread, which may sit in a
+ * network fetch: never do it on the UI thread. */
+struct sd_reload_request
+{
+    playlist_t *playlist;
+    char *name;
+};
+
+static volatile bool b_sd_reload_busy = false;
+static vlc_thread_t sd_reload_thread;
+static bool b_sd_reload_joinable = false;   /* UI thread only */
+
+static void *RunSDReload( void *data )
+{
+    struct sd_reload_request *req = (struct sd_reload_request *)data;
+    playlist_ServicesDiscoveryRemove( req->playlist, req->name );
+    playlist_ServicesDiscoveryAdd( req->playlist, req->name );
+    free( req->name );
+    free( req );
+    b_sd_reload_busy = false;
+    return NULL;
+}
+
 void SelectorActionButton::paintEvent( QPaintEvent *event )
 {
     QPainter p( this );
@@ -370,6 +393,63 @@ void PLSelector::setSource( QTreeWidgetItem *item )
                                                     SD_CMD_DESCRIPTOR, &test ) == VLC_SUCCESS )
             {
                 item->setData( 0, CAP_SEARCH_ROLE, (test.i_capabilities & SD_CAP_SEARCH) );
+            }
+        }
+        else
+        {
+            /* an on-line service left empty (network hiccup during its
+             * one-shot discovery) has no other way to retry: selecting
+             * it again restarts the module, in the background (removing
+             * a service joins its thread, which may sit in a network
+             * fetch — doing that here would freeze the UI) */
+            bool b_empty = false;
+            playlist_Lock( THEPL );
+            playlist_item_t *p_node = playlist_ChildSearchName( &(THEPL->root),
+                vlc_gettext(qtu(item->data(0, LONGNAME_ROLE).toString())) );
+            if( p_node != NULL )
+            {
+                if( p_node->i_children <= 0 )
+                    b_empty = true;
+                else if( p_node->i_children == 1 )
+                {
+                    /* only the error placeholder a service script adds
+                     * after a failed discovery */
+                    playlist_item_t *p_child = p_node->pp_children[0];
+                    b_empty = p_child->i_children < 0 && p_child->p_input
+                           && p_child->p_input->psz_uri
+                           && !strcmp( p_child->p_input->psz_uri, "vlc://nop" );
+                }
+            }
+            playlist_Unlock( THEPL );
+            if( b_empty && !b_sd_reload_busy )
+            {
+                /* reclaim the previous, finished reload thread (there is
+                 * no detached variant in this core) */
+                if( b_sd_reload_joinable )
+                {
+                    vlc_join( sd_reload_thread, NULL );
+                    b_sd_reload_joinable = false;
+                }
+                struct sd_reload_request *req =
+                    (struct sd_reload_request *)calloc( 1, sizeof( *req ) );
+                char *name = strdup( qtu( qs ) );
+                if( req != NULL && name != NULL )
+                {
+                    req->playlist = THEPL;
+                    req->name = name;
+                    b_sd_reload_busy = true;
+                    if( vlc_clone( &sd_reload_thread, RunSDReload, req,
+                                   VLC_THREAD_PRIORITY_LOW ) == 0 )
+                    {
+                        b_sd_reload_joinable = true;
+                        req = NULL;
+                        name = NULL; /* owned by the thread */
+                    }
+                    else
+                        b_sd_reload_busy = false;
+                }
+                free( name );
+                free( req );
             }
         }
     }

@@ -448,6 +448,8 @@ void PlTreeView::setModel( QAbstractItemModel * model )
     QTreeView::setModel( model );
     VLCModel *m = static_cast<VLCModel*>(model);
     connect( this, &PlTreeView::expanded,
+             m, &VLCModel::ensureBrowsed );
+    connect( this, &PlTreeView::expanded,
              m, &VLCModel::ensureArtRequested );
 }
 

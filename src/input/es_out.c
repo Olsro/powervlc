@@ -41,6 +41,8 @@
 #include <vlc_vout_osd.h>
 #include <vlc_fourcc.h>
 #include <vlc_meta.h>
+#include <vlc_charset.h>
+#include <vlc_url.h>
 
 #include "input_internal.h"
 #include "clock.h"
@@ -2408,15 +2410,25 @@ static void EsOutMeta( es_out_t *p_out, const vlc_meta_t *p_meta, const vlc_meta
     input_thread_t  *p_input = p_sys->p_input;
     input_item_t *p_item = input_GetItem( p_input );
 
+    char *psz_combined = NULL;
     vlc_mutex_lock( &p_item->lock );
     if( p_meta )
+    {
+        const char *psz_new_title = vlc_meta_Get( p_meta, vlc_meta_Title );
+        if( psz_new_title )
+            psz_combined = input_item_CombineCuratedTitle( p_item, psz_new_title );
         vlc_meta_Merge( p_item->p_meta, p_meta );
+        if( psz_combined )
+            vlc_meta_Set( p_item->p_meta, vlc_meta_Title, psz_combined );
+    }
     vlc_mutex_unlock( &p_item->lock );
 
     /* Check program meta to not override GROUP_META values */
     if( p_meta && (!p_program_meta || vlc_meta_Get( p_program_meta, vlc_meta_Title ) == NULL) &&
-         vlc_meta_Get( p_meta, vlc_meta_Title ) != NULL )
+         vlc_meta_Get( p_meta, vlc_meta_Title ) != NULL &&
+         psz_combined == NULL /* keep a curated item name */ )
         input_item_SetName( p_item, vlc_meta_Get( p_meta, vlc_meta_Title ) );
+    free( psz_combined );
 
     const char *psz_arturl = NULL;
     char *psz_alloc = NULL;

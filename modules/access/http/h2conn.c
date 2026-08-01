@@ -35,6 +35,7 @@
 #include <vlc_common.h>
 #include <vlc_block.h>
 #include <vlc_interrupt.h>
+#include <vlc_threads.h>
 #include <vlc_tls.h>
 
 #include "h2frame.h"
@@ -58,6 +59,11 @@ struct vlc_h2_conn
 
     vlc_mutex_t lock; /**< State machine lock */
     vlc_thread_t thread; /**< Receive thread */
+    vlc_interrupt_t *interrupt; /**< Interruption context of the receive
+        thread: pthread cancellation cannot be relied upon to wake its
+        poll() on the legacy Mac OS X targets (no cancellation points in
+        poll/select, and a local shutdown() does not wake select there
+        either), so the destructor interrupts the thread instead. */
 };
 
 static void vlc_h2_conn_destroy(struct vlc_h2_conn *conn);
@@ -583,7 +589,11 @@ static ssize_t vlc_https_recv(vlc_tls_t *tls, void *buf, size_t len)
         if (errno != EINTR && errno != EAGAIN)
             return count ? (ssize_t)count : -1;
 
-        poll(&ufd, 1, -1);
+        /* interruptible: vlc_h2_conn_destroy() kills the thread's
+         * interruption context to wake this wait deterministically */
+        vlc_poll_i11e(&ufd, 1, -1);
+        if (vlc_killed())
+            return count ? (ssize_t)count : -1;
     }
 
     return count;
@@ -645,6 +655,8 @@ static void *vlc_h2_recv_thread(void *data)
     struct vlc_h2_parser *parser;
     int canc, val;
 
+    if (conn->interrupt != NULL)
+        vlc_interrupt_set(conn->interrupt);
     canc = vlc_savecancel();
     parser = vlc_h2_parse_init(conn, &vlc_h2_parser_callbacks);
     if (unlikely(parser == NULL))
@@ -685,8 +697,16 @@ static void vlc_h2_conn_destroy(struct vlc_h2_conn *conn)
 
     vlc_h2_error(conn, VLC_H2_NO_ERROR);
 
+    /* wake the receive thread deterministically: pthread cancellation
+     * cannot be trusted to interrupt poll() on every supported system
+     * (the legacy Mac OS X pthreads have no cancellation point there,
+     * and a local shutdown() does not wake select() either) */
+    if (conn->interrupt != NULL)
+        vlc_interrupt_kill(conn->interrupt);
     vlc_cancel(conn->thread);
     vlc_join(conn->thread, NULL);
+    if (conn->interrupt != NULL)
+        vlc_interrupt_destroy(conn->interrupt);
     vlc_mutex_destroy(&conn->lock);
 
     vlc_h2_output_destroy(conn->out);
@@ -731,6 +751,7 @@ struct vlc_http_conn *vlc_h2_conn_create(void *ctx, struct vlc_tls *tls)
     conn->streams = NULL;
     conn->next_id = 1; /* TODO: server side */
     conn->released = false;
+    conn->interrupt = vlc_interrupt_create();
 
     if (unlikely(conn->out == NULL))
         goto error;
@@ -747,6 +768,8 @@ struct vlc_http_conn *vlc_h2_conn_create(void *ctx, struct vlc_tls *tls)
     }
     return &conn->conn;
 error:
+    if (conn->interrupt != NULL)
+        vlc_interrupt_destroy(conn->interrupt);
     free(conn);
     return NULL;
 }

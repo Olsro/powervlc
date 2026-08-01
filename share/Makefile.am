@@ -155,8 +155,10 @@ nobase_vlclib_DATA += \
 	lua/playlist/vimeo.luac \
 	lua/playlist/vocaroo.luac \
 	lua/playlist/twitch.luac \
+	lua/playlist/radiobrowser.luac \
 	lua/sd/icecast.luac \
 	lua/sd/jamendo.luac \
+	lua/sd/radiobrowser.luac \
 	$(NULL)
 
 nobase_doc_DATA = \
@@ -291,12 +293,14 @@ EXTRA_DIST += \
 	lua/playlist/vimeo.lua \
 	lua/playlist/vocaroo.lua \
 	lua/playlist/twitch.lua \
+	lua/playlist/radiobrowser.lua \
 	lua/playlist/zapiks.lua \
 	lua/sd/README.txt \
 	lua/sd/fmc.lua \
 	lua/sd/icecast.lua \
 	lua/sd/icast.lua \
-	lua/sd/jamendo.lua
+	lua/sd/jamendo.lua \
+	lua/sd/radiobrowser.lua
 DIST_solid = \
 	solid/vlc-openbd.desktop \
 	solid/vlc-opencda.desktop \

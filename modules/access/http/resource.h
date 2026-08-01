@@ -48,6 +48,7 @@ struct vlc_http_resource
     bool secure;
     bool negotiate;
     bool failure;
+    bool icy; /**< Ask for SHOUTcast/Icecast in-band metadata */
     char *host;
     unsigned port;
     char *authority;
