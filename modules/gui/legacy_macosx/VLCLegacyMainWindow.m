@@ -3481,13 +3481,24 @@ static const struct {
 /* services discovery trees mirror an external source (on-line radio
  * directories...): the user cannot reorder them or drop files into
  * them.  Dragging OUT of them (to the sidebar Playlist / Media
- * Library) stays possible: that path does not come through here. */
+ * Library) stays possible: that path does not come through here.
+ *
+ * ⚠ The test is the IDENTITY of the root, not PLAYLIST_RO_FLAG: the core
+ * creates BOTH p_playing and p_media_library with that flag (engine.c),
+ * where it only means "this node itself may not be deleted" -- and
+ * PLAYLIST_NO_INHERIT_FLAG keeps their children out of it. Testing the
+ * flag therefore declared the Playlist and the Media Library read-only
+ * too, which killed every drop and every reorder on the playlist area
+ * (only the "Drop media here" dropzone, which never goes through the
+ * outline, kept working). The modern interface tests the root type the
+ * same way (VLCPLModel -editAllowed). */
 - (BOOL)currentRootIsReadOnly
 {
     playlist_t *p_playlist = pl_Get(p_intf);
     playlist_Lock(p_playlist);
     playlist_item_t *p_root = [self currentRootLocked:p_playlist];
-    BOOL readOnly = p_root && (p_root->i_flags & PLAYLIST_RO_FLAG);
+    BOOL readOnly = p_root != p_playlist->p_playing
+                 && p_root != p_playlist->p_media_library;
     playlist_Unlock(p_playlist);
     return readOnly;
 }
