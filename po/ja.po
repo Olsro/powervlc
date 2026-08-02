@@ -31280,6 +31280,34 @@ msgstr ""
 "ディスクが字幕ストリームを非表示にしても、デコードを続けて強制字幕のみを表示"
 "します（据え置き型Blu-rayプレーヤーと同じ動作）。"
 
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Installing %@..."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Uninstalling %@..."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ installed."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ uninstalled."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not install this addon"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not remove this addon"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ could not be processed. The Messages window records what went wrong."
+msgstr ""
+
 #, c-format
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "VLCバージョン %s (%s)\n"

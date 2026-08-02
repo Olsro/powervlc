@@ -31665,3 +31665,31 @@ msgstr ""
 #~ "VLC_LEGACY_SHOW ortam değişkeninde olduğu gibi, başlangıçta açılacak "
 #~ "pencerenin adı: prefs, prefsadv, mediainfo, errors, about, bookmarks, "
 #~ "messages, tracksync, effects, videoeffects, convert, fspanel, open0..3."
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Installing %@..."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Uninstalling %@..."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ installed."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ uninstalled."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not install this addon"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not remove this addon"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ could not be processed. The Messages window records what went wrong."
+msgstr ""

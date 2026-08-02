@@ -38,6 +38,7 @@
 #import "VLCLegacyBookmarks.h"
 #import "VLCLegacyFSPanel.h"
 #import "VLCLegacyAbout.h"
+#import "VLCLegacyExtensionsDialogProvider.h"
 
 #include <vlc_dialog.h>
 #include <vlc_configuration.h>
@@ -172,6 +173,10 @@ static const vlc_dialog_cbs dialog_callbacks = {
         bookmarks = [[VLCLegacyBookmarks alloc] initWithCore:core];
         fsPanel = [[VLCLegacyFSPanel alloc] initWithCore:core];
         about = [[VLCLegacyAbout alloc] initWithIntf:intf];
+        /* without this, an extension builds its dialog and nothing
+         * ever shows it: clicking VLSub simply did nothing */
+        extensionDialogs =
+            [[VLCLegacyExtensionsDialogProvider alloc] initWithIntf:intf];
         menu = [[VLCLegacyMenu alloc] initWithCore:core
                                         mainWindow:mainWindow
                                               open:open
@@ -205,6 +210,8 @@ static const vlc_dialog_cbs dialog_callbacks = {
     [mediaInfo release];
     [bookmarks release];
     [fsPanel release];
+    [extensionDialogs stop];
+    [extensionDialogs release];
     [about release];
     [mainWindow release];
     [core release];

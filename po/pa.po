@@ -29564,3 +29564,31 @@ msgstr ""
 #~ msgstr ""
 #~ "vlc ਨੂੰ ਡਿਫਾਲਟ ਇੰਟਰਫੇਸ ਨਾਲ ਚਲਾਇਆ ਜਾ ਰਿਹਾ ਹੈ। vlc ਨੂੰ ਬਿਨਾਂ ਇੰਟਰਫੇਸ ਚਲਾਉਣ ਵਾਸਤੇ "
 #~ "'cvlc' ਵਰਤੋਂ।"
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Installing %@..."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Uninstalling %@..."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ installed."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ uninstalled."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not install this addon"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not remove this addon"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ could not be processed. The Messages window records what went wrong."
+msgstr ""

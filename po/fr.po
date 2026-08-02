@@ -31689,6 +31689,35 @@ msgstr ""
 "n'afficher que ses sous-titres forcés, comme le fait une platine Blu-ray de "
 "salon."
 
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Installing %@..."
+msgstr "Installation de %@…"
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Uninstalling %@..."
+msgstr "Désinstallation de %@…"
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ installed."
+msgstr "%@ installé."
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ uninstalled."
+msgstr "%@ désinstallé."
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not install this addon"
+msgstr "Impossible d’installer ce greffon"
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not remove this addon"
+msgstr "Impossible de supprimer ce greffon"
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ could not be processed. The Messages window records what went wrong."
+msgstr ""
+"%@ n’a pas pu être traité. La fenêtre Messages indique ce qui a échoué."
+
 #, c-format
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "VLC version %s (%s)\n"

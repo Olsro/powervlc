@@ -1258,9 +1258,9 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     vlc_mutex_unlock(&p_extensions_manager->lock);
 
     if (i_action == 0) {
-        /* toggle activation, or plain trigger for trigger-only ones.
-         * NOTE: extension dialogs have no provider in this interface yet;
-         * they are a safe no-op (core returns VLC_EGENERIC). */
+        /* toggle activation, or plain trigger for trigger-only ones. Dialogs
+         * raised by the extension are rendered by
+         * VLCLegacyExtensionsDialogProvider. */
         if (extension_TriggerOnly(p_extensions_manager, p_ext))
             extension_Trigger(p_extensions_manager, p_ext);
         else if (extension_IsActivated(p_extensions_manager, p_ext))

@@ -55,10 +55,19 @@ typedef float CGFloat;
     NSTextField *authorField;
     NSTextField *versionField;
     NSTextView *descriptionView;
+    NSTextField *statusField;          /* what the manager is doing */
+    NSProgressIndicator *installProgress;
 
     NSMutableArray *addons;          /* NSValue-wrapped held entries */
     NSMutableArray *displayedAddons; /* filtered view of the above */
     BOOL b_subscribed;
+
+    /* the install/remove in flight, so that its outcome can be reported:
+     * the core only tells us "something changed", never whether it worked */
+    addon_uuid_t pending_uuid;
+    BOOL b_pending;
+    BOOL b_pending_install;   /* NO when the pending request is a removal */
+    NSString *pendingName;
 }
 
 - (id)initWithIntf:(intf_thread_t *)intf;

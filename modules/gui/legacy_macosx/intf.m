@@ -376,7 +376,6 @@ void VLCLegacyCursorSetHidden(bool b_hide)
     else
         CGDisplayShowCursor(kCGDirectMainDisplay);
     b_vlc_cursor_hidden = b_hide;
-    fprintf(stderr, "CURSEUR : %s\n", b_hide ? "masqué" : "rendu");
 }
 
 void VLCLegacyCursorActivity(void)

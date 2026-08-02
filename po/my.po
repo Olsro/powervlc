@@ -29597,3 +29597,31 @@ msgstr ""
 #~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
 #~ "interface."
 #~ msgstr "မူလ သွင်ပြင် ဖြင့် VLC ကို မောင်းနှင်ခြင်း။  VLC ကို သွင်ပြင် မရှိပဲ သုံးရန် 'cvlc' ကိုသုံးပါ။"
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Installing %@..."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Uninstalling %@..."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ installed."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ uninstalled."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not install this addon"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not remove this addon"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ could not be processed. The Messages window records what went wrong."
+msgstr ""

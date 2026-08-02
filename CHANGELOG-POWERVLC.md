@@ -115,6 +115,7 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
 - BD-J interoperability jar rebuilt as **Java 5 bytecode**, keeping Blu-ray
   menus possible on period JVMs (a Java 5 API index is vendored under
   `contrib/java5-api/`).
+- **Extensions support, including the extensions browser to download new extensions straight from PowerVLC**
 
 ### Improvements — legacy Macs
 

@@ -46,6 +46,8 @@ liblegacy_macosx_plugin_la_SOURCES = \
 	gui/legacy_macosx/VLCLegacyMessages.h gui/legacy_macosx/VLCLegacyMessages.m \
 	gui/legacy_macosx/VLCLegacyConvertAndSave.h gui/legacy_macosx/VLCLegacyConvertAndSave.m \
 	gui/legacy_macosx/VLCLegacyAddons.h gui/legacy_macosx/VLCLegacyAddons.m \
+	gui/legacy_macosx/VLCLegacyExtensionsDialogProvider.h \
+	gui/legacy_macosx/VLCLegacyExtensionsDialogProvider.m \
 	gui/legacy_macosx/VLCLegacyMediaInfo.h gui/legacy_macosx/VLCLegacyMediaInfo.m \
 	gui/legacy_macosx/VLCLegacyBookmarks.h gui/legacy_macosx/VLCLegacyBookmarks.m \
 	gui/legacy_macosx/VLCLegacyFSPanel.h gui/legacy_macosx/VLCLegacyFSPanel.m \

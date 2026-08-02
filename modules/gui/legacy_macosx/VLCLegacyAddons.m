@@ -25,6 +25,8 @@
 #import "VLCLegacyAddons.h"
 #import "misc.h"
 
+#include <vlc_modules.h>
+
 #define _NS(s) ((NSString *)[NSString stringWithUTF8String:vlc_gettext(s)])
 
 /*****************************************************************************
@@ -97,6 +99,7 @@ static void addonChangedCallback(addons_manager_t *manager,
 
 - (void)dealloc
 {
+    [pendingName release];
     [self releaseHeldEntries];
     if (p_manager)
         addons_manager_Delete(p_manager);
@@ -185,8 +188,60 @@ static void addonChangedCallback(addons_manager_t *manager,
         NSViewMinXMargin | NSViewMinYMargin];
     [content addSubview:downloadCatalogButton];
 
+    /* Lay the top bar out from the localised strings instead of the fixed
+     * widths this used to have: "Show Installed Only" and "Find more addons
+     * online" are both noticeably longer in French and were truncated. The
+     * window grows when the row does not fit, so no translation can clip. */
+    [typeSwitcher sizeToFit];
+    [localOnlyCheckbox sizeToFit];
+    [downloadCatalogButton sizeToFit];
+
+    float switcherWidth = [typeSwitcher frame].size.width;
+    if (switcherWidth < 160)
+        switcherWidth = 160;
+    float checkboxWidth = [localOnlyCheckbox frame].size.width;
+    /* sizeToFit is tight on a rounded bezel: it clips the last glyph */
+    float buttonWidth = [downloadCatalogButton frame].size.width + 16;
+
+    /* 16 margin | switcher | 14 | checkbox | 14 | spinner 16 | 8 | button | 16 */
+    float neededWidth = 16 + switcherWidth + 14 + checkboxWidth + 14 + 16 + 8
+                      + buttonWidth + 16;
+    if (neededWidth > bounds.size.width) {
+        /* Widening the window autoresizes the controls already in it (the
+         * button carries NSViewMinXMargin), which paints them at an
+         * intermediate position before the frames below are applied and
+         * leaves a sliver of the old title behind. Suspend the masks over
+         * the resize and repaint the bar afterwards. */
+        unsigned switcherMask = [typeSwitcher autoresizingMask];
+        unsigned checkboxMask = [localOnlyCheckbox autoresizingMask];
+        unsigned buttonMask = [downloadCatalogButton autoresizingMask];
+
+        [typeSwitcher setAutoresizingMask:NSViewNotSizable];
+        [localOnlyCheckbox setAutoresizingMask:NSViewNotSizable];
+        [downloadCatalogButton setAutoresizingMask:NSViewNotSizable];
+
+        [window setContentSize:NSMakeSize(neededWidth, bounds.size.height)];
+        bounds = [content bounds];
+
+        [typeSwitcher setAutoresizingMask:switcherMask];
+        [localOnlyCheckbox setAutoresizingMask:checkboxMask];
+        [downloadCatalogButton setAutoresizingMask:buttonMask];
+        [content setNeedsDisplay:YES];
+    }
+    [window setMinSize:NSMakeSize(
+        neededWidth > 560 ? neededWidth : 560, 400)];
+
+    [typeSwitcher setFrame:NSMakeRect(16, bounds.size.height - 36,
+                                      switcherWidth, 24)];
+    [localOnlyCheckbox setFrame:NSMakeRect(16 + switcherWidth + 14,
+                                           bounds.size.height - 34,
+                                           checkboxWidth, 18)];
+    [downloadCatalogButton setFrame:NSMakeRect(
+        bounds.size.width - 16 - buttonWidth,
+        bounds.size.height - 40, buttonWidth, 28)];
+
     spinner = [[[NSProgressIndicator alloc]
-        initWithFrame:NSMakeRect(bounds.size.width - 240,
+        initWithFrame:NSMakeRect(bounds.size.width - 16 - buttonWidth - 24,
                                  bounds.size.height - 34, 16, 16)]
         autorelease];
     [spinner setStyle:NSProgressIndicatorSpinningStyle];
@@ -265,6 +320,25 @@ static void addonChangedCallback(addons_manager_t *manager,
     [installButton setAutoresizingMask:NSViewMinXMargin];
     [content addSubview:installButton];
 
+    /* An install downloads an archive and unpacks it; the core reports no
+     * percentage for that, so this is an indeterminate bar plus a line of
+     * text saying what is going on -- previously the window said nothing at
+     * all and the button just looked inert. */
+    statusField = [self plainLabel:@""
+        frame:NSMakeRect(bounds.size.width - 156, 44, 140, 14)
+           in:content bold:NO];
+    [statusField setAlignment:NSCenterTextAlignment];
+    [statusField setAutoresizingMask:NSViewMinXMargin];
+
+    installProgress = [[[NSProgressIndicator alloc]
+        initWithFrame:NSMakeRect(bounds.size.width - 156, 26, 140, 12)]
+        autorelease];
+    [installProgress setStyle:NSProgressIndicatorBarStyle];
+    [installProgress setIndeterminate:YES];
+    [installProgress setDisplayedWhenStopped:NO];
+    [installProgress setAutoresizingMask:NSViewMinXMargin];
+    [content addSubview:installProgress];
+
     [window center];
 }
 
@@ -313,6 +387,24 @@ static void addonChangedCallback(addons_manager_t *manager,
     return _NS("Unknown");
 }
 
+/* Whether an addon of that type could actually do anything in this build.
+ * The catalogue is served to every platform alike, so it advertises plenty
+ * of skins even though skins2 is not built on macOS: they installed fine and
+ * then did nothing at all, which is worse than not offering them.
+ *
+ * Only what can be tested honestly is filtered. module_exists() matches the
+ * FIRST shortcut of a module and nothing else, so it answers for "skins"
+ * (skins2's own shortcut) but would answer "no" for a plain "lua" -- the Lua
+ * plugin's first shortcut is "luaintf". Testing Lua that way would hide every
+ * extension, service discovery and playlist parser instead, so the Lua-backed
+ * types stay visible: Lua is built in every macOS target of this fork. */
+- (BOOL)isTypeUsable:(int)type
+{
+    if (type == ADDON_SKIN2)
+        return module_exists("skins");
+    return YES;
+}
+
 - (void)refreshDisplayedList
 {
     [displayedAddons removeAllObjects];
@@ -325,13 +417,18 @@ static void addonChangedCallback(addons_manager_t *manager,
             [[addons objectAtIndex:i] pointerValue];
         vlc_mutex_lock(&entry->lock);
         BOOL matches = (typeFilter == -1 || entry->e_type == typeFilter)
-            && (!localOnly || entry->e_state == ADDON_INSTALLED);
+            && (!localOnly || entry->e_state == ADDON_INSTALLED)
+            /* an already-installed addon stays listed, so that it can still
+             * be removed even if this build cannot run it */
+            && ([self isTypeUsable:entry->e_type]
+                || entry->e_state == ADDON_INSTALLED);
         vlc_mutex_unlock(&entry->lock);
         if (matches)
             [displayedAddons addObject:[addons objectAtIndex:i]];
     }
     [table reloadData];
     [self tableViewSelectionDidChange:nil];
+    [self checkPendingOutcome];
 }
 
 - (void)filtersChanged:(id)sender
@@ -360,18 +457,86 @@ static void addonChangedCallback(addons_manager_t *manager,
 - (void)installSelection:(id)sender
 {
     addon_entry_t *entry = [self selectedEntry];
-    if (!entry || !p_manager)
+    if (!entry || !p_manager || b_pending)
         return;
     addon_uuid_t uuid;
     vlc_mutex_lock(&entry->lock);
     memcpy(uuid, entry->uuid, sizeof(uuid));
     BOOL installed = entry->e_state == ADDON_INSTALLED;
+    NSString *name = entry->psz_name
+        ? [NSString stringWithUTF8String:entry->psz_name] : @"";
     vlc_mutex_unlock(&entry->lock);
+
+    /* The work happens on the manager's installer thread and takes as long as
+     * a download: without this the button simply did not react and nothing on
+     * screen said anything was happening. */
+    memcpy(pending_uuid, uuid, sizeof(pending_uuid));
+    b_pending = YES;
+    b_pending_install = !installed;
+    [pendingName release];
+    pendingName = [name retain];
+
+    [installButton setEnabled:NO];
+    [downloadCatalogButton setEnabled:NO];
+    [statusField setStringValue:installed
+        ? [NSString stringWithFormat:_NS("Uninstalling %@..."), name]
+        : [NSString stringWithFormat:_NS("Installing %@..."), name]];
+    [installProgress startAnimation:nil];
 
     if (installed)
         addons_manager_Remove(p_manager, uuid);
     else
         addons_manager_Install(p_manager, uuid);
+}
+
+/* Called on every state change of every entry. The core reports the new state
+ * only, so the outcome of the request is deduced from it: an install that ends
+ * anywhere but ADDON_INSTALLED failed, and conversely. */
+- (void)checkPendingOutcome
+{
+    if (!b_pending)
+        return;
+
+    unsigned i;
+    for (i = 0; i < [addons count]; i++) {
+        addon_entry_t *entry = (addon_entry_t *)
+            [[addons objectAtIndex:i] pointerValue];
+        vlc_mutex_lock(&entry->lock);
+        BOOL isPending = memcmp(entry->uuid, pending_uuid,
+                                sizeof(pending_uuid)) == 0;
+        int state = entry->e_state;
+        vlc_mutex_unlock(&entry->lock);
+
+        if (!isPending)
+            continue;
+        if (state == ADDON_INSTALLING || state == ADDON_UNINSTALLING)
+            return;   /* still working */
+
+        BOOL ok = b_pending_install ? (state == ADDON_INSTALLED)
+                                    : (state != ADDON_INSTALLED);
+        NSString *name = pendingName ? pendingName : @"";
+
+        b_pending = NO;
+        [installProgress stopAnimation:nil];
+        [downloadCatalogButton setEnabled:YES];
+        [statusField setStringValue:ok
+            ? (b_pending_install
+                ? [NSString stringWithFormat:_NS("%@ installed."), name]
+                : [NSString stringWithFormat:_NS("%@ uninstalled."), name])
+            : @""];
+        [self tableViewSelectionDidChange:nil];
+
+        if (!ok) {
+            NSRunAlertPanel(b_pending_install
+                    ? _NS("Could not install this addon")
+                    : _NS("Could not remove this addon"),
+                [NSString stringWithFormat:
+                    _NS("%@ could not be processed. The Messages window "
+                        "records what went wrong."), name],
+                _NS("OK"), nil, nil);
+        }
+        return;
+    }
 }
 
 /*****************************************************************************
@@ -395,8 +560,13 @@ static void addonChangedCallback(addons_manager_t *manager,
     NSString *result = @"";
 
     vlc_mutex_lock(&entry->lock);
-    if ([identifier isEqualToString:@"installed"])
-        result = entry->e_state == ADDON_INSTALLED ? @"✔" : @"✘";
+    if ([identifier isEqualToString:@"installed"]) {
+        /* NOT an @"..." literal with the character in it: the legacy GCC
+         * copies the source bytes into the NSString without decoding them
+         * as UTF-8, so a check mark came out as MacRoman mojibake. */
+        unichar mark = entry->e_state == ADDON_INSTALLED ? 0x2713 : 0x2717;
+        result = [NSString stringWithCharacters:&mark length:1];
+    }
     else if ([identifier isEqualToString:@"name"])
         result = entry->psz_name
             ? [NSString stringWithUTF8String:entry->psz_name] : @"";
@@ -430,7 +600,9 @@ static void addonChangedCallback(addons_manager_t *manager,
     [descriptionView setString:entry->psz_description
         ? [NSString stringWithUTF8String:entry->psz_description] : @""];
     BOOL manageable = (entry->e_flags & ADDON_MANAGEABLE) != 0;
-    [installButton setEnabled:manageable];
+    BOOL busy = entry->e_state == ADDON_INSTALLING
+             || entry->e_state == ADDON_UNINSTALLING;
+    [installButton setEnabled:manageable && !busy && !b_pending];
     [installButton setTitle:entry->e_state == ADDON_INSTALLED
         ? _NS("Uninstall") : _NS("Install")];
     vlc_mutex_unlock(&entry->lock);
