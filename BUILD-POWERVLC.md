@@ -394,10 +394,28 @@ moves on rather than discarding a build that can take hours under emulation.
   `contrib/tarballs/` (committed on purpose) and downloads the toolchains once, so
   a build never depends on a flaky download mirror.
 - Each target keeps its state in a **persistent Docker volume**, so a re‑run
-  *resumes* instead of recompiling from scratch. Reset them with:
+  *resumes* instead of recompiling from scratch. Two levels of housekeeping:
   ```bash
-  extras/package/docker/build-in-docker.sh clean
+  extras/package/docker/build-in-docker.sh reclaim   # drop build dirs, KEEP contribs
+  extras/package/docker/build-in-docker.sh clean     # delete the volumes outright
   ```
+  Reach for `reclaim` first: a build directory costs minutes to rebuild, the
+  Windows contribs cost hours.
+- **Docker's virtual disk is a hard ceiling**, and a full campaign gets close to
+  it: the three Windows targets share one volume holding ~23 GB of contribs plus
+  2–5 GB per target, and each Linux target owns another 3–4 GB. Running out does
+  not fail cleanly — it surfaces hours in as an unrelated
+  `install: error writing …: No space left on device` inside `make install`.
+  Each build therefore reclaims the *other* Windows targets' build directories
+  when free space drops below **`PVLC_MIN_FREE_GB`** (default 10), never touching
+  `contrib/`. Raise the ceiling in Docker Desktop → Settings → Resources if even
+  that is tight, keeping an eye on the host disk it is carved from.
+- An **interrupted build can poison the volume**: `autopoint` creates
+  `tmpwrk<pid>` in the source root and only removes it on a clean exit, so a
+  killed container or a full disk leaves one behind and every later run dies
+  with `directory tmpwrkNNNN already exists`. The seed step now sweeps them, so
+  this is handled — but it is why a rerun could once fail in seconds with an
+  error that had nothing to do with the change being built.
 - Builds run from a **clean copy of your working tree** (tracked + new files,
   minus build artifacts), so they never mix with the macOS `build*/` dirs.
 - **No snap.** Linux ships as an AppImage only. snapcraft is itself a snap and

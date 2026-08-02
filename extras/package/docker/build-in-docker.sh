@@ -17,9 +17,18 @@
 #   linux-amd64-appimage  PowerVLC-<ver>-x86_64.AppImage    (emulated on arm64 host: slow)
 #   linux-i386-appimage   PowerVLC-<ver>-i386.AppImage      (emulated, legacy)
 #
+# Housekeeping subcommands (instead of a target):
+#   reclaim               drop the per-target build dirs, KEEP the contribs
+#   clean                 delete the build volumes outright (contribs included)
+#
 # Speed note (arm64 host): Windows targets cross-compile with a NATIVE arm64
 # toolchain (fast). linux-arm64 is native (fast). linux-amd64 / linux-i386 run
 # under QEMU emulation and can take hours. See README.md.
+#
+# Disk: Docker Desktop's virtual disk is a hard ceiling and the three Windows
+# targets share one volume (~23 GB of contribs plus 2-5 GB per target). Each
+# build reclaims the other targets' build dirs when free space drops under
+# PVLC_MIN_FREE_GB (default 10), so a full campaign fits without babysitting.
 #
 # The build runs from a CLEAN copy of your working tree (tracked + new files,
 # minus git-ignored build artifacts), so it never mixes with your macOS build
@@ -47,6 +56,12 @@ REVISION="$(git -C "$REPO" describe --always HEAD 2>/dev/null || echo "$PVLC_VER
 # Two passes: everything except the vendored contrib source tarballs is synced
 # normally; the tarballs are synced with --ignore-existing so a re-run never
 # rewrites their mtime (which would needlessly re-extract/rebuild contribs).
+#
+# The tmpwrk* sweep matters more than it looks: autopoint creates tmpwrk<pid>
+# in the source root and removes it on exit, so a build interrupted there (a
+# killed container, a full disk, ^C) leaves one behind -- and autopoint then
+# refuses to start FOREVER with "directory tmpwrkNNNN already exists". The
+# state that makes a rerun resume is also the state that makes it fail.
 SEED='set -e; git config --global --add safe.directory /src;
   ( cd /src && git ls-files -co --exclude-standard -z \
       | grep -zv "^contrib/tarballs/" \
@@ -54,6 +69,7 @@ SEED='set -e; git config --global --add safe.directory /src;
   ( cd /src && git ls-files -co --exclude-standard -z -- contrib/tarballs \
       | rsync -0a --ignore-existing --files-from=- /src/ /work/ );
   mkdir -p /work/src; printf "%s\n" "${REVISION:-unknown}" > /work/src/revision.txt;
+  rm -rf /work/tmpwrk*;
   cd /work'
 
 # WORK_VOL: a persistent named Docker volume mounted at /work, so build state
@@ -62,12 +78,52 @@ SEED='set -e; git config --global --add safe.directory /src;
 # Reset with:  ./build-in-docker.sh clean
 WORK_VOL=""
 
+# Docker Desktop's virtual disk is a hard ceiling (Settings > Resources), and
+# it is easy to hit: the three Windows targets SHARE one volume, where the
+# contribs alone are ~23 GB and each target's build directory adds 2-5 GB more.
+# Running out mid-build is not a clean failure -- it surfaces as an unrelated
+# "install: error writing ...: No space left on device" deep inside make, hours
+# in. Reclaim below this many GiB free. Override with PVLC_MIN_FREE_GB=<n>.
+PVLC_MIN_FREE_GB="${PVLC_MIN_FREE_GB:-10}"
+
 docker_run() { # docker_run <platform> <image> <shell-command>
   docker run --rm --platform "$1" \
     -v "$REPO":/src:ro -v "$OUT":/out -v "${WORK_VOL}":/work \
     -e "PVLC_VER=$PVLC_VER" -e "REVISION=$REVISION" \
+    -e "PVLC_MIN_FREE_GB=$PVLC_MIN_FREE_GB" \
     "$2" sh -eu -c "$3"
 }
+
+# Shell snippet evaluated INSIDE the container (prepended to the build command,
+# so it costs no extra docker run). Its text is substituted verbatim -- shell
+# expansion is not recursive -- so it is written as plain container-side shell,
+# with no escaping. It uses only cut/tr, no awk, to stay clear of nested quotes.
+#
+# pvlc_reclaim drops the build directories of the OTHER targets sharing this
+# volume when space runs short. It never touches contrib/: rebuilding a build
+# directory costs minutes, rebuilding the Windows contribs costs hours.
+DISK_HELPERS='
+pvlc_free_gb() {
+  df -P -BG /work | tail -1 | tr -s " " | cut -d" " -f4 | tr -d "G"
+}
+pvlc_reclaim() {  # pvlc_reclaim <name of the target being built>
+  keep=$1
+  min=${PVLC_MIN_FREE_GB:-10}
+  free=$(pvlc_free_gb)
+  echo "  disk: ${free}G free in the work volume (reclaim below ${min}G)"
+  if [ "$free" -ge "$min" ]; then return 0; fi
+  for d in /work/win32* /work/win64* /work/winarm64*; do
+    [ -d "$d" ] || continue
+    case "$d" in
+      /work/${keep}*) continue ;;
+    esac
+    echo "  disk: below ${min}G — dropping stale build dir $d (contribs kept)"
+    rm -rf "$d"
+  done
+  echo "  disk: $(pvlc_free_gb)G free after reclaim"
+  return 0
+}
+'
 
 # Zip what a target just produced, mirroring the macOS convention: section 4 of
 # BUILD-POWERVLC.md ships every bundle as powervlc-<version>-<target>.zip, so
@@ -106,6 +162,11 @@ build_windows() { # build_windows <arch-flags> <name-glob>
     -f "$DOCKER_DIR/Dockerfile.windows" "$DOCKER_DIR"
   docker_run linux/arm64 powervlc-win \
     "$SEED
+     $DISK_HELPERS
+     # The three Windows targets share this volume, so the two we are NOT
+     # building are dead weight once their installers are in out/ -- reclaim
+     # them rather than dying on ENOSPC halfway through 'make install'.
+     pvlc_reclaim $2
      # Clean stale packaging staging so a re-package does not objcopy-strip the
      # NSIS setup exe left by a previous run (\"spad-setup.exe: file truncated\"),
      # AND remove the install prefix (_win32) so 'make install' re-populates it
@@ -141,6 +202,10 @@ build_linux_appimage() { # build_linux_appimage <platform> <base-image> <appimag
     -f "$DOCKER_DIR/Dockerfile.linux" "$DOCKER_DIR"
   docker_run "$1" "powervlc-linux-$arch_tag" \
     "$SEED
+     $DISK_HELPERS
+     # Each Linux target owns its volume, so there is nothing here to reclaim
+     # from -- report the headroom so a later ENOSPC is not a surprise.
+     echo \"  disk: \$(pvlc_free_gb)G free in the work volume\"
      # Build the FFmpeg 8.1 contrib (static) instead of linking the
      # distribution's ancient one: same decoders (ATRAC9, APV, the 8.x
      # improvements) in the AppImages as in every other target. The
@@ -174,6 +239,27 @@ build_linux_appimage() { # build_linux_appimage <platform> <base-image> <appimag
 if [ "$1" = "clean" ]; then
   echo "Removing PowerVLC build volumes..."
   docker volume ls -q | grep '^powervlc-build-' | xargs -r docker volume rm || true
+  exit 0
+fi
+
+# 'reclaim' is the middle ground between doing nothing and 'clean': it drops
+# the per-target build directories (minutes to rebuild) and any interrupted
+# autopoint tmpwrk, but KEEPS the contribs (hours to rebuild). Reach for it
+# when the Docker disk is full and you would rather not lose the expensive
+# state -- the build itself does this automatically under PVLC_MIN_FREE_GB.
+if [ "$1" = "reclaim" ]; then
+  echo "Dropping per-target build directories (contribs are kept)..."
+  for v in $(docker volume ls -q | grep '^powervlc-build-' || true); do
+    echo "  volume $v"
+    docker run --rm -v "$v":/work alpine sh -c '
+      for d in /work/win32* /work/win64* /work/winarm64* /work/tmpwrk*; do
+        [ -e "$d" ] || continue
+        echo "    rm $d"
+        rm -rf "$d"
+      done
+      df -h /work | tail -1 | sed "s/^/    /"' 2>/dev/null || \
+      echo "    (skipped: could not run the alpine helper)"
+  done
   exit 0
 fi
 
