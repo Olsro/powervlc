@@ -195,7 +195,7 @@ static void MsgCallback(void *data, int type, const vlc_log_t *item, const char 
     [saveFolderPanel setCanSelectHiddenExtension: NO];
     [saveFolderPanel setCanCreateDirectories: YES];
     [saveFolderPanel setAllowedFileTypes: [NSArray arrayWithObject:@"txt"]];
-    [saveFolderPanel setNameFieldStringValue:[NSString stringWithFormat: _NS("VLC Debug Log (%s).txt"), VERSION_MESSAGE]];
+    [saveFolderPanel setNameFieldStringValue:[NSString stringWithFormat: _NS("PowerVLC Debug Log (%s).txt"), POWERVLC_VERSION]];
     [saveFolderPanel beginSheetModalForWindow: self.window completionHandler:^(NSInteger returnCode) {
         if (returnCode != NSOKButton) {
             return;

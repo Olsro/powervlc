@@ -18842,8 +18842,8 @@ msgstr "Cancella il log"
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:214
 #: modules/gui/macosx/VLCLogWindowController.m:198
 #, c-format
-msgid "VLC Debug Log (%s).txt"
-msgstr "VLC Debug Log (%s).rtf"
+msgid "PowerVLC Debug Log (%s).txt"
+msgstr "PowerVLC Debug Log (%s).rtf"
 
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:255
 #: modules/gui/macosx/VLCErrorWindowController.m:55

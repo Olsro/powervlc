@@ -17863,8 +17863,8 @@ msgstr "清除日志"
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:214
 #: modules/gui/macosx/VLCLogWindowController.m:198
 #, c-format
-msgid "VLC Debug Log (%s).txt"
-msgstr "VLC 调试日志 (%s).txt"
+msgid "PowerVLC Debug Log (%s).txt"
+msgstr "PowerVLC 调试日志 (%s).txt"
 
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:255
 #: modules/gui/macosx/VLCErrorWindowController.m:55

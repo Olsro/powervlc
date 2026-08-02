@@ -18331,8 +18331,8 @@ msgstr "로그 비우기"
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:214
 #: modules/gui/macosx/VLCLogWindowController.m:198
 #, c-format
-msgid "VLC Debug Log (%s).txt"
-msgstr "VLC 디버그 로그 (%s).rtf"
+msgid "PowerVLC Debug Log (%s).txt"
+msgstr "PowerVLC 디버그 로그 (%s).rtf"
 
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:255
 #: modules/gui/macosx/VLCErrorWindowController.m:55

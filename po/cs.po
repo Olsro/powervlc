@@ -18569,8 +18569,8 @@ msgstr "Smazat protokol"
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:214
 #: modules/gui/macosx/VLCLogWindowController.m:198
 #, c-format
-msgid "VLC Debug Log (%s).txt"
-msgstr "Protokol pro ladění VLC (%s).txt"
+msgid "PowerVLC Debug Log (%s).txt"
+msgstr "Protokol pro ladění PowerVLC (%s).txt"
 
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:255
 #: modules/gui/macosx/VLCErrorWindowController.m:55

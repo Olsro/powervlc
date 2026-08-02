@@ -18388,7 +18388,7 @@ msgstr "Viutà u ghjurnale di i messaghji"
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:214
 #: modules/gui/macosx/VLCLogWindowController.m:198
 #, c-format
-msgid "VLC Debug Log (%s).txt"
+msgid "PowerVLC Debug Log (%s).txt"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:255

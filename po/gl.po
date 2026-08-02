@@ -18760,8 +18760,8 @@ msgstr "Limpar o rexistro"
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:214
 #: modules/gui/macosx/VLCLogWindowController.m:198
 #, c-format
-msgid "VLC Debug Log (%s).txt"
-msgstr "Rexistro de depuración do VLC (%s).log"
+msgid "PowerVLC Debug Log (%s).txt"
+msgstr "Rexistro de depuración do PowerVLC (%s).log"
 
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:255
 #: modules/gui/macosx/VLCErrorWindowController.m:55

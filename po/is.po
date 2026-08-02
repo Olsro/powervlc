@@ -17578,8 +17578,8 @@ msgstr "Hreinsa atvikaskrá"
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:214
 #: modules/gui/macosx/VLCLogWindowController.m:198
 #, c-format
-msgid "VLC Debug Log (%s).txt"
-msgstr "VLC atvikaskrá (%s).txt"
+msgid "PowerVLC Debug Log (%s).txt"
+msgstr "PowerVLC atvikaskrá (%s).txt"
 
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:255
 #: modules/gui/macosx/VLCErrorWindowController.m:55

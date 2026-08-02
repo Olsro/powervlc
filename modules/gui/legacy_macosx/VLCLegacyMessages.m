@@ -211,7 +211,7 @@ static void MsgCallback(void *data, int type, const vlc_log_t *item,
 {
     NSSavePanel *panel = [NSSavePanel savePanel];
     NSString *name = [NSString stringWithFormat:
-        _NS("VLC Debug Log (%s).txt"), VERSION_MESSAGE];
+        _NS("PowerVLC Debug Log (%s).txt"), POWERVLC_VERSION];
     if ([panel runModalForDirectory:nil file:name]
             != NSFileHandlingPanelOKButton)
         return;
