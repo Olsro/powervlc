@@ -113,6 +113,32 @@ package-win-common: package-win-install package-win-sdk
 		fi ; \
 	fi
 
+# mingw runtime DLLs. gcc links libgcc dynamically as soon as something needs
+# unwinding, and the contrib system does not pass -static-libgcc, so a handful
+# of binaries import libgcc_s_seh-1.dll (x86_64) / libgcc_s_dw2-1.dll (i686):
+# libaacs, libbdplus, and the x265, gme and SRT plugins. Nothing else ships
+# that DLL, and the failure is SILENT -- LoadLibrary just fails, the plugin
+# drops out of the cache, and Blu-ray decryption, x265 and SRT vanish with no
+# error message anywhere. So: stage every mingw runtime DLL the staged tree
+# actually imports (the DLL name sits in the import table as plain ASCII,
+# hence the grep) and copy it from the toolchain. llvm-mingw (winarm64) links
+# its unwinder statically, imports none of these, and skips the whole loop.
+	@for dll in libgcc_s_seh-1.dll libgcc_s_dw2-1.dll libgcc_s_sjlj-1.dll \
+	            libwinpthread-1.dll libstdc++-6.dll; do \
+		if grep -rq "$$dll" "$(win32_destdir)" 2>/dev/null && \
+		   test ! -f "$(win32_destdir)/$$dll"; then \
+			src=`$(CC) -print-file-name=$$dll 2>/dev/null` ; \
+			if test -f "$$src"; then \
+				cp "$$src" "$(win32_destdir)/$$dll" ; \
+				echo "  PACKAGE  $$dll" ; \
+			else \
+				echo "ERROR: $$dll is imported by this build but the toolchain has no copy of it." ; \
+				echo "       Without it the importing plugins fail to load, silently." ; \
+				exit 1 ; \
+			fi ; \
+		fi ; \
+	done
+
 if BUILD_LUA
 	mkdir -p $(win32_destdir)/lua/
 	cp -r $(prefix)/lib/vlc/lua/* $(win32_destdir)/lua/
