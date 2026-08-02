@@ -3,7 +3,7 @@ Your universally compatible video player based on VLC3.
 
 Windows XP SP3 (2007) continued to receive official VLC updates, whereas Mac OS X minimal version bumped several times, requiring 10.7.5 (2011). Starting VLC4, things will get worse: Mac OS X 10.10+ (2014)/Windows 7 (2009) will be required.
 
-PowerVLC supports almost every features & nitpicks the real VLC3 does, back to Tiger & PPC machines. User experience is the same between all OS, though 10.7+ users can freely switch to use the "Modern" interface as they do not need the Legacy UI rewrite.
+PowerVLC supports almost every features & nitpicks the real VLC3 does, back to Jaguar 10.2. User experience is the same between all OS, though 10.7+ users can freely switch to use the "Modern" interface as they do not need the Legacy UI rewrite.
 
 Linux/Windows support is available but barely tested at this moment. OpenGL look ahead cache should work on these platforms, and gapless playback aswell.
 
