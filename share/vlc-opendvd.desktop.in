@@ -1,8 +1,8 @@
 [Desktop Entry]
 Version=1.0
-Name=VLC media player (DVD)
+Name=PowerVLC (DVD)
 NoDisplay=true
-Exec=@bindir@/vlc --started-from-file dvd://%f
+Exec=@bindir@/powervlc --started-from-file dvd://%f
 Icon=powervlc
 Terminal=false
 Type=Application

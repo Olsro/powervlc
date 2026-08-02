@@ -546,7 +546,14 @@ static void *ThreadPlatform( void *obj, char *platform_name )
 {
     intf_thread_t *p_intf = (intf_thread_t *)obj;
     intf_sys_t *p_sys = p_intf->p_sys;
-    char vlc_name[] = "vlc"; /* for WM_CLASS */
+    /* argv[0] devient la WM_CLASS X11. ⚠ Elle doit rester d'accord avec le
+     * StartupWMClass de share/vlc.desktop.in, sinon l'environnement de bureau
+     * n'apparie plus la fenêtre à son entrée : icône générique dans la barre
+     * des tâches, et fenêtre non regroupée avec son lanceur. Le fichier
+     * .desktop s'installe encore sous le nom vlc.desktop, d'où la nécessité du
+     * StartupWMClass explicite — l'appariement par défaut se fait sur le nom de
+     * fichier. */
+    char vlc_name[] = PACKAGE_USERDIR; /* for WM_CLASS */
     char platform_parm[] = "-platform";
     char *argv[4];
     int argc = 0;
@@ -584,8 +591,15 @@ static void *ThreadPlatform( void *obj, char *platform_name )
     char *cConfigDir = config_GetUserDir( VLC_CONFIG_DIR );
     QString configDir = cConfigDir;
     free( cConfigDir );
-    if( configDir.endsWith( "\\vlc" ) )
-        configDir.chop( 4 ); /* the "\vlc" dir is added again by QSettings */
+    /* QSettings recolle le nom de l'organisation au chemin qu'on lui donne :
+     * on retire donc le dernier composant, sinon on obtiendrait
+     * %APPDATA%\powervlc\powervlc\. Le suffixe est dérivé de PACKAGE_USERDIR et
+     * non écrit en dur ("\\vlc" à l'origine) : en dur, il cesserait
+     * silencieusement de correspondre au premier renommage du dossier, et le
+     * niveau en trop reviendrait sans que rien ne le signale. */
+    const QString userDirSuffix = QStringLiteral( "\\" PACKAGE_USERDIR );
+    if( configDir.endsWith( userDirSuffix ) )
+        configDir.chop( userDirSuffix.length() );
     QSettings::setPath( QSettings::IniFormat, QSettings::UserScope, configDir );
 #endif
 
@@ -595,12 +609,17 @@ static void *ThreadPlatform( void *obj, char *platform_name )
 #else
             QSettings::NativeFormat,
 #endif
-            QSettings::UserScope, "vlc", "vlc-qt-interface" );
+            QSettings::UserScope, PACKAGE_USERDIR,
+            PACKAGE_USERDIR "-qt-interface" );
 
     if( QDate::currentDate().dayOfYear() >= QT_XMAS_JOKE_DAY && var_InheritBool( p_intf, "qt-icon-change" ) )
         app.setWindowIcon( QIcon::fromTheme( "powervlc-xmas", QIcon( ":/logo/vlc128-xmas.png" ) ) );
     else
-        app.setWindowIcon( QIcon::fromTheme( "vlc", QIcon( ":/logo/vlc256.png" ) ) );
+        /* Le thème n'expose que des icônes « powervlc » (share/icons/, cf.
+         * share/Makefile.am) : chercher « vlc » ramenait celle du VLC officiel
+         * quand il est installé à côté, et sinon rien — le repli embarqué
+         * masquait le défaut. Le voisin « powervlc-xmas » était déjà correct. */
+        app.setWindowIcon( QIcon::fromTheme( PACKAGE_USERDIR, QIcon( ":/logo/vlc256.png" ) ) );
 
     /* Initialize the Dialog Provider and the Main Input Manager */
     DialogsProvider::getInstance( p_intf );

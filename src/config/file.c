@@ -86,53 +86,12 @@ static FILE *config_OpenConfigFile( vlc_object_t *p_obj )
                  psz_filename, vlc_strerror_c(errno) );
 
     }
-#if !( defined(_WIN32) || defined(__APPLE__) || defined(__OS2__) )
-    else if( p_stream == NULL && errno == ENOENT )
-    {
-        /* This is the fallback for pre XDG Base Directory
-         * Specification configs */
-        char *home = config_GetUserDir(VLC_HOME_DIR);
-        char *psz_old;
-
-        if( home != NULL
-         && asprintf( &psz_old, "%s/.vlc/" CONFIG_FILE,
-                      home ) != -1 )
-        {
-            p_stream = vlc_fopen( psz_old, "rt" );
-            if( p_stream )
-            {
-                /* Old config file found. We want to write it at the
-                 * new location now. */
-                msg_Info( p_obj, "Found old config file at %s. "
-                          "VLC will now use %s.", psz_old, psz_filename );
-                char *psz_readme;
-                if( asprintf(&psz_readme,"%s/.vlc/README",
-                             home ) != -1 )
-                {
-                    FILE *p_readme = vlc_fopen( psz_readme, "wt" );
-                    if( p_readme )
-                    {
-                        fprintf( p_readme, "The VLC media player "
-                                 "configuration folder has moved to comply\n"
-                                 "with the XDG Base Directory Specification "
-                                 "version 0.6. Your\nconfiguration has been "
-                                 "copied to the new location:\n%s\nYou can "
-                                 "delete this directory and all its contents.",
-                                  psz_filename);
-                        fclose( p_readme );
-                    }
-                    free( psz_readme );
-                }
-                /* Remove the old configuration file so that --reset-config
-                 * can work properly. Fortunately, Linux allows removing
-                 * open files - with most filesystems. */
-                unlink( psz_old );
-            }
-            free( psz_old );
-        }
-        free( home );
-    }
-#endif
+    /* Le repli « pré-XDG » d'amont (lire ~/.vlc/vlcrc quand le fichier neuf
+     * manque) a été RETIRÉ : ce chemin appartient à un VLC officiel, pas à
+     * PowerVLC. Il importait donc silencieusement la configuration du voisin au
+     * premier lancement — et, pire, il l'UNLINKait ensuite, détruisant les
+     * réglages d'une autre application. PowerVLC n'a de toute façon jamais
+     * écrit dans ~/.vlc : il n'y a aucune configuration héritée à récupérer. */
     free( psz_filename );
     return p_stream;
 }

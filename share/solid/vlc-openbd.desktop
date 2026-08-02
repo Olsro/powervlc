@@ -4,6 +4,6 @@ Type=Service
 Actions=open;
 
 [Desktop Action open]
-Name=Open with VLC media player
-Exec=vlc bluray://%d
-Icon=vlc
+Name=Open with PowerVLC
+Exec=powervlc bluray://%d
+Icon=powervlc

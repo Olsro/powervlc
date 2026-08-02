@@ -91,14 +91,14 @@ static char *config_GetAppDir (const char *xdg_name, const char *xdg_default)
     const char *home = getenv (var);
     if (home != NULL)
     {
-        if (asprintf (&psz_dir, "%s/vlc", home) == -1)
+        if (asprintf (&psz_dir, "%s/" PACKAGE_USERDIR, home) == -1)
             psz_dir = NULL;
         return psz_dir;
     }
 
     char *psz_home = config_GetHomeDir ();
     if( psz_home == NULL
-     || asprintf( &psz_dir, "%s/%s/vlc", psz_home, xdg_default ) == -1 )
+     || asprintf( &psz_dir, "%s/%s/" PACKAGE_USERDIR, psz_home, xdg_default ) == -1 )
         psz_dir = NULL;
     free (psz_home);
     return psz_dir;

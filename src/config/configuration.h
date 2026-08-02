@@ -55,8 +55,11 @@ extern bool config_dirty;
 
 bool config_IsSafe (const char *);
 
-/* The configuration file */
-#define CONFIG_FILE                     "vlcrc"
+/* The configuration file.
+ * ⚠ Renommé depuis « vlcrc » : rupture nette assumée, aucune migration. Un
+ * fichier resté sous l'ancien nom est simplement ignoré, et les réglages
+ * repartent des valeurs par défaut. */
+#define CONFIG_FILE                     "powervlcrc"
 
 # ifdef __cplusplus
 }

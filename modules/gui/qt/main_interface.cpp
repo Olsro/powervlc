@@ -1323,7 +1323,7 @@ void MainInterface::createSystray()
     if( QDate::currentDate().dayOfYear() >= QT_XMAS_JOKE_DAY && var_InheritBool( p_intf, "qt-icon-change" ) )
         iconVLC = QIcon::fromTheme( "powervlc-xmas", QIcon( ":/logo/vlc128-xmas.png" ) );
     else
-        iconVLC = QIcon::fromTheme( "vlc", QIcon( ":/logo/vlc256.png" ) );
+        iconVLC = QIcon::fromTheme( PACKAGE_USERDIR, QIcon( ":/logo/vlc256.png" ) );
     sysTray = new QSystemTrayIcon( iconVLC, this );
     sysTray->setToolTip( qtr( "PowerVLC media player" ));
 

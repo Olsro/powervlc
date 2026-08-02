@@ -4,7 +4,7 @@ Type=Service
 Actions=open;
 
 [Desktop Action open]
-Name=Open with VLC media player
-Exec=vlc vcd://%d
-Icon=vlc
+Name=Open with PowerVLC
+Exec=powervlc vcd://%d
+Icon=powervlc
 

@@ -38,6 +38,26 @@
 extern "C" {
 # endif
 
+/**
+ * Nom du dossier utilisateur (configuration, données, cache).
+ *
+ * PowerVLC ne partage RIEN avec un VLC officiel installé à côté : le même nom
+ * de dossier, ce sont les mêmes préférences ET le même cache de pochettes, donc
+ * une pollution croisée silencieuse dans les deux sens (une pochette erronée
+ * mise en cache par l'un est resservie par l'autre).
+ *
+ * Défini ici, et non dans `src/config/configuration.h`, parce que les modules
+ * en ont besoin aussi — l'interface Qt nomme ses propres `QSettings` avec.
+ *
+ * ⚠ macOS n'utilise PAS cette constante : `src/darwin/dirs.c` dérive déjà le
+ * dossier de l'identifiant de bundle (`com.github.PowerVLC`), et l'isolation y
+ * est donc acquise depuis plus longtemps. Ne pas confondre non plus avec
+ * `PACKAGE`, qui vaut toujours « vlc » et gouverne les chemins
+ * d'INSTALLATION (pkglibdir, share/, domaine gettext) — le changer aurait un
+ * rayon tout autre.
+ */
+#define PACKAGE_USERDIR "powervlc"
+
 struct config_category_t
 {
     int         i_id;
