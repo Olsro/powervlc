@@ -53,11 +53,33 @@ esac
 SCRIPTDIR=$(cd "$(dirname "$0")" && pwd)
 VLCROOT=$(cd "$SCRIPTDIR/../../.." && pwd)
 BUILDDIR="$VLCROOT/build$TARGET"
+
+# ⚠ build.sh does NOT reconfigure an existing build directory: its objects keep
+# the -mmacosx-version-min they were first configured with. When the PowerPC
+# floor dropped from 10.4 to 10.2 that would have produced a "10.2" bundle made
+# of 10.4 objects, with no error anywhere -- the failure only shows up as a dyld
+# error on the old machine. Stamp the target and refuse a mismatched reuse.
+case "$TARGET" in
+    g3|g4|g4e|g5) WANT_MIN="10.2" ;;
+    x86)          WANT_MIN="10.4" ;;
+    x64)          WANT_MIN="10.5" ;;
+    arm64)        WANT_MIN="11.0" ;;
+    *)            WANT_MIN="" ;;
+esac
+STAMP="$BUILDDIR/.powervlc-osx-min"
+if [ -n "$WANT_MIN" ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP")" != "$WANT_MIN" ]; then
+    echo "ERROR: $BUILDDIR was configured for macOS $(cat "$STAMP")," >&2
+    echo "       this target now needs $WANT_MIN. Remove that directory and" >&2
+    echo "       build again -- build.sh does not reconfigure in place." >&2
+    exit 1
+fi
 mkdir -p "$BUILDDIR"
 cd "$BUILDDIR"
 
 VLC_CONFIGURE_ARGS="$ARGS $VLC_CONFIGURE_ARGS" \
     "$SCRIPTDIR/build.sh" -a "$ARCH" "$@"
+
+[ -n "$WANT_MIN" ] && [ -d "$BUILDDIR" ] && echo "$WANT_MIN" > "$STAMP"
 
 # Lua bytecode is architecture-specific; ship portable source so the PowerPC
 # and 32-bit slices stop failing with "bad header in precompiled chunk".

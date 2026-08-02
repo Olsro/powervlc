@@ -15,6 +15,8 @@ $(TARBALLS)/speex-$(SPEEX_VERSION).tar.gz:
 
 speex: speex-$(SPEEX_VERSION).tar.gz .sum-speex
 	$(UNPACK)
+	$(UPDATE_AUTOCONFIG)
+	$(call pkg_static,"speex.pc.in")
 	$(MOVE)
 
 SPEEX_CONF := --disable-binaries
@@ -26,8 +28,8 @@ endif
 endif
 
 .speex: speex
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) $(SPEEX_CONF)
-	$(MAKE) -C $<
-	$(call pkg_static,"speex.pc")
-	$(MAKE) -C $< install
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE) $(SPEEX_CONF)
+	+$(MAKEBUILD)
+	+$(MAKEBUILD) install
 	touch $@

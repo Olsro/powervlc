@@ -32,7 +32,7 @@
 #include "x11_display.hpp"
 #include "../src/logger.hpp"
 
-#include "../share/icons/32x32/vlc.xpm"
+#include "../share/icons/32x32/powervlc.xpm"
 
 template<class type> type X11Display::putPixel(type r, type g, type b) const
 {
@@ -239,7 +239,7 @@ X11Display::X11Display( intf_thread_t *pIntf ): SkinObject( pIntf ),
 
         // Add an icon
         Pixmap icon_pixmap, shape_pixmap;
-        int ret = XpmCreatePixmapFromData( m_pDisplay, root, (char**)vlc_xpm,
+        int ret = XpmCreatePixmapFromData( m_pDisplay, root, (char**)powervlc_xpm,
                                            &icon_pixmap, &shape_pixmap, NULL );
         if( ret == XpmSuccess )
         {

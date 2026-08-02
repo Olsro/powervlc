@@ -29,12 +29,6 @@ endif
 if HAVE_XCB
 libqt_plugin_la_CXXFLAGS += -DQT5_HAS_XCB
 endif
-if HAVE_WAYLAND
-libqt_plugin_la_CPPFLAGS += -DQT5_HAS_WAYLAND \
-	-DQPNI_HEADER=\<$(QT_VERSION)/QtGui/qpa/qplatformnativeinterface.h\>
-libqt_plugin_la_CXXFLAGS += $(WAYLAND_CLIENT_CFLAGS)
-libqt_plugin_la_LIBADD += $(WAYLAND_CLIENT_LIBS)
-endif
 if HAVE_WIN32
 libqt_plugin_la_LIBADD += $(LIBCOM) -lcomctl32 -luuid
 endif
@@ -150,6 +144,7 @@ libqt_plugin_la_SOURCES = \
 	gui/qt/util/singleton.hpp \
 	gui/qt/util/imagehelper.cpp gui/qt/util/imagehelper.hpp \
 	gui/qt/util/powervlc_links.cpp gui/qt/util/powervlc_links.hpp \
+	gui/qt/util/powervlc_disclibs.cpp gui/qt/util/powervlc_disclibs.hpp \
 	gui/qt/styles/seekstyle.cpp gui/qt/styles/seekstyle.hpp
 if HAVE_WIN32
 libqt_plugin_la_SOURCES += \

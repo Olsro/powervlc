@@ -133,7 +133,7 @@ void matroska_segment_c::LoadCues( KaxCues *cues )
                         b_invalid_cue = true;
                         break;
                     }
-                    cue_mk_time = static_cast<uint64>( *kct_ptr ) * i_timescale / INT64_C(1000);
+                    cue_mk_time = VLC_TICK_FROM_NS(static_cast<uint64>( *kct_ptr ) * i_timescale);
                 }
                 else if( MKV_IS_ID( el, KaxCueTrackPositions ) )
                 {
@@ -315,7 +315,7 @@ bool matroska_segment_c::ParseSimpleTags( SimpleTag* pout_simple, KaxTagSimple *
                               // the SimpleTag is valid if ParseSimpleTags returns `true`
 
                 if (ParseSimpleTags( &st, kts_ptr, target_type )) {
-                  pout_simple->sub_tags.push_back( st );
+                  pout_simple->sub_tags.push_back( std::move(st) );
                 }
             }
             /*TODO Handle binary tags*/
@@ -439,7 +439,7 @@ void matroska_segment_c::LoadTags( KaxTags *tags )
                     SimpleTag simple;
 
                     if (ParseSimpleTags(&simple, kts_ptr, target_type )) {
-                      tag.simple_tags.push_back( simple );
+                      tag.simple_tags.push_back( std::move(simple) );
                     }
                 }
                 else
@@ -448,7 +448,7 @@ void matroska_segment_c::LoadTags( KaxTags *tags )
                 }
             }
             eparser.Up();
-            this->tags.push_back(tag);
+            this->tags.push_back(std::move(tag));
         }
         else
         {
@@ -1266,6 +1266,7 @@ int matroska_segment_c::BlockGet( KaxBlock * & pp_block, KaxSimpleBlock * & pp_s
             }
             if (read == 0 && ksblock.GetSize() != 0) {
                 msg_Err( vars.p_demuxer,"Error while reading %s",  EBML_NAME(&ksblock) );
+                ksblock.ReleaseFrames();
                 return;
             }
             vars.simpleblock = &ksblock;
@@ -1276,7 +1277,7 @@ int matroska_segment_c::BlockGet( KaxBlock * & pp_block, KaxSimpleBlock * & pp_s
                 bool const b_valid_track = vars.obj->FindTrackByBlock( NULL, &ksblock ) != NULL;
                 if (b_valid_track)
                     vars.obj->_seeker.add_seekpoint( ksblock.TrackNum(),
-                        SegmentSeeker::Seekpoint( ksblock.GetElementPosition(), ksblock.GlobalTimecode() / 1000 ) );
+                        SegmentSeeker::Seekpoint( ksblock.GetElementPosition(), VLC_TICK_FROM_NS(ksblock.GlobalTimecode()) ) );
             }
         }
     };
@@ -1294,6 +1295,7 @@ int matroska_segment_c::BlockGet( KaxBlock * & pp_block, KaxSimpleBlock * & pp_s
             }
             if (unlikely(read == 0) && kblock.GetSize() != 0) {
                 msg_Err( vars.p_demuxer,"Error while reading %s",  EBML_NAME(&kblock) );
+                kblock.ReleaseFrames();
                 return;
             }
             vars.block = &kblock;
@@ -1303,7 +1305,7 @@ int matroska_segment_c::BlockGet( KaxBlock * & pp_block, KaxSimpleBlock * & pp_s
             if( p_track != NULL && p_track->fmt.i_cat == SPU_ES )
             {
                 vars.obj->_seeker.add_seekpoint( kblock.TrackNum(),
-                    SegmentSeeker::Seekpoint( kblock.GetElementPosition(), kblock.GlobalTimecode() / 1000 ) );
+                    SegmentSeeker::Seekpoint( kblock.GetElementPosition(), VLC_TICK_FROM_NS(kblock.GlobalTimecode()) ) );
             }
 
             vars.ep->Keep ();
@@ -1489,7 +1491,7 @@ bool matroska_segment_c::ReadMaster(EbmlMaster & m, ScopeMode scope)
     }
     try
     {
-        EbmlElement *el;
+        EbmlElement *el = nullptr;
         int i_upper_level = 0;
         m.Read( es, EBML_CONTEXT(&m), i_upper_level, el, true, scope );
         if (i_upper_level != 0)

@@ -1,6 +1,6 @@
---- a/upnp/src/api/UpnpString.c	2026-07-14 09:05:38
-+++ b/upnp/src/api/UpnpString.c	2026-07-14 09:05:38
-@@ -32,18 +32,21 @@
+--- a/upnp/src/api/UpnpString.c
++++ b/upnp/src/api/UpnpString.c
+@@ -32,18 +32,22 @@
  		 * (potentially) different linkage */
  		/* strnlen() is a GNU extension. */
  		#if !HAVE_STRNLEN
@@ -18,17 +18,18 @@
  #endif		       /* _WIN32 */
  
  /* strndup() is a GNU extension. */
- #if !HAVE_STRNDUP || defined(_WIN32)
+ #if !HAVE_STRNDUP
 -static char *strndup(const char *__string, size_t __n)
++/* Same renaming for strndup, declared by the 10.7+ SDKs as well. */
 +static char *upnp_strndup(const char *__string, size_t __n)
  {
  	size_t strsize = strnlen(__string, __n);
  	char *newstr = (char *)malloc(strsize + 1);
-@@ -55,6 +58,7 @@
+@@ -55,6 +59,7 @@
  
  	return newstr;
  }
 +	#define strndup upnp_strndup
- #endif /* HAVE_STRNDUP && !defined(_WIN32) */
+ #endif /* !HAVE_STRNDUP */
  
  /*!

@@ -79,7 +79,7 @@ static char * GetDefaultArtUri( void )
     char *psz_uri = NULL;
     char *psz_path;
     char *psz_datadir = config_GetDataDir();
-    if( asprintf( &psz_path, "%s/icons/128x128/vlc.png", psz_datadir ) >= 0 )
+    if( asprintf( &psz_path, "%s/icons/128x128/powervlc.png", psz_datadir ) >= 0 )
     {
         psz_uri = vlc_path2uri( psz_path, NULL );
         free( psz_path );

@@ -139,7 +139,7 @@ void libvlc_set_user_agent (libvlc_instance_t *p_i,
 
     var_SetString (p_libvlc, "user-agent", name);
     if ((http != NULL)
-     && (asprintf (&str, "%s LibVLC/"PACKAGE_VERSION, http) != -1))
+     && (asprintf (&str, "%s LibPowerVLC/"POWERVLC_VERSION, http) != -1))
     {
         var_SetString (p_libvlc, "http-user-agent", str);
         free (str);

@@ -23,6 +23,7 @@
 #endif
 
 #import "VLCLegacyOpen.h"
+#import "misc.h"
 #import "VLCLegacyOutput.h"
 #import "VLCLegacyCoreInteraction.h"
 #import "VLCLegacyMenu.h"
@@ -415,7 +416,10 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
     NSImageView *well = [[[NSImageView alloc] initWithFrame:frame]
         autorelease];
     [well setEditable:NO];
-    [well unregisterDraggedTypes];
+    /* -unregisterDraggedTypes is 10.3; below it, a view that never
+     * registered a type has nothing to unregister anyway */
+    if ([well respondsToSelector:@selector(unregisterDraggedTypes)])
+        [well unregisterDraggedTypes];
     [parent addSubview:well];
     return well;
 }
@@ -545,7 +549,7 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
         [self checkbox:_NS("Treat as a pipe rather than as a file")
                  frame:NSMakeRect(76, 228, 360, 18)
                 action:@selector(openFileStreamChanged:) in:pane];
-    [fileTreatAsPipeButton setHidden:YES];
+    VLCLegacySetViewHidden(fileTreatAsPipeButton, YES);
 
     fileSlaveCheckbox =
         [self checkbox:_NS("Play another media synchronously")
@@ -617,16 +621,16 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
 
         [fileNameLabel setStringValue:
             [[NSFileManager defaultManager] displayNameAtPath:filePath]];
-        [fileNameStubLabel setHidden:YES];
-        [fileTreatAsPipeButton setHidden:NO];
+        VLCLegacySetViewHidden(fileNameStubLabel, YES);
+        VLCLegacySetViewHidden(fileTreatAsPipeButton, NO);
         [fileIconWell setImage:
             [[NSWorkspace sharedWorkspace] iconForFile:filePath]];
-        [fileIconWell setHidden:NO];
+        VLCLegacySetViewHidden(fileIconWell, NO);
         [self setMRL:mrlString];
     } else {
         [fileNameLabel setStringValue:@""];
-        [fileNameStubLabel setHidden:NO];
-        [fileTreatAsPipeButton setHidden:YES];
+        VLCLegacySetViewHidden(fileNameStubLabel, NO);
+        VLCLegacySetViewHidden(fileTreatAsPipeButton, YES);
         [fileIconWell setImage:[self genericFileIcon]];
         [self setMRL:@""];
     }
@@ -949,7 +953,7 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
     discSelectorPopup = [self popup:NSMakeRect(16, 264, 530, 26)
                              action:@selector(discSelectorChanged:)
                                  in:pane];
-    [discSelectorPopup setHidden:YES];
+    VLCLegacySetViewHidden(discSelectorPopup, YES);
 
     discIconView = [self iconWell:NSMakeRect(40, 80, 128, 128) in:pane];
 
@@ -1062,14 +1066,14 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
                             displayNameAtPath:[dict objectForKey:@"path"]];
             [discSelectorPopup addItemWithTitle:title];
         }
-        [discSelectorPopup setHidden:count <= 1];
+        VLCLegacySetViewHidden(discSelectorPopup, count <= 1);
         if (sender == specialMediaFolders && count > 0)
             [discSelectorPopup selectItemAtIndex:count - 1];
         if ([[[tabView selectedTabViewItem] identifier] intValue]
                 == OPEN_TAB_DISC)
             [self discSelectorChanged:nil];
     } else {
-        [discSelectorPopup setHidden:YES];
+        VLCLegacySetViewHidden(discSelectorPopup, YES);
         if ([[[tabView selectedTabViewItem] identifier] intValue]
                 == OPEN_TAB_DISC)
             [self setMRL:@""];
@@ -1744,7 +1748,7 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
     mrlLabel = [self label:_NS("Media Resource Locator (MRL)")
                      frame:NSMakeRect(34, 68, 400, 14) in:content];
     mrlField = [self field:NSMakeRect(12, 44, 572, 20) in:content];
-    [mrlField setHidden:YES];
+    VLCLegacySetViewHidden(mrlField, YES);
     [[NSNotificationCenter defaultCenter]
         addObserver:self selector:@selector(mrlFieldChanged:)
                name:NSControlTextDidChangeNotification object:mrlField];
@@ -1783,7 +1787,8 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
 
 - (void)expandMRLfieldAction:(id)sender
 {
-    [mrlField setHidden:[mrlDisclosureButton state] == NSOffState];
+    VLCLegacySetViewHidden(mrlField,
+                           [mrlDisclosureButton state] == NSOffState);
 }
 
 - (void)mrlFieldChanged:(NSNotification *)notification

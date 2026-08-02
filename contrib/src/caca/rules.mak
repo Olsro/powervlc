@@ -22,10 +22,15 @@ caca: libcaca-$(CACA_VERSION).tar.gz .sum-caca
 	$(UPDATE_AUTOCONFIG) && cd $(UNPACK_DIR) && mv config.guess config.sub .auto
 	$(APPLY) $(SRC)/caca/caca-fix-compilation-llvmgcc.patch
 	$(APPLY) $(SRC)/caca/caca-fix-pkgconfig.patch
+	$(APPLY) $(SRC)/caca/0001-win32-don-t-for-_WIN32_WINNT-to-Win2K.patch
+	$(APPLY) $(SRC)/caca/0002-win32-don-t-redefine-GetCurrentConsoleFont-with-ming.patch
+	$(APPLY) $(SRC)/caca/0003-win32-use-ANSI-calls-explicitly.patch
+	$(APPLY) $(SRC)/caca/0004-win32-use-CreateFile2-when-compiling-for-Win8.patch
+	$(APPLY) $(SRC)/caca/0005-canvas-use-GetCurrentProcessId-on-Windows.patch
+	$(APPLY) $(SRC)/caca/0006-stubs-include-winsock2.h-to-get-htons-htonl-declarat.patch
+	$(APPLY) $(SRC)/caca/fb77acff9ba6bb01d53940da34fb10f20b156a23.patch
 	$(call pkg_static,"caca/caca.pc.in")
-	$(UPDATE_AUTOCONFIG)
 	$(MOVE)
-	mv caca/config.sub caca/config.guess caca/.auto
 
 CACA_CONF := \
 	--disable-gl \
@@ -48,9 +53,16 @@ endif
 ifdef HAVE_WIN32
 CACA_CONF += --disable-ncurses \
     ac_cv_func_sprintf=yes \
-    ac_cv_func_vsnprintf_s=yes \
-    ac_cv_func_vsnprintf=yes \
-    ac_cv_func_sprintf_s=yes
+    ac_cv_func_vsnprintf=yes
+ifeq ($(ARCH),i386)
+# The *_s "secure CRT" functions only reached msvcrt.dll with Windows Vista.
+# The win32 slice targets XP SP3, where a DLL importing them cannot be loaded
+# at all ("the procedure entry point ... could not be located in msvcrt.dll"),
+# so let libcaca use its plain vsnprintf()/sprintf() paths there.
+CACA_CONF += ac_cv_func_vsnprintf_s=no ac_cv_func_sprintf_s=no
+else
+CACA_CONF += ac_cv_func_vsnprintf_s=yes ac_cv_func_sprintf_s=yes
+endif
 endif
 ifdef HAVE_LINUX
 CACA_CONF += --disable-ncurses
@@ -65,6 +77,6 @@ CACA_CONF += \
 .caca: caca
 	$(MAKEBUILDDIR)
 	$(MAKECONFIGURE) $(CACA_CONF)
-	+$(MAKEBUILD) -C $<
-	+$(MAKEBUILD) -C $< install
+	+$(MAKEBUILD) -C $< noinst_PROGRAMS= bin_PROGRAMS=
+	+$(MAKEBUILD) -C $< noinst_PROGRAMS= bin_PROGRAMS= install
 	touch $@

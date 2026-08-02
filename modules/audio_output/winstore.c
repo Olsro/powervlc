@@ -33,7 +33,7 @@
 #include <vlc_aout.h>
 #include <vlc_charset.h> // ToWide
 #include <vlc_modules.h>
-#include "audio_output/mmdevice.h"
+#include "mmdevice.h"
 
 #include <audioclient.h>
 #include <mmdeviceapi.h>
@@ -280,6 +280,7 @@ static int VolumeSet(audio_output_t *aout, float vol)
     if( unlikely( sys->client == NULL ) )
         return VLC_EGENERIC;
     HRESULT hr;
+    void *pv = NULL;
     ISimpleAudioVolume *pc_AudioVolume = NULL;
 
     float linear_vol = vol * vol * vol; /* ISimpleAudioVolume is tapered linearly. */
@@ -294,17 +295,18 @@ static int VolumeSet(audio_output_t *aout, float vol)
 
     aout_GainRequest(aout, sys->gain);
 
-    hr = IAudioClient_GetService(sys->client, &IID_ISimpleAudioVolume, &pc_AudioVolume);
+    hr = IAudioClient_GetService(sys->client, &IID_ISimpleAudioVolume, &pv);
     if (FAILED(hr))
     {
-        msg_Err(aout, "cannot get volume service (error 0x%lx)", hr);
+        msg_Err(aout, "cannot get volume service (error 0x%lX)", hr);
         goto done;
     }
+    pc_AudioVolume = pv;
 
     hr = ISimpleAudioVolume_SetMasterVolume(pc_AudioVolume, linear_vol, NULL);
     if (FAILED(hr))
     {
-        msg_Err(aout, "cannot set volume (error 0x%lx)", hr);
+        msg_Err(aout, "cannot set volume (error 0x%lX)", hr);
         goto done;
     }
 
@@ -323,19 +325,21 @@ static int MuteSet(audio_output_t *aout, bool mute)
     if( unlikely( sys->client == NULL ) )
         return VLC_EGENERIC;
     HRESULT hr;
+    void *pv = NULL;
     ISimpleAudioVolume *pc_AudioVolume = NULL;
 
-    hr = IAudioClient_GetService(sys->client, &IID_ISimpleAudioVolume, &pc_AudioVolume);
+    hr = IAudioClient_GetService(sys->client, &IID_ISimpleAudioVolume, &pv);
     if (FAILED(hr))
     {
-        msg_Err(aout, "cannot get volume service (error 0x%lx)", hr);
+        msg_Err(aout, "cannot get volume service (error 0x%lX)", hr);
         goto done;
     }
+    pc_AudioVolume = pv;
 
     hr = ISimpleAudioVolume_SetMute(pc_AudioVolume, mute, NULL);
     if (FAILED(hr))
     {
-        msg_Err(aout, "cannot set mute (error 0x%lx)", hr);
+        msg_Err(aout, "cannot set mute (error 0x%lX)", hr);
         goto done;
     }
 
@@ -505,14 +509,16 @@ static int Start(audio_output_t *aout, audio_sample_format_t *restrict fmt)
     // Report the initial volume and mute status to the core
     if (sys->client != NULL)
     {
-        ISimpleAudioVolume* pc_AudioVolume = NULL;
+        ISimpleAudioVolume *pc_AudioVolume = NULL;
+        void *pv;
 
-        hr = IAudioClient_GetService(sys->client, &IID_ISimpleAudioVolume, &pc_AudioVolume);
+        hr = IAudioClient_GetService(sys->client, &IID_ISimpleAudioVolume, &pv);
         if (FAILED(hr))
         {
             msg_Err(aout, "cannot get volume service (error 0x%lx)", hr);
             goto done;
         }
+        pc_AudioVolume = pv;
 
         float vol;
         hr = ISimpleAudioVolume_GetMasterVolume(pc_AudioVolume, &vol);

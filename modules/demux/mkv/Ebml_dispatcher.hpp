@@ -25,10 +25,8 @@
 
 #include "dispatcher.hpp"
 
-#include "ebml/EbmlElement.h"
-#include "ebml/EbmlId.h"
-
-#include <vlc_threads.h>
+#include <ebml/EbmlElement.h>
+#include <ebml/EbmlId.h>
 
 #include <algorithm>
 #include <typeinfo>
@@ -117,7 +115,7 @@ namespace {
 
 #define E_CASE(EbmlType_, VariableName_)            \
     EBML_ELEMENT_CASE_DEF(EbmlType_, EbmlType_, VariableName_, \
-      (dispatcher.insert( EbmlProcessorEntry( EbmlType_ ::ClassInfos.ClassId(), &EbmlType_ ## _callback) ) ) \
+      (dispatcher.insert( EbmlProcessorEntry( EBML_ID(EbmlType_), &EbmlType_ ## _callback) ) ) \
     )
 
 #define E_CASE_DEFAULT(VariableName_)                    \

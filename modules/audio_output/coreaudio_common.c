@@ -48,6 +48,21 @@ FramesToBytes(struct aout_sys_common *p_sys, uint64_t i_frames)
     return i_frames * p_sys->i_bytes_per_frame / p_sys->i_frame_length;
 }
 
+/* Au-delà de ce délai sans le moindre signe de vie du rappel de rendu, on
+ * considère la sortie CoreAudio comme morte et on se débrouille sans elle
+ * plutôt que d'attendre pour toujours. En lecture normale le tampon se vide en
+ * quelques dizaines de millisecondes : ces gardes sont inatteignables. */
+#define CA_DEAD_OUTPUT_TIMEOUT   ((vlc_tick_t)2 * CLOCK_FREQ)
+/* La branche sans attente de ca_Flush JETTE les tampons : lui laisser 2 s, c'est
+ * faire patienter l'utilisateur devant une image figée pour obtenir la
+ * permission de jeter ce qu'on jette de toute façon. Quelques périodes de rappel
+ * suffisent à conclure qu'il n'y a plus personne, et se tromper ne coûte rien —
+ * on fait alors le vidage soi-même, sous le même verrou que le rappel. */
+#define CA_DEAD_OUTPUT_FLUSH_TIMEOUT  ((vlc_tick_t)CLOCK_FREQ / 2)
+/* Budget des tentatives SUIVANTES, une fois b_render_dead posé : le verdict est
+ * déjà rendu, on ne le repaie pas plein tarif à chaque bloc. */
+#define CA_DEAD_OUTPUT_RETRY          ((vlc_tick_t)CLOCK_FREQ / 20)
+
 static inline uint64_t
 UsToFrames(struct aout_sys_common *p_sys, vlc_tick_t i_us)
 {
@@ -154,6 +169,7 @@ ca_Open(audio_output_t *p_aout)
 
     vlc_sem_init(&p_sys->flush_sem, 0);
     lock_init(p_sys);
+    p_sys->b_render_dead = false;
     p_sys->p_out_chain = NULL;
     p_sys->pp_out_last = &p_sys->p_out_chain;
     p_sys->chans_to_reorder = 0;
@@ -183,6 +199,10 @@ ca_Render(audio_output_t *p_aout, uint32_t i_frames, uint64_t i_host_time,
     struct aout_sys_common *p_sys = (struct aout_sys_common *) p_aout->sys;
 
     lock_lock(p_sys);
+
+    /* Ce rappel s'exécute : la sortie est vivante. Lève l'état constaté par les
+     * gardes anti-gel, qui redeviennent donc patientes. */
+    p_sys->b_render_dead = false;
 
     if (p_sys->b_do_flush)
     {
@@ -319,9 +339,16 @@ ca_Flush(audio_output_t *p_aout, bool wait)
 {
     struct aout_sys_common *p_sys = (struct aout_sys_common *) p_aout->sys;
 
+    bool b_gave_up = false;
+
     lock_lock(p_sys);
+    /* N'avertir qu'à la découverte : au teardown, plusieurs vidages se
+     * succèdent et répéter le message n'apprend rien. */
+    const bool b_already_dead = p_sys->b_render_dead;
     if (wait)
     {
+        vlc_tick_t i_stuck_us = 0;   /* cumul d'attente sans drainage */
+
         while (p_sys->i_out_size > 0)
         {
             if (p_sys->b_paused)
@@ -334,9 +361,26 @@ ca_Flush(audio_output_t *p_aout, bool wait)
              * for the render thread to play it all */
             const vlc_tick_t i_frame_us =
                 FramesToUs(p_sys, BytesToFrames(p_sys, p_sys->i_out_size)) + 10000;
+            const size_t i_out_before = p_sys->i_out_size;
             lock_unlock(p_sys);
             msleep(i_frame_us);
             lock_lock(p_sys);
+            /* ★ Même garde anti-gel que ca_Play : sans elle, une sortie qui ne
+             * draine plus fait boucler ici indéfiniment. */
+            if (p_sys->i_out_size >= i_out_before)
+            {
+                i_stuck_us += (i_frame_us > 0) ? i_frame_us : 40000;
+                if (i_stuck_us > (p_sys->b_render_dead ? CA_DEAD_OUTPUT_RETRY
+                                                       : CA_DEAD_OUTPUT_TIMEOUT))
+                {
+                    ca_ClearOutBuffers(p_aout);
+                    p_sys->b_render_dead = true;
+                    b_gave_up = true;
+                    break;
+                }
+            }
+            else
+                i_stuck_us = 0;
         }
     }
     else
@@ -346,16 +390,65 @@ ca_Flush(audio_output_t *p_aout, bool wait)
             ca_ClearOutBuffers(p_aout);
         else
         {
+            /* ★ Garde anti-gel (10.2/10.3, mesurée au sample sur iBook G3) :
+             * seul le rappel de rendu remet b_do_flush à faux et poste le
+             * sémaphore. Quand l'unité audio n'a plus de thread d'E/S — arrêtée,
+             * ou jamais démarrée parce que la piste n'a rien joué — ce rappel ne
+             * tirera PLUS JAMAIS et le vlc_sem_wait nu ne rendait pas la main.
+             * L'effet visible n'était pas « pas de son » mais un blocage total :
+             * input_DecoderDelete restait suspendu, donc l'entrée ne s'arrêtait
+             * jamais (« incoming request - stopping current input » en boucle,
+             * image figée), et le quit suivant se bloquait dans libvlc_release.
+             * On sonde donc b_do_flush sous le verrou, et au bout de 2 s on fait
+             * le vidage nous-mêmes. Pas de course : le rappel de rendu prend le
+             * MÊME verrou, donc s'il ne l'a pas encore consommé quand on le
+             * remet à faux, il ne postera pas ; et s'il l'a consommé, on voit
+             * b_do_flush faux et le sémaphore est déjà posté. */
             p_sys->b_do_flush = true;
-            lock_unlock(p_sys);
-            vlc_sem_wait(&p_sys->flush_sem);
-            lock_lock(p_sys);
+
+            for (vlc_tick_t i_waited = 0;;)
+            {
+                if (!p_sys->b_do_flush)
+                {
+                    /* Le rappel a fait le vidage : le post est acquis. */
+                    lock_unlock(p_sys);
+                    vlc_sem_wait(&p_sys->flush_sem);
+                    lock_lock(p_sys);
+                    break;
+                }
+                if (i_waited >= (p_sys->b_render_dead
+                                 ? CA_DEAD_OUTPUT_RETRY
+                                 : CA_DEAD_OUTPUT_FLUSH_TIMEOUT))
+                {
+                    ca_ClearOutBuffers(p_aout);
+                    p_sys->b_do_flush = false;
+                    p_sys->b_render_dead = true;
+                    b_gave_up = true;
+                    break;
+                }
+                /* Même unité d'attente que ca_Play et que la branche wait
+                 * ci-dessus : le temps qu'il faudrait au rappel pour jouer ce
+                 * qui reste, plancher 10 ms. Une sortie vivante consomme le
+                 * drapeau au premier tour, donc le chemin normal ne paie qu'un
+                 * seul de ces sommeils. */
+                const vlc_tick_t i_poll_us =
+                    FramesToUs(p_sys, BytesToFrames(p_sys, p_sys->i_out_size))
+                    + 10000;
+                lock_unlock(p_sys);
+                msleep(i_poll_us);
+                i_waited += i_poll_us;
+                lock_lock(p_sys);
+            }
         }
     }
 
     p_sys->i_render_host_time = p_sys->i_first_render_host_time = 0;
     p_sys->i_render_frames = 0;
     lock_unlock(p_sys);
+
+    if (b_gave_up && !b_already_dead)
+        msg_Warn(p_aout, "la sortie CoreAudio ne rend plus — vidage fait sur "
+                 "place (garde anti-gel)");
 
     p_sys->b_played = false;
 }
@@ -375,6 +468,7 @@ void
 ca_Play(audio_output_t * p_aout, block_t * p_block)
 {
     struct aout_sys_common *p_sys = (struct aout_sys_common *) p_aout->sys;
+    vlc_tick_t i_stuck_us = 0;   /* cumul d'attente sans drainage (anti-gel) */
 
     /* Do the channel reordering */
     if (p_sys->chans_to_reorder)
@@ -434,9 +528,42 @@ ca_Play(audio_output_t * p_aout, block_t * p_block)
                 FramesToUs(p_sys, BytesToFrames(p_sys, p_block->i_buffer));
 
             /* Wait for the render buffer to play the remaining data */
+            const size_t i_out_before = p_sys->i_out_size;
             lock_unlock(p_sys);
             msleep(i_frame_us);
             lock_lock(p_sys);
+            /* ★ Garde anti-gel (10.3, gel au quit mesuré au sample) : si le
+             * rappel de rendu ne draine PLUS (sortie arrêtée pendant qu'on
+             * dormait — teardown, périphérique figé), cette boucle redormait
+             * indéfiniment ; le thread décodeur audio ne mourait jamais et le
+             * quit restait suspendu sur son pthread_join (« stopping current
+             * input » en boucle). 2 s sans progrès = sortie morte : on
+             * abandonne le bloc. En lecture normale le tampon se vide en
+             * quelques dizaines de ms, la garde est inatteignable. */
+            if (p_sys->i_out_size >= i_out_before)
+            {
+                /* Une fois la sortie constatée morte, ne pas redécouvrir le
+                 * même verdict à 2 s par bloc : au teardown, les blocs encore
+                 * en vol coûtaient ainsi une dizaine de secondes de mur
+                 * (mesuré : 5 déclenchements). On garde un sommeil — sortir
+                 * sans attendre du tout ferait tourner le thread décodeur en
+                 * boucle serrée — mais un budget bien plus court. */
+                i_stuck_us += (i_frame_us > 0) ? i_frame_us : 40000;
+                if (i_stuck_us > (p_sys->b_render_dead ? CA_DEAD_OUTPUT_RETRY
+                                                       : CA_DEAD_OUTPUT_TIMEOUT))
+                {
+                    const bool b_first = !p_sys->b_render_dead;
+                    p_sys->b_render_dead = true;
+                    lock_unlock(p_sys);
+                    if (b_first)
+                        msg_Warn(p_aout, "la sortie CoreAudio ne draine plus — "
+                                 "bloc audio abandonné (garde anti-gel)");
+                    block_Release(p_block);
+                    return;
+                }
+            }
+            else
+                i_stuck_us = 0;
         }
         else
         {
@@ -633,8 +760,18 @@ RenderCallback(void *p_data, AudioUnitRenderActionFlags *ioActionFlags,
     VLC_UNUSED(inTimeStamp);
     VLC_UNUSED(inBusNumber);
 
+    /* The AUHAL of Mac OS X 10.2 announces kAudioTimeStampSampleTimeValid
+     * and nothing else (measured: mFlags == 0x1), leaving mHostTime filled
+     * with uninitialised memory. Passing 0 down is not an option: ca_Render
+     * would then find its deferred start time forever in the future and
+     * write silence for the whole file, ca_TimeGet would never succeed, and
+     * the input would wait for a drain that never comes -- silent playback
+     * that never ends. The callback runs immediately before the buffer is
+     * handed to the device, so "now" is the right substitute; what it costs
+     * in accuracy is the device latency, which i_dev_latency_us already
+     * accounts for separately. */
     uint64_t i_host_time = (inTimeStamp->mFlags & kAudioTimeStampHostTimeValid)
-                         ? inTimeStamp->mHostTime : 0;
+                         ? inTimeStamp->mHostTime : mach_absolute_time();
 
     ca_Render(p_data, inNumberFrames, i_host_time, ioData->mBuffers[0].mData,
               ioData->mBuffers[0].mDataByteSize);
@@ -768,6 +905,25 @@ MapOutputLayout(audio_output_t *p_aout, audio_sample_format_t *fmt,
     if (outlayout->mChannelLayoutTag !=
         kAudioChannelLayoutTag_UseChannelDescriptions)
     {
+        /* AudioFormatGetProperty() only exists since Mac OS X 10.3; below that
+         * deployment target it is weak-imported and resolves to NULL on the
+         * running system. Expanding a layout tag into channel descriptions is
+         * then impossible, so settle for stereo -- which is what every Mac
+         * that stops at 10.2 has on its built-in output anyway. Taken through
+         * a variable so the 10.3+ builds, where the symbol is not weak, do not
+         * warn that its address is always true. */
+        OSStatus (*get_layout_info)(AudioFormatPropertyID, UInt32,
+                                    const void *, UInt32 *) =
+            AudioFormatGetPropertyInfo;
+
+        if (get_layout_info == NULL)
+        {
+            msg_Dbg(p_aout, "no AudioFormat API (pre-10.3): assuming stereo");
+            fmt->i_physical_channels = AOUT_CHANS_STEREO;
+            aout_FormatPrepare(fmt);
+            return VLC_SUCCESS;
+        }
+
         reslayout = GetLayoutDescription(p_aout, outlayout);
         if (reslayout == NULL)
             return VLC_EGENERIC;
@@ -1017,7 +1173,16 @@ au_Initialize(audio_output_t *p_aout, AudioUnit au, audio_sample_format_t *fmt,
                                    kAudioUnitScope_Input, 0, inlayout,
                                    inlayout_size);
         free(inlayout_buf);
-        if (err != noErr)
+        if (err == kAudioUnitErr_InvalidProperty)
+        {
+            /* The AUHAL of Mac OS X 10.2 has no channel layout property at
+             * all: it plays whatever interleaved stream it is fed, in the
+             * channel order the format already describes. Declining to
+             * describe the layout is not a reason to refuse to play. */
+            ca_LogWarn("AU has no channel layout property, using the "
+                       "stream order as-is");
+        }
+        else if (err != noErr)
         {
             ca_LogErr("failed to setup input layout");
             return VLC_EGENERIC;

@@ -281,6 +281,7 @@ static const struct name2action
     { "deinterlace", ACTIONID_DEINTERLACE, },
     { "deinterlace-mode", ACTIONID_DEINTERLACE_MODE, },
     { "disc-menu", ACTIONID_DISC_MENU, },
+    { "disc-popup-menu", ACTIONID_DISC_POPUP_MENU, },
     { "faster", ACTIONID_FASTER, },
     { "frame-next", ACTIONID_FRAME_NEXT, },
     { "incr-scalefactor", ACTIONID_SCALE_UP, },

@@ -26,12 +26,12 @@
  *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
-%pure-parser
+%define api.pure full
+%define api.prefix {css}
 
-%parse-param { yyscan_t scanner }
+%param { yyscan_t scanner }
 %parse-param { vlc_css_parser_t *css_parser }
-%lex-param   { yyscan_t scanner }
-%lex-param   { vlc_css_parser_t *css_parser }
+
 
 %{
 #ifdef HAVE_CONFIG_H
@@ -43,6 +43,10 @@
 #ifndef YY_TYPEDEF_YY_SCANNER_T
 #define YY_TYPEDEF_YY_SCANNER_T
 typedef void* yyscan_t;
+#endif
+
+#if YYBISON < 30800
+# define YYNOMEM YYABORT
 #endif
 %}
 
@@ -64,17 +68,17 @@ typedef void* yyscan_t;
 
 %{
 /* See bison pure calling */
-int yylex(union YYSTYPE *, yyscan_t, vlc_css_parser_t *);
+#define YY_DECL int yylex(union YYSTYPE *, yyscan_t)
+YY_DECL;
 
-static int yyerror(yyscan_t scanner, vlc_css_parser_t *p, const char *msg)
+static void yyerror(yyscan_t scanner, vlc_css_parser_t *p, const char *msg)
 {
     VLC_UNUSED(scanner);VLC_UNUSED(p);VLC_UNUSED(msg);
-    return 1;
 }
 
 %}
 
-%expect 10
+%expect 7
 
 %nonassoc LOWEST_PREC
 
@@ -82,6 +86,7 @@ static int yyerror(yyscan_t scanner, vlc_css_parser_t *p, const char *msg)
 
 %token WHITESPACE SGML_CD
 %token TOKEN_EOF 0
+%token MEMERROR
 
 %token INCLUDES
 %token DASHMATCH
@@ -174,6 +179,9 @@ static int yyerror(yyscan_t scanner, vlc_css_parser_t *p, const char *msg)
 
 stylesheet:
     maybe_space maybe_charset maybe_sgml rule_list
+    | MEMERROR { // catch alloc failures from lexer
+        YYNOMEM;
+    }
   ;
 
 maybe_space:
@@ -189,9 +197,7 @@ maybe_sgml:
 
 maybe_charset:
    /* empty */
-  | charset {
-    vlc_css_rules_Delete($1);
-  }
+  | charset
   ;
 
 closing_brace:
@@ -202,13 +208,13 @@ closing_brace:
 charset:
   CHARSET_SYM maybe_space STRING maybe_space ';' {
       free( $3 );
-      $$ = 0;
+      $$ = NULL;
   }
   | CHARSET_SYM error invalid_block {
-      $$ = 0;
+      $$ = NULL;
   }
   | CHARSET_SYM error ';' {
-      $$ = 0;
+      $$ = NULL;
   }
 ;
 
@@ -216,10 +222,10 @@ ignored_charset:
     CHARSET_SYM maybe_space STRING maybe_space ';' {
         // Ignore any @charset rule not at the beginning of the style sheet.
         free( $3 );
-        $$ = 0;
+        $$ = NULL;
     }
     | CHARSET_SYM maybe_space ';' {
-        $$ = 0;
+        $$ = NULL;
     }
 ;
 
@@ -279,19 +285,16 @@ unary_operator:
 ruleset:
     selector_list '{' maybe_space declaration_list closing_brace {
         $$ = vlc_css_rule_New();
-        if($$)
-        {
-            $$->p_selectors = $1;
-            $$->p_declarations = $4;
-        }
+        if( !$$ )
+            YYNOMEM;
+        $$->p_selectors = $1;
+        $$->p_declarations = $4;
     }
   ;
 
 selector_list:
     selector %prec UNIMPORTANT_TOK {
-        if ($1) {
-            $$ = $1;
-        }
+        $$ = $1;
     }
     | selector_list ',' maybe_space selector %prec UNIMPORTANT_TOK {
         if ($1 && $4 )
@@ -328,22 +331,32 @@ selector:
     }
     | selector_with_trailing_whitespace simple_selector
     {
-        $$ = $1;
-        if ($$ && $2)
+        if( $1 && $2 )
         {
-            vlc_css_selector_AddSpecifier( $$, $2 );
+            vlc_css_selector_AddSpecifier( $1, $2 );
             $2->combinator = RELATION_DESCENDENT;
+            $$ = $1;
         }
-        else $$ = $2;
+        else
+        {
+            vlc_css_selectors_Delete( $1 );
+            vlc_css_selectors_Delete( $2 );
+            $$ = NULL;
+        }
     }
     | selector combinator simple_selector {
-        $$ = $1;
-        if ($$ && $3)
+        if( $1 && $3 )
         {
-            vlc_css_selector_AddSpecifier( $$, $3 );
+            vlc_css_selector_AddSpecifier( $1, $3 );
             $3->combinator = $2;
+            $$ = $1;
         }
-        else $$ = $3;
+        else
+        {
+            vlc_css_selectors_Delete( $1 );
+            vlc_css_selectors_Delete( $3 );
+            $$ = NULL;
+        }
     }
     | selector error {
         vlc_css_selectors_Delete( $1 );
@@ -353,19 +366,27 @@ selector:
 
 simple_selector:
     element_name {
+        if( !$1 )
+        {
+            $$ = NULL;
+            YYERROR;
+        }
         $$ = vlc_css_selector_New( SELECTOR_SIMPLE, $1 );
+        if( !$$ )
+            YYNOMEM; // destructors called
         free( $1 );
     }
     | element_name specifier_list {
+        if( !$1 )
+        {
+            $$ = NULL;
+            YYERROR;
+        }
         $$ = vlc_css_selector_New( SELECTOR_SIMPLE, $1 );
-        if( $$ && $2 )
-        {
+        if( !$$ )
+            YYNOMEM; // destructors called
+        if( $2 )
             vlc_css_selector_AddSpecifier( $$, $2 );
-        }
-        else
-        {
-            vlc_css_selectors_Delete( $2 );
-        }
         free( $1 );
     }
     | specifier_list {
@@ -388,7 +409,8 @@ specifier_list:
             $$ = $1;
             while( $1->specifiers.p_first )
                 $1 = $1->specifiers.p_first;
-            vlc_css_selector_AddSpecifier( $1, $2 );
+            if( $2 )
+                vlc_css_selector_AddSpecifier( $1, $2 );
         }
         else $$ = $2;
     }
@@ -400,17 +422,28 @@ specifier_list:
 
 specifier:
     IDSEL {
+        if( !$1 )
+        {
+            $$ = NULL;
+            YYERROR;
+        }
         $$ = vlc_css_selector_New( SPECIFIER_ID, $1 );
+        if( !$$ )
+            YYNOMEM; // $1 destructor called
         free( $1 );
     }
     /* Case when #fffaaa like token is lexed as HEX instead of IDSEL */
   | HASH {
-        if ($1[0] >= '0' && $1[0] <= '9') {
+        if ( !$1 || ($1[0] >= '0' && $1[0] <= '9') )
+        {
             $$ = NULL;
+            YYERROR; // $1 destructor called
         } else {
             $$ = vlc_css_selector_New( SPECIFIER_ID, $1 );
+            if( !$$ )
+                YYNOMEM;  // $1 destructor called
+            free( $1 );
         }
-        free( $1 );
     }
   | class
   | attrib
@@ -419,7 +452,14 @@ specifier:
 
 class:
     '.' IDENT {
+        if( !$2 )
+        {
+            $$ = NULL;
+            YYERROR;
+        }
         $$ = vlc_css_selector_New( SPECIFIER_CLASS, $2 );
+        if( !$$ )
+            YYNOMEM; // $2 destructor called
         free( $2 );
     }
   ;
@@ -432,15 +472,29 @@ attr_name:
 
 attrib:
     '[' maybe_space attr_name ']' {
+        if( !$3 )
+        {
+            $$ = NULL;
+            YYERROR;
+        }
         $$ = vlc_css_selector_New( SPECIFIER_ATTRIB, $3 );
         free( $3 );
     }
     | '[' maybe_space attr_name match maybe_space ident_or_string maybe_space ']' {
-        $$ = vlc_css_selector_New( SPECIFIER_ATTRIB, $3 );
-        if( $$ && $$ )
+        if( !$6 || !$3 )
         {
-            $$->match = $4;
-            $$->p_matchsel = vlc_css_selector_New( SPECIFIER_ID, $6 );
+            $$ = NULL;
+            YYERROR;
+        }
+        $$ = vlc_css_selector_New( SPECIFIER_ATTRIB, $3 );
+        if( !$$ )
+            YYNOMEM;
+        $$->match = $4;
+        $$->p_matchsel = vlc_css_selector_New( SPECIFIER_ID, $6 );
+        if ( !$$->p_matchsel )
+        {
+            vlc_css_selectors_Delete( $$ );
+            YYNOMEM;
         }
         free( $3 );
         free( $6 );
@@ -475,41 +529,81 @@ ident_or_string:
 
 pseudo:
     ':' IDENT {
+        if( !$2 )
+        {
+            $$ = NULL;
+            YYERROR;
+        }
         $$ = vlc_css_selector_New( SELECTOR_PSEUDOCLASS, $2 );
+        if( !$$ )
+            YYNOMEM;
         free( $2 );
     }
     | ':' ':' IDENT {
+        if( !$3 )
+        {
+            $$ = NULL;
+            YYERROR;
+        }
         $$ = vlc_css_selector_New( SELECTOR_PSEUDOELEMENT, $3 );
+        if( !$$ )
+            YYNOMEM;
         free( $3 );
     }
     // used by :nth-*
     | ':' FUNCTION maybe_space maybe_unary_operator NUMBER maybe_space ')' {
+        if( !$2 )
+        {
+            $$ = NULL;
+            YYERROR;
+        }
+
         if(*$2 != 0)
             $2[strlen($2) - 1] = 0;
         $$ = vlc_css_selector_New( SELECTOR_PSEUDOCLASS, $2 );
+        if( !$$ )
+            YYNOMEM;
         $5.val *= $4;
+
         free( $2 );
         vlc_css_term_Clean( $5 );
     }
     // required for WEBVTT weirdos cue::(::past)
     | ':' ':' FUNCTION maybe_space selector maybe_space ')' {
+        if( !$3 )
+        {
+            $$ = NULL;
+            YYERROR;
+        }
+
         if(*$3 != 0)
             $3[strlen($3) - 1] = 0;
         $$ = vlc_css_selector_New( SELECTOR_PSEUDOELEMENT, $3 );
-        free( $3 );
-        if( $$ && $5 )
+        if( !$$ )
+            YYNOMEM;
+
+        if( $5 )
         {
             vlc_css_selector_AddSpecifier( $$, $5 );
             $5->combinator = RELATION_SELF;
         }
-        else
-            vlc_css_selectors_Delete( $5 );
+
+        free( $3 );
     }
     // used by :nth-*(odd/even) and :lang
     | ':' FUNCTION maybe_space IDENT maybe_space ')' {
+        if( !$2 )
+        {
+            $$ = NULL;
+            YYERROR;
+        }
+
         if(*$2 != 0)
             $2[strlen($2) - 1] = 0;
         $$ = vlc_css_selector_New( SELECTOR_PSEUDOCLASS, $2 );
+        if( !$$ )
+            YYNOMEM;
+
         free( $2 );
         free( $4 );
     }
@@ -577,59 +671,44 @@ decl_list:
 
 declaration:
     property ':' maybe_space expr prio {
-        if( $4 )
+        if( !$1 || !$4 )
         {
-            $$ = vlc_css_declaration_New( $1 );
-            if( $$ )
-                $$->expr = $4;
-            else
-                vlc_css_expression_Delete( $4 );
+            $$ = NULL;
+            YYERROR;
         }
-        else $$ = NULL;
+        $$ = vlc_css_declaration_New( $1 );
+        if( !$$ )
+            YYNOMEM;
+        $$->expr = $4;
         free( $1 );
     }
-    |
-    property error {
-        free( $1 );
-        $$ = NULL;
-    }
-    |
-    property ':' maybe_space error expr prio {
-        free( $1 );
-        vlc_css_expression_Delete( $5 );
-        /* The default movable type template has letter-spacing: .none;  Handle this by looking for
-        error tokens at the start of an expr, recover the expr and then treat as an error, cleaning
-        up and deleting the shifted expr.  */
-        $$ = NULL;
-    }
-    |
-    property ':' maybe_space expr prio error {
+    | property ':' maybe_space expr error {
+        /* e.g. color: red !important fail;  or color: red; garbage */
         free( $1 );
         vlc_css_expression_Delete( $4 );
-        /* When we encounter something like p {color: red !important fail;} we should drop the declaration */
         $$ = NULL;
     }
-    |
-    IMPORTANT_SYM maybe_space {
-        /* Handle this case: div { text-align: center; !important } Just reduce away the stray !important. */
-        $$ = NULL;
-    }
-    |
-    property ':' maybe_space {
+    | property ':' maybe_space error {
+        /* color: garbage */
         free( $1 );
-        /* div { font-family: } Just reduce away this property with no value. */
         $$ = NULL;
     }
-    |
-    property ':' maybe_space error {
+    | property error {
+        /* color garbage */
         free( $1 );
-        /* if we come across rules with invalid values like this case: p { weight: *; }, just discard the rule */
         $$ = NULL;
     }
-    |
-    property invalid_block {
-        /* if we come across: div { color{;color:maroon} }, ignore everything within curly brackets */
+    | property ':' maybe_space {
+        /* color: ; */
         free( $1 );
+        $$ = NULL;
+    }
+    | property invalid_block {
+        free( $1 );
+        $$ = NULL;
+    }
+    | IMPORTANT_SYM maybe_space {
+        /* stray !important */
         $$ = NULL;
     }
   ;
@@ -649,38 +728,38 @@ expr:
     term {
         $$ = vlc_css_expression_New( $1 );
         if( !$$ )
-            vlc_css_term_Clean( $1 );
+            YYNOMEM;
     }
-    | expr operator term {
+    | expr term {
+        if( !$1 )
+        {
+            $$ = NULL;
+            YYERROR;
+        }
         $$ = $1;
-        if( !$1 || !vlc_css_expression_AddTerm($1, $2, $3) )
-            vlc_css_term_Clean( $3 );
+        if( !vlc_css_expression_AddTerm( $1, ' ', $2 ) )
+            YYNOMEM;
     }
-    | expr invalid_block_list {
-        vlc_css_expression_Delete( $1 );
-        $$ = NULL;
-    }
-    | expr invalid_block_list error {
-        vlc_css_expression_Delete( $1 );
-        $$ = NULL;
-    }
-    | expr error {
-        vlc_css_expression_Delete( $1 );
-        $$ = NULL;
+    | expr operator maybe_space term {
+        if( !$1 )
+        {
+            $$ = NULL;
+            YYERROR;
+        }
+        $$ = $1;
+        if( !vlc_css_expression_AddTerm( $1, '/', $4 ) )
+            YYNOMEM;
     }
   ;
 
 operator:
-    '/' maybe_space {
-        $$ = '/';
-    }
-  | ',' maybe_space {
-        $$ = ',';
-    }
-  | /* empty */ {
-        $$ = 0;
-  }
-  ;
+      '/' maybe_space {
+          $$ = '/';
+      }
+    | ',' maybe_space {
+          $$ = ',';
+      }
+    ;
 
 term:
   unary_term { $$ = $1; }
@@ -697,7 +776,7 @@ term:
   | UNICODERANGE maybe_space { $$.type = TYPE_UNICODERANGE; $$.psz = $1; }
   | IDSEL maybe_space { $$.type = TYPE_HEXCOLOR; $$.psz = $1; }
   | HASH maybe_space { $$.type = TYPE_HEXCOLOR; $$.psz = $1; }
-  | '#' maybe_space { $$.type = TYPE_HEXCOLOR; $$.psz = NULL; } /* Handle error case: "color: #;" */
+  | '#' maybe_space { $$.type = TYPE_INVALID; } /* Handle error case: "color: #;" */
   /* FIXME: according to the specs a function can have a unary_operator in front. I know no case where this makes sense */
   | function {
       $$ = $1;
@@ -720,22 +799,22 @@ function:
     FUNCTION maybe_space expr ')' maybe_space {
         $$.type = TYPE_FUNCTION; $$.function = $3;
         $$.psz = $1;
-        if(*$$.psz != 0)
+        if($1 && *$$.psz != 0)
             $$.psz[strlen($$.psz) - 1] = 0;
     } |
     FUNCTION maybe_space expr TOKEN_EOF {
         $$.type = TYPE_FUNCTION; $$.function = $3; $$.psz = $1;
-        if(*$$.psz != 0)
+        if($1 && *$$.psz != 0)
             $$.psz[strlen($$.psz) - 1] = 0;
     } |
     FUNCTION maybe_space ')' maybe_space {
         $$.type = TYPE_FUNCTION; $$.function = NULL; $$.psz = $1;
-        if(*$$.psz != 0)
+        if($1 && *$$.psz != 0)
             $$.psz[strlen($$.psz) - 1] = 0;
     } |
     FUNCTION maybe_space error {
         $$.type = TYPE_FUNCTION; $$.function = NULL; $$.psz = $1;
-        if(*$$.psz != 0)
+        if($1 && *$$.psz != 0)
             $$.psz[strlen($$.psz) - 1] = 0;
   }
   ;

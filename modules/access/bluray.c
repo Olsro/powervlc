@@ -67,6 +67,8 @@
 #include <libbluray/overlay.h>
 #include <libbluray/clpi_data.h>
 
+#include "bluray_keydb.h"
+
 /*****************************************************************************
  * Module descriptor
  *****************************************************************************/
@@ -77,6 +79,17 @@
 #define BD_REGION_TEXT      N_("Region code")
 #define BD_REGION_LONGTEXT  N_("Blu-Ray player region code. "\
                                 "Some discs can be played only with a correct region code.")
+#define BD_FORCED_SUBS_TEXT     N_("Show forced subtitles")
+#define BD_FORCED_SUBS_LONGTEXT N_("When the disc hides the subtitle stream, "\
+                                "keep decoding it and display only its forced "\
+                                "captions, as a standalone Blu-ray player does.")
+#define BD_KEYDB_PL_TEXT     N_("Use the main playlist from the key database")
+#define BD_KEYDB_PL_LONGTEXT N_("Some discs hide the feature among hundreds of "\
+                                "decoy playlists of the same length, so the longest "\
+                                "one is not the right one. When playing without menus, "\
+                                "start on the playlist your KEYDB.cfg records for this "\
+                                "disc, if it records one. Titles are named after their "\
+                                ".mpls file either way, so another one can still be picked.")
 
 static const char *const ppsz_region_code[] = {
     "A", "B", "C" };
@@ -109,8 +122,10 @@ vlc_module_begin ()
     set_subcategory(SUBCAT_INPUT_ACCESS)
     set_capability("access_demux", 200)
     add_bool("bluray-menu", true, BD_MENU_TEXT, BD_MENU_LONGTEXT, false)
+    add_bool("bluray-forced-subs", true, BD_FORCED_SUBS_TEXT, BD_FORCED_SUBS_LONGTEXT, false)
     add_string("bluray-region", ppsz_region_code[REGION_DEFAULT], BD_REGION_TEXT, BD_REGION_LONGTEXT, false)
         change_string_list(ppsz_region_code, ppsz_region_code_text)
+    add_bool("bluray-keydb-playlist", true, BD_KEYDB_PL_TEXT, BD_KEYDB_PL_LONGTEXT, false)
 
     add_shortcut("bluray", "file")
 
@@ -533,7 +548,7 @@ static bool FindRawDevice(char **file)
 
 /* Hands our MMC channel to libaacs, which cannot open its own: SCSITaskLib
  * grants exclusive access to a single owner. libbluray dlopen()s libaacs by the
- * path SetupLibaacsPath() exported, so opening that same path here yields the
+ * path SetupDiscLibPath() exported, so opening that same path here yields the
  * very same image and therefore the same globals. Absent from older libaacs
  * builds, hence the dlsym() rather than a direct call. */
 static void ShareMMCWithLibaacs(demux_t *p_demux, void *task_interface)
@@ -542,7 +557,7 @@ static void ShareMMCWithLibaacs(demux_t *p_demux, void *task_interface)
     if (psz_lib == NULL)
         return;
 
-    /* SetupLibaacsPath() exports the path *without* the extension, because that
+    /* SetupDiscLibPath() exports the path *without* the extension, because that
      * is what libbluray expects to append to. dlopen() needs the real file. */
     char *psz_file;
     if (asprintf(&psz_file, "%s.dylib", psz_lib) < 0)
@@ -852,22 +867,23 @@ bailout:
 }
 
 /*****************************************************************************
- * SetupLibaacsPath: point libbluray at the AACS library we ship
+ * SetupDiscLibPath: point libbluray at the descrambling libraries we ship
  *
- * libbluray does not link against libaacs, it dlopen()s it under a plain name
- * ("libaacs.dylib", "libaacs.dll", "libaacs.so.0"). That relies on the
- * platform library search path, which is fine for a distribution package but
- * not for the copy we bundle: an application bundle is on no search path, and
- * DYLD_/LD_LIBRARY_PATH cannot be counted on. libbluray does try
- * @executable_path itself on Darwin, but that is one dyld behaviour on one
- * platform to bet a retail Blu-ray on; it tries $LIBAACS_PATH before anything
- * else, so point that at our own copy - unless the user already selected an
- * implementation, e.g. libmmbd.
+ * libbluray does not link against libaacs or libbdplus, it dlopen()s them
+ * under plain names ("libaacs.dylib", "libbdplus.dll", "libaacs.so.0"...).
+ * That relies on the platform library search path, which is fine for a
+ * distribution package but not for the copies we bundle: an application bundle
+ * is on no search path, and DYLD_/LD_LIBRARY_PATH cannot be counted on.
+ * libbluray does try @executable_path itself on Darwin, but that is one dyld
+ * behaviour on one platform to bet a retail Blu-ray on; it tries $LIBAACS_PATH
+ * / $LIBBDPLUS_PATH before anything else, so point those at our own copies -
+ * unless the user already selected an implementation, e.g. libmmbd.
  *
- * The variable holds the path *without* the extension: libbluray appends the
+ * The variables hold the path *without* the extension: libbluray appends the
  * platform one itself (see dl_dlopen() in libbluray).
  *****************************************************************************/
-static void SetupLibaacsPath(demux_t *p_demux)
+static void SetupDiscLibPath(demux_t *p_demux, const char *psz_lib,
+                             const char *psz_var)
 {
 #ifdef _WIN32
     static const char psz_ext[] = ".dll";
@@ -877,15 +893,15 @@ static void SetupLibaacsPath(demux_t *p_demux)
     static const char psz_ext[] = ".so.0";
 #endif
     static const char *const ppsz_fmt[] = {
-        "%s/lib/libaacs",  /* VLC.app/Contents/MacOS + /lib */
-        "%s/libaacs",      /* Windows: beside powervlc.exe; UNIX: $libdir */
-        "%s/../libaacs",   /* UNIX: $libdir is .../lib/vlc, library in lib/ */
+        "%s/lib/%s",  /* VLC.app/Contents/MacOS + /lib */
+        "%s/%s",      /* Windows: beside powervlc.exe; UNIX: $libdir */
+        "%s/../%s",   /* UNIX: $libdir is .../lib/vlc, library in lib/ */
     };
     static vlc_mutex_t lock = VLC_STATIC_MUTEX;
 
     vlc_mutex_lock(&lock);
 
-    if (getenv("LIBAACS_PATH") != NULL)
+    if (getenv(psz_var) != NULL)
         goto out;
 
     char *psz_libdir = config_GetLibDir();
@@ -894,7 +910,7 @@ static void SetupLibaacsPath(demux_t *p_demux)
 
     for (size_t i = 0; i < ARRAY_SIZE(ppsz_fmt); i++) {
         char *psz_base;
-        if (asprintf(&psz_base, ppsz_fmt[i], psz_libdir) < 0)
+        if (asprintf(&psz_base, ppsz_fmt[i], psz_libdir, psz_lib) < 0)
             break;
 
         char *psz_file;
@@ -906,8 +922,8 @@ static void SetupLibaacsPath(demux_t *p_demux)
         struct stat st;
         bool b_found = vlc_stat(psz_file, &st) == 0 && !S_ISDIR(st.st_mode);
         if (b_found) {
-            msg_Dbg(p_demux, "using bundled AACS library %s", psz_file);
-            setenv("LIBAACS_PATH", psz_base, 1);
+            msg_Dbg(p_demux, "using bundled descrambling library %s", psz_file);
+            setenv(psz_var, psz_base, 1);
         }
 
         free(psz_file);
@@ -995,8 +1011,16 @@ static int blurayOpen(vlc_object_t *object)
 
     var_AddCallback( p_demux->p_input, "intf-event", onIntfEvent, p_demux );
 
+    /* Tells the interfaces whether to offer their pop-up menu entry
+     * (INPUT_NAV_POPUP). Created for every Blu-ray, menus or not, and given
+     * its value once menus are known to run (see below): without menus there
+     * is never a pop-up, and an existing variable reading false is what the
+     * interfaces expect. */
+    var_Create( p_demux->p_input, INPUT_POPUP_MENU_VAR, VLC_VAR_BOOL );
+
     /* Open BluRay */
-    SetupLibaacsPath(p_demux);
+    SetupDiscLibPath(p_demux, "libaacs", "LIBAACS_PATH");
+    SetupDiscLibPath(p_demux, "libbdplus", "LIBBDPLUS_PATH");
 #ifdef BLURAY_DEMUX
     if (p_demux->s) {
         i_init_pos = vlc_stream_Tell(p_demux->s);
@@ -1180,6 +1204,16 @@ static int blurayOpen(vlc_object_t *object)
         p_sys->b_menu = false;
     }
 
+    /* Offer the pop-up menu entry for the whole disc as soon as menus run.
+     * The obvious gate -- BD_EVENT_POPUP -- cannot be used: libbluray raises
+     * it from the HDMV graphics controller only (GC_STATUS_POPUP, set when an
+     * interactive composition uses IG_UI_MODEL_POPUP), and the BD-J path never
+     * raises it at all. Gating on it would grey the entry out forever on every
+     * BD-J disc. So the key is always offered while menus are on, and the disc
+     * decides what to do with it -- some ignore it, which is the same as on a
+     * set-top player. */
+    var_SetBool(p_demux->p_input, INPUT_POPUP_MENU_VAR, p_sys->b_menu);
+
     /* Get titles and chapters */
     blurayInitTitles(p_demux, disc_info->num_hdmv_titles + disc_info->num_bdj_titles + 1/*Top Menu*/ + 1/*First Play*/);
 
@@ -1271,6 +1305,7 @@ static void blurayClose(vlc_object_t *object)
     demux_sys_t *p_sys = p_demux->p_sys;
 
     var_DelCallback( p_demux->p_input, "intf-event", onIntfEvent, p_demux );
+    var_Destroy( p_demux->p_input, INPUT_POPUP_MENU_VAR );
 
     setTitleInfo(p_sys, NULL);
 
@@ -1418,6 +1453,7 @@ typedef struct
     bool b_discontinuity;
     bool b_disable_output;
     bool b_lowdelay;
+    bool b_forced_subs; /* show forced captions of a hidden PG stream */
     vlc_mutex_t lock;
     struct
     {
@@ -1430,6 +1466,7 @@ enum
 {
     BLURAY_ES_OUT_CONTROL_SET_ES_BY_PID = ES_OUT_PRIVATE_START,
     BLURAY_ES_OUT_CONTROL_UNSET_ES_BY_PID,
+    BLURAY_ES_OUT_CONTROL_SET_SPU_VISIBILITY,
     BLURAY_ES_OUT_CONTROL_FLAG_DISCONTINUITY,
     BLURAY_ES_OUT_CONTROL_ENABLE_OUTPUT,
     BLURAY_ES_OUT_CONTROL_DISABLE_OUTPUT,
@@ -1466,7 +1503,20 @@ static es_out_id_t *bluray_esOutAdd(es_out_t *p_out, const es_format_t *p_fmt)
         setStreamLang(p_sys, &fmt);
         break ;
     case SPU_ES:
-        b_select = (esout_sys->selected.i_spu_pid == p_fmt->i_id && p_sys->b_spu_enable);
+        if (esout_sys->selected.i_spu_pid == p_fmt->i_id)
+        {
+            if (p_sys->b_spu_enable)
+                b_select = true;
+            else if (esout_sys->b_forced_subs)
+            {
+                /* BD semantics: a hidden PG stream still displays its
+                 * forced captions. Keep it selected and mark the track
+                 * forced so the decoder only renders those (see
+                 * avcodec/subtitle.c). */
+                b_select = true;
+                fmt.subs.b_forced = true;
+            }
+        }
         fmt.i_priority = ES_PRIORITY_NOT_SELECTABLE;
         setStreamLang(p_sys, &fmt);
         break ;
@@ -1630,6 +1680,39 @@ static int bluray_esOutControl(es_out_t *p_out, int i_query, va_list args)
             break;
         };
 
+        case BLURAY_ES_OUT_CONTROL_SET_SPU_VISIBILITY:
+        {
+            const bool b_visible = va_arg(args, int);
+            es_pair_t *p_pair = getEsPairByPID(&esout_sys->es,
+                                               esout_sys->selected.i_spu_pid);
+            if (unlikely(!p_pair))
+            {
+                i_ret = VLC_EGENERIC;
+                break;
+            }
+
+            if (!b_visible && !esout_sys->b_forced_subs)
+            {
+                /* forced captions disabled: plain hide */
+                i_ret = es_out_Control(esout_sys->p_dst_out,
+                                       ES_OUT_SET_ES_STATE, p_pair->p_es, false);
+                break;
+            }
+
+            /* Visible: full display. Hidden: keep the track selected but
+             * marked forced, the decoder then only renders the forced
+             * captions (BD semantics). */
+            const bool b_forced_only = !b_visible;
+            if (p_pair->fmt.subs.b_forced != b_forced_only)
+            {
+                p_pair->fmt.subs.b_forced = b_forced_only;
+                es_out_Control(esout_sys->p_dst_out, ES_OUT_SET_ES_FMT,
+                               p_pair->p_es, &p_pair->fmt);
+            }
+            i_ret = es_out_Control(esout_sys->p_dst_out, ES_OUT_SET_ES,
+                                   p_pair->p_es);
+        } break;
+
         case BLURAY_ES_OUT_CONTROL_FLAG_DISCONTINUITY:
         {
             esout_sys->b_discontinuity = true;
@@ -1661,6 +1744,43 @@ static int bluray_esOutControl(es_out_t *p_out, int i_query, va_list args)
         case ES_OUT_SET_ES_STATE:
             i_ret = VLC_EGENERIC;
             break;
+
+        case ES_OUT_SET_ES_FMT:
+        {
+            /* A sub-demuxer (ts.c PGS forced-caption detection) updates the
+             * format: re-apply our own adjustments (language, priority,
+             * forced-only display of a hidden PG stream) before forwarding,
+             * or they would be lost on the core side. */
+            es_out_id_t *p_esid = va_arg(args, es_out_id_t *);
+            es_format_t *p_updfmt = va_arg(args, es_format_t *);
+            es_pair_t *p_pair = getEsPairByES(&esout_sys->es, p_esid);
+            if (p_pair == NULL)
+            {
+                i_ret = es_out_Control(esout_sys->p_dst_out, ES_OUT_SET_ES_FMT,
+                                       p_esid, p_updfmt);
+                break;
+            }
+
+            demux_t *p_demux = esout_sys->priv;
+            demux_sys_t *p_sys = p_demux->p_sys;
+            es_format_t fmt;
+            es_format_Copy(&fmt, p_updfmt);
+            if (fmt.i_cat == AUDIO_ES || fmt.i_cat == SPU_ES)
+            {
+                fmt.i_priority = ES_PRIORITY_NOT_SELECTABLE;
+                setStreamLang(p_sys, &fmt);
+            }
+            if (fmt.i_cat == SPU_ES &&
+                esout_sys->selected.i_spu_pid == fmt.i_id &&
+                !p_sys->b_spu_enable && esout_sys->b_forced_subs)
+                fmt.subs.b_forced = true;
+
+            i_ret = es_out_Control(esout_sys->p_dst_out, ES_OUT_SET_ES_FMT,
+                                   p_esid, &fmt);
+            es_format_Clean(&p_pair->fmt);
+            es_format_Copy(&p_pair->fmt, &fmt);
+            es_format_Clean(&fmt);
+        } break;
 
         case ES_OUT_GET_ES_STATE:
             va_arg(args, es_out_id_t *);
@@ -1716,6 +1836,7 @@ static es_out_t *esOutNew(vlc_object_t *p_obj, es_out_t *p_dst_out, void *priv)
     esout_sys->b_entered_recycling = false;
     esout_sys->b_restart_decoders_on_reuse = true;
     esout_sys->b_lowdelay = false;
+    esout_sys->b_forced_subs = var_InheritBool(p_obj, "bluray-forced-subs");
     esout_sys->selected.i_audio_pid = -1;
     esout_sys->selected.i_spu_pid = -1;
     vlc_mutex_init(&esout_sys->lock);
@@ -2204,18 +2325,16 @@ static void blurayDrawArgbOverlay(demux_t *p_demux, const BD_ARGB_OVERLAY* const
                            p_reg->p_picture->p[0].i_pitch * eventov->y +
                            eventov->x * 4;
     /* always true as for now, see bd_bdj_osd_cb */
-    if(likely(eventov->stride == p_reg->p_picture->p[0].i_pitch))
+    /* Row by row. The single-shot path this replaced was guarded by
+     * "eventov->stride == i_pitch", comparing a stride in pixels with a pitch
+     * in bytes: never true for a 4-byte chroma, so it never ran -- and its
+     * length, stride * h - x, ignored the y offset already applied to dst0,
+     * so it would have run off the end of the picture if it ever had. */
+    for(uint16_t h = 0; h < eventov->h; h++)
     {
-        memcpy(dst0, src0, (eventov->stride * eventov->h - eventov->x)*4);
-    }
-    else
-    {
-        for(uint16_t h = 0; h < eventov->h; h++)
-        {
-            memcpy(dst0, src0, eventov->w *4);
-            dst0 = dst0 + p_reg->p_picture->p[0].i_pitch;
-            src0 = src0 + eventov->stride;
-        }
+        memcpy(dst0, src0, eventov->w * 4);
+        dst0 = dst0 + p_reg->p_picture->p[0].i_pitch;
+        src0 = src0 + eventov->stride;
     }
 
     vlc_mutex_unlock(&ov->lock);
@@ -2357,6 +2476,14 @@ static void blurayUpdateTitleInfo(input_title_t *t, BLURAY_TITLE_INFO *title_inf
             break;
         }
         s->i_time_offset = FROM_SCALE_NZ(title_info->chapters[j].start);
+#if BLURAY_VERSION >= BLURAY_VERSION_CODE(1,5,0)
+        /* Chapter names, where the disc carries them (libbluray >= 1.5.0
+         * resolves them in the preferred language). Every interface already
+         * displays seekpoint names, so there is nothing else to do. */
+        if (title_info->chapters[j].chapter_name != NULL &&
+            title_info->chapters[j].chapter_name[0] != '\0')
+            s->psz_name = strdup(title_info->chapters[j].chapter_name);
+#endif
 
         TAB_APPEND(t->i_seekpoint, t->seekpoint, s);
     }
@@ -2370,9 +2497,21 @@ static void blurayInitTitles(demux_t *p_demux, uint32_t menu_titles)
     /* get and set the titles */
     uint32_t i_title = menu_titles;
 
+    /* Playlist the key database names as the feature, when it names one. Only
+     * looked up when it can actually be used: with menus the disc decides what
+     * plays, and the scan walks a file that runs to tens of megabytes. */
+    int i_keydb_playlist = BLURAY_KEYDB_NO_PLAYLIST;
+
+    vlc_tick_t i_scan_start = mdate();
+
     if (!p_sys->b_menu) {
         i_title = bd_get_titles(p_sys->bluray, TITLES_RELEVANT, 60);
         p_sys->i_longest_title = bd_get_main_title(p_sys->bluray);
+
+        if (di != NULL && di->aacs_detected &&
+            var_InheritBool(p_demux, "bluray-keydb-playlist"))
+            i_keydb_playlist = bluray_KeydbFindMainPlaylist(VLC_OBJECT(p_demux),
+                                                            di->disc_id);
     }
 
     for (uint32_t i = 0; i < i_title; i++) {
@@ -2382,7 +2521,32 @@ static void blurayInitTitles(demux_t *p_demux, uint32_t menu_titles)
 
         if (!p_sys->b_menu) {
             BLURAY_TITLE_INFO *title_info = bd_get_title_info(p_sys->bluray, i, 0);
-            blurayUpdateTitleInfo(t, title_info);
+
+            /* Name every title after the playlist it actually plays. Without
+             * this the list is a bare "Title 1..N" that cannot be matched to
+             * anything on the disc or to what a key database says -- which is
+             * precisely what playlist obfuscation relies on. */
+            if (title_info != NULL) {
+                const uint32_t i_playlist = title_info->playlist;
+
+                blurayUpdateTitleInfo(t, title_info);
+
+                if ((int)i_playlist == i_keydb_playlist) {
+                    /* Believe the database over the longest-title heuristic:
+                     * on an obfuscated disc the decoys share the feature's
+                     * duration, so the heuristic is picking among them at
+                     * random. */
+                    p_sys->i_longest_title = i;
+                    if (asprintf(&t->psz_name, _("%05u.mpls (main playlist)"),
+                                 i_playlist) < 0)
+                        t->psz_name = NULL;
+                    msg_Dbg(p_demux, "key database names %05u.mpls as the main "
+                            "playlist, selecting title %u", i_playlist, i);
+                } else if (asprintf(&t->psz_name, "%05u.mpls", i_playlist) < 0) {
+                    t->psz_name = NULL;
+                }
+            }
+
             bd_free_title_info(title_info);
 
         } else if (i == 0) {
@@ -2407,6 +2571,13 @@ static void blurayInitTitles(demux_t *p_demux, uint32_t menu_titles)
 
         TAB_APPEND(p_sys->i_title, p_sys->pp_title, t);
     }
+
+    /* Every playlist on the disc is read here, twice for the ones kept: the
+     * scan is the bulk of the time to first picture, and it is entirely made
+     * of small reads scattered over the disc. */
+    if (!p_sys->b_menu)
+        msg_Dbg(p_demux, "scanned %u titles in %" PRId64 " ms",
+                i_title, (mdate() - i_scan_start) / 1000);
 }
 
 static void blurayRestartParser(demux_t *p_demux, bool b_flush, bool b_random_access)
@@ -2962,12 +3133,100 @@ static void blurayOnStreamSelectedEvent(demux_t *p_demux, uint32_t i_type, uint3
 
     if (i_pid > 0)
     {
-        if (i_type == BD_EVENT_PG_TEXTST_STREAM && !p_sys->b_spu_enable)
-            es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_UNSET_ES_BY_PID, (int)i_type, i_pid);
-        else
-            es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_SET_ES_BY_PID, (int)i_type, i_pid);
+        es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_SET_ES_BY_PID, (int)i_type, i_pid);
+        if (i_type == BD_EVENT_PG_TEXTST_STREAM)
+            /* apply the display flag: a hidden PG stream stays selected in
+             * forced-captions-only mode (or is plainly deselected when
+             * bluray-forced-subs is off) */
+            es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_SET_SPU_VISIBILITY,
+                           (int)p_sys->b_spu_enable);
     }
 }
+
+/*****************************************************************************
+ * HDR / colour attributes declared by the playlist (libbluray >= 1.5.0)
+ *****************************************************************************
+ * The BDMV stream entry carries these only for HEVC (coding type 0x24), that
+ * is on UHD discs; everywhere else libbluray leaves them zeroed, which reads
+ * exactly like "SDR, unspecified colour space". So the guard is on the coding
+ * type, not on the values.
+ *
+ * They are published as information and deliberately NOT pushed into
+ * es_format_t. The HEVC elementary stream signals its own transfer function
+ * and primaries in the VUI and the mastering-display SEI, the decoders already
+ * act on that, and a playlist declaration that disagreed with the stream would
+ * make the picture worse rather than better. What this adds is the disc's own
+ * statement of what it holds, which belongs in "Media Information" -- where
+ * every interface shows it without any interface-side code.
+ *****************************************************************************/
+#if BLURAY_VERSION >= BLURAY_VERSION_CODE(1,5,0)
+
+#define BD_INFO_CAT N_("Blu-ray")
+
+static void blurayUpdateVideoInfo(demux_t *p_demux, const BLURAY_TITLE_INFO *info)
+{
+    input_thread_t *p_input = p_demux->p_input;
+    if (p_input == NULL)
+        return;
+
+    input_Control(p_input, INPUT_DEL_INFO, vlc_gettext(BD_INFO_CAT), NULL);
+
+    if (info == NULL || info->clip_count == 0)
+        return;
+
+    const BLURAY_CLIP_INFO *p_clip = &info->clips[0];
+    if (p_clip->video_stream_count == 0)
+        return;
+
+    const BLURAY_STREAM_INFO *p_video = &p_clip->video_streams[0];
+    if (p_video->coding_type != BD_STREAM_TYPE_VIDEO_HEVC)
+        return;
+
+    const char *psz_range;
+    switch (p_video->dynamic_range_type) {
+        case BLURAY_DYNAMIC_RANGE_SDR:          psz_range = "SDR";           break;
+        case BLURAY_DYNAMIC_RANGE_HDR10:        psz_range = "HDR10";         break;
+        case BLURAY_DYNAMIC_RANGE_DOLBY_VISION: psz_range = "Dolby Vision";  break;
+        default:                                psz_range = NULL;            break;
+    }
+    if (psz_range != NULL)
+        input_Control(p_input, INPUT_ADD_INFO, vlc_gettext(BD_INFO_CAT),
+                      _("Dynamic range"), "%s", psz_range);
+
+    const char *psz_space;
+    switch (p_video->color_space) {
+        case BLURAY_COLOR_SPACE_BT709:  psz_space = "BT.709";  break;
+        case BLURAY_COLOR_SPACE_BT2020: psz_space = "BT.2020"; break;
+        default:                        psz_space = NULL;      break;
+    }
+    if (psz_space != NULL)
+        input_Control(p_input, INPUT_ADD_INFO, vlc_gettext(BD_INFO_CAT),
+                      _("Color space"), "%s", psz_space);
+
+    if (p_video->hdr_plus_flag)
+        input_Control(p_input, INPUT_ADD_INFO, vlc_gettext(BD_INFO_CAT),
+                      "HDR10+", "%s", _("Yes"));
+
+    if (p_clip->dv_stream_count > 0)
+        input_Control(p_input, INPUT_ADD_INFO, vlc_gettext(BD_INFO_CAT),
+                      _("Dolby Vision tracks"), "%u", p_clip->dv_stream_count);
+
+    if (info->sdr_conversion_notification_flag)
+        input_Control(p_input, INPUT_ADD_INFO, vlc_gettext(BD_INFO_CAT),
+                      _("SDR conversion notice"), "%s", _("Yes"));
+
+    /* cr_flag is the one attribute libbluray exposes without naming: its own
+     * dump tools print it as a raw byte and the header carries no comment, so
+     * there is nothing truthful to label it with in a user-facing panel.
+     * Logged instead of guessed. */
+    msg_Dbg(p_demux, "playlist video attributes: dynamic_range=%u color_space=%u "
+            "cr_flag=%u hdr_plus=%u dv_streams=%u",
+            p_video->dynamic_range_type, p_video->color_space,
+            p_video->cr_flag, p_video->hdr_plus_flag, p_clip->dv_stream_count);
+}
+#else
+# define blurayUpdateVideoInfo(a, b) do { (void)(a); (void)(b); } while (0)
+#endif
 
 static void blurayUpdatePlaylist(demux_t *p_demux, unsigned i_playlist)
 {
@@ -2987,6 +3246,7 @@ static void blurayUpdatePlaylist(demux_t *p_demux, unsigned i_playlist)
         if (p_sys->b_menu)
             p_demux->info.i_update |= INPUT_UPDATE_TITLE_LIST;
     }
+    blurayUpdateVideoInfo(p_demux, p_title_info);
     setTitleInfo(p_sys, p_title_info);
 
     blurayResetStillImage(p_demux);
@@ -3145,7 +3405,11 @@ static void blurayHandleEvent(demux_t *p_demux, const BD_EVENT *e, bool b_delaye
         break;
     case BD_EVENT_POPUP:
         p_sys->b_popup_available = e->param;
-        /* TODO: show / hide pop-up menu button in gui ? */
+        /* HDMV only -- never raised by BD-J. The interfaces are not driven
+         * from here (see INPUT_POPUP_MENU_VAR at open time); the flag serves
+         * the navigation and the look-ahead cache below. */
+        msg_Dbg(p_demux, "BD_EVENT_POPUP: pop-up menu %s",
+                p_sys->b_popup_available ? "available" : "unavailable");
         break;
 
     /*
@@ -3171,6 +3435,9 @@ static void blurayHandleEvent(demux_t *p_demux, const BD_EVENT *e, bool b_delaye
      */
     case BD_EVENT_PG_TEXTST:
         p_sys->b_spu_enable = e->param;
+        /* the display toggle may come without a following stream event */
+        es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_SET_SPU_VISIBILITY,
+                       (int)e->param);
         break;
     case BD_EVENT_AUDIO_STREAM:
     case BD_EVENT_PG_TEXTST_STREAM:
@@ -3192,6 +3459,23 @@ static void blurayHandleEvent(demux_t *p_demux, const BD_EVENT *e, bool b_delaye
      */
     case BD_EVENT_STILL_TIME:
         blurayStillImage(p_demux, e->param);
+        break;
+    case BD_EVENT_STILL:
+        /* BD-J still mode: hold the last decoded frame while the disc keeps
+         * the screen. Distinct from BD_EVENT_STILL_TIME, which is the HDMV
+         * timed still: this one carries no duration (param is 1 to enter, 0
+         * to leave) and libbluray only sends it on transitions, never as a
+         * repeating tick.
+         *
+         * Ignoring it is what made a BD-J menu unreachable: the disc enters
+         * still at the end of its pre-menu sequence and waits for the menu
+         * Xlet, bd_read_ext() then returns no data, and the player -- which
+         * kept asking for some -- ended up replaying the intro in a loop
+         * instead of showing the menu (measured on Rio, org 0x7fff646c). */
+        if (e->param)
+            blurayStillImage(p_demux, 0); /* 0 -> STILL_IMAGE_INFINITE */
+        else
+            blurayResetStillImage(p_demux);
         break;
     case BD_EVENT_DISCONTINUITY:
         /* reset demuxer (partially decoded PES packets must be dropped) */
@@ -3362,6 +3646,13 @@ static int blurayDemux(demux_t *p_demux)
         if (!p_sys->b_menu) {
             return VLC_DEMUXER_EOF;
         }
+        /* Still mode yields no data until the disc leaves it. The timed
+         * (HDMV) still paces itself inside blurayStillImage(), which libbluray
+         * re-arms on every read; the BD-J one is a single transition event, so
+         * without this the demuxer would spin on bd_read_ext() burning a core
+         * for as long as the menu is up. */
+        if (p_sys->i_still_end_time == STILL_IMAGE_INFINITE)
+            msleep(40000);
         return VLC_DEMUXER_SUCCESS;
     }
 

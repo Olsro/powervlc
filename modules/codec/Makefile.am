@@ -51,9 +51,10 @@ libg711_plugin_la_SOURCES = codec/g711.c
 codec_LTLIBRARIES += libg711_plugin.la
 
 libfluidsynth_plugin_la_SOURCES = codec/fluidsynth.c
-libfluidsynth_plugin_la_CFLAGS = $(AM_CFLAGS) $(FLUIDSYNTH_CFLAGS)
+libfluidsynth_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) -DDATADIR=\"$(datadir)\"
+libfluidsynth_plugin_la_CFLAGS = $(AM_CFLAGS) $(CFLAGS_fluidsynth)
 libfluidsynth_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)'
-libfluidsynth_plugin_la_LIBADD = $(FLUIDSYNTH_LIBS)
+libfluidsynth_plugin_la_LIBADD = $(LIBS_fluidsynth)
 EXTRA_LTLIBRARIES += libfluidsynth_plugin.la
 codec_LTLIBRARIES += $(LTLIBfluidsynth)
 if HAVE_DARWIN
@@ -132,13 +133,12 @@ if ENABLE_SOUT
 codec_LTLIBRARIES += librtpvideo_plugin.la
 endif
 
-
-libschroedinger_plugin_la_SOURCES = codec/schroedinger.c
-libschroedinger_plugin_la_CFLAGS = $(AM_CFLAGS) $(CFLAGS_schroedinger)
-libschroedinger_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)'
-libschroedinger_plugin_la_LIBADD = $(LIBS_schroedinger)
-EXTRA_LTLIBRARIES += libschroedinger_plugin.la
-codec_LTLIBRARIES += $(LTLIBschroedinger)
+libopenapv_plugin_la_SOURCES = codec/openapv.c
+libopenapv_plugin_la_CFLAGS = $(AM_CFLAGS) $(CFLAGS_openapv)
+libopenapv_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)'
+libopenapv_plugin_la_LIBADD = $(LIBS_openapv)
+EXTRA_LTLIBRARIES += libopenapv_plugin.la
+codec_LTLIBRARIES += $(LTLIBopenapv)
 
 
 ### Image codecs ###
@@ -563,7 +563,9 @@ libx265_plugin_la_CFLAGS = $(AM_CFLAGS) $(CFLAGS_x265)
 libx265_plugin_la_LDFLAGS = $(AM_LDFLAGS) $(LDFLAGS_x265) -rpath '$(codecdir)'
 libx265_plugin_la_LIBADD = $(LIBS_x265)
 EXTRA_LTLIBRARIES += libx265_plugin.la
+if ENABLE_SOUT
 codec_LTLIBRARIES += $(LTLIBx265)
+endif
 
 libx262_plugin_la_SOURCES = codec/x264.c
 libx262_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) -DMODULE_NAME_IS_x262
@@ -571,7 +573,9 @@ libx262_plugin_la_CFLAGS = $(AM_CFLAGS) $(CFLAGS_x262)
 libx262_plugin_la_LDFLAGS = $(AM_LDFLAGS) $(LDFLAGS_x262) -rpath '$(codecdir)'
 libx262_plugin_la_LIBADD = $(LIBS_x262) $(LIBM)
 EXTRA_LTLIBRARIES += libx262_plugin.la
+if ENABLE_SOUT
 codec_LTLIBRARIES += $(LTLIBx262)
+endif
 
 libx264_plugin_la_SOURCES = codec/x264.c
 libx264_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) $(CPPFLAGS_x264) -DMODULE_NAME_IS_x264
@@ -579,7 +583,9 @@ libx264_plugin_la_CFLAGS = $(AM_CFLAGS) $(CFLAGS_x264)
 libx264_plugin_la_LDFLAGS = $(AM_LDFLAGS) $(LDFLAGS_x264) -rpath '$(codecdir)'
 libx264_plugin_la_LIBADD = $(LIBS_x264) $(LIBM)
 EXTRA_LTLIBRARIES += libx264_plugin.la
+if ENABLE_SOUT
 codec_LTLIBRARIES += $(LTLIBx264)
+endif
 
 libx26410b_plugin_la_SOURCES = codec/x264.c
 libx26410b_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) -DMODULE_NAME_IS_x26410b
@@ -587,7 +593,9 @@ libx26410b_plugin_la_CFLAGS = $(AM_CFLAGS) $(CFLAGS_x26410b)
 libx26410b_plugin_la_LDFLAGS = $(AM_LDFLAGS) $(LDFLAGS_x26410b) -rpath '$(codecdir)'
 libx26410b_plugin_la_LIBADD = $(LIBS_x26410b) $(LIBM)
 EXTRA_LTLIBRARIES += libx26410b_plugin.la
+if ENABLE_SOUT
 codec_LTLIBRARIES += $(LTLIBx26410b)
+endif
 
 
 ### Misc encoders ###
@@ -648,9 +656,9 @@ EXTRA_LTLIBRARIES += libcrystalhd_plugin.la
 codec_LTLIBRARIES += $(LTLIBcrystalhd)
 
 libqsv_plugin_la_SOURCES = codec/qsv.c
-libqsv_plugin_la_CFLAGS = $(AM_CFLAGS) $(MFX_CFLAGS)
+libqsv_plugin_la_CFLAGS = $(AM_CFLAGS) $(VPL_CFLAGS)
 libqsv_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)'
-libqsv_plugin_la_LIBADD = $(MFX_LIBS)
+libqsv_plugin_la_LIBADD = $(VPL_LIBS)
 EXTRA_LTLIBRARIES += libqsv_plugin.la
 codec_LTLIBRARIES += $(LTLIBqsv)
 

@@ -31,7 +31,6 @@ ifeq ($(ARCH),ppc)
 	# this pre-C99 AltiVec code no longer compiles with modern GCC)
 	sed -i.orig2 -e 's/for TRY_CFLAGS in "-mpim-altivec -force_cpusubtype_ALL" -faltivec -maltivec -fvec; do/for TRY_CFLAGS in ; do/' $(UNPACK_DIR)/configure.ac
 endif
-	$(UPDATE_AUTOCONFIG) && cd $(UNPACK_DIR) && mv config.guess config.sub .auto
 	$(MOVE)
 
 LIBMPEG2_CONF := --without-x --disable-sdl
@@ -44,7 +43,10 @@ endif
 .libmpeg2: libmpeg2
 	$(REQUIRE_GPL)
 	$(RECONF)
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) $(LIBMPEG2_CONF)
-	$(MAKE) -C $<
-	$(MAKE) -C $< install
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE) $(LIBMPEG2_CONF)
+	+$(MAKEBUILD) -C libmpeg2
+	+$(MAKEBUILD) -C include
+	+$(MAKEBUILD) -C libmpeg2 install
+	+$(MAKEBUILD) -C include install
 	touch $@

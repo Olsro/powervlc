@@ -23,6 +23,7 @@
 #endif
 
 #import "VLCLegacyVideoEffects.h"
+#import "misc.h"
 #import "VLCLegacyCoreInteraction.h"
 
 #include <vlc_playlist.h>
@@ -814,13 +815,13 @@ static int64_t hexValue(NSString *string)
     /* Miscellaneous */
     b_state = [addTextCheckbox state] == NSOnState;
     [addTextTextTextField setStringValue:[self stringOption:"marq-marquee"]];
-    [addTextPositionPopup selectItemWithTag:[self intOption:"marq-position"]];
+    VLCLegacySelectItemWithTag(addTextPositionPopup, [self intOption:"marq-position"]);
     [addTextTextTextField setEnabled:b_state];
     [addTextPositionPopup setEnabled:b_state];
 
     b_state = [addLogoCheckbox state] == NSOnState;
     [addLogoLogoTextField setStringValue:[self stringOption:"logo-file"]];
-    [addLogoPositionPopup selectItemWithTag:[self intOption:"logo-position"]];
+    VLCLegacySelectItemWithTag(addLogoPositionPopup, [self intOption:"logo-position"]);
     [addLogoTransparencySlider setIntValue:
         (int)[self intOption:"logo-opacity"]];
     [addLogoLogoTextField setEnabled:b_state];

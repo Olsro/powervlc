@@ -120,6 +120,10 @@ checked:
     {
         canProcess = true; // detection doesn't work
     }
+    else if (d3d_dev->adapterDesc.VendorId == GPU_MANUFACTURER_MTGPU)
+    {
+        canProcess = true; // detection doesn't work
+    }
 #ifdef HAVE_AMF_SCALER
     else if (d3d_dev->adapterDesc.VendorId == GPU_MANUFACTURER_AMD)
     {
@@ -578,6 +582,34 @@ int D3D11_UpscalerUpdate(vlc_object_t *vd, d3d11_scaler *scaleProc, d3d11_device
                 goto done_super;
             }
         }
+        else if (d3d_dev->adapterDesc.VendorId == GPU_MANUFACTURER_MTGPU)
+        {
+            constexpr GUID kMtvsrGUID{ 0x28D65B12, 0x957F, 0x4C0C, {0xA9, 0x34, 0x3B, 0x5D, 0xBE, 0xB4, 0x31, 0x0F} };
+            constexpr UINT kMtvsrVersion = 0x1;
+            constexpr UINT kMtvsrMethod  = 0x1;
+            constexpr UINT kMtvsrLevel   = 1;
+            struct ExtInfo
+            {
+                UINT version;
+                UINT method;
+                UINT level;
+                UINT enable;
+            } extInfo = {
+                kMtvsrVersion,
+                kMtvsrMethod,
+                kMtvsrLevel,
+                upscale ? 1u : 0u,
+            };
+            hr = scaleProc->d3dvidctx->VideoProcessorSetStreamExtension(
+                scaleProc->processor.Get(), 0,
+                &kMtvsrGUID, sizeof(extInfo), &extInfo);
+
+            if (FAILED(hr)) {
+                msg_Err(vd, "Failed to set the Mthreads video super resolution extension. (hr=0x%lX)", hr);
+                d3d11_device_unlock(d3d_dev);
+                goto done_super;
+            }
+        }
     }
     d3d11_device_unlock(d3d_dev);
 #ifdef HAVE_AMF_SCALER
@@ -727,6 +759,7 @@ int D3D11_UpscalerScale(vlc_object_t *vd, d3d11_scaler *scaleProc, picture_sys_t
         if (D3D11_AllocateShaderView(vd, scaleProc->d3d_dev->d3ddevice, scaleProc->d3d_fmt,
                                     _upscaled, 0, scaleProc->SRVs) != VLC_SUCCESS)
         {
+            amfOutput->Release();
             return (-ENOTSUP);
         }
 

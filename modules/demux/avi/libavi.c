@@ -64,7 +64,7 @@ static int AVI_ChunkReadCommon( stream_t *s, avi_chunk_t *p_chk,
 {
     const uint8_t *p_peek;
 
-    memset( p_chk, 0, sizeof( avi_chunk_t ) );
+    AVI_ChunkInit( p_chk );
 
     const uint64_t i_pos = vlc_stream_Tell( s );
     if( vlc_stream_Peek( s, &p_peek, 8 ) < 8 )
@@ -573,13 +573,13 @@ static void AVI_ChunkFree_strf( avi_chunk_t *p_chk )
 
 static int AVI_ChunkRead_strd( stream_t *s, avi_chunk_t *p_chk )
 {
+    AVI_READCHUNK_ENTER;
     if ( p_chk->common.i_chunk_size == 0 )
     {
         msg_Dbg( (vlc_object_t*)s, "Zero sized pre-JUNK section met" );
-        return AVI_ZEROSIZED_CHUNK;
+        AVI_READCHUNK_EXIT(AVI_ZEROSIZED_CHUNK);
     }
 
-    AVI_READCHUNK_ENTER;
     p_chk->strd.p_data = malloc( p_chk->common.i_chunk_size );
     if( p_chk->strd.p_data )
         memcpy( p_chk->strd.p_data, p_buff + 8, p_chk->common.i_chunk_size );
@@ -1051,9 +1051,14 @@ void AVI_ChunkClean( stream_t *s,
         msg_Warn( (vlc_object_t*)s, "unknown chunk: %4.4s (not unloaded)",
                 (char*)&p_chk->common.i_chunk_fourcc );
     }
-    p_chk->common.p_first = NULL;
+    AVI_ChunkInit( p_chk );
 
     return;
+}
+
+void AVI_ChunkInit( avi_chunk_t *p_chk )
+{
+    memset( p_chk, 0, sizeof(*p_chk) );
 }
 
 static void AVI_ChunkDumpDebug_level( vlc_object_t *p_obj,

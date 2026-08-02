@@ -37,6 +37,8 @@
 #include <vlc_plugin.h>
 #include <vlc_codec.h>
 
+#include <sys/utsname.h>
+
 #include "dvddriver_backend.h"
 #include "dvddriver_piccontext.h"
 #include "dvddriver_spu.h"
@@ -62,6 +64,13 @@
  * G3 : le faire au moment de l'affichage ajouterait ce retard là où il se voit).
  * Les dates sont dans l'horloge système, converties du PTS par
  * decoder_GetDisplayDate. */
+/* Taille retenue pour le paquet brut : les sous-titres d'un film tiennent
+ * largement dedans (1 à 5 Ko mesurés ; 1272 octets dans la trace du DVD Player),
+ * et 4 entrées de file à 24 Ko restent modestes à côté des 110 Ko de bitmap que
+ * chacune porte déjà. Un paquet plus gros est simplement rendu en logiciel. */
+#define SP_PKT_MAX 24576u
+#define SP_CMD_MAX 64u
+
 typedef struct
 {
     uint8_t  bitmap[SP_PITCH * SP_LINES];
@@ -70,6 +79,11 @@ typedef struct
     unsigned lines;
     vlc_tick_t i_show, i_hide;    /* dates système ; i_hide == 0 = pas d'échéance */
     bool     b_used;
+    /* 10.2 : le pilote veut le paquet BRUT et l'offset de chaque commande. */
+    uint8_t  packet[SP_PKT_MAX];
+    unsigned packet_size;
+    uint16_t cmd_off[SP_CMD_MAX];
+    unsigned cmd_count;
 } sp_entry_t;
 
 /* Profondeur de file. Les paquets SPU arrivent quelques secondes avant leur
@@ -374,6 +388,11 @@ static void SpParseAndQueue(decoder_t *p_dec)
     /* Parcours de la CHAÎNE de séquences : chacune porte son propre délai
      * (unités de 1024/90000 s) et se termine par 0xff. Les délais sont à NOTRE
      * charge : le driver ignore les commandes d'apparition/disparition. */
+    /* 10.2 : offsets des octets de commande DANS LE PAQUET, dans l'ordre —
+     * c'est exactement ce que le DVD Player d'Apple passe à `ApplySPDCSQ`. */
+    uint16_t pi_cmd[SP_CMD_MAX];
+    unsigned i_ncmd = 0;
+
     unsigned i_guard = 0;
     while( i_dcsq + 4 <= i_size && i_guard++ < 32 )
     {
@@ -385,6 +404,27 @@ static void SpParseAndQueue(decoder_t *p_dec)
 
         while( i < i_size && !b_end )
         {
+            switch( p[i] )   /* relevé de l'offset, commandes CONNUES seulement */
+            {
+            case SPU_CMD_FORCE_DISPLAY:  case SPU_CMD_START_DISPLAY:
+            case SPU_CMD_STOP_DISPLAY:   case SPU_CMD_SET_PALETTE:
+            case SPU_CMD_SET_ALPHACHANNEL: case SPU_CMD_SET_COORDINATES:
+            case SPU_CMD_SET_OFFSETS:    case SPU_CMD_SET_COLCON:
+                /* ⚠⚠ PREMIÈRE DCSQ SEULEMENT. La chaîne en contient d'autres, à
+                 * des dates ultérieures, et la seconde porte presque toujours le
+                 * `STOP_DISPLAY` (0x02) qui EFFACE le drapeau d'affichage
+                 * `ctx[0x1C4]`. Les rejouer toutes revient à dire « affiche »
+                 * puis « arrête » dans le même souffle : mesuré, 0x1C4 retombait
+                 * à 0 et rien n'apparaissait, alors que le blit tournait bien
+                 * (0x1B4 = 196). Le DVD Player n'applique que les commandes de la
+                 * DCSQ courante — les cinq de la trace (00/01, 03, 04, 05, 06) —
+                 * et c'est notre propre échéance (`i_hide`) qui retire ensuite le
+                 * sous-titre. */
+                if( i_guard == 1 && i_ncmd < SP_CMD_MAX )
+                    pi_cmd[i_ncmd++] = (uint16_t) i;
+                break;
+            default: break;
+            }
             switch( p[i] )
             {
             case SPU_CMD_FORCE_DISPLAY:
@@ -543,6 +583,23 @@ static void SpParseAndQueue(decoder_t *p_dec)
     e->i_hide    = i_hide;
 
     SpBuildPalette( p_clut, e->palette );
+    /* 10.2 : le pilote décode le paquet lui-même — on le conserve tel quel, avec
+     * les offsets de commande relevés ci-dessus. Un paquet trop gros pour notre
+     * réserve laisse simplement `packet_size` à 0 : le backend retombe alors sur
+     * le bitmap, et le rendu logiciel prendra le relais si le blit ne produit
+     * rien. */
+    if( i_size <= SP_PKT_MAX )
+    {
+        memcpy( e->packet, p, i_size );
+        e->packet_size = i_size;
+        e->cmd_count   = i_ncmd;
+        memcpy( e->cmd_off, pi_cmd, i_ncmd * sizeof( pi_cmd[0] ) );
+    }
+    else
+    {
+        e->packet_size = 0;
+        e->cmd_count   = 0;
+    }
     p_sys->i_head++;
     vlc_cond_signal( &p_sys->wait );
     vlc_mutex_unlock( &p_sys->lock );
@@ -568,6 +625,11 @@ static void SpBuildPicture(decoder_t *p_dec, const sp_entry_t *e,
     sp->contrasts = e->contrasts;
     sp->hide_in_us = -1;          /* l'échéance est tenue par le fil, pas là-bas */
     memcpy( sp->palette, e->palette, sizeof( sp->palette ) );
+    /* 10.2 : le backend s'en sert à la place du bitmap (cf. dvddriver_sp_submit). */
+    sp->packet      = e->packet;
+    sp->packet_size = e->packet_size;
+    sp->cmd_off     = e->cmd_off;
+    sp->cmd_count   = e->cmd_count;
 
     int hl[4];
     if( p_sys->p_scratch != NULL
@@ -709,7 +771,13 @@ static void *SpThread(void *p_data)
                  p_sys->i_shown, pr[3], pr[6], pr[1], pr[5], pr[7], pr[0],
                  pr[5] == 0 ? "← LE BLIT NE PRODUIT RIEN"
                  : pr[0] == 0 ? "← PRODUIT PUIS EFFACÉ" : "" );
-        (void) dw;
+        if( p_sys->b_probe )
+            msg_Dbg( p_dec, "SP-ÉTAT : ligneDepart(0x1B4)=%d affichage(0x1C4)=%d "
+                     "aRedessiner(0x1D0)=%d | plan %d,%d→%d,%d | bouton %d,%d",
+                     dw[0], dw[1], dw[2],
+                     (int16_t) (dw[3] >> 16), (int16_t) dw[3],
+                     (int16_t) (dw[4] >> 16), (int16_t) dw[4],
+                     (int16_t) (dw[5] >> 16), (int16_t) dw[5] );
         vlc_mutex_lock( &p_sys->lock );
     }
     vlc_mutex_unlock( &p_sys->lock );
@@ -844,6 +912,15 @@ int dvddriver_spu_Open(vlc_object_t *p_this)
     if( !var_InheritBool( p_dec, "mpeg2-hwaccel-hwsubs" ) )
         return VLC_EGENERIC;
 
+    /* ✅ 30/07 — PLUS AUCUNE GARDE DE VERSION : le plan subpicture matériel
+     * incruste sur les TROIS systèmes, validé à l'œil sur iBook G3 / RV200
+     * (10.2.8, 10.3.9, 10.4.11). C'est `sp_available` qui décide, et lui seul.
+     * La recette 10.2 a demandé deux choses que le désassemblage seul ne pouvait
+     * pas donner, et qu'une trace du DVD Player d'Apple a livrées : déposer le
+     * PAQUET SPU BRUT dans le tampon de la série b (le blit l'analyse pour en
+     * tirer la ligne de départ), et n'appliquer que les commandes de la PREMIÈRE
+     * DCSQ (les suivantes portent le STOP_DISPLAY, qui éteignait l'affichage
+     * aussitôt allumé). Cf. dvddriver_sp_submit. */
     /* ⚠ On ne peut PAS conditionner la sélection à la présence du contexte
      * matériel : mesuré sur le G3, la piste de sous-titres s'ouvre AVANT que le
      * décodeur vidéo n'ait créé le sien (il lui faut l'en-tête de séquence pour

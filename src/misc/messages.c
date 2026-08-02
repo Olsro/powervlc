@@ -32,6 +32,7 @@
 # include "config.h"
 #endif
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>                                       /* va_list for BSD */
 #include <unistd.h>
@@ -59,7 +60,19 @@ static void vlc_vaLogCallback(libvlc_int_t *vlc, int type,
     vlc_logger_t *logger = libvlc_priv(vlc)->logger;
     int canc;
 
-    assert(logger != NULL);
+    /* Messages emitted before vlc_LogPreinit() -- vlc_custom_create() does,
+     * when a variable it just created cannot be found again -- would
+     * dereference a NULL logger here. The assert() catches that in a debug
+     * build and does nothing in a release one, where the crash lands inside
+     * pthread_mutex_lock with a backtrace that says nothing about the real
+     * problem. Print and carry on: the message is the diagnosis. */
+    if (unlikely(logger == NULL))
+    {
+        vfprintf(stderr, format, ap);
+        fputc('\n', stderr);
+        return;
+    }
+
     canc = vlc_savecancel();
     vlc_rwlock_rdlock(&logger->lock);
     logger->log(logger->sys, type, item, format, ap);
@@ -175,8 +188,14 @@ static void Win32DebugOutputMsg (void* d, int type, const vlc_log_t *p_item,
         return;
 
     va_list dol2;
+    char probe[1];
+
+    /* ⚠ NOT vsnprintf(NULL, 0, ...): asking for the length that way is C99, and
+     * Mac OS X 10.2 answers -1 (measured on 10.2.1, where the same call with a
+     * one-byte buffer already returns the right length). A one-byte buffer is
+     * just as portable and costs a single stack byte. */
     va_copy (dol2, dol);
-    int msg_len = vsnprintf(NULL, 0, format, dol2);
+    int msg_len = vsnprintf(probe, sizeof (probe), format, dol2);
     va_end (dol2);
 
     if (msg_len <= 0)

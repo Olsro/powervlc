@@ -116,15 +116,15 @@ MessagesDialog::MessagesDialog( intf_thread_t *_p_intf)
 
     tabChanged(0);
 
-    BUTTONACT( updateButton, updateOrClear() );
-    BUTTONACT( ui.saveLogButton, save() );
-    CONNECT( ui.filterEdit, editingFinished(), this, updateConfig() );
-    CONNECT( ui.filterEdit, textChanged(QString), this, filterMessages() );
-    CONNECT( ui.bottomButtonsBox, rejected(), this, hide() );
-    CONNECT( ui.verbosityBox, valueChanged( int ),
-             this, changeVerbosity( int ) );
+    BUTTONACT( updateButton, updateOrClear );
+    BUTTONACT( ui.saveLogButton, save );
+    connect( ui.filterEdit, &QLineEdit::editingFinished, this, &MessagesDialog::updateConfig );
+    connect( ui.filterEdit, &QLineEdit::textChanged, this, &MessagesDialog::filterMessages );
+    connect( ui.bottomButtonsBox, &QDialogButtonBox::rejected, this, &MessagesDialog::hide );
+    connect( ui.verbosityBox, QOverload<int>::of(&QVLCDebugLevelSpinBox::valueChanged),
+             this, &MessagesDialog::changeVerbosity );
 
-    CONNECT( ui.mainTab, currentChanged( int ), this, tabChanged( int ) );
+    connect( ui.mainTab, &QTabWidget::currentChanged, this, &MessagesDialog::tabChanged );
 
     /* General action */
     restoreWidgetPosition( "Messages", QSize( 600, 450 ) );

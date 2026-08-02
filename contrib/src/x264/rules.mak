@@ -2,7 +2,7 @@
 
 X264_HASH := e067ab0b530395f90b578f6d05ab0a225e2efdf9
 X264_VERSION := $(X264_HASH)
-X264_GITURL := https://code.videolan.org/videolan/x264.git
+X264_GITURL := $(VIDEOLAN_GIT)/videolan/x264.git
 
 ifdef BUILD_ENCODERS
 ifdef GPL
@@ -93,8 +93,12 @@ x264 x26410b: %: x264-$(X264_VERSION).tar.xz .sum-%
 
 .x264: x264
 	$(REQUIRE_GPL)
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) $(X264CONF)
-	$(MAKE) -C $< install
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE) $(X264CONF)
+	# make dummy dependency file
+	touch $(BUILD_DIR)/.depend
+	+$(MAKEBUILD)
+	+$(MAKEBUILD) install
 	touch $@
 
 .x26410b: .x264

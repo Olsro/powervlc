@@ -95,6 +95,115 @@ void VLCLegacyDenyNativeFullscreen(NSWindow *window);
  * VideoLAN. */
 void VLCLegacyConfirmAndOpenVideoLANURL(NSURL *url);
 
+/* Three AppKit conveniences the interface uses arrived in 10.3, and on 10.2 a
+ * single missing .objc_class_name_ symbol stops the WHOLE plug-in from
+ * loading -- there is no interface at all, not just no search field. So none
+ * of them may be named literally: [NSSearchField alloc] emits a hard link
+ * reference, NSClassFromString(@"NSSearchField") does not.
+ *
+ * These keep one code path for every target rather than a version gate: on
+ * 10.3+ each helper does exactly what the literal spelling did. */
+
+/* An NSSearchField where there is one, a plain NSTextField on 10.2. Both are
+ * text fields with a target and an action, so 10.2 loses the magnifier and
+ * the cancel button and searches on Return instead of on every keystroke --
+ * unless the target implements -controlTextDidChange:, which the helper wires
+ * up for it (and only in the fallback, so 10.3+ does not fire twice). */
+NSTextField *VLCLegacyMakeSearchField(NSRect frame, id target, SEL action);
+
+/* -selectedRowIndexes (10.3), as an ascending array of NSNumbers.
+ * -selectedRowEnumerator gives the same rows on 10.2. */
+NSArray *VLCLegacySelectedRows(NSTableView *table);
+
+/* -selectRowIndexes:byExtendingSelection: (10.3), single row, replacing the
+ * selection. -selectRow:byExtendingSelection: is the 10.2 spelling. */
+void VLCLegacySelectRow(NSTableView *table, NSInteger row);
+
+/* NSMenu got a delegate in 10.3. On 10.2 -setDelegate: is not merely
+ * ineffective, it raises NSInvalidArgumentException -- and AppKit swallows
+ * exceptions raised inside a -performSelectorOnMainThread:, so the rest of
+ * the interface setup is skipped and the application draws nothing at all,
+ * with the reason left only in /var/tmp/console.log. Returns NO when there
+ * is no delegate to set. */
+BOOL VLCLegacySetMenuDelegate(NSMenu *menu, id delegate);
+
+/* Creates a menu that rebuilds itself before it is shown: the delegate where
+ * there is one, and below 10.3 an NSMenu subclass whose -update calls
+ * -menuNeedsUpdate: itself. AppKit calls -update on a menu it is about to
+ * display, submenus included, which is precisely when the delegate would
+ * have fired.
+ * ⚠ -validateMenuItem: is NOT an option for this: AppKit does not validate
+ * an item that carries a submenu, so a rebuild hung off it never runs, and
+ * the submenu stays empty -- an empty submenu simply does not open, which is
+ * how "Audio Device" and "Crop" came to do nothing at all on 10.2. */
+NSMenu *VLCLegacyMakeDynamicMenu(NSString *title, id controller);
+
+/* Whether NSMenu delegates work here at all, for the code that has to
+ * choose between the two ways of refreshing a dynamic menu. */
+BOOL VLCLegacyMenuDelegatesAvailable(void);
+
+/* -[NSView setHidden:] is 10.3 as well, and it is the one missing method the
+ * interface cannot simply skip: whole panels are shown and hidden with it.
+ * Below 10.3 the view is detached from its superview instead and put back
+ * where it was, which is how this was written before -setHidden: existed. */
+void VLCLegacySetViewHidden(NSView *view, BOOL hidden);
+BOOL VLCLegacyViewIsHidden(NSView *view);
+
+/* -[NSTableView setColumnAutoresizingStyle:] is 10.4, and its 10.0 ancestor
+ * is the reverse switch: -setAutoresizesAllColumnsToFit:NO gives exactly the
+ * "last column only" behaviour. It matters more than it sounds -- with all
+ * columns resizing proportionally, a column that was squeezed once (the
+ * table is laid out before it is put in the window, so the last column gets
+ * shrunk to fit) keeps its share of the width for good, which is how the
+ * Duration column ended up 15 pixels wide. */
+void VLCLegacyResizeLastColumnOnly(NSTableView *table);
+
+/* An outline view that stripes its rows itself where AppKit will not:
+ * -setUsesAlternatingRowBackgroundColors: is 10.3, and without it a playlist
+ * is a flat white page with no line to follow. Identical to a plain
+ * NSOutlineView from 10.3 on. */
+@interface VLCLegacyStripedOutlineView : NSOutlineView
+@end
+
+/* -[NSView viewWithTag:] walks the view TREE, so it cannot find a view that
+ * VLCLegacySetViewHidden() has detached -- and the caller that hid it by tag
+ * is usually the one that wants to show it again. (The Preferences toolbar
+ * did exactly that: hidden on "Show All", gone for good on the way back.)
+ * This looks in the detached set too. */
+NSView *VLCLegacyViewWithTag(NSView *root, NSInteger tag);
+
+/* -[NSCell setLineBreakMode:] is 10.4. Below it, -setWraps: is the only
+ * control over long text: the ellipsis is lost and the text is clipped or
+ * wrapped, which is what these labels did before 10.4 existed. */
+void VLCLegacySetCellLineBreakMode(NSCell *cell, NSLineBreakMode mode);
+
+/* +[NSFont systemFontSizeForControlSize:] is 10.3. Small and regular are the
+ * only sizes this interface asks for, and both have had their own accessor
+ * since 10.0. */
+CGFloat VLCLegacySystemFontSizeForControlSize(NSControlSize size);
+
+/* +[NSCursor resizeUpDownCursor] is 10.3; the arrow stands in for it. */
+NSCursor *VLCLegacyResizeUpDownCursor(void);
+
+/* -[NSPopUpButton selectItemWithTag:] is 10.4, and searching the items for
+ * the tag is what it does. Leaves the selection alone if no item matches. */
+void VLCLegacySelectItemWithTag(NSPopUpButton *popup, NSInteger tag);
+
+/* -[NSSavePanel setAllowedFileTypes:] is 10.3; -setRequiredFileType: is the
+ * single-extension ancestor and all this interface ever needs. */
+void VLCLegacySetPanelFileType(NSSavePanel *panel, NSString *extension);
+
+/* The -[NSWindow contentRectForFrameRect:] / -frameRectForContentRect: pair
+ * is 10.3. The class methods that take a style mask are not, and give the
+ * same answer for a window whose style is known. */
+NSRect VLCLegacyContentRectForFrameRect(NSWindow *window, NSRect frame);
+NSRect VLCLegacyFrameRectForContentRect(NSWindow *window, NSRect content);
+
+/* The one sort the preferences need, without NSSortDescriptor (10.3) nor
+ * -sortUsingDescriptors: (also 10.3): case-insensitive, on the "title" key
+ * of each NSDictionary in the array. */
+void VLCLegacySortDictionariesByTitle(NSMutableArray *array);
+
 @interface NSScreen (VLCAdditions)
 - (BOOL)hasMenuBar;
 - (BOOL)hasDock;

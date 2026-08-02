@@ -211,7 +211,7 @@ static void MsgCallback(void *data, int type, const vlc_log_t *item,
 {
     NSSavePanel *panel = [NSSavePanel savePanel];
     NSString *name = [NSString stringWithFormat:
-        _NS("VLC Debug Log (%s).txt"), VERSION_MESSAGE];
+        _NS("PowerVLC Debug Log (%s).txt"), POWERVLC_VERSION];
     if ([panel runModalForDirectory:nil file:name]
             != NSFileHandlingPanelOKButton)
         return;
@@ -266,17 +266,21 @@ static void MsgCallback(void *data, int type, const vlc_log_t *item,
     [scroll setBorderType:NSNoBorder];
     [scroll setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
 
-    table = [[[NSTableView alloc]
-        initWithFrame:[[scroll contentView] bounds]] autorelease];
-    [table setHeaderView:nil];
-    NSTableColumn *column = [[[NSTableColumn alloc]
-        initWithIdentifier:@"error"] autorelease];
-    [column setWidth:bounds.size.width - 20];
-    [column setEditable:NO];
-    [[column dataCell] setWraps:YES];
-    [table addTableColumn:column];
-    [table setDataSource:(id)self];
-    [scroll setDocumentView:table];
+    NSSize contentSize = [[scroll contentView] bounds].size;
+    errorView = [[[NSTextView alloc]
+        initWithFrame:NSMakeRect(0, 0, contentSize.width,
+                                 contentSize.height)] autorelease];
+    [errorView setEditable:NO];
+    [errorView setSelectable:YES];
+    [errorView setDrawsBackground:NO];
+    [errorView setFont:[NSFont systemFontOfSize:11]];
+    [errorView setVerticallyResizable:YES];
+    [errorView setHorizontallyResizable:NO];
+    [errorView setAutoresizingMask:NSViewWidthSizable];
+    [[errorView textContainer] setContainerSize:
+        NSMakeSize(contentSize.width, 1.0e7)];
+    [[errorView textContainer] setWidthTracksTextView:YES];
+    [scroll setDocumentView:errorView];
     [content addSubview:scroll];
 
     NSButton *cleanupButton = [[[NSButton alloc]
@@ -296,35 +300,28 @@ static void MsgCallback(void *data, int type, const vlc_log_t *item,
 {
     if (!window)
         [self buildWindow];
-    [table reloadData];
+    [self refreshErrors];
     [window makeKeyAndOrderFront:nil];
+}
+
+- (void)refreshErrors
+{
+    if (errorView == nil)
+        return;
+    [errorView setString:[errors componentsJoinedByString:@"\n\n"]];
 }
 
 - (void)addError:(NSString *)line
 {
     [errors addObject:line];
     if (window)
-        [table reloadData];
+        [self refreshErrors];
 }
 
 - (void)cleanupTable:(id)sender
 {
     [errors removeAllObjects];
-    [table reloadData];
-}
-
-- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
-{
-    return (NSInteger)[errors count];
-}
-
-- (id)tableView:(NSTableView *)tableView
-    objectValueForTableColumn:(NSTableColumn *)column
-                          row:(NSInteger)row
-{
-    if (row < 0 || (unsigned)row >= [errors count])
-        return @"";
-    return [errors objectAtIndex:row];
+    [self refreshErrors];
 }
 
 @end

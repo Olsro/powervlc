@@ -25,6 +25,7 @@
 %option noinput
 %option never-interactive
 %option nostdinit
+%option prefix="css" outfile="lex.yy.c"
 
 %{
 #ifdef HAVE_CONFIG_H
@@ -38,10 +39,10 @@
 char *d;
 %}
 
-h		[0-9a-f]
-nonascii	[\200-\377]
+h		[0-9a-fA-F]
+nonascii	(?-i:[\200-\377])
 unicode		\\{h}{1,6}[ \t\r\n\f]?
-escape		{unicode}|\\[ -~\200-\377]
+escape		(?-i:{unicode}|\\[ -~\200-\377])
 nmstart		[a-z]|{nonascii}|{escape}
 nmchar		[a-z0-9-]|{nonascii}|{escape}
 string1		\"([\t !#$%&(-~]|\\{nl}|\'|{nonascii}|{escape})*\"
@@ -66,10 +67,13 @@ range		\?{1,6}|{h}(\?{0,5}|{h}(\?{0,4}|{h}(\?{0,3}|{h}(\?{0,2}|{h}(\??|{h})))))
 "-->"			{return CDC;}
 "~="			{return INCLUDES;}
 "|="			{return DASHMATCH;}
+"^="			{return BEGINSWITH;}
+"$="			{return ENDSWITH;}
+"*="			{return CONTAINS;}
 
-{string}		{ yylval->string = vlc_css_unquotedunescaped(yytext); return STRING;}
+{string}		{ return (yylval->string = vlc_css_unquotedunescaped(yytext)) ? STRING : MEMERROR; }
 
-{ident}			{ yylval->string = vlc_css_unescaped(yytext); return IDENT;}
+{ident}			{ return (yylval->string = vlc_css_unquotedunescaped(yytext)) ? IDENT : MEMERROR; }
 
 "@font-face"		{return FONT_FACE_SYM;}
 
@@ -94,14 +98,14 @@ range		\?{1,6}|{h}(\?{0,5}|{h}(\?{0,4}|{h}(\?{0,3}|{h}(\?{0,2}|{h}(\??|{h})))))
 {num}%			{ VAL( atoi(yytext), PERCENT ); return PERCENTAGE;}
 {num}			{ VAL( us_strtof(yytext, &d), NONE ); return NUMBER;}
 
-"url("{w}{string}{w}")"	{ yylval->string = vlc_css_unquotedunescaped(yytext); return URI;}
-"url("{w}{url}{w}")"	{ yylval->string = vlc_css_unquotedunescaped(yytext); return URI;}
-{ident}"("		{ yylval->string = vlc_css_unescaped(yytext); return FUNCTION;}
-"#"{ident}      {yylval->string = vlc_css_unescaped(yytext); return IDSEL;}
-"#"{name}       {yylval->string = vlc_css_unescaped(yytext); return HASH;}
+"url("{w}{string}{w}")"	{ return (yylval->string = vlc_css_unquotedunescaped(yytext)) ? URI : MEMERROR; }
+"url("{w}{url}{w}")"	{ return (yylval->string = vlc_css_unquotedunescaped(yytext)) ? URI : MEMERROR; }
+{ident}"("		{ return (yylval->string = vlc_css_unquotedunescaped(yytext)) ? FUNCTION : MEMERROR; }
+"#"{ident}      { return (yylval->string = vlc_css_unquotedunescaped(yytext)) ? IDSEL : MEMERROR; }
+"#"{name}       { return (yylval->string = vlc_css_unquotedunescaped(yytext)) ? HASH : MEMERROR; }
 
-U\+{range}		{ yylval->string = strdup(yytext); return UNICODERANGE;}
-U\+{h}{1,6}-{h}{1,6}	{ yylval->string = strdup(yytext); return UNICODERANGE;}
+U\+{range}		{ return (yylval->string = strdup(yytext)) ? UNICODERANGE : MEMERROR; }
+U\+{h}{1,6}-{h}{1,6}	{ return (yylval->string = strdup(yytext)) ? UNICODERANGE : MEMERROR; }
 
 .			{return *yytext;}
 

@@ -487,6 +487,7 @@ static int Open( vlc_object_t *p_this )
 
     /* */
     p_sys->i_state = STATE_NOSYNC;
+    date_Init( &p_sys->end_date, 1, 1 );
     date_Set( &p_sys->end_date, 0 );
 
     block_BytestreamInit( &p_sys->bytestream );
@@ -500,6 +501,7 @@ static int Open( vlc_object_t *p_this )
     /* Set callback */
     p_dec->pf_packetize = Packetize;
     p_dec->pf_flush     = Flush;
+    p_dec->pf_get_cc    = NULL;
     return VLC_SUCCESS;
 }
 

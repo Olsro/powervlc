@@ -41,6 +41,8 @@
 #include <vlc_vout_osd.h>
 #include <vlc_fourcc.h>
 #include <vlc_meta.h>
+#include <vlc_charset.h>
+#include <vlc_url.h>
 
 #include "input_internal.h"
 #include "clock.h"
@@ -87,6 +89,9 @@ struct es_out_id_t
 
     /* */
     bool b_scrambled;
+    /* Selection was forced (user or demux request): the automatic
+     * default-selection must not steal it for a higher-priority track */
+    bool b_forced_selection;
 
     /* Channel in the track type */
     int         i_channel;
@@ -2405,15 +2410,25 @@ static void EsOutMeta( es_out_t *p_out, const vlc_meta_t *p_meta, const vlc_meta
     input_thread_t  *p_input = p_sys->p_input;
     input_item_t *p_item = input_GetItem( p_input );
 
+    char *psz_combined = NULL;
     vlc_mutex_lock( &p_item->lock );
     if( p_meta )
+    {
+        const char *psz_new_title = vlc_meta_Get( p_meta, vlc_meta_Title );
+        if( psz_new_title )
+            psz_combined = input_item_CombineCuratedTitle( p_item, psz_new_title );
         vlc_meta_Merge( p_item->p_meta, p_meta );
+        if( psz_combined )
+            vlc_meta_Set( p_item->p_meta, vlc_meta_Title, psz_combined );
+    }
     vlc_mutex_unlock( &p_item->lock );
 
     /* Check program meta to not override GROUP_META values */
     if( p_meta && (!p_program_meta || vlc_meta_Get( p_program_meta, vlc_meta_Title ) == NULL) &&
-         vlc_meta_Get( p_meta, vlc_meta_Title ) != NULL )
+         vlc_meta_Get( p_meta, vlc_meta_Title ) != NULL &&
+         psz_combined == NULL /* keep a curated item name */ )
         input_item_SetName( p_item, vlc_meta_Get( p_meta, vlc_meta_Title ) );
+    free( psz_combined );
 
     const char *psz_arturl = NULL;
     char *psz_alloc = NULL;
@@ -2500,6 +2515,7 @@ static es_out_id_t *EsOutAddSlave( es_out_t *out, const es_format_t *fmt, es_out
     es->i_id = es->fmt.i_id;
     es->i_meta_id = p_sys->i_id++; /* always incremented */
     es->b_scrambled = false;
+    es->b_forced_selection = false;
 
     switch( es->fmt.i_cat )
     {
@@ -2770,6 +2786,8 @@ static void EsUnselect( es_out_t *out, es_out_id_t *es, bool b_update )
         EsDestroyDecoder( out, es );
     }
 
+    es->b_forced_selection = false;
+
     if( !b_update )
         return;
 
@@ -2886,9 +2904,11 @@ static void EsOutSelect( es_out_t *out, es_out_id_t *es, bool b_force )
                         {
                             wanted_es = es;
                         }
-                        /* Otherwise, fallback by priority */
+                        /* Otherwise, fallback by priority (never stealing a
+                         * forced selection, see #24815) */
                         else if( p_esprops->p_main_es == NULL ||
-                                 es->fmt.i_priority > p_esprops->p_main_es->fmt.i_priority )
+                                 ( !p_esprops->p_main_es->b_forced_selection &&
+                                   es->fmt.i_priority > p_esprops->p_main_es->fmt.i_priority ) )
                         {
                             if( p_esprops->b_autoselect )
                                 wanted_es = es;
@@ -2905,7 +2925,8 @@ static void EsOutSelect( es_out_t *out, es_out_id_t *es, bool b_force )
             wanted_es = es;
         }
         else if( p_esprops->p_main_es == NULL ||
-                 es->fmt.i_priority > p_esprops->p_main_es->fmt.i_priority )
+                 ( !p_esprops->p_main_es->b_forced_selection &&
+                   es->fmt.i_priority > p_esprops->p_main_es->fmt.i_priority ) )
         {
             if( p_esprops->b_autoselect )
                 wanted_es = es;
@@ -2919,6 +2940,9 @@ static void EsOutSelect( es_out_t *out, es_out_id_t *es, bool b_force )
             EsSelect( out, es );
         }
     }
+
+    if( b_force )
+        es->b_forced_selection = true;
 
     /* FIXME TODO handle priority here */
     if( p_esprops && p_sys->i_mode == ES_OUT_MODE_AUTO && EsIsSelected( es ) )
@@ -2944,6 +2968,14 @@ static void EsOutCreateCCChannels( es_out_t *out, vlc_fourcc_t codec, uint64_t i
             continue;
 
         msg_Dbg( p_input, "Adding CC track %d for es[%d]", 1+i, parent->i_id );
+
+        /* Traduire ICI et pas chez l'appelant : EsOutSend passe par ce chemin À
+         * CHAQUE BLOC, et sur Mac OS X 10.3 chaque résolution gettext refait un
+         * getcwd() qui MARCHE LE DISQUE en readdir — mesuré au PC-sampling sur
+         * l'iBook G3 : ~50 %% d'un cœur pendant une lecture DVD, pour une
+         * chaîne qui ne sert qu'à la création (rare, jamais sur un DVD) d'un
+         * canal de sous-titres CC. */
+        psz_descfmt = vlc_gettext( psz_descfmt );
 
         es_format_Init( &fmt, SPU_ES, codec );
         fmt.subs.cc.i_channel = i;
@@ -3092,9 +3124,9 @@ static int EsOutSend( es_out_t *out, es_out_id_t *es, block_t *p_block )
     input_DecoderGetCcDesc( es->p_dec, &desc );
     if( var_InheritInteger( p_input, "captions" ) == 708 )
         EsOutCreateCCChannels( out, VLC_CODEC_CEA708, desc.i_708_channels,
-                               _("DTVCC Closed captions %u"), es );
+                               N_("DTVCC Closed captions %u"), es );
     EsOutCreateCCChannels( out, VLC_CODEC_CEA608, desc.i_608_channels,
-                           _("Closed captions %u"), es );
+                           N_("Closed captions %u"), es );
 
     vlc_mutex_unlock( &p_sys->lock );
 

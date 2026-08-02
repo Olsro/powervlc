@@ -1,0 +1,70 @@
+From 08f7ea36809aa3d156a118e6a6a0c2f03f4ce3d8 Mon Sep 17 00:00:00 2001
+From: Steve Lhomme <robux4@ycbcr.xyz>
+Date: Fri, 10 Apr 2026 14:12:37 +0200
+Subject: [PATCH 1/2] Only link with MATH library if it's found
+
+If it's not found it may not be required (or linking will fail).
+---
+ src/CMakeLists.txt | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index f330262..9c8b8ac 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -15,12 +15,9 @@ configure_file(config.h.in ${PROJECT_SOURCE_DIR}/src/config.h)
+ if(NOT MSVC)
+   if(NOT WIN32)
+     find_library(MATH m)
+-  else()
+-    set(MATH "")
+   endif()
+   include(FindZLIB)
+ else()
+-  set(MATH "")
+   find_program(NUGET nuget)
+   if(NUGET)
+     execute_process(COMMAND ${NUGET} install zlib)
+@@ -32,15 +29,12 @@ endif()
+ if(NOT MSVC)
+   if(NOT WIN32)
+     find_library(MATH m)
+-  else()
+-    set(MATH "")
+   endif()
+   include(FindZLIB)
+   include_directories(${ZLIB_INCLUDE_DIRS})
+   set(PKG_CONFIG_PRIVATELIBS "-lm ${PKG_CONFIG_PRIVATELIBS}")
+   set(PKG_CONFIG_PRIVATELIBS "-lz ${PKG_CONFIG_PRIVATELIBS}")
+ else()
+-  set(MATH "")
+   find_program(NUGET nuget)
+   if(NOT NUGET)
+     message(
+@@ -77,7 +71,10 @@ set(libsrc
+     resampler/speex_resampler.c)
+ if(BUILD_STATIC_LIBS)
+ add_library(mysofa-static STATIC ${libsrc})
+-target_link_libraries(mysofa-static LINK_PRIVATE ${MATH} ${ZLIB_LIBRARIES})
++if(MATH)
++    target_link_libraries(mysofa-static LINK_PRIVATE ${MATH})
++endif()
++target_link_libraries(mysofa-static LINK_PRIVATE ${ZLIB_LIBRARIES})
+ set_target_properties(
+   mysofa-static
+   PROPERTIES OUTPUT_NAME mysofa CLEAN_DIRECT_OUTPUT 1 POSITION_INDEPENDENT_CODE
+@@ -99,7 +96,10 @@ endif()
+ 
+ if(BUILD_SHARED_LIBS)
+   add_library(mysofa-shared SHARED ${libsrc})
+-  target_link_libraries(mysofa-shared PRIVATE ${MATH} ${ZLIB_LIBRARIES})
++  if(MATH)
++    target_link_libraries(mysofa-shared PRIVATE ${MATH})
++  endif()
++  target_link_libraries(mysofa-shared PRIVATE ${ZLIB_LIBRARIES})
+   set_target_properties(mysofa-shared
+                         PROPERTIES OUTPUT_NAME mysofa CLEAN_DIRECT_OUTPUT 1)
+   set_property(
+-- 
+2.43.0
+

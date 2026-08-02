@@ -152,11 +152,6 @@ MainInterface::MainInterface( intf_thread_t *_p_intf ) : QVLCMW( _p_intf )
     /* Should the UI stays on top of other windows */
     b_interfaceOnTop = var_InheritBool( p_intf, "video-on-top" );
 
-#ifdef QT5_HAS_WAYLAND
-    b_hasWayland = QGuiApplication::platformName()
-        .startsWith(QLatin1String("wayland"), Qt::CaseInsensitive);
-#endif
-
     /**************************
      *  UI and Widgets design
      **************************/
@@ -166,8 +161,8 @@ MainInterface::MainInterface( intf_thread_t *_p_intf ) : QVLCMW( _p_intf )
      * Menu Bar *
      ************/
     VLCMenuBar::createMenuBar( this, p_intf );
-    CONNECT( THEMIM->getIM(), voutListChanged( vout_thread_t **, int ),
-             THEDP, destroyPopupMenu() );
+    connect( THEMIM->getIM(), &InputManager::voutListChanged,
+             THEDP, &DialogsProvider::destroyPopupMenu );
 
     createMainWidget( settings );
 
@@ -193,51 +188,51 @@ MainInterface::MainInterface( intf_thread_t *_p_intf ) : QVLCMW( _p_intf )
      * Those connects are different because options can impeach them to trigger.
      **/
     /* Main Interface statusbar */
-    CONNECT( THEMIM->getIM(), nameChanged( const QString& ),
-             this, setName( const QString& ) );
+    connect( THEMIM->getIM(), &InputManager::nameChanged,
+             this, &MainInterface::setName );
     /* and title of the Main Interface*/
     if( var_InheritBool( p_intf, "qt-name-in-title" ) )
     {
-        CONNECT( THEMIM->getIM(), nameChanged( const QString& ),
-                 this, setVLCWindowsTitle( const QString& ) );
+        connect( THEMIM->getIM(), &InputManager::nameChanged,
+                 this, &MainInterface::setVLCWindowsTitle );
     }
-    CONNECT( THEMIM, inputChanged( bool ), this, onInputChanged( bool ) );
+    connect( THEMIM, &MainInputManager::inputChanged, this, &MainInterface::onInputChanged );
 
     /* END CONNECTS ON IM */
 
     /* VideoWidget connects for asynchronous calls */
     b_videoFullScreen = false;
-    connect( this, SIGNAL(askGetVideo(struct vout_window_t*, unsigned, unsigned, bool, bool*)),
-             this, SLOT(getVideoSlot(struct vout_window_t*, unsigned, unsigned, bool, bool*)),
+    connect( this, &MainInterface::askGetVideo,
+             this, &MainInterface::getVideoSlot,
              Qt::BlockingQueuedConnection );
-    connect( this, SIGNAL(askReleaseVideo( bool )),
-             this, SLOT(releaseVideoSlot( bool )),
+    connect( this, &MainInterface::askReleaseVideo,
+             this, &MainInterface::releaseVideoSlot,
              Qt::BlockingQueuedConnection );
-    CONNECT( this, askVideoOnTop(bool), this, setVideoOnTop(bool));
+    connect( this, &MainInterface::askVideoOnTop, this, &MainInterface::setVideoOnTop );
 
     if( videoWidget )
     {
         if( b_autoresize )
         {
-            CONNECT( videoWidget, sizeChanged( int, int ),
-                     this, videoSizeChanged( int,  int ) );
+            connect( videoWidget, &VideoWidget::sizeChanged,
+                     this, &MainInterface::videoSizeChanged );
         }
-        CONNECT( this, askVideoToResize( unsigned int, unsigned int ),
-                 this, setVideoSize( unsigned int, unsigned int ) );
+        connect( this, &MainInterface::askVideoToResize,
+                 this, &MainInterface::setVideoSize );
 
-        CONNECT( this, askVideoSetFullScreen( bool ),
-                 this, setVideoFullScreen( bool ) );
-        CONNECT( this, askHideMouse( bool ),
-                 this, setHideMouse( bool ) );
+        connect( this, &MainInterface::askVideoSetFullScreen,
+                 this, &MainInterface::setVideoFullScreen );
+        connect( this, &MainInterface::askHideMouse,
+                 this, &MainInterface::setHideMouse );
     }
 
-    CONNECT( THEDP, toolBarConfUpdated(), this, toolBarConfUpdated() );
+    connect( THEDP, &DialogsProvider::toolBarConfUpdated, this, &MainInterface::toolBarConfUpdated );
     installEventFilter( this );
 
-    CONNECT( this, askToQuit(), THEDP, quit() );
+    connect( this, &MainInterface::askToQuit, THEDP, &DialogsProvider::quit );
 
-    CONNECT( this, askBoss(), this, setBoss() );
-    CONNECT( this, askRaise(), this, setRaise() );
+    connect( this, &MainInterface::askBoss, this, &MainInterface::setBoss );
+    connect( this, &MainInterface::askRaise, this, &MainInterface::setRaise );
 
 
     connect( THEDP, &DialogsProvider::releaseMouseEvents, this, &MainInterface::voutReleaseMouseEvents ) ;
@@ -345,8 +340,8 @@ void MainInterface::recreateToolbars()
     {
         delete fullscreenControls;
         fullscreenControls = new FullscreenControllerWidget( p_intf, this );
-        CONNECT( fullscreenControls, keyPressed( QKeyEvent * ),
-                 this, handleKeyPress( QKeyEvent * ) );
+        connect( fullscreenControls, &FullscreenControllerWidget::keyPressed,
+                 this, &MainInterface::handleKeyPress );
         THEMIM->requestVoutUpdate();
     }
 
@@ -393,10 +388,10 @@ void MainInterface::createResumePanel( QWidget *w )
     resumeTimer->setSingleShot( true );
     resumeTimer->setInterval( 6000 );
 
-    CONNECT( resumeTimer, timeout(), this, hideResumePanel() );
-    CONNECT( cancel, clicked(), this, hideResumePanel() );
-    CONNECT( THEMIM->getIM(), resumePlayback(int64_t), this, showResumePanel(int64_t) );
-    BUTTONACT( ok, resumePlayback() );
+    connect( resumeTimer, &QTimer::timeout, this, &MainInterface::hideResumePanel );
+    connect( cancel, &QToolButton::clicked, this, &MainInterface::hideResumePanel );
+    connect( THEMIM->getIM(), &InputManager::resumePlayback, this, &MainInterface::showResumePanel );
+    BUTTONACT( ok, resumePlayback );
 
     w->layout()->addWidget( resumePanel );
 }
@@ -474,7 +469,7 @@ void MainInterface::createMainWidget( QSettings *creationSettings )
          && var_InheritBool( p_intf, "qt-icon-change" ) )
     {
         bgWidget = new EasterEggBackgroundWidget( p_intf );
-        CONNECT( this, kc_pressed(), bgWidget, animate() );
+        connect( this, SIGNAL( kc_pressed() ), bgWidget, SLOT( animate() ) );
     }
     else
         bgWidget = new BackgroundWidget( p_intf );
@@ -519,16 +514,16 @@ void MainInterface::createMainWidget( QSettings *creationSettings )
 
     /* Enable the popup menu in the MI */
     main->setContextMenuPolicy( Qt::CustomContextMenu );
-    CONNECT( main, customContextMenuRequested( const QPoint& ),
-             THEDP, setPopupMenu() );
+    connect( main, &QWidget::customContextMenuRequested,
+             THEDP, &DialogsProvider::setPopupMenu );
 
     if ( depth() > 8 ) /* 8bit depth has too many issues with opacity */
         /* Create the FULLSCREEN CONTROLS Widget */
         if( var_InheritBool( p_intf, "qt-fs-controller" ) )
         {
             fullscreenControls = new FullscreenControllerWidget( p_intf, this );
-            CONNECT( fullscreenControls, keyPressed( QKeyEvent * ),
-                     this, handleKeyPress( QKeyEvent * ) );
+            connect( fullscreenControls, &FullscreenControllerWidget::keyPressed,
+                     this, &MainInterface::handleKeyPress );
         }
 
     if ( b_interfaceOnTop )
@@ -586,7 +581,7 @@ inline void MainInterface::createStatusBar()
     updateStyle();
 //same as Qt::AA_UseStyleSheetPropagationInWidgetStyles
 #if !HAS_QT57
-    connect(qApp, &QApplication::paletteChanged, this, [this, updateStyle](){
+    connect(qApp, &QApplication::paletteChanged, this, [updateStyle](){
         updateStyle();
     });
 #endif
@@ -596,16 +591,16 @@ inline void MainInterface::createStatusBar()
     statusBarr->addPermanentWidget( speedLabel, 0 );
     statusBarr->addPermanentWidget( timeLabel, 0 );
 
-    CONNECT( nameLabel, doubleClicked(), THEDP, epgDialog() );
+    connect( nameLabel, SIGNAL( doubleClicked() ), THEDP, SLOT( epgDialog() ) );
     /* timeLabel behaviour:
        - double clicking opens the goto time dialog
        - right-clicking and clicking just toggle between remaining and
          elapsed time.*/
-    CONNECT( timeLabel, doubleClicked(), THEDP, gotoTimeDialog() );
+    connect( timeLabel, &TimeLabel::doubleClicked, THEDP, &DialogsProvider::gotoTimeDialog );
 
 #ifndef QT_NO_STATUSBAR
-    CONNECT( THEMIM->getIM(), encryptionChanged( bool ),
-             this, showCryptedLabel( bool ) );
+    connect( THEMIM->getIM(), &InputManager::encryptionChanged,
+             this, &MainInterface::showCryptedLabel );
 #endif
 
     /* This shouldn't be necessary, but for somehow reason, the statusBarr
@@ -892,12 +887,7 @@ void MainInterface::setVideoFullScreen( bool fs )
 
             QRect screenres = QGuiApplication::screens()[ numscreen ]->geometry();
             lastWinScreen = windowHandle()->screen();
-#ifdef QT5_HAS_WAYLAND
-            if( !b_hasWayland )
-                windowHandle()->setScreen(QGuiApplication::screens()[numscreen]);
-#else
             windowHandle()->setScreen(QGuiApplication::screens()[numscreen]);
-#endif
 
             /* To be sure window is on proper-screen in xinerama */
             if( !screenres.contains( pos() ) )
@@ -923,13 +913,8 @@ void MainInterface::setVideoFullScreen( bool fs )
     {
         setMinimalView( b_minimalView );
         setInterfaceFullScreen( b_interfaceFullScreen );
-#ifdef QT5_HAS_WAYLAND
-        if( lastWinScreen != NULL && !b_hasWayland )
-            windowHandle()->setScreen(lastWinScreen);
-#else
         if( lastWinScreen != NULL )
             windowHandle()->setScreen(lastWinScreen);
-#endif
         if( lastWinPosition.isNull() == false )
         {
             move( lastWinPosition );
@@ -1041,7 +1026,7 @@ void MainInterface::createPlaylist()
         stackCentralW->addWidget( playlistWidget );
         stackWidgetsSizes[playlistWidget] = settings->value( "playlistSize", QSize( 600, 300 ) ).toSize();
     }
-    CONNECT( dialog, visibilityChanged(bool), this, setPlaylistVisibility(bool) );
+    connect( dialog, &PlaylistDialog::visibilityChanged, this, &MainInterface::setPlaylistVisibility );
 }
 
 void MainInterface::togglePlaylist()
@@ -1336,7 +1321,7 @@ void MainInterface::createSystray()
 {
     QIcon iconVLC;
     if( QDate::currentDate().dayOfYear() >= QT_XMAS_JOKE_DAY && var_InheritBool( p_intf, "qt-icon-change" ) )
-        iconVLC = QIcon::fromTheme( "vlc-xmas", QIcon( ":/logo/vlc128-xmas.png" ) );
+        iconVLC = QIcon::fromTheme( "powervlc-xmas", QIcon( ":/logo/vlc128-xmas.png" ) );
     else
         iconVLC = QIcon::fromTheme( "vlc", QIcon( ":/logo/vlc256.png" ) );
     sysTray = new QSystemTrayIcon( iconVLC, this );
@@ -1348,15 +1333,15 @@ void MainInterface::createSystray()
     VLCMenuBar::updateSystrayMenu( this, p_intf, true );
     sysTray->show();
 
-    CONNECT( sysTray, activated( QSystemTrayIcon::ActivationReason ),
-             this, handleSystrayClick( QSystemTrayIcon::ActivationReason ) );
+    connect( sysTray, &QSystemTrayIcon::activated,
+             this, &MainInterface::handleSystrayClick );
 
     /* Connects on nameChanged() */
-    CONNECT( THEMIM->getIM(), nameChanged( const QString& ),
-             this, updateSystrayTooltipName( const QString& ) );
+    connect( THEMIM->getIM(), &InputManager::nameChanged,
+             this, &MainInterface::updateSystrayTooltipName );
     /* Connect PLAY_STATUS on the systray */
-    CONNECT( THEMIM->getIM(), playingStatusChanged( int ),
-             this, updateSystrayTooltipStatus( int ) );
+    connect( THEMIM->getIM(), &InputManager::playingStatusChanged,
+             this, &MainInterface::updateSystrayTooltipStatus );
 }
 
 void MainInterface::toggleUpdateSystrayMenuWhenVisible()

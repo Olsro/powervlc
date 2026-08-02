@@ -18,10 +18,13 @@ $(TARBALLS)/qtsvg-$(QTSVG_VERSION).tar.xz:
 
 .sum-qtsvg: qtsvg-$(QTSVG_VERSION).tar.xz
 
+qtsvg: UNPACK_DIR=qtsvg-opensource-src-$(QTSVG_VERSION)
 qtsvg: qtsvg-$(QTSVG_VERSION).tar.xz .sum-qtsvg
 	$(UNPACK)
-	mv qtsvg-opensource-src-$(QTSVG_VERSION) qtsvg-$(QTSVG_VERSION)
 	$(APPLY) $(SRC)/qtsvg/0001-Force-the-usage-of-QtZlib-header.patch
+	$(APPLY) $(SRC)/qtsvg/0001-QSvgFont-Initialize-used-member-remove-unused.patch
+	# use up to date system zlib
+	sed -i -e 's,<QtZlib/,<,' $(UNPACK_DIR)/src/svg/qsvgtinydocument.cpp
 	$(MOVE)
 
 .qtsvg: qtsvg

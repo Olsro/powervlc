@@ -326,6 +326,21 @@ static int WindowControl(vout_window_t *p_wnd, int i_query, va_list args)
             i_ret = VLC_SUCCESS;
             break;
         }
+        case VOUT_WINDOW_HIDE_MOUSE:
+        {
+            /* ★ Masquage du pointeur pendant la lecture. Le coeur envoie ICI
+             * les DEUX sens (masquer après inactivité, réafficher au retour de
+             * la souris), ce qui permet un masquage FERME au niveau de
+             * l'écran : `-[NSCursor setHiddenUntilMouseMoves:]`, essayé côté
+             * vout, ne tenait pas en plein écran (annulé aussitôt par les
+             * événements de souris internes, panneau de contrôles compris).
+             * CGDisplayHide/ShowCursor, lui, n'est levé que par nous.
+             * ⚠ Les appels s'empilent : ne jamais masquer/démasquer deux fois
+             * de suite, sinon le pointeur ne revient plus. */
+            (void) va_arg(args, int);   /* décidé par le sondage, cf. intf.m */
+            i_ret = VLC_SUCCESS;
+            break;
+        }
         default:
             msg_Warn(p_wnd, "unsupported control query");
             i_ret = VLC_EGENERIC;
@@ -335,6 +350,45 @@ static int WindowControl(vout_window_t *p_wnd, int i_query, va_list args)
     [pool release];
     return i_ret;
 }
+
+/* ★ MASQUAGE DU POINTEUR pendant la lecture (10.3).
+ * `-[NSCursor setHiddenUntilMouseMoves:]`, essayé d'abord côté vout, ne tient
+ * pas en plein écran : il est annulé aussitôt par les événements de souris
+ * internes. On masque donc au niveau de l'ÉCRAN (CGDisplayHideCursor), ce que
+ * rien d'autre ne lève — mais il faut alors le lever nous-mêmes. Le coeur ne
+ * demande le retour du pointeur que s'il voit passer les événements souris, ce
+ * qui n'est pas le cas en plein écran ; c'est le sondage du panneau de
+ * contrôles (VLCLegacyFSPanel -poll:) qui détecte le mouvement et appelle
+ * VLCLegacyCursorActivity(). ⚠ Les appels CGDisplayHide/ShowCursor s'empilent :
+ * l'état est gardé ici pour ne jamais les déséquilibrer (sinon pointeur perdu).
+ */
+static bool b_vlc_cursor_hidden = false;
+
+void VLCLegacyCursorSetHidden(bool b_hide);
+void VLCLegacyCursorActivity(void);
+
+void VLCLegacyCursorSetHidden(bool b_hide)
+{
+    if (b_hide == b_vlc_cursor_hidden)
+        return;
+    if (b_hide)
+        CGDisplayHideCursor(kCGDirectMainDisplay);
+    else
+        CGDisplayShowCursor(kCGDirectMainDisplay);
+    b_vlc_cursor_hidden = b_hide;
+}
+
+void VLCLegacyCursorActivity(void)
+{
+    VLCLegacyCursorSetHidden(false);
+}
+
+/* ⚠ Le coeur ne peut PAS être l'arbitre du masquage : il ne voit pas passer
+ * les événements souris en plein écran, donc il croit le pointeur masqué pour
+ * toujours et ne redemande plus rien — on se retrouvait avec un pointeur figé
+ * dans un sens ou dans l'autre. On accuse donc réception de sa requête sans
+ * rien faire, et c'est le sondage du panneau plein écran
+ * (VLCLegacyFSPanel -poll:) qui décide seul, masquage ET démasquage. */
 
 static int WindowControlEmbedded(vout_window_t *p_wnd, int i_query,
                                  va_list args)
@@ -366,6 +420,14 @@ static int WindowControlEmbedded(vout_window_t *p_wnd, int i_query,
                 performSelectorOnMainThread:@selector(setVideoFullscreenFromNumber:)
                                  withObject:[NSNumber numberWithBool:i_full != 0]
                               waitUntilDone:NO];
+            break;
+        }
+        case VOUT_WINDOW_HIDE_MOUSE:
+        {
+            /* ★ Même masquage que pour la fenêtre autonome (cf. plus haut) :
+             * c'est CE chemin qu'emprunte l'interface legacy, qui embarque la
+             * vidéo dans sa fenêtre principale. */
+            (void) va_arg(args, int);   /* décidé par le sondage, cf. intf.m */
             break;
         }
         default:

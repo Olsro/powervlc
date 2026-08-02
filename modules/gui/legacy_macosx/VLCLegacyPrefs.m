@@ -23,6 +23,7 @@
 #endif
 
 #import "VLCLegacyPrefs.h"
+#import "misc.h"
 #import "VLCLegacyCoreInteraction.h"
 #import "VLCLegacyControls.h"
 
@@ -564,7 +565,7 @@ static NSString *prettyKeyString(NSString *theString)
     [button setBezelStyle:NSRoundedBezelStyle];
     [[button cell] setControlSize:NSSmallControlSize];
     [[button cell] setFont:[NSFont systemFontOfSize:
-        [NSFont systemFontSizeForControlSize:NSSmallControlSize]]];
+        VLCLegacySystemFontSizeForControlSize(NSSmallControlSize)]];
     [button setTitle:title];
     [button setTarget:self];
     [button setAction:action];
@@ -611,7 +612,8 @@ static NSString *prettyKeyString(NSString *theString)
         initWithFrame:NSMakeRect(0, 0, PREFS_WIDTH, PREFS_PANE_HEIGHT)]
         autorelease];
     [scroll setHasVerticalScroller:YES];
-    [scroll setAutohidesScrollers:YES];
+    if ([scroll respondsToSelector:@selector(setAutohidesScrollers:)])
+        [scroll setAutohidesScrollers:YES];
     [scroll setBorderType:NSNoBorder];
     [scroll setDrawsBackground:NO];
     [scroll setDocumentView:doc];
@@ -1502,7 +1504,7 @@ static BOOL haveConfig(const char *name)
     advancedContainer = [[[NSView alloc]
         initWithFrame:NSMakeRect(0, 46, PREFS_WIDTH, PREFS_HEIGHT - 54)]
         autorelease];
-    [advancedContainer setHidden:YES];
+    VLCLegacySetViewHidden(advancedContainer, YES);
 
     float height = PREFS_HEIGHT - 54;
     NSScrollView *treeScroll = [[[NSScrollView alloc]
@@ -1644,9 +1646,6 @@ static BOOL haveConfig(const char *name)
     }
 
     /* modules sorted alphabetically inside each subcategory */
-    NSSortDescriptor *byTitle = [[[NSSortDescriptor alloc]
-        initWithKey:@"title" ascending:YES
-           selector:@selector(caseInsensitiveCompare:)] autorelease];
     unsigned c, sc;
     for (c = 0; c < [categoryTree count]; c++) {
         NSMutableArray *subcats =
@@ -1654,8 +1653,7 @@ static BOOL haveConfig(const char *name)
         for (sc = 0; sc < [subcats count]; sc++) {
             NSMutableArray *mods =
                 [[subcats objectAtIndex:sc] objectForKey:@"children"];
-            [mods sortUsingDescriptors:
-                [NSArray arrayWithObject:byTitle]];
+            VLCLegacySortDictionariesByTitle(mods);
         }
     }
     module_list_free(list);
@@ -1786,7 +1784,7 @@ static BOOL haveConfig(const char *name)
         [label setDrawsBackground:NO];
         [label setAlignment:NSRightTextAlignment];
         [[label cell] setFont:[NSFont systemFontOfSize:11]];
-        [[label cell] setLineBreakMode:NSLineBreakByTruncatingTail];
+        VLCLegacySetCellLineBreakMode([label cell], NSLineBreakByTruncatingTail);
         [label setStringValue:text];
         if (longText)
             [label setToolTip:longText];
@@ -1902,26 +1900,26 @@ static BOOL haveConfig(const char *name)
     if (advancedMode) {
         [window makeFirstResponder:nil];
         [self loadModuleList];
-        [advancedContainer setHidden:NO];
-        [tabView setHidden:YES];
+        VLCLegacySetViewHidden(advancedContainer, NO);
+        VLCLegacySetViewHidden(tabView, YES);
         int i;
         for (i = 0; i < 6; i++)
-            [[[window contentView] viewWithTag:100 + i] setHidden:YES];
+            VLCLegacySetViewHidden(
+                VLCLegacyViewWithTag([window contentView], 100 + i), YES);
         [toggleButton setTitle:_NS("Basic")];
         if ([categoryOutline selectedRow] < 0 && [categoryTree count]) {
             [categoryOutline expandItem:[categoryTree objectAtIndex:0]];
-            [categoryOutline selectRowIndexes:
-                [NSIndexSet indexSetWithIndex:1]
-                         byExtendingSelection:NO];
+            VLCLegacySelectRow(categoryOutline, 1);
         }
     } else {
         [window makeFirstResponder:nil];
         [self commitAdvancedEntries];
-        [advancedContainer setHidden:YES];
-        [tabView setHidden:NO];
+        VLCLegacySetViewHidden(advancedContainer, YES);
+        VLCLegacySetViewHidden(tabView, NO);
         int i;
         for (i = 0; i < 6; i++)
-            [[[window contentView] viewWithTag:100 + i] setHidden:NO];
+            VLCLegacySetViewHidden(
+                VLCLegacyViewWithTag([window contentView], 100 + i), NO);
         [toggleButton setTitle:_NS("Show All")];
         [self loadValues];
     }
@@ -2007,8 +2005,8 @@ static BOOL haveConfig(const char *name)
         return;
     BOOL custom = [[deintQualityPopup titleOfSelectedItem]
                       isEqualToString:_NS("Custom")];
-    [deintMethodPopup setHidden:!custom];
-    [deintMethodLabel setHidden:!custom];
+    VLCLegacySetViewHidden(deintMethodPopup, !custom);
+    VLCLegacySetViewHidden(deintMethodLabel, !custom);
 }
 
 - (void)deinterlaceQualityChanged:(id)sender
@@ -2108,10 +2106,10 @@ static BOOL haveConfig(const char *name)
                     [cacheLevelPopup selectItemAtIndex:j];
                     break;
                 }
-            [cacheCustomLabel setHidden:YES];
+            VLCLegacySetViewHidden(cacheCustomLabel, YES);
         } else {
             [cacheLevelPopup selectItemAtIndex:0];   /* Custom */
-            [cacheCustomLabel setHidden:NO];
+            VLCLegacySetViewHidden(cacheCustomLabel, NO);
         }
     }
 }

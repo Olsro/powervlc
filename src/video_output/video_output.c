@@ -956,6 +956,22 @@ static int ThreadDisplayPreparePicture(vout_thread_t *vout, bool reuse, bool fra
                         late_threshold = VOUT_DISPLAY_LATE_THRESHOLD * (num / (CLOCK_FREQ/2));
                     const vlc_tick_t predicted = mdate() + 0; /* TODO improve */
                     const vlc_tick_t late = predicted - decoded->date;
+                    /* A picture decoded by the GPU costs nothing to display:
+                     * the work is already spent and the surface already holds
+                     * the image. Dropping one that is merely a frame or two
+                     * late saves no decoding and leaves a hole where its frame
+                     * period should be -- measured on the ATI DVDDriver path
+                     * (Mac OS X 10.2, iBook G3), that is what made the picture
+                     * stutter as if frames were repeated.
+                     * Be generous, but NOT infinite: dropping is also the only
+                     * way the pipeline ever catches up. With no ceiling at all
+                     * a deficit taken at start-up (the software probe runs
+                     * before the hardware path commits) never resorbs, and the
+                     * vout settles into displaying every picture 1.3 s late in
+                     * bursts -- same stutter, harder to see. Above a quarter of
+                     * a second the deficit is worth paying down. */
+                    if (decoded->context != NULL && late_threshold < CLOCK_FREQ / 4)
+                        late_threshold = CLOCK_FREQ / 4;
                     if (late > late_threshold) {
                         msg_Warn(vout, "picture is too late to be displayed (missing %"PRId64" ms)", late/1000);
                         picture_Release(decoded);
@@ -1003,14 +1019,15 @@ static picture_t *ConvertRGB32AndBlendBufferNew(filter_t *filter)
 }
 
 static picture_t *ConvertRGB32AndBlend(vout_thread_t *vout, picture_t *pic,
-                                     subpicture_t *subpic)
+                                     subpicture_t *subpic,
+                                     const video_format_t *fmt_spu)
 {
     /* This function will convert the pic to RGB32 and blend the subpic to it.
      * The returned pic can't be used to display since the chroma will be
      * different than the "vout display" one, but it can be used for snapshots.
+     * fmt_spu is the format the subpicture was rendered for; it also describes
+     * pic, which is left untouched.
      * */
-
-    assert(vout->p->spu_blend);
 
     filter_owner_t owner = {
         .video = {
@@ -1021,7 +1038,10 @@ static picture_t *ConvertRGB32AndBlend(vout_thread_t *vout, picture_t *pic,
     if (!filterc)
         return NULL;
 
-    es_format_t src = vout->p->spu_blend->fmt_out;
+    es_format_t src;
+    es_format_Init(&src, VIDEO_ES, fmt_spu->i_chroma);
+    src.video = *fmt_spu;
+
     es_format_t dst = src;
     dst.video.i_chroma = VLC_CODEC_RGB32;
     video_format_FixRgb(&dst.video);
@@ -1049,6 +1069,24 @@ static picture_t *ConvertRGB32AndBlend(vout_thread_t *vout, picture_t *pic,
         picture_Release(pic);
     }
     return NULL;
+}
+
+/* Format a subpicture has to be rendered for when the "vout display" blends it
+ * itself: the placed picture on the display, never smaller than the source. */
+static void SpuDisplayFormat(video_format_t *fmt, vout_display_t *vd)
+{
+    vout_display_place_t place;
+    vout_display_PlacePicture(&place, &vd->source, vd->cfg, false);
+
+    *fmt = vd->source;
+    if (fmt->i_width * fmt->i_height < place.width * place.height) {
+        fmt->i_sar_num = vd->cfg->display.sar.num;
+        fmt->i_sar_den = vd->cfg->display.sar.den;
+        fmt->i_width          =
+        fmt->i_visible_width  = place.width;
+        fmt->i_height         =
+        fmt->i_visible_height = place.height;
+    }
 }
 
 static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
@@ -1084,9 +1122,9 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
     /*
      * Get the subpicture to be displayed
      */
-    const bool do_dr_spu = !do_snapshot &&
-                           vd->info.subpicture_chromas &&
-                           *vd->info.subpicture_chromas != 0;
+    const bool spu_in_display = vd->info.subpicture_chromas &&
+                                *vd->info.subpicture_chromas != 0;
+    const bool do_dr_spu = !do_snapshot && spu_in_display;
 
     //FIXME: Denying do_early_spu if vd->source.orientation != ORIENT_NORMAL
     //will have the effect that snapshots miss the subpictures. We do this
@@ -1101,19 +1139,11 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
 
     const vlc_fourcc_t *subpicture_chromas;
     video_format_t fmt_spu;
+    /* An opaque chroma (a hardware surface: CVPX, D3D, VAAPI...) has no
+     * pixels the blend module could ever write to. */
+    bool opaque_spu_dst = false;
     if (do_dr_spu) {
-        vout_display_place_t place;
-        vout_display_PlacePicture(&place, &vd->source, vd->cfg, false);
-
-        fmt_spu = vd->source;
-        if (fmt_spu.i_width * fmt_spu.i_height < place.width * place.height) {
-            fmt_spu.i_sar_num = vd->cfg->display.sar.num;
-            fmt_spu.i_sar_den = vd->cfg->display.sar.den;
-            fmt_spu.i_width          =
-            fmt_spu.i_visible_width  = place.width;
-            fmt_spu.i_height         =
-            fmt_spu.i_visible_height = place.height;
-        }
+        SpuDisplayFormat(&fmt_spu, vd);
         subpicture_chromas = vd->info.subpicture_chromas;
     } else {
         if (do_early_spu) {
@@ -1124,14 +1154,34 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
             fmt_spu.i_sar_den = vd->cfg->display.sar.den;
         }
         subpicture_chromas = NULL;
+        /* A hardware surface has no plane to write into: its chroma
+         * description is either missing or a FAKE_FMT() with no plane. */
+        const vlc_chroma_description_t *dsc =
+            vlc_fourcc_GetChromaDescription(fmt_spu.i_chroma);
+        opaque_spu_dst = dsc == NULL || dsc->plane_count == 0;
 
         if (vout->p->spu_blend &&
-            vout->p->spu_blend->fmt_out.video.i_chroma != fmt_spu.i_chroma) {
+            (opaque_spu_dst ||
+             vout->p->spu_blend->fmt_out.video.i_chroma != fmt_spu.i_chroma)) {
             filter_DeleteBlend(vout->p->spu_blend);
             vout->p->spu_blend = NULL;
             vout->p->spu_blend_chroma = 0;
         }
-        if (!vout->p->spu_blend && vout->p->spu_blend_chroma != fmt_spu.i_chroma) {
+        if (opaque_spu_dst) {
+            /* Don't load a blender that could only fail. Snapshots are blended
+             * into an RGB32 conversion below, and the picture on screen keeps
+             * its overlay through the "vout display" itself when it can draw
+             * subpictures. */
+            if (vout->p->spu_blend_chroma != fmt_spu.i_chroma) {
+                vout->p->spu_blend_chroma = fmt_spu.i_chroma;
+                msg_Dbg(vout, "opaque chroma %4.4s: subpictures are %s, "
+                        "snapshots are blended in RGB32",
+                        (const char *)&fmt_spu.i_chroma,
+                        spu_in_display ? "drawn by the display"
+                                       : "not blended");
+            }
+        } else if (!vout->p->spu_blend &&
+                   vout->p->spu_blend_chroma != fmt_spu.i_chroma) {
             vout->p->spu_blend_chroma = fmt_spu.i_chroma;
             vout->p->spu_blend = filter_NewBlend(VLC_OBJECT(vout), &fmt_spu);
             if (!vout->p->spu_blend)
@@ -1146,6 +1196,24 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
                                       &vd->source,
                                       render_subtitle_date, render_osd_date,
                                       do_snapshot);
+
+    /* The overlay above was rendered to be blended into the picture, which is
+     * impossible on a hardware surface. Render a second one, in a chroma and a
+     * size the "vout display" can draw itself, so that the frame on screen
+     * does not lose its subtitles/menus while the snapshot is being made.
+     * Rendered even when the first one came back empty: a snapshot ignores the
+     * OSD layer (disc menus, volume bar), the screen must not. Missing it is
+     * visible for good when the snapshot lands on a paused frame -- no further
+     * picture is rendered to bring the menu back. */
+    subpicture_t *dr_subpic = NULL;
+    if (opaque_spu_dst && spu_in_display && sys->display.use_dr) {
+        video_format_t fmt_dr, fmt_dr_rot;
+        SpuDisplayFormat(&fmt_dr, vd);
+        video_format_ApplyRotation(&fmt_dr_rot, &fmt_dr);
+        dr_subpic = spu_Render(vout->p->spu, vd->info.subpicture_chromas,
+                               &fmt_dr_rot, &vd->source,
+                               render_subtitle_date, render_osd_date, false);
+    }
     /*
      * Perform rendering
      *
@@ -1157,7 +1225,16 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
     picture_t *todisplay = filtered;
     picture_t *snap_pic = todisplay;
     if (do_early_spu && subpic) {
-        if (vout->p->spu_blend) {
+        if (opaque_spu_dst) {
+            /* Nothing to blend into: only the snapshot needs a blended copy,
+             * made in RGB32 out of the hardware surface. */
+            if (do_snapshot) {
+                picture_t *copy = ConvertRGB32AndBlend(vout, todisplay, subpic,
+                                                       &fmt_spu);
+                if (copy)
+                    snap_pic = copy;
+            }
+        } else if (vout->p->spu_blend) {
             picture_t *blent = picture_pool_Get(vout->p->private_pool);
             if (blent) {
                 VideoFormatCopyCropAr(&blent->format, &filtered->format);
@@ -1167,12 +1244,13 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
                     snap_pic = todisplay = blent;
                 } else
                 {
-                    /* Blending failed, likely because the picture is opaque or
-                     * read-only. Try to convert the opaque picture to a
-                     * software RGB32 one before blending it. */
+                    /* Blending failed, likely because the picture is
+                     * read-only. Try to convert it to a software RGB32 one
+                     * before blending it. */
                     if (do_snapshot)
                     {
-                        picture_t *copy = ConvertRGB32AndBlend(vout, blent, subpic);
+                        picture_t *copy = ConvertRGB32AndBlend(vout, blent,
+                                                               subpic, &fmt_spu);
                         if (copy)
                             snap_pic = copy;
                     }
@@ -1182,6 +1260,14 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
         }
         subpicture_Delete(subpic);
         subpic = NULL;
+    }
+
+    /* Hand the display the overlay it can draw itself, in place of the one we
+     * could not blend in. */
+    if (dr_subpic != NULL) {
+        if (subpic != NULL)
+            subpicture_Delete(subpic);
+        subpic = dr_subpic;
     }
 
     assert(vout_IsDisplayFiltered(vd) == !sys->display.use_dr);

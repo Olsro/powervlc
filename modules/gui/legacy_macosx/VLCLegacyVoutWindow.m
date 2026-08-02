@@ -70,7 +70,7 @@ extern VLCLegacyCoreInteraction *VLCLegacyGetCore(void);
 /* Main-thread trampoline for VOUT_WINDOW_SET_STATE (see intf.m) */
 - (void)setLevelFromNumber:(NSNumber *)value
 {
-    [self setLevel:[value integerValue]];
+    [self setLevel:[value intValue]];
 }
 
 /* Main-thread trampoline for VOUT_WINDOW_SET_SIZE (see intf.m) */
@@ -132,12 +132,20 @@ extern VLCLegacyCoreInteraction *VLCLegacyGetCore(void);
     [super rightMouseDown:event];
 }
 
+/* ⚠ BASCULE PLEIN ÉCRAN SANS ANIMATION (`animate:NO`).
+ * L'animation de redimensionnement coûte cher sur un G3 — c'est la lenteur
+ * ressentie à chaque bascule — et surtout elle publie une géométrie
+ * INTERMÉDIAIRE : le vout calculait son rectangle sur une étape de l'animation
+ * (mesuré : 690x388) et ne le recalculait plus une fois la fenêtre arrivée à sa
+ * taille finale. La vidéo restait alors dans un coin d'une fenêtre plus grande,
+ * le reste en blanc — le framebuffer OpenGL n'étant jamais peint quand le
+ * décodage matériel est en mode remplacement. */
 - (void)enterFullscreen
 {
     NSScreen *screen = [self screen];
 
     initialFrame = [self frame];
-    [self setFrame:[[self screen] frame] display:YES animate:YES];
+    [self setFrame:[[self screen] frame] display:YES animate:NO];
 
     if ([screen hasMenuBar] || [screen hasDock])
         SetSystemUIMode(kUIModeAllHidden, kUIOptionAutoShowMenuBar);
@@ -146,7 +154,7 @@ extern VLCLegacyCoreInteraction *VLCLegacyGetCore(void);
 - (void)leaveFullscreen
 {
     SetSystemUIMode(kUIModeNormal, 0);
-    [self setFrame:initialFrame display:YES animate:YES];
+    [self setFrame:initialFrame display:YES animate:NO];
 }
 
 @end

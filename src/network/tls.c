@@ -561,6 +561,188 @@ static ssize_t vlc_tls_ConnectWrite(vlc_tls_t *tls,
     return vlc_tls_SocketWrite(tls, iov, count);
 }
 
+/*****************************************************************************
+ * Happy Eyeballs (RFC 8305)
+ *****************************************************************************
+ * The addresses of a name used to be tried strictly one after another, and
+ * vlc_tls_WaitConnect() polls without a deadline. So a dual-stack host whose
+ * IPv6 path is a black hole stalled every connection for the kernel's full
+ * TCP timeout -- 75 s on Darwin -- before the IPv4 address was even tried.
+ * Measured on api-addons.videolan.org, which is exactly such a host.
+ *
+ * Attempts are now interleaved by family and raced, the first one to connect
+ * winning. Single-address names keep the old deferred-connect path: there is
+ * nothing to race, and deferring lets TCP Fast Open carry the first payload
+ * in the SYN.
+ *****************************************************************************/
+#define VLC_HE_MAX_ADDRS     16 /* addresses considered at all */
+#define VLC_HE_MAX_INFLIGHT   6 /* RFC 8305 §5: cap on parallel attempts */
+#define VLC_HE_ATTEMPT_DELAY 250 /* ms, RFC 8305 §5 recommended value */
+
+struct vlc_tls_attempt
+{
+    vlc_tls_t *sock;
+    size_t index;
+};
+
+/**
+ * Copies the address list into @c tab, alternating address families.
+ * @return the number of addresses copied.
+ */
+static size_t vlc_tls_InterleaveAddrInfo(const struct addrinfo *res,
+                                         const struct addrinfo *tab[],
+                                         size_t max)
+{
+    size_t n = 0;
+
+    for (const struct addrinfo *p = res; p != NULL && n < max; p = p->ai_next)
+        tab[n++] = p;
+    if (n < 2)
+        return n;
+
+    /* RFC 8305 §4: alternate families, the family of the first address
+     * first. The order within a family is kept as the resolver gave it: it
+     * already encodes the system destination address policy (RFC 6724). */
+    const struct addrinfo *first[VLC_HE_MAX_ADDRS];
+    const struct addrinfo *other[VLC_HE_MAX_ADDRS];
+    size_t nfirst = 0, nother = 0;
+    const int family = tab[0]->ai_family;
+
+    for (size_t i = 0; i < n; i++)
+    {
+        if (tab[i]->ai_family == family)
+            first[nfirst++] = tab[i];
+        else
+            other[nother++] = tab[i];
+    }
+
+    size_t k = 0, i = 0, j = 0;
+
+    while (i < nfirst || j < nother)
+    {
+        if (i < nfirst)
+            tab[k++] = first[i++];
+        if (j < nother)
+            tab[k++] = other[j++];
+    }
+    return n;
+}
+
+/**
+ * Races connection attempts against the addresses of @c tab.
+ * @param winner set to the index in @c tab of the address that won
+ * @return a connected socket, or NULL with @c errno set.
+ */
+static vlc_tls_t *vlc_tls_SocketRace(vlc_object_t *obj,
+                                     const struct addrinfo *const tab[],
+                                     size_t n, size_t *restrict winner)
+{
+    struct vlc_tls_attempt inflight[VLC_HE_MAX_INFLIGHT];
+    struct pollfd ufd[VLC_HE_MAX_INFLIGHT];
+    size_t count = 0, next = 0;
+    int saved_errno = ENETUNREACH;
+
+    while (count > 0 || next < n)
+    {
+        /* Start attempts until one is actually pending: an address that
+         * fails outright must not consume the staggering delay. */
+        while (next < n && count < VLC_HE_MAX_INFLIGHT)
+        {
+            const size_t index = next++;
+            const struct addrinfo *ai = tab[index];
+            vlc_tls_t *sock = vlc_tls_SocketAddrInfo(ai);
+
+            if (sock == NULL)
+            {
+                saved_errno = errno;
+                continue;
+            }
+
+            if (connect(vlc_tls_GetFD(sock), ai->ai_addr, ai->ai_addrlen) == 0)
+            {   /* Connected without waiting (loopback, or a warm path). */
+                for (size_t i = 0; i < count; i++)
+                    vlc_tls_SessionDelete(inflight[i].sock);
+                *winner = index;
+                return sock;
+            }
+#ifdef _WIN32
+            if (WSAGetLastError() != WSAEWOULDBLOCK)
+#else
+            if (errno != EINPROGRESS)
+#endif
+            {
+                saved_errno = errno;
+                vlc_tls_SessionDelete(sock);
+                continue;
+            }
+
+            inflight[count].sock = sock;
+            inflight[count].index = index;
+            count++;
+            break; /* let this one breathe before starting the next */
+        }
+
+        if (count == 0)
+            break; /* nothing pending and no address left */
+
+        for (size_t i = 0; i < count; i++)
+        {
+            ufd[i].fd = vlc_tls_GetFD(inflight[i].sock);
+            ufd[i].events = POLLOUT;
+            ufd[i].revents = 0;
+        }
+
+        /* Only wait forever once the last address is in flight. */
+        int ret = vlc_poll_i11e(ufd, count,
+                                (next < n) ? VLC_HE_ATTEMPT_DELAY : -1);
+        if (ret < 0)
+        {
+            saved_errno = errno;
+            goto fail;
+        }
+        if (ret == 0)
+            continue; /* delay expired: bring the next address in */
+
+        for (size_t i = 0; i < count; )
+        {
+            if (ufd[i].revents == 0)
+            {
+                i++;
+                continue;
+            }
+
+            int val = 0;
+            socklen_t len = sizeof (val);
+
+            if (getsockopt(ufd[i].fd, SOL_SOCKET, SO_ERROR, &val, &len) == 0
+             && val == 0)
+            {   /* Winner: drop every other attempt. */
+                vlc_tls_t *sock = inflight[i].sock;
+
+                *winner = inflight[i].index;
+                for (size_t j = 0; j < count; j++)
+                    if (j != i)
+                        vlc_tls_SessionDelete(inflight[j].sock);
+                return sock;
+            }
+
+            saved_errno = (val != 0) ? val : errno;
+            msg_Dbg(obj, "connection attempt failed: %s",
+                    vlc_strerror_c(saved_errno));
+            vlc_tls_SessionDelete(inflight[i].sock);
+            /* compact both arrays in step, and re-examine this slot */
+            inflight[i] = inflight[--count];
+            ufd[i] = ufd[count];
+        }
+    }
+
+fail:
+    for (size_t i = 0; i < count; i++)
+        vlc_tls_SessionDelete(inflight[i].sock);
+    errno = saved_errno;
+    return NULL;
+}
+
 vlc_tls_t *vlc_tls_SocketOpenAddrInfo(const struct addrinfo *restrict info,
                                       bool defer_connect)
 {
@@ -606,22 +788,16 @@ vlc_tls_t *vlc_tls_SocketOpenTCP(vlc_object_t *obj, const char *name,
 
     msg_Dbg(obj, "connecting to %s port %u ...", name, port);
 
-    /* TODO: implement RFC6555 */
-    for (const struct addrinfo *p = res; p != NULL; p = p->ai_next)
-    {
-        vlc_tls_t *tls = vlc_tls_SocketOpenAddrInfo(p, false);
-        if (tls == NULL)
-        {
-            msg_Err(obj, "connection error: %s", vlc_strerror_c(errno));
-            continue;
-        }
+    const struct addrinfo *tab[VLC_HE_MAX_ADDRS];
+    size_t n = vlc_tls_InterleaveAddrInfo(res, tab, VLC_HE_MAX_ADDRS);
+    size_t winner;
+    vlc_tls_t *tls = vlc_tls_SocketRace(obj, tab, n, &winner);
 
-        freeaddrinfo(res);
-        return tls;
-    }
+    if (tls == NULL)
+        msg_Err(obj, "connection error: %s", vlc_strerror_c(errno));
 
-    freeaddrinfo(res);
-    return NULL;
+    freeaddrinfo(res); /* tab[] points into res: not one line sooner */
+    return tls;
 }
 
 vlc_tls_t *vlc_tls_SocketOpenTLS(vlc_tls_creds_t *creds, const char *name,
@@ -644,28 +820,50 @@ vlc_tls_t *vlc_tls_SocketOpenTLS(vlc_tls_creds_t *creds, const char *name,
         return NULL;
     }
 
-    for (const struct addrinfo *p = res; p != NULL; p = p->ai_next)
+    const struct addrinfo *tab[VLC_HE_MAX_ADDRS];
+    size_t n = vlc_tls_InterleaveAddrInfo(res, tab, VLC_HE_MAX_ADDRS);
+    vlc_tls_t *tls = NULL;
+
+    while (n > 0)
     {
-        vlc_tls_t *tcp = vlc_tls_SocketOpenAddrInfo(p, true);
-        if (tcp == NULL)
+        vlc_tls_t *tcp;
+        size_t winner = 0;
+
+        if (n == 1)
+        {   /* Nothing to race. Keep deferring the connect so that TCP Fast
+             * Open can carry the TLS ClientHello in the SYN. */
+            tcp = vlc_tls_SocketOpenAddrInfo(tab[0], true);
+            if (tcp == NULL)
+            {
+                msg_Err(creds, "socket error: %s", vlc_strerror_c(errno));
+                break;
+            }
+        }
+        else
         {
-            msg_Err(creds, "socket error: %s", vlc_strerror_c(errno));
-            continue;
+            tcp = vlc_tls_SocketRace(VLC_OBJECT(creds), tab, n, &winner);
+            if (tcp == NULL)
+            {
+                msg_Err(creds, "connection error: %s", vlc_strerror_c(errno));
+                break;
+            }
         }
 
-        vlc_tls_t *tls = vlc_tls_ClientSessionCreate(creds, tcp, name, service,
-                                                     alpn, alp);
+        tls = vlc_tls_ClientSessionCreate(creds, tcp, name, service, alpn, alp);
         if (tls != NULL)
-        {   /* Success! */
-            freeaddrinfo(res);
-            return tls;
-        }
+            break; /* Success! */
 
         msg_Err(creds, "connection error: %s", vlc_strerror_c(errno));
         vlc_tls_SessionDelete(tcp);
+
+        /* A TLS failure is rarely address-specific, but a multi-homed host
+         * can genuinely have one bad endpoint, and the sequential code this
+         * replaces did try them all. Drop the loser and race what is left. */
+        memmove(&tab[winner], &tab[winner + 1],
+                (n - winner - 1) * sizeof (tab[0]));
+        n--;
     }
 
-    /* Failure! */
-    freeaddrinfo(res);
-    return NULL;
+    freeaddrinfo(res); /* tab[] points into res: not one line sooner */
+    return tls;
 }

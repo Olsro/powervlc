@@ -98,6 +98,7 @@
 # include "config.h"
 #endif
 
+#include <stdio.h>
 #include <vlc_common.h>
 #include <vlc_input.h>
 #include <vlc_codec.h>
@@ -117,6 +118,7 @@ struct decoder_synchro_t
     /* */
     int             i_frame_rate;
     bool            b_no_skip;
+    vlc_tick_t      i_excluded_time;   /* non-travail à retirer du tau courant */
     bool            b_quiet;
 
     /* date of the beginning of the decoding of the current picture */
@@ -150,7 +152,31 @@ struct decoder_synchro_t
 };
 
 /* Error margins */
-#define DELTA                   (int)(0.075*CLOCK_FREQ)
+/* ★ DELTA abaissé 75→20 ms (29/07, chantier Panther). L'héritage 0.x exigeait
+ * 75 ms de marge AVANT décodage ; avec le décodage matériel (~15 ms/picture) et
+ * un affichage mesuré ponctuel à <0,5 ms, ce seuil jetait des B parfaitement
+ * tenables : via les menus DVD, la phase du pipeline mettait les deux B d'une
+ * paire à 79/117 ms de marge pour un seuil à ~95 ms → une B sur deux jetée en
+ * permanence (cadence bimodale 40/80 ms perçue comme un dédoublement), sans
+ * jamais converger. 20 ms couvre l'ordonnancement + le present (~6 ms) ; les
+ * vraies retardataires sont de toute façon jetées en aval par le vout. */
+#define DELTA                   decoder_SynchroDelta()
+
+/* Marge exigée avant de décoder une image (cf. le commentaire ci-dessus).
+ * /tmp/vlc_delta75 rétablit l'ancienne valeur 0.x sans recompiler, pour
+ * comparer sur une machine donnée. */
+static int decoder_SynchroDelta(void)
+{
+    static int i_delta = -1;
+    if( i_delta < 0 )
+    {
+        FILE *f = fopen( "/tmp/vlc_delta75", "r" );
+        i_delta = (int)( ( f != NULL ? 0.075 : 0.020 ) * CLOCK_FREQ );
+        if( f != NULL )
+            fclose( f );
+    }
+    return i_delta;
+}
 #define MAX_VALID_TAU           (int)(0.3*CLOCK_FREQ)
 
 #define DEFAULT_NB_P            5
@@ -358,7 +384,14 @@ void decoder_SynchroTrash( decoder_synchro_t * p_synchro )
 void decoder_SynchroDecode( decoder_synchro_t * p_synchro )
 {
     p_synchro->decoding_start = mdate();
+    p_synchro->i_excluded_time = 0;
     p_synchro->i_nb_ref = p_synchro->i_dec_nb_ref;
+}
+
+void decoder_SynchroExcludeTime( decoder_synchro_t * p_synchro, vlc_tick_t i_us )
+{
+    if( i_us > 0 )
+        p_synchro->i_excluded_time += i_us;
 }
 
 /*****************************************************************************
@@ -373,6 +406,13 @@ void decoder_SynchroEnd( decoder_synchro_t * p_synchro, int i_coding_type,
         return;
 
     tau = mdate() - p_synchro->decoding_start;
+    /* Retirer ce qui n'était pas du décodage (attente de surface GPU). */
+    if( p_synchro->i_excluded_time > 0 )
+    {
+        tau -= p_synchro->i_excluded_time;
+        if( tau < 0 )
+            tau = 0;
+    }
 
     /* If duration too high, something happened (pause ?), so don't
      * take it into account. */

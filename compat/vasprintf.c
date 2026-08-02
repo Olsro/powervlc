@@ -32,9 +32,12 @@ int vasprintf (char **strp, const char *fmt, va_list ap)
 {
     va_list args;
     int len;
+    char probe[1];
 
+    /* see the note in src/text/memstream.c: 10.2 answers -1 to the C99
+     * "how long would it be" call, but not to a one-byte buffer */
     va_copy (args, ap);
-    len = vsnprintf (NULL, 0, fmt, args);
+    len = vsnprintf (probe, sizeof (probe), fmt, args);
     va_end (args);
 
     char *str = malloc (len + 1);

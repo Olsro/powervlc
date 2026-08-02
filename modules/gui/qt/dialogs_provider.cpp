@@ -80,11 +80,11 @@ DialogsProvider::DialogsProvider( intf_thread_t *_p_intf ) :
 
     /* Various signal mappers for the menus */
     menusMapper = new QSignalMapper();
-    CONNECT( menusMapper, mapped(QObject *), this, menuAction( QObject *) );
+    connect( menusMapper, QSIGNALMAPPER_MAPPEDOBJ_SIGNAL, this, &DialogsProvider::menuAction );
 
     menusUpdateMapper = new QSignalMapper();
-    CONNECT( menusUpdateMapper, mapped(QObject *),
-             this, menuUpdateAction( QObject *) );
+    connect( menusUpdateMapper, QSIGNALMAPPER_MAPPEDOBJ_SIGNAL,
+             this, &DialogsProvider::menuUpdateAction );
 
     new DialogHandler (p_intf, this );
 }

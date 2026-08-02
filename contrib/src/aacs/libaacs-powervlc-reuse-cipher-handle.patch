@@ -1,0 +1,173 @@
+Reuse one AES handle for AACS unit decryption
+
+crypto_aacs_decrypt() opens a libgcrypt cipher handle, sets the key, decrypts
+one aligned unit and closes the handle again. gcry_cipher_open() is not just an
+allocation: it runs a fast poll of the CSPRNG, which costs a getrusage() and a
+clock() syscall every time.
+
+The read path calls this once per 6144-byte aligned unit, so a 30 Mbit/s stream
+opens and closes roughly 600 handles a second. Profiling a Blu-ray playing on
+Mac OS X 10.6 (Core 2 Duo) put 19% of all time spent decrypting inside
+gcry_cipher_open, almost all of it in _gcry_rngcsprng_fast_poll.
+
+Nothing about the handle depends on the unit: the key is set per call and the
+IV is a constant. Open one handle when the AACS object is created and only
+re-key it. gcry_cipher_setkey() re-runs the key schedule and gcry_cipher_setiv()
+resets the CBC chain, so no state leaks from one unit to the next.
+
+The handle lives in the AACS object rather than in a static, so two discs
+decrypting at the same time keep their own; this is the same granularity the
+surrounding code already assumes. If the handle cannot be created the helper
+falls back to the original open-per-call function, so a failure here degrades
+performance instead of breaking playback.
+
+crypto_aacs_decrypt() is kept for that fallback.
+
+--- a/src/libaacs/crypto.h
++++ b/src/libaacs/crypto.h
+@@ -42,6 +42,25 @@
+                              uint8_t *pk) BD_USED;   // returns left, centre, right keys
+ BD_PRIVATE int  crypto_aes_cmac_16(const unsigned char *data, const unsigned char *aes_key, unsigned char *cmac) BD_USED;
+ 
++/*
++ * AES-128-CBC decryption with a reusable cipher handle.
++ *
++ * gcry_cipher_open() is not cheap: besides allocating the handle it runs a
++ * fast poll of the CSPRNG, which costs a getrusage() and a clock() syscall.
++ * The AACS read path opens one handle per aligned unit (6144 bytes), so on a
++ * 30 Mbit/s stream that is about 600 opens a second, purely to set a key that
++ * changes every time. Keep the handle for the lifetime of the AACS object and
++ * only re-key it.
++ */
++struct aacs_cipher_s;
++typedef struct aacs_cipher_s AACS_CIPHER;
++
++BD_PRIVATE AACS_CIPHER *crypto_aacs_cipher_open(void) BD_USED;
++BD_PRIVATE void crypto_aacs_cipher_close(AACS_CIPHER **p_cipher);
++BD_PRIVATE int  crypto_aacs_cipher_decrypt(AACS_CIPHER *cipher, const uint8_t *key,
++                                           uint8_t *out, size_t out_size,
++                                           const uint8_t *in, size_t in_size) BD_USED;
++
+ BD_PRIVATE int  crypto_aacs_decrypt(const uint8_t *key, uint8_t *out, size_t out_size, const uint8_t *in, size_t in_size) BD_USED;
+ 
+ BD_PRIVATE int  crypto_aacs_sign(const uint8_t *cert, const uint8_t *priv_key,
+--- a/src/libaacs/crypto.c
++++ b/src/libaacs/crypto.c
+@@ -270,11 +270,63 @@
+ /*
+  *
+  */
++
++static const uint8_t aacs_iv[16] = { 0x0b, 0xa0, 0xf8, 0xdd, 0xfe, 0xa6, 0x1f, 0xb3,
++                                     0xd8, 0xdf, 0x9f, 0x56, 0x6a, 0x05, 0x0f, 0x78 };
++
++struct aacs_cipher_s {
++    gcry_cipher_hd_t hd;
++};
++
++AACS_CIPHER *crypto_aacs_cipher_open(void)
++{
++    AACS_CIPHER *cipher = calloc(1, sizeof(*cipher));
++    gcry_error_t err;
++
++    if (!cipher)
++        return NULL;
++
++    err = gcry_cipher_open(&cipher->hd, GCRY_CIPHER_AES, GCRY_CIPHER_MODE_CBC, 0);
++    if (err) {
++        LOG_CRYPTO_ERROR(DBG_AACS, "cipher open failed", err);
++        X_FREE(cipher);
++        return NULL;
++    }
++
++    return cipher;
++}
++
++void crypto_aacs_cipher_close(AACS_CIPHER **p_cipher)
++{
++    if (p_cipher && *p_cipher) {
++        gcry_cipher_close((*p_cipher)->hd);
++        X_FREE(*p_cipher);
++    }
++}
+ 
++int crypto_aacs_cipher_decrypt(AACS_CIPHER *cipher, const uint8_t *key,
++                               uint8_t *out, size_t out_size,
++                               const uint8_t *in, size_t in_size)
++{
++    gcry_error_t err;
++
++    if (!cipher)
++        return crypto_aacs_decrypt(key, out, out_size, in, in_size);
++
++    /* setkey() re-runs the key schedule and setiv() resets the CBC chain, so
++     * the handle carries no state between units. */
++    err = gcry_cipher_setkey(cipher->hd, key, 16);
++    if (err)
++        return err;
++    err = gcry_cipher_setiv(cipher->hd, aacs_iv, 16);
++    if (err)
++        return err;
++
++    return gcry_cipher_decrypt(cipher->hd, out, out_size, in, in_size);
++}
++
+ int crypto_aacs_decrypt(const uint8_t *key, uint8_t *out, size_t out_size, const uint8_t *in, size_t in_size)
+ {
+-    static const uint8_t aacs_iv[16]   = { 0x0b, 0xa0, 0xf8, 0xdd, 0xfe, 0xa6, 0x1f, 0xb3,
+-                                           0xd8, 0xdf, 0x9f, 0x56, 0x6a, 0x05, 0x0f, 0x78 };
+     gcry_cipher_hd_t gcry_h;
+     gcry_error_t err;
+ 
+--- a/src/libaacs/aacs.c
++++ b/src/libaacs/aacs.c
+@@ -73,6 +73,9 @@
+ 
+     int       no_cache; /* do not use cached keys */
+ 
++    /* AES handle reused by the read path, see crypto_aacs_cipher_open() */
++    AACS_CIPHER *cipher;
++
+     /* bus encryption */
+     int       bee;        /* bus encryption enabled flag in content certificate */
+     int       bec;        /* bus encryption capable flag in drive certificate. -1 = unread. */
+@@ -1239,9 +1242,9 @@
+     }
+ 
+     if (BD_UNLIKELY(in_buf != NULL)) {
+-        crypto_err = crypto_aacs_decrypt(key, out_buf + 16, ALIGNED_UNIT_LEN - 16, in_buf + 16, ALIGNED_UNIT_LEN - 16);
++        crypto_err = crypto_aacs_cipher_decrypt(aacs->cipher, key, out_buf + 16, ALIGNED_UNIT_LEN - 16, in_buf + 16, ALIGNED_UNIT_LEN - 16);
+     } else {
+-        crypto_err = crypto_aacs_decrypt(key, out_buf + 16, ALIGNED_UNIT_LEN - 16, NULL, 0);
++        crypto_err = crypto_aacs_cipher_decrypt(aacs->cipher, key, out_buf + 16, ALIGNED_UNIT_LEN - 16, NULL, 0);
+     }
+     if (crypto_err) {
+         LOG_CRYPTO_ERROR(DBG_AACS, "decrypting unit failed", crypto_err);
+@@ -1327,6 +1330,9 @@
+     aacs = calloc(1, sizeof(AACS));
+     if (aacs) {
+         aacs->no_cache = !!getenv("AACS_NO_CACHE");
++        /* Failure is not fatal: the decrypt helpers fall back to opening a
++         * handle per call when this is NULL. */
++        aacs->cipher = crypto_aacs_cipher_open();
+     }
+     return aacs;
+ }
+@@ -1400,6 +1406,8 @@
+ 
+     uk_free(&aacs->uk);
+ 
++    crypto_aacs_cipher_close(&aacs->cipher);
++
+     X_FREE(aacs->path);
+ 
+     cc_free(&aacs->cc);
+@@ -1419,7 +1427,7 @@
+         int crypto_err;
+         for (i = 0; i < ALIGNED_UNIT_LEN; i += SECTOR_LEN) {
+             //_decrypt_bus(aacs, buf + i);
+-            crypto_err = crypto_aacs_decrypt(aacs->read_data_key, buf + i + 16, SECTOR_LEN - 16, NULL, 0);
++            crypto_err = crypto_aacs_cipher_decrypt(aacs->cipher, aacs->read_data_key, buf + i + 16, SECTOR_LEN - 16, NULL, 0);
+             if (crypto_err) {
+                 LOG_CRYPTO_ERROR(DBG_AACS, "bus decrypting failed", crypto_err);
+             }

@@ -125,9 +125,19 @@ vlc_plugin_t *vlc_plugin_create(void)
 void vlc_plugin_destroy(vlc_plugin_t *plugin)
 {
     assert(plugin != NULL);
-#ifdef HAVE_DYNAMIC_PLUGINS
-    assert(!plugin->unloadable || !atomic_load(&plugin->loaded));
-#endif
+    /* Upstream asserts here that an unloadable plug-in has been unmapped
+     * first. That invariant no longer holds: module_EndBank() deliberately
+     * destroys plug-ins while they are still mapped, because a plug-in
+     * described by loading it keeps descriptor fields pointing into its own
+     * image, and freeing them after unmapping hands free() an address that is
+     * gone -- fatal on Mac OS X 10.2, where NSUnLinkModule() really unmaps.
+     * See the comment in module_EndBank() for the full reasoning.
+     *
+     * So a still-loaded plug-in is now the expected state at teardown, which
+     * is exactly what the warning above already documents. Keeping the
+     * assertion only meant that every debug build aborted on exit -- on
+     * Windows it surfaced as a "Microsoft Visual C++ Runtime Library --
+     * Assertion failed" box every time PowerVLC was closed. */
 
     if (plugin->module != NULL)
         vlc_module_destroy(plugin->module);

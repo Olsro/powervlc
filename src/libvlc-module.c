@@ -33,6 +33,10 @@
 
 #include <limits.h>
 
+#ifdef __APPLE__
+# include <AvailabilityMacros.h>
+#endif
+
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_cpu.h>
@@ -1351,6 +1355,9 @@ static const char *const mouse_wheel_texts[] = {
 #define NAV_ACTIVATE_KEY_LONGTEXT N_("Select the key to activate selected item in DVD menus.")
 #define DISC_MENU_TEXT N_("Go to the DVD menu")
 #define DISC_MENU_LONGTEXT N_("Select the key to take you to the DVD menu")
+#define DISC_POPUP_MENU_TEXT N_("Show the Blu-ray pop-up menu")
+#define DISC_POPUP_MENU_LONGTEXT N_("Select the key that shows the pop-up " \
+    "menu a Blu-ray draws over the running movie (not the disc root menu).")
 #define TITLE_PREV_TEXT N_("Select previous DVD title")
 #define TITLE_PREV_LONGTEXT N_("Select the key to choose the previous title from the DVD")
 #define TITLE_NEXT_TEXT N_("Select next DVD title")
@@ -2349,6 +2356,7 @@ vlc_module_begin ()
 #   define KEY_INTF_BOSS          NULL
 #   define KEY_INTF_POPUP_MENU    "Menu"
 #   define KEY_DISC_MENU          "Ctrl+m"
+#   define KEY_DISC_POPUP_MENU    "Ctrl+Shift+m"
 #   define KEY_TITLE_PREV         "Ctrl+p"
 #   define KEY_TITLE_NEXT         "Ctrl+n"
 #   define KEY_CHAPTER_PREV       "Ctrl+u"
@@ -2492,6 +2500,7 @@ vlc_module_begin ()
 #   define KEY_INTF_BOSS          NULL
 #   define KEY_INTF_POPUP_MENU    "Menu"
 #   define KEY_DISC_MENU          "Shift+m"
+#   define KEY_DISC_POPUP_MENU    "Ctrl+Shift+m"
 #   define KEY_TITLE_PREV         "Shift+o"
 #   define KEY_TITLE_NEXT         "Shift+b"
 #   define KEY_CHAPTER_PREV       "Shift+p"
@@ -2611,6 +2620,8 @@ vlc_module_begin ()
 
     add_key( "key-disc-menu", KEY_DISC_MENU, DISC_MENU_TEXT,
              DISC_MENU_LONGTEXT, true )
+    add_key( "key-disc-popup-menu", KEY_DISC_POPUP_MENU, DISC_POPUP_MENU_TEXT,
+             DISC_POPUP_MENU_LONGTEXT, true )
     add_key( "key-title-prev", KEY_TITLE_PREV, TITLE_PREV_TEXT,
              TITLE_PREV_LONGTEXT, true )
     add_key( "key-title-next", KEY_TITLE_NEXT, TITLE_NEXT_TEXT,

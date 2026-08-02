@@ -1,0 +1,166 @@
+From 96f5186c65552f2055fc6fe6575bd88f53b21e99 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 17 Jul 2026 15:55:29 +0000
+Subject: [PATCH 3/4] PPC: Enable the motion-comp blend kernels on plain
+ AltiVec (G4/G5)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The mc blend kernels in src/ppc/mc_tmpl.c (blend / blend_h / blend_v) were
+built only for the ppc64le "pwr9" sub-target and gated to ARCH_PPC64LE, so
+big-endian AltiVec-only targets (G4/G5, incl. 32-bit Darwin) fell back to
+scalar C. They use only base-VMX ops (vec_mule/vec_mulo are base AltiVec,
+not VSX) plus vec_xl/vec_xst/vec_xst_len, which already have AltiVec
+fallbacks in src/ppc/dav1d_types.h — no doubleword merges, no VSX-only
+instructions — so the port is a build-gating change with no kernel edits.
+
+Widen the mc_tmpl.c build guard to accept DAV1D_ALTIVEC, gate src/ppc/mc.h
+on ARCH_PPC (accepting the ALTIVEC cpu flag, like cdef/looprestoration/itx
+already do), and add mc_tmpl.c to the meson altivec sub-target. The "_pwr9"
+symbol suffix is a hardcoded label and each arch builds mc_tmpl.c in exactly
+one sub-target, so it does not collide.
+
+This surfaced a latent variable-capture bug in the vec_xst AltiVec fallback:
+vec_xst_len(v, ptr, 16) delegates to vec_xst(_v, 0, _dst), but vec_xst's
+first line was `u8x16 _v = (u8x16)(v);` — expanding to
+`u8x16 _v = (u8x16)(_v);`, a shadowing self-initialisation from garbage. So
+vec_xst_len(..., 16) stored uninitialised data. Only blend_v (w=32) reaches
+that path, which is why nothing hit it before (cdef/looprestoration use
+vec_xst directly; itx's vec_xst_len calls use len 4/8, the byte-copy
+branch). Fixed by prefixing vec_xst's internal identifiers with _xst_ so a
+caller's `_v`/`_dst`/etc. can no longer be captured.
+
+Verified under qemu-ppc (-cpu 7400, real 32-bit big-endian AltiVec) against
+dav1d's scalar C reference: blend (w 4..32), blend_v (w 2..32) and blend_h
+(w 2..128) across many heights are bit-exact (17800 trials, 0 mismatches).
+Re-ran the cdef and itx cross-checks after the vec_xst rename — both remain
+bit-exact, confirming the fallback fix does not regress the already-enabled
+AltiVec paths.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+---
+ src/meson.build       |  1 +
+ src/ppc/dav1d_types.h | 36 ++++++++++++++++++++----------------
+ src/ppc/mc.h          | 14 ++++++++------
+ src/ppc/mc_tmpl.c     |  4 ++--
+ 4 files changed, 31 insertions(+), 24 deletions(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index f3a91dd2..1d14968a 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -295,6 +295,7 @@ if is_asm_enabled
+                 'ppc/cdef_tmpl.c',
+                 'ppc/itx_tmpl.c',
+                 'ppc/looprestoration_tmpl.c',
++                'ppc/mc_tmpl.c',
+             )}
+         endif
+     elif host_machine.cpu_family().startswith('riscv')
+diff --git a/src/ppc/dav1d_types.h b/src/ppc/dav1d_types.h
+index fba70b80..6402e4eb 100644
+--- a/src/ppc/dav1d_types.h
++++ b/src/ppc/dav1d_types.h
+@@ -154,24 +154,28 @@ static inline void aligned_st(u8x16 v, unsigned long offset, void *ptr) {
+  * "background", so the mask is built as vec_perm(zeros, ones, perm) (zeros
+  * first) -- swapping this ordering silently corrupts every unaligned store.
+  */
++/* Internal identifiers are prefixed _xst_ so they cannot be captured when this
++ * macro is expanded with an argument that happens to be named `_v` etc. — e.g.
++ * vec_xst_len(v, ptr, 16) calls vec_xst(_v, 0, _dst); a plain `_v` here would
++ * become `u8x16 _v = (u8x16)(_v);`, self-initialising from garbage. */
+ #define vec_xst(v, offset, ptr) do { \
+-    u8x16 _v = (u8x16)(v); \
+-    unsigned char *_ptr = (unsigned char *)(ptr) + (offset); \
+-    unsigned long _addr = (unsigned long)_ptr; \
+-    if ((_addr & 15) == 0) { \
+-        vec_st(_v, 0, _ptr); \
++    u8x16 _xst_v = (u8x16)(v); \
++    unsigned char *_xst_ptr = (unsigned char *)(ptr) + (offset); \
++    unsigned long _xst_addr = (unsigned long)_xst_ptr; \
++    if ((_xst_addr & 15) == 0) { \
++        vec_st(_xst_v, 0, _xst_ptr); \
+     } else { \
+-        u8x16 _lo = vec_ld(0, _ptr); \
+-        u8x16 _hi = vec_ld(15, _ptr); \
+-        u8x16 _perm = vec_lvsr(0, _ptr); \
+-        u8x16 _tmp = vec_perm(_v, _v, _perm); \
+-        u8x16 _ones = (u8x16)vec_splat_s8(-1); \
+-        u8x16 _zeros = (u8x16)vec_splat_s8(0); \
+-        u8x16 _sel = vec_perm(_zeros, _ones, _perm); \
+-        u8x16 _result_lo = vec_sel(_lo, _tmp, (b8x16)_sel); \
+-        u8x16 _result_hi = vec_sel(_tmp, _hi, (b8x16)_sel); \
+-        vec_st(_result_lo, 0, _ptr); \
+-        vec_st(_result_hi, 16, _ptr); \
++        u8x16 _xst_lo = vec_ld(0, _xst_ptr); \
++        u8x16 _xst_hi = vec_ld(15, _xst_ptr); \
++        u8x16 _xst_perm = vec_lvsr(0, _xst_ptr); \
++        u8x16 _xst_tmp = vec_perm(_xst_v, _xst_v, _xst_perm); \
++        u8x16 _xst_ones = (u8x16)vec_splat_s8(-1); \
++        u8x16 _xst_zeros = (u8x16)vec_splat_s8(0); \
++        u8x16 _xst_sel = vec_perm(_xst_zeros, _xst_ones, _xst_perm); \
++        u8x16 _xst_result_lo = vec_sel(_xst_lo, _xst_tmp, (b8x16)_xst_sel); \
++        u8x16 _xst_result_hi = vec_sel(_xst_tmp, _xst_hi, (b8x16)_xst_sel); \
++        vec_st(_xst_result_lo, 0, _xst_ptr); \
++        vec_st(_xst_result_hi, 16, _xst_ptr); \
+     } \
+ } while(0)
+ 
+diff --git a/src/ppc/mc.h b/src/ppc/mc.h
+index b946d47f..255b31dc 100644
+--- a/src/ppc/mc.h
++++ b/src/ppc/mc.h
+@@ -28,19 +28,21 @@
+ #include "src/cpu.h"
+ #include "src/mc.h"
+ 
+-/* The POWER9 mc code is only built for little-endian POWER (ppc64le);
+- * on big-endian/AltiVec-only targets (e.g. G4/G5) its symbols do not exist. */
+-#if ARCH_PPC64LE
++/* The blend kernels carry a "_pwr9" symbol suffix regardless of the flags used
++ * to build them; they run correctly on plain AltiVec (G4/G5) too, so they are
++ * built on the whole PPC family (ARCH_PPC). The meson split assigns mc_tmpl.c
++ * to exactly one sub-target per arch, so the "_pwr9" names never collide. */
++#if ARCH_PPC
+ decl_blend_fn(BF(dav1d_blend, pwr9));
+ decl_blend_dir_fn(BF(dav1d_blend_h, pwr9));
+ decl_blend_dir_fn(BF(dav1d_blend_v, pwr9));
+ #endif
+ 
+ static ALWAYS_INLINE void mc_dsp_init_ppc(Dav1dMCDSPContext *const c) {
+-#if ARCH_PPC64LE
++#if ARCH_PPC
+   const unsigned flags = dav1d_get_cpu_flags();
+ 
+-  if (!(flags & DAV1D_PPC_CPU_FLAG_PWR9)) return;
++  if (!(flags & (DAV1D_PPC_CPU_FLAG_PWR9 | DAV1D_PPC_CPU_FLAG_ALTIVEC))) return;
+ 
+ #if BITDEPTH == 8
+   c->blend = BF(dav1d_blend, pwr9);
+@@ -49,5 +51,5 @@ static ALWAYS_INLINE void mc_dsp_init_ppc(Dav1dMCDSPContext *const c) {
+ #endif
+ #else
+   (void)c;
+-#endif /* ARCH_PPC64LE */
++#endif /* ARCH_PPC */
+ }
+diff --git a/src/ppc/mc_tmpl.c b/src/ppc/mc_tmpl.c
+index 262eab35..a0393cb1 100644
+--- a/src/ppc/mc_tmpl.c
++++ b/src/ppc/mc_tmpl.c
+@@ -25,7 +25,7 @@
+  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+-#if defined(__VSX__) || defined(__POWER9_VECTOR__)
++#if defined(__VSX__) || defined(__POWER9_VECTOR__) || defined(DAV1D_ALTIVEC)
+ 
+ #include "common/attributes.h"
+ #include "src/ppc/mc.h"
+@@ -555,4 +555,4 @@ void dav1d_blend_h_8bpc_pwr9(pixel *dst, const ptrdiff_t dst_stride, const pixel
+ 
+ #endif // BITDEPTH
+ 
+-#endif // __VSX__ || __POWER9_VECTOR__
++#endif // __VSX__ || __POWER9_VECTOR__ || DAV1D_ALTIVEC

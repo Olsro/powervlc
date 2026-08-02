@@ -144,6 +144,9 @@ public:
 public slots:
     /* slots handlers */
     void ensureArtRequested( const QModelIndex &index ) Q_DECL_OVERRIDE;
+    /* make sure the children of an expanded lazy node are loaded;
+     * models supporting on-demand browsing override this */
+    virtual void ensureBrowsed( const QModelIndex & ) {}
 
 signals:
     void currentIndexChanged( const QModelIndex& );

@@ -166,9 +166,24 @@ block_t *screen_Capture(demux_t *p_demux)
     /* forward cursor location */
     CGPoint cursor_pos;
 
-    CGEventRef event = CGEventCreate(NULL);
-    cursor_pos = CGEventGetLocation(event);
-    CFRelease(event);
+    /* CGEventCreate()/CGEventGetLocation() only exist since Mac OS X 10.4;
+     * below that deployment target the SDK weak-imports them, so on 10.3 they
+     * resolve to NULL and calling them jumps to 0. There is no pre-10.4
+     * replacement in ApplicationServices (the Carbon one lives in HIToolbox,
+     * which this plugin does not link), so the capture goes on without the
+     * cursor position: the screen itself is still captured, only the cursor
+     * overlay and --screen-follow-mouse are inert. */
+    CGEventRef (*create_event)(CGEventSourceRef) = CGEventCreate;
+    CGPoint (*event_location)(CGEventRef) = CGEventGetLocation;
+
+    if (create_event != NULL && event_location != NULL)
+    {
+        CGEventRef event = create_event(NULL);
+        cursor_pos = event_location(event);
+        CFRelease(event);
+    }
+    else
+        cursor_pos = CGPointZero;
 
     cursor_pos.x -= p_data->screen_left;
     cursor_pos.y -= p_data->screen_top;

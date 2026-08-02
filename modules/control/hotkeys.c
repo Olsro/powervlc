@@ -696,7 +696,7 @@ static int PutAction( intf_thread_t *p_intf, input_thread_t *p_input,
                 var_SetInteger( p_input, "spu-delay", i_delay );
                 ClearChannels( p_vout, slider_chan );
                 DisplayMessage( p_vout, _( "Subtitle delay %i ms" ),
-                                (int)(i_delay/1000) );
+                                (int)MS_FROM_VLC_TICK(i_delay) );
                 var_FreeList( &list, &list2 );
             }
             break;
@@ -713,7 +713,7 @@ static int PutAction( intf_thread_t *p_intf, input_thread_t *p_input,
                 var_SetInteger( p_input, "audio-delay", i_delay );
                 ClearChannels( p_vout, slider_chan );
                 DisplayMessage( p_vout, _( "Audio delay %i ms" ),
-                                 (int)(i_delay/1000) );
+                                 (int)MS_FROM_VLC_TICK(i_delay) );
             }
             break;
         }
@@ -970,6 +970,9 @@ static int PutAction( intf_thread_t *p_intf, input_thread_t *p_input,
         case ACTIONID_DISC_MENU:
             if( p_input )
                 var_SetInteger( p_input, "title  0", 2 );
+            break;
+        case ACTIONID_DISC_POPUP_MENU:
+            input_ShowPopupMenu( p_input );
             break;
         case ACTIONID_NAV_ACTIVATE:
             if( p_input )

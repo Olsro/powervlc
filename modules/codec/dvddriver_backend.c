@@ -20,6 +20,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <sys/time.h>
+#include <sys/utsname.h>
 #include <ApplicationServices/ApplicationServices.h>
 #include <IOKit/IOKitLib.h>
 
@@ -32,6 +33,17 @@ static int s_dd_instances = 0;
 
 #define ATI_BUNDLE \
     "/System/Library/Extensions/ATIRadeonDVDDriver.bundle/Contents/MacOS/ATIRadeonDVDDriver"
+
+/* Banc d'essai : charger le pilote d'un AUTRE système que celui qui a démarré.
+ * Les trois volumes de la machine de test en portent trois versions distinctes
+ * (md5 différents) et DVDDriverDecode n'y coûte pas le même prix. Sans effet
+ * si la variable n'est pas posée. */
+static const char *ati_bundle_path(void)
+{
+    const char *p = getenv("POWERVLC_ATI_BUNDLE");
+
+    return (p != NULL && *p != '\0') ? p : ATI_BUNDLE;
+}
 #define CARBON_FW \
     "/System/Library/Frameworks/Carbon.framework/Carbon"
 
@@ -103,6 +115,22 @@ typedef int  (*dvd_applydcsq_fn)(void *ctx, uint32_t idx, const void *base,
                                  uint32_t dcsq_offset);
 typedef int  (*dvd_enablesp_fn)(void *ctx, int enable);
 typedef int  (*dvd_clearsp_fn)(void *ctx, int arg);
+/* ── API BOUTON : c'est ELLE qui déclenche le blit sur le pilote de 10.2 ─────
+ * Désassemblage (bundle 10.2, mode surface ctx[0x1FC]==0) :
+ *   PrepareButton(ctx, rect, _) : range le rect du bouton (4 × int16, ordre Mac
+ *       { haut, gauche, bas, droite }) en ctx[0x1F4] et ctx[0x1F8], puis le
+ *       DÉCOUPE contre le rect du plan rangé par ShowSPBuffer (ctx[0x1E4]…) ;
+ *       le 3e argument n'est lu que dans l'autre mode.
+ *   EnableButton(ctx, on) : pose ctx[0x1D8] = !!on — la condition SANS LAQUELLE
+ *       ShowSPBuffer n'appelle le blit qu'avec son argument « 0 », c'est-à-dire
+ *       pour rien — puis, si le drapeau d'affichage ctx[0x1C4] est armé,
+ *       APPELLE LUI-MÊME LE VRAI BLIT sur le tampon ctx[0x1B0] (0x2690/0x26a0,
+ *       le second appel avec l'argument 1).
+ * Sur 10.4 rien de tout cela n'est nécessaire : son SetSPBuffer blitte
+ * directement. Sur 10.2 SetSPBuffer est un stub, et cette API est la SEULE
+ * route vers le blit. */
+typedef int  (*dvd_preparebutton_fn)(void *ctx, const void *rect, void *unused);
+typedef int  (*dvd_enablebutton_fn)(void *ctx, int enable);
 typedef int  (*dvd_getkeycolor_fn)(void *ctx, uint32_t *color);
 /* Plan VIDÉO (MP). Le driver expanse le bitmap SPU vers la destination définie
  * par ces appels : sans eux, sa boucle d'expansion écrit à une adresse invalide
@@ -155,6 +183,8 @@ struct dvddriver_ctx
     dvd_applydcsq_fn   ApplySPDCSQ;
     dvd_enablesp_fn    EnableSP;
     dvd_clearsp_fn     ClearSP;
+    dvd_preparebutton_fn PrepareButton;
+    dvd_enablebutton_fn  EnableButton;
     dvd_getkeycolor_fn GetKeyColor;
     dvd_setmprects_fn  SetMPRects;
     dvd_enablemp_fn    EnableMP;
@@ -184,8 +214,32 @@ struct dvddriver_ctx
      * Coût : deux entiers par image, aucune lecture mémoire GPU. */
     unsigned long pres_last_us;
     uint32_t pres_hist[8];   /* <25, <33, <37, <43, <50, <60, <100, >=100 ms */
+    uint32_t dec_hist[8];    /* durée d'un Decode : <4, <8, <12, <16, <24, <40, <80, >=80 ms */
+    unsigned long us_last_decode;  /* durée du dernier Decode (corrélation type↔durée) */
     uint32_t pres_n;
     uint32_t sp_mode_flag, sp_ctx_word0, sp_cur_buf, sp_enable_st, sp_caps;
+    /* ── Layout du contexte PRIVÉ, par version du bundle ────────────────────
+     * Relevé par désassemblage des trois versions (cf. dvddriver_open). Tous
+     * les champs que nous touchons sont en LECTURE SEULE et se trouvent aux
+     * MÊMES offsets sur 10.2, 10.3 et 10.4 — à une exception près :
+     *   `lay_mp_pitch` : le pas de ligne de la destination du blit, que le
+     *   SetMPRects de 10.3/10.4 MÉMORISE en ctx[0x414] (avec le rect en
+     *   0x410/0x418/0x41c/0x420). Celui de 10.2 ne mémorise RIEN — il n'écrit
+     *   que ctx[0x18] — donc l'offset n'y existe pas et vaut 0 ici : on ne peut
+     *   pas demander au pilote si la géométrie est déjà posée, et on n'y touche
+     *   donc PAS du tout sur 10.2 (cf. dvddriver_sp_submit : l'y forcer déplace
+     *   l'image et éteint le plan subpicture).
+     * `lay_deref_ok` : peut-on suivre ctx[0x204] comme un POINTEUR pour les
+     * empreintes de diagnostic ? Seulement là où le layout est connu — sinon
+     * ce serait déréférencer ce qui traîne à cet offset. */
+    unsigned lay_mp_pitch;
+    bool     lay_deref_ok;
+    /* `lay_sp_stub` : sur 10.2, `DVDDriverSetSPBuffer` est un QUASI-STUB — il
+     * mémorise l'index et arme le drapeau ctx[0x1D0], puis rend la main sans
+     * jamais lire le descripteur ni appeler le blit (13 instructions, contre 40
+     * sur 10.4). Il faut donc poser à sa place le mot couleurs/contrastes que
+     * la version 10.4 extrait du descripteur. */
+    bool     lay_sp_stub;
     /* valeurs de SORTIE d'OpenDevice, jusqu'ici ignorées */
     uint32_t open_caps, open_dims[4];
     uint16_t open_five, open_eight;
@@ -225,12 +279,47 @@ struct dvddriver_ctx
     bool   display_mode;
     CGRect dst_rect;
 
-    /* accumulateur de picture (pic_desc) */
+    /* accumulateur de picture (pic_desc). `descriptors`/`coeffs` sont des ALIAS
+     * du jeu de tampons actif (voir *_store ci-dessous) : les hooks écrivent
+     * toujours à travers eux, begin() les fait pointer sur le bon jeu. */
     uint8_t *descriptors;            /* nb_mbs * 28 o (mb_desc) */
     uint8_t *coeffs;                 /* flux run-level 4 o/coeff */
     unsigned nb_mbs, mb_index;
     unsigned coeffs_len, coeffs_cap;
     int coding_type, pic_structure;
+
+    /* ── Soumission ASYNCHRONE (recouvrement VLD/Decode) ─────────────────
+     * Mesuré sur l'iBook G3 (Panther) : DVDDriverDecode est du temps BLOQUÉ
+     * dans le kext (le CPU du processus plafonne à ~80 %), 8-34 ms par
+     * picture, pendant lesquelles la VLD de la picture suivante pourrait
+     * déjà tourner. Un worker unique fait le Decode ; profondeur 1 (l'enqueue
+     * suivant attend la fin du précédent) → deux jeux de tampons suffisent,
+     * et il n'y a JAMAIS deux Decode en vol (scratch1/2/reftab restent
+     * uniques). Le verrou est relâché PENDANT l'appel Decode ; les autres
+     * appels driver (Show, SP) attendent async_busy via
+     * dd_wait_gpu_idle_locked() — même sérialisation qu'avant, sans bloquer
+     * pick/hold/release qui ne touchent pas le driver. */
+    bool           async_on;
+    bool           async_started;
+    pthread_t      async_th;
+    pthread_cond_t async_in_cv;      /* réveil du worker */
+    pthread_cond_t async_done_cv;    /* fin d'un Decode / place libre */
+    bool           async_quit;
+    bool           async_job;        /* un job en file (profondeur 1) */
+    bool           async_busy;       /* Decode en cours dans le worker */
+    uint8_t        async_pic[0x40];
+    int16_t        async_rect[4];
+    int            async_out_idx;
+    int            async_coding;
+    int            async_last_rc;
+    unsigned long  us_submit_wait;   /* attente de la fin du job précédent */
+    unsigned long  us_last_submit_wait;
+    int            async_fail_type;  /* coding_type d'un échec non consommé */
+    uint8_t       *desc_store[2];
+    unsigned       desc_cap_mbs[2];
+    uint8_t       *coeff_store[2];
+    unsigned       coeff_store_cap[2];
+    int            wset;             /* jeu actif en écriture (0/1) */
     /* Pool de 5 surfaces GPU (offload P/B). ref_idx[0]=dernière I/P décodée,
      * ref_idx[1]=avant-dernière (-1=aucune) ; out_idx=surface de sortie de la
      * picture courante ; fwd_ref/bwd_ref=indices de réf pour pic_desc (0xff=none). */
@@ -268,6 +357,21 @@ struct dvddriver_ctx
      * present utilise dst_rect (valeur d'ouverture). */
     int present_x, present_y, present_w, present_h;
     bool ext_win;                    /* surface liée à la fenêtre VLC (U2/U4) */
+    int (*OrderSurf)(int, int, int, int, int); /* ré-affirmation d'ordre Z */
+    unsigned n_order_reassert;
+    /* ★ « clic automatique » : ordre + flush de FENÊTRE côté WindowServer,
+     * rejoués aux presents n°1 et n°50 (cf. résolution des symboles). */
+    int (*OrderWin)(int, int, int, int);
+    int (*FlushWin)(int, int, int);
+    /* ★ transaction d'update explicite autour de chaque present */
+    int (*DisUpd)(int);
+    int (*ReenUpd)(int);
+    /* ★ anti-tearing (cf. résolution des symboles) */
+    int (*WaitBeam)(uint32_t, unsigned, unsigned);
+    uint32_t (*MainDispID)(void);
+    int (*WinBoundsF)(int, int, CGRect *);
+    float win_top;                   /* haut de la fenêtre à l'écran (lignes) */
+    unsigned n_beam_tick;            /* rafraîchissement périodique de win_top */
     /* PERF — dernier rectangle réellement posé par CGSSetSurfaceBounds. Ce rect
      * est IDENTIQUE d'une frame à l'autre en régime établi ; re-poser les bounds
      * à chaque present est un aller-retour WindowServer synchrone pour rien. */
@@ -284,6 +388,8 @@ struct dvddriver_ctx
      * périmée) : distingue « le vout n'appelle pas » de « on rejette ». */
     unsigned      n_present_stale;
     int           rr_out;            /* dernière surface de sortie (round-robin) */
+    int           last_shown;       /* surface actuellement À L'ÉCRAN (dernier Show) */
+    int           prev_shown;       /* l'avant-dernier (double-buffer driver possible) */
 
     /* ★ CONTRÔLE DE FLUX SUR LE POOL DE SURFACES ==========================
      * Le GPU n'a que 5 surfaces, alors que VLC laisse le décodeur prendre une
@@ -299,6 +405,9 @@ struct dvddriver_ctx
     unsigned        surf_hold[5];
     pthread_cond_t  surf_cv;
     unsigned        n_surf_wait;     /* diagnostics : attentes de surface */
+    unsigned long   us_surf_wait;    /* durée cumulée de ces attentes */
+    unsigned long   us_last_surf_wait; /* attente de la derniere picture (diag) */
+
 
     /* ⚠ DURÉE DE VIE. Les picture_context_t de VLC survivent au décodeur : à
      * l'arrêt en cours de lecture, VLC détruit des contextes APRÈS le
@@ -362,7 +471,11 @@ struct dvddriver_ctx
  * il vaut mieux rendre la main au CPU que de s'y enfoncer — c'est ce régime qui
  * mène au wedge GPU. DD_STALL_MAX évite de réagir à un pic isolé (changement de
  * mode d'affichage, machine chargée). */
-#define DD_STALL_US      150000ul
+/* 150 ms à l'origine, calibré sur le pipeline au CPU lent : tout Decode long y
+ * signait une famine de buffers. Avec la capture run/level le CPU soumet par
+ * rafales et le GPU répond par de la contre-pression LÉGITIME de 150-200 ms qui
+ * se résout seule — un vrai wedge, lui, se mesure en secondes et en série. */
+#define DD_STALL_US      250000ul
 #define DD_STALL_MAX     8
 
 /* Nombre max de surfaces soumises non encore rendues. 2 laisse au vout la marge
@@ -399,9 +512,13 @@ static void dd_unref_unlock(dvddriver_ctx *ctx)
     if (!last)
         return;
     pthread_cond_destroy(&ctx->surf_cv);
+    pthread_cond_destroy(&ctx->async_in_cv);
+    pthread_cond_destroy(&ctx->async_done_cv);
     pthread_mutex_destroy(&ctx->lock);
-    free(ctx->descriptors);
-    free(ctx->coeffs);
+    free(ctx->desc_store[0]);
+    free(ctx->desc_store[1]);
+    free(ctx->coeff_store[0]);
+    free(ctx->coeff_store[1]);
     free(ctx);
 }
 
@@ -421,7 +538,46 @@ static void dd_recycle_locked(dvddriver_ctx *ctx, int keep)
  * Le bundle ATIRadeonDVDDriver se charge ET un service "ATIRadeon" existe. */
 bool dvddriver_available(void)
 {
-    void *dl = dlopen(ATI_BUNDLE, RTLD_NOW | RTLD_LOCAL);
+    /* Reverse-engineered and validated on Darwin 8 (Mac OS X 10.4) with an
+     * RV200. Enabling it on hardware it had not been reversed for has
+     * already WEDGED a GPU once (the RV280 of the Mac mini G4, 2026-07-23:
+     * the machine needed a full power cycle), so the rule stands -- only
+     * what has been checked runs.
+     *
+     * Mac OS X 10.2 ships its own build of ATIRadeonDVDDriver.bundle (Oct
+     * 2002, 51320 bytes). Checked before opening it up, by disassembly:
+     *   - the same 26 entry points, DVDDriverOpenDevice/Decode included;
+     *   - DVDDriverDecode(ctx, pic, rect) still reads the rect as four
+     *     int16, the picture type at pic[2] and the buffer pointers from
+     *     pic[0x10] onwards -- the argument contract this code depends on;
+     *   - an IOKit service of class ATIRadeon is present.
+     * The PRIVATE context layout is shared too -- see dvddriver_open(), which
+     * documents the field-by-field comparison of the three bundles and the one
+     * genuine difference (10.2 does not memoise the video-plane rect).
+     *
+     * Darwin 7 (10.3 Panther) likewise: measured on the same iBook
+     * G3 / RV200, the surface is presented properly there -- 765 present
+     * callbacks for 810 displayed pictures, 0 stale present, 15,3 ms per
+     * DVDDriverDecode against a 40 ms budget, and the image is correct on
+     * screen. It behaves like 10.4, so it gets the hardware decoder like
+     * 10.4. (Its presentation cadence is still uneven; that is the same
+     * pacing problem 10.2 shows, not a reason to fall back to a CPU path a
+     * 750 cannot sustain at all -- 2 to 39 displayed frames per 5 s there.) */
+    /* ✅ 2026-07-29 : LE DÉCODEUR MATÉRIEL EST ACTIVÉ SUR 10.2 AUSSI.
+     * Une note antérieure l'y désactivait par défaut, au motif que « le vout ne
+     * présente jamais sa surface » sur 10.2 ; elle est RÉFUTÉE par la mesure
+     * sur un
+     * iBook G3 / RV200 sous 10.2.8 : le vout présente bel et bien sa surface —
+     * 2603 rappels de present, 0 périmé, géométrie correctement publiée
+     * (wid=162, rect 0,62 1024x576, fenêtre-local 0,22) et Decode à 13,7 ms
+     * pour un budget de 40 ms. Fluidité confirmée à l'œil par l'utilisateur,
+     * fenêtré ET plein écran, cadrage correct. (L'image « agrandie et
+     * déchirée » d'une capture était un artefact de `screencapture` lisant le
+     * framebuffer pendant l'affichage direct, pas un défaut de placement.)
+     * Le chemin logiciel, lui, ne décodait qu'UNE IMAGE SUR TROIS sur cette
+     * machine (39/110, 30/108, 43/108) : c'était lui, et non le matériel, la
+     * cause du « pas fluide du tout » de 10.2. */
+    void *dl = dlopen(ati_bundle_path(), RTLD_NOW | RTLD_LOCAL);
     if (dl == NULL)
         return false;
     bool has_sym = dlsym(dl, "DVDDriverOpenDevice") != NULL
@@ -473,7 +629,27 @@ dvddriver_ctx *dvddriver_open(unsigned width, unsigned height, int display_mode,
     if (as == NULL)
         return NULL;
 
+    /* CGSMainConnectionID() is 10.3. Jaguar's CoreGraphics exports neither it
+     * nor CGSDefaultConnection; what it has is CGSGetActiveConnection(), the
+     * older way of asking for the connection the WindowServer already gave
+     * this process. Everything else of the surface API -- CGSAddSurface,
+     * CGSBindSurface, CGSSetSurfaceBounds, CGSOrderSurface, CGSFlushSurface
+     * -- is present in the 10.2 build, checked symbol by symbol. */
+    /* Ce que fait le CLIENT D'APPLE, relevé sur 10.2 : DVDPlayback.framework
+     * (embarqué dans DVD Player.app, c'est lui et non l'application qui pilote
+     * ce driver) n'importe NI CGSMainConnectionID NI CGSGetConnectionIDForPSN.
+     * Il demande GetCGSConnectionID(), exporté par QD -- un sous-framework
+     * d'ApplicationServices, d'où l'importance du repli dlsym de dlcompat.c.
+     * Désassemblé : aucun argument, la connexion revient dans r3 depuis un
+     * global qu'INIT_CGSSupport remplit au premier appel. C'est la connexion
+     * DU PROCESSUS quel que soit le thread appelant -- exactement ce que
+     * réclament les appels de surface, et sans le détour par le PSN. */
+    int (*QDConnID)(void)                      = CGS_SYM(as, "GetCGSConnectionID");
     int (*MainConn)(void)                      = CGS_SYM(as, "CGSMainConnectionID");
+    int (*ActiveConn)(int *)                   = CGS_SYM(as, "CGSGetActiveConnection");
+    int (*NewConn)(int, int *)                 = CGS_SYM(as, "CGSNewConnection");
+    int (*ConnForPSN)(int, const uint32_t *, int *)
+                                 = CGS_SYM(as, "CGSGetConnectionIDForPSN");
     int (*NewRegion)(const CGRect *, void **)  = CGS_SYM(as, "CGSNewRegionWithRect");
     int (*NewWindow)(int, int, float, float, void *, int *) = CGS_SYM(as, "CGSNewWindow");
     int (*AddSurf)(int, int, int *)            = CGS_SYM(as, "CGSAddSurface");
@@ -481,15 +657,120 @@ dvddriver_ctx *dvddriver_open(unsigned width, unsigned height, int display_mode,
     int (*OrderSurf)(int, int, int, int, int)  = CGS_SYM(as, "CGSOrderSurface");
     int (*FlushSurf)(int, int, int, void *)    = CGS_SYM(as, "CGSFlushSurface");
     int (*SetWinLevel)(int, int, int)          = CGS_SYM(as, "CGSSetWindowLevel");
+    /* ★ « clic automatique » (10.3, scintillement) : un clic souris N'IMPORTE
+     * OÙ dans la fenêtre répare le scintillement de façon collante — pas un
+     * seek, pas un [window display] AppKit (testés). L'effet réparateur du
+     * clic est donc côté WindowServer : l'opération d'ordre de fenêtre (et le
+     * flush fenêtre) qu'il exécute en amenant la fenêtre cliquée devant. On
+     * rejoue les deux au niveau CGS à l'engagement. */
+    int (*OrderWin)(int, int, int, int)        = CGS_SYM(as, "CGSOrderWindow");
+    int (*FlushWin)(int, int, int)             = CGS_SYM(as, "CGSFlushWindow");
+    /* ★ ANTI-TEARING : depuis que la surface est COMPOSÉE (cf. le pixel de
+     * recouvrement du vout), le blit vers le framebuffer n'est plus synchronisé
+     * au balayage — d'où les « vagues » sur les panoramiques. 10.3 expose la
+     * parade de l'époque : attendre que le faisceau soit hors des lignes qu'on
+     * s'apprête à réécrire. /tmp/hw_nobeam désactive pour l'A/B. */
+    int (*WaitBeam)(uint32_t, unsigned, unsigned)
+                                 = CGS_SYM(as, "CGDisplayWaitForBeamPositionOutsideLines");
+    uint32_t (*MainDispID)(void) = CGS_SYM(as, "CGMainDisplayID");
+    int (*WinBoundsF)(int, int, CGRect *) = CGS_SYM(as, "CGSGetWindowBounds");
+    /* ★ UPDATES DIFFÉRÉES (10.3, scintillement) : Panther a introduit les
+     * « coalesced updates » — le WindowServer coalesce les flushes d'une
+     * fenêtre et recompose à sa propre cadence. Signature mesurée : flush
+     * ~400 µs (coalescé, écran qui MÉLANGE des images successives de la
+     * surface GPU = le dédoublement) contre ~2 ms (recomposition synchrone,
+     * propre) ; l'activité souris force le mode synchrone — d'où le « clic
+     * réparateur » de l'utilisateur. On demande la désactivation des updates
+     * différées pour notre connexion, comme QuickTime à l'époque. */
+    /* ⚠ ABI 10.3 : la propriété se passe en CGSValue PRIVÉS (CGSCreateCString/
+     * CGSCreateBoolean), PAS en CFTypes — un CFStringRef ici a SIGSEGV
+     * (rapport du 29/07 13h01, saut dans les données du CFString constant). */
+    int (*SetConnProp)(int, int, void *, void *)
+                                 = CGS_SYM(as, "CGSSetConnectionProperty");
+    void *(*CGSCreateCStr)(const char *) = CGS_SYM(as, "CGSCreateCString");
+    void *(*CGSCreateBool)(unsigned char) = CGS_SYM(as, "CGSCreateBoolean");
+    /* ★ Transaction d'update explicite (anti-composition-paresseuse) : le
+     * WindowServer compose SYNCHRONEMENT à la ré-activation. Autour de chaque
+     * present (cf. dd_show_locked). /tmp/hw_noupd la désactive pour l'A/B. */
+    int (*DisUpd)(int)                          = CGS_SYM(as, "CGSDisableUpdate");
+    int (*ReenUpd)(int)                         = CGS_SYM(as, "CGSReenableUpdate");
     int (*WinList)(int, int, int, int *, int *) = CGS_SYM(as, "CGSGetOnScreenWindowList");
     int (*WinBounds)(int, int, CGRect *)       = CGS_SYM(as, "CGSGetWindowBounds");
     s_CGSBindSurface = (int (*)(int,int,int,int,int,uint32_t)) CGS_SYM(as, "CGSBindSurface");
-    if (MainConn == NULL || AddSurf == NULL || s_CGSBindSurface == NULL)
+    if ((MainConn == NULL && ActiveConn == NULL && NewConn == NULL)
+     || AddSurf == NULL || s_CGSBindSurface == NULL)
         goto err_as;
 
-    int cid = MainConn();
+    int cid = 0;
+
+    /* Mac OS X 10.2 has no CGSMainConnectionID(), and its CGS connections are
+     * per-thread: from the decoder thread CGSGetActiveConnection() answers
+     * kCGErrorInvalidConnection (1002). A connection made here with
+     * CGSNewConnection() is valid but owns no window, and CGSAddSurface() on
+     * the VLC window then answers kCGErrorIllegalArgument (1001) -- measured,
+     * both of them. What is needed is the connection of THIS PROCESS, the one
+     * AppKit's main thread opened, and CGSGetConnectionIDForPSN() maps it
+     * from the process serial number. Its three arguments were read off the
+     * disassembly: (connection, ProcessSerialNumber *, out). */
+    /* ⚠ CGSMainConnectionID() FIRST wherever it exists, and QD's
+     * GetCGSConnectionID() only where it does not. Both are exported from
+     * 10.3 on -- QD has _GetCGSConnectionID on Tiger too, checked with nm on
+     * the machine -- so preferring QD unconditionally, as the 10.2 port did,
+     * silently changed which connection 10.3 and 10.4 use. On 10.4 that
+     * WEDGED the GPU on the first pictures of a DVD: the surface ends up on a
+     * connection the compositor does not consume, the driver never gets its
+     * MP buffers back, DVDDriverDecode blocks and the process goes into
+     * uninterruptible state (reproduced twice from a cold boot, zero present
+     * callbacks, "waiting decoder fifos to empty" forever). Hardware DVD
+     * playback was reliable on Tiger in 1.0.0, before that commit.
+     * Jaguar is the only system that needs the QD route, and it is the only
+     * one that takes it: its CoreGraphics exports neither CGSMainConnectionID
+     * nor CGSDefaultConnection. */
+    if (MainConn != NULL)
+        cid = MainConn();
+
+    if (cid == 0 && QDConnID != NULL)
+        cid = QDConnID();
+
+    if (cid == 0 && NewConn != NULL && NewConn(0, &cid) != 0)
+        cid = 0;
+
+    /* Repli seulement : avec GetCGSConnectionID() la connexion est déjà la
+     * bonne, et repasser par le PSN la remplacerait par une autre. */
+    if (QDConnID == NULL && ConnForPSN != NULL) {
+        void *carbon_psn = dlopen(CARBON_FW, RTLD_NOW | RTLD_GLOBAL);
+
+        if (carbon_psn != NULL) {
+            int (*GetCurProc)(uint32_t *) = CGS_SYM(carbon_psn,
+                                                    "GetCurrentProcess");
+            uint32_t psn[2] = { 0, 0 };
+            int app_cid = 0;
+
+            if (GetCurProc != NULL && GetCurProc(psn) == 0
+             && ConnForPSN(cid, psn, &app_cid) == 0 && app_cid != 0)
+                cid = app_cid;
+        }
+    }
+
+    if (cid == 0 && ActiveConn != NULL && ActiveConn(&cid) != 0)
+        cid = 0;
     if (cid == 0)
         goto err_as;                     /* pas de connexion WindowServer */
+
+    /* ★ Désactiver les updates différées/coalescées pour cette connexion
+     * (cf. résolution de CGSSetConnectionProperty) — le « clic réparateur »
+     * en boîte, via l'API CGSValue historique de 10.3 (le snippet
+     * « DisableDeferredUpdates » de l'époque QuickTime/jeux). Silencieux si
+     * un des symboles manque. */
+    if (SetConnProp != NULL && CGSCreateCStr != NULL && CGSCreateBool != NULL) {
+        void *k = CGSCreateCStr("DisableDeferredUpdates");
+        void *v = CGSCreateBool(1);
+        if (k != NULL && v != NULL) {
+            int rc_du = SetConnProp(cid, cid, k, v);
+            fprintf(stderr, "DVDDriver: DisableDeferredUpdates=true rc=%d\n",
+                    rc_du);
+        }
+    }
 
     /* M4 mode AFFICHAGE : dimensionner la fenêtre + le rectangle destination de la
      * surface. En display_mode, fenêtre plein écran et surface letterboxée (le
@@ -640,6 +921,7 @@ dvddriver_ctx *dvddriver_open(unsigned width, unsigned height, int display_mode,
      * +1 dans tous les cas. */
     if (on_screen && OrderSurf)
         OrderSurf(cid, wid, sid, 1, 0);
+
     (void) subs_overlay;
     /* Niveau de fenêtre. ⚠ INTÉGRATION UI (Option A) EN COURS : l'idéal serait un
      * niveau JUSTE sous le FSPanel de contrôles (NSFloatingWindowLevel=3) pour laisser
@@ -659,7 +941,7 @@ dvddriver_ctx *dvddriver_open(unsigned width, unsigned height, int display_mode,
     serviceTable[0] = svc;
 
     /* bundle DVDDriver */
-    void *b = dlopen(ATI_BUNDLE, RTLD_NOW | RTLD_LOCAL);
+    void *b = dlopen(ati_bundle_path(), RTLD_NOW | RTLD_LOCAL);
     if (b == NULL)
         goto err_svc;
     dvd_init_fn   DVDInit = (dvd_init_fn)   dlsym(b, "DVDInitializeLibrary");
@@ -723,6 +1005,8 @@ dvddriver_ctx *dvddriver_open(unsigned width, unsigned height, int display_mode,
     ctx->ApplySPDCSQ  = (dvd_applydcsq_fn)   dlsym(b, "DVDDriverApplySPDCSQ");
     ctx->EnableSP     = (dvd_enablesp_fn)    dlsym(b, "DVDDriverEnableSP");
     ctx->ClearSP      = (dvd_clearsp_fn)     dlsym(b, "DVDDriverClearSP");
+    ctx->PrepareButton = (dvd_preparebutton_fn) dlsym(b, "DVDDriverPrepareButton");
+    ctx->EnableButton  = (dvd_enablebutton_fn)  dlsym(b, "DVDDriverEnableButton");
     ctx->GetKeyColor  = (dvd_getkeycolor_fn) dlsym(b, "DVDDriverGetKeyColor");
     ctx->SetMPRects   = (dvd_setmprects_fn)  dlsym(b, "DVDDriverSetMPRects");
     ctx->EnableMP     = (dvd_enablemp_fn)    dlsym(b, "DVDDriverEnableMP");
@@ -732,6 +1016,60 @@ dvddriver_ctx *dvddriver_open(unsigned width, unsigned height, int display_mode,
     for (int i = 0; i < 4; i++) ctx->open_dims[i] = ctx_dims_out[i];
     ctx->sp_available = (ctx->GetSPBuffer && ctx->SetSPBuffer && ctx->ShowSPBuffer
                          && ctx->SetSPPalette && ctx->EnableSP);
+
+    /* The hardware subpicture plane addresses the driver's private context by
+     * offsets read off the 10.4 build of the bundle, so it is only safe where
+     * that layout holds. Settled by disassembling all three builds side by
+     * side (legacy otool: the modern one refuses these Mach-O):
+     *
+     *   10.3 Panther (43332 bytes, same size as 10.4) -- THE SAME CODE,
+     *     recompiled. Its text is shifted by 0x10 and a few registers are
+     *     scheduled differently; every context offset is unchanged.
+     *     GetSPBuffer still reads ctx[0x2F4+4i] and ctx[0x2D4+4i] instruction
+     *     for instruction; ShowMPBuffer still gates the subpicture on
+     *     ctx[0x1C4] then ctx[0x1C8]; and the three writes of the display flag
+     *     in the ApplySPDCSQ engine sit at the very same addresses 0x79bc /
+     *     0x79d8 / 0x7a04, with the same registers. The plane is therefore
+     *     ENABLED on Panther.
+     *
+     *   10.2 Jaguar (51320 bytes) -- a genuinely different driver. Its
+     *     GetSPBuffer ignores the ctx argument altogether and dereferences a
+     *     GLOBAL (0x73f8), reading the two series at +0x44 and +0x24 of what
+     *     it points to. Nothing of the 10.4 layout applies; poking those
+     *     offsets would write into whatever happens to live there. Wiring it
+     *     up means deriving that build's layout on its own -- and is moot for
+     *     now, since the hardware decoder itself is off by default on 10.2
+     *     (the vout never presents its surface there, see below).
+     *
+     * ⚠ The earlier note claimed the flag "is not even referenced" in the 10.2
+     * binary, from a grep for "452(" -- the DECIMAL form of 0x1C4. This otool
+     * only ever prints displacements in hex, so that grep found nothing in ANY
+     * of the three builds, Tiger included. It proved nothing, and it cost
+     * Panther its hardware subtitles. */
+    {
+        struct utsname uts;
+        int darwin = (uname(&uts) == 0) ? atoi(uts.release) : 0;
+
+        /* Layout du contexte privé (cf. la description des champs lay_*).
+         * Darwin 7+ = le bundle 10.4, dont tous les offsets sont connus.
+         * Darwin 6 = le bundle 10.2 : mêmes offsets pour tout ce que nous
+         * lisons, SAUF le cache de rect du plan vidéo, qui n'y existe pas. */
+        ctx->lay_mp_pitch = (darwin == 0 || darwin >= 7) ? 0x414 : 0;
+        /* ctx[0x204] (base de la destination du blit) est au MÊME offset sur les
+         * trois bundles — cinq occurrences dans chacun, comme tous les autres
+         * champs SP. Le suivre comme un pointeur y est donc aussi légitime que
+         * sur 10.4, la garde NULL restant en place. Ce drapeau n'existe que pour
+         * refuser le déréférencement sur un layout NON relevé (une version
+         * future, ou un pilote inconnu). */
+        ctx->lay_deref_ok = true;
+        ctx->lay_sp_stub  = (darwin > 0 && darwin < 7);
+        /* ⚠ PLUS AUCUNE VERSION N'EST EXCLUE : le layout des trois bundles est
+         * relevé, et nous ne faisons que LIRE. Sur 10.2 cela ne change rien en
+         * configuration par défaut — le décodeur matériel y est désactivé, donc
+         * il n'y a pas de contexte et le sous-module SPU décline de lui-même.
+         * Cela n'a d'effet qu'avec /tmp/hw_jaguar, et le plan SP n'a JAMAIS été
+         * éprouvé sur 10.2 : c'est une expérimentation, pas un acquis. */
+    }
     if (ctx->sp_available && ctx->dev_ctx) {
         uint32_t a[8], bb[8];
         memset(a, 0, sizeof(a)); memset(bb, 0, sizeof(bb));
@@ -767,7 +1105,19 @@ dvddriver_ctx *dvddriver_open(unsigned width, unsigned height, int display_mode,
     ctx->width     = width;
     ctx->height    = height;
     ctx->cid = cid; ctx->wid = wid; ctx->sid = sid;
-    ctx->ref_idx[0] = ctx->ref_idx[1] = -1;   /* aucune référence au départ */
+    ctx->OrderSurf = OrderSurf;   /* ré-affirmation d'ordre Z au present */
+    ctx->OrderWin  = OrderWin;    /* « clic automatique » à l'engagement */
+    ctx->FlushWin  = FlushWin;
+    ctx->DisUpd    = DisUpd;      /* transaction d'update autour du present */
+    ctx->ReenUpd   = ReenUpd;
+    ctx->WaitBeam  = WaitBeam;    /* anti-tearing */
+    ctx->MainDispID = MainDispID;
+    ctx->WinBoundsF = WinBoundsF;
+    ctx->win_top   = -1.0f;
+    ctx->n_beam_tick = 0;
+    ctx->ref_idx[0] = ctx->ref_idx[1] = -1;
+    ctx->last_shown = -1;
+    ctx->prev_shown = -1;   /* aucune référence au départ */
     ctx->out_idx = 0;
     /* Phase 2 : mode de déblocage field, reçu en paramètre (option
      * mpeg2-hwaccel-field ; 0 = field non soumis, défaut sûr). */
@@ -796,6 +1146,8 @@ dvddriver_ctx *dvddriver_open(unsigned width, unsigned height, int display_mode,
     ctx->ext_win      = use_ext;
     pthread_mutex_init(&ctx->lock, NULL);
     pthread_cond_init(&ctx->surf_cv, NULL);
+    pthread_cond_init(&ctx->async_in_cv, NULL);
+    pthread_cond_init(&ctx->async_done_cv, NULL);
     ctx->refs = 1;                   /* référence du codec (lâchée par close) */
     ctx->present_x = ctx->present_y = ctx->present_w = ctx->present_h = -1;
     s_dd_instances++;
@@ -866,26 +1218,53 @@ unsigned dvddriver_encode_block(const int16_t *dctblock, const uint8_t *scan,
 {
     int last = -1;
     unsigned n = 0;
-    for (int zz = 0; zz < 64; zz++) {
+    /* ★ PERF — sortir les zéros AVANT tout calcul. Mesuré sur le DVD de Chihiro
+     * (720x576) : une picture I coûtait 76 ms pour un budget de 40, une toutes
+     * les 9 images, soit précisément les 10 % d'images manquantes (22,6 des
+     * 25 im/s). Une I porte 1620 macroblocs tous intra = 9720 blocs = 622 000
+     * coefficients, et la boucle faisait pour CHACUN une division arrondie avec
+     * branchement puis un memcpy de deux octets — alors que la grande majorité
+     * sont nuls et ne produisent rien. Seul le coefficient DC doit être traité
+     * même nul : le recentrage chroma peut le rendre non nul. */
+    {
+        int v0 = dctblock[scan[0]];
+        v0 = (v0 >= 0) ? (v0 + 8) / 16 : -(((-v0) + 8) / 16);
+        v0 -= dc_bias;
+        if (v0 != 0) {
+            if (v0 > 2047) v0 = 2047; else if (v0 < -2047) v0 = -2047;
+            out[0] = 0;                      /* run : premier coefficient */
+            out[1] = 0;
+            int16_t lv0 = (int16_t) v0;
+            memcpy(out + 2, &lv0, sizeof lv0);   /* ordre-octet NATIF */
+            out += 4;
+            n++;
+            last = 0;
+        }
+    }
+    for (int zz = 1; zz < 64; zz++) {
         int v = dctblock[scan[zz]];
+        if (v == 0)
+            continue;              /* ni division, ni branchement, ni écriture */
         /* libmpeg2 travaille dans une échelle 16× celle attendue par le driver
          * (son iDCT veut pixel=DC/128, neutre DC=16384=128*128 ; le driver veut
          * pixel=DC/8, neutre 1024 — validé au harnais). On ramène chaque coeff à
          * l'échelle driver en divisant par 16 (arrondi au plus proche). Sans ça :
          * luma 16× surexposé + chroma jamais recentrable → contours magenta. */
         v = (v >= 0) ? (v + 8) / 16 : -(((-v) + 8) / 16);
-        if (zz == 0)
-            v -= dc_bias;                                  /* recentrage DC chroma (échelle driver) */
         if (v != 0) {
             if (v >  2047) v =  2047;                       /* borne coeff driver (12 bits signés) */
             else if (v < -2047) v = -2047;
-            int16_t lv = (int16_t) v;
             out[0] = (uint8_t)(zz - last - 1);            /* run (écart zigzag) */
             out[1] = 0;                                    /* pad */
             /* level : i16 en ordre-octet NATIF (big-endian sur PPC), comme le
              * driver et le harnais ati_carbon.c (qui stockait un int16_t natif).
              * Un octet-à-octet little-endian inverse les octets sur le G3 →
-             * coefficients corrompus → bruit à l'écran. */
+             * coefficients corrompus → bruit à l'écran.
+             * ⚠ GARDER memcpy : écrire par `*(int16_t *)(out + 2)` dans un
+             * tampon manipulé en uint8_t viole l'aliasing strict — essayé, GCC 13
+             * a produit un flux que le GPU n'a pas digéré et DVDDriverDecode
+             * s'est bloqué à répétition (garde-fou anti-wedge déclenché). */
+            int16_t lv = (int16_t) v;
             memcpy(out + 2, &lv, sizeof lv);
             out += 4;
             n++;
@@ -912,9 +1291,24 @@ static int dd_pick_output(dvddriver_ctx *ctx)
     for (int attempt = 0; attempt < 6 && sel < 0 && !ctx->closed; attempt++) {
         for (int k = 1; k <= 5; k++) {
             int s = (ctx->rr_out + k) % 5;
+            /* ★ Ne JAMAIS choisir la surface actuellement à l'écran. Elle
+             * n'était protégée que tant que VLC détenait sa picture ; dès la
+             * destruction du contexte, `surf_hold` retombe à 0 et l'image
+             * suivante se décodait PAR-DESSUS celle en cours de balayage.
+             * Mesuré : 59 surfaces présentées deux fois de suite sur 1441
+             * (≈ une par seconde) — invisible pour l'histogramme de cadence,
+             * mais bien visible à l'œil, la première image n'ayant qu'un cycle
+             * pour être composée avant d'être écrasée. */
+            /* ★★ Ne JAMAIS décoder dans la surface À L'ÉCRAN, même si VLC a
+             * déjà relâché sa picture : quand la surface est composée en
+             * direct (app active à la création — 10.3), la réécrire fait
+             * apparaître l'image FUTURE à l'écran avant l'heure, puis le
+             * present suivant revient en arrière — mesuré sur film au ralenti
+             * (trajectoire du panoramique : bonds +16 puis reculs -2). */
             if (s != ctx->ref_idx[0] && s != ctx->ref_idx[1]
+                && s != ctx->last_shown && s != ctx->prev_shown
                 && ctx->surf_hold[s] == 0) {
-                sel = s;
+                    sel = s;
                 break;
             }
         }
@@ -927,7 +1321,13 @@ static int dd_pick_output(dvddriver_ctx *ctx)
         ts.tv_nsec = (long) tv.tv_usec * 1000L + 200000000L;   /* +200 ms */
         if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
         ctx->n_surf_wait++;
-        pthread_cond_timedwait(&ctx->surf_cv, &ctx->lock, &ts);
+        {
+            unsigned long w0 = dd_now_us();
+            pthread_cond_timedwait(&ctx->surf_cv, &ctx->lock, &ts);
+            unsigned long w = dd_now_us() - w0;
+            ctx->us_surf_wait += w;
+            ctx->us_last_surf_wait += w;
+        }
     }
     if (sel >= 0)
         ctx->rr_out = sel;
@@ -961,23 +1361,32 @@ void dvddriver_surface_release(dvddriver_ctx *ctx, int idx)
 int dvddriver_picture_begin(dvddriver_ctx *ctx, int coding_type,
                             int pic_structure, unsigned nb_mbs)
 {
+    if (ctx != NULL) { ctx->us_last_surf_wait = 0; ctx->us_last_submit_wait = 0; }
     unsigned coeffs_cap = nb_mbs * 6u * 64u * 4u;   /* pire cas */
-    if (nb_mbs != ctx->nb_mbs) {
-        uint8_t *d = realloc(ctx->descriptors, nb_mbs * MB_DESC_SIZE);
+    /* Jeu de tampons actif : en asynchrone submit() bascule wset après chaque
+     * enqueue, si bien qu'on écrit ici le jeu que le worker ne lit PAS. */
+    int w = ctx->wset & 1;
+    if (nb_mbs != ctx->desc_cap_mbs[w]) {
+        uint8_t *d = realloc(ctx->desc_store[w], nb_mbs * MB_DESC_SIZE);
         if (d == NULL) {
-            free(ctx->descriptors); ctx->descriptors = NULL; ctx->nb_mbs = 0;
+            free(ctx->desc_store[w]); ctx->desc_store[w] = NULL;
+            ctx->desc_cap_mbs[w] = 0; ctx->descriptors = NULL; ctx->nb_mbs = 0;
             return -1;
         }
-        ctx->descriptors = d;
-        ctx->nb_mbs = nb_mbs;
+        ctx->desc_store[w] = d;
+        ctx->desc_cap_mbs[w] = nb_mbs;
     }
-    if (coeffs_cap > ctx->coeffs_cap) {
-        uint8_t *co = realloc(ctx->coeffs, coeffs_cap);
+    if (coeffs_cap > ctx->coeff_store_cap[w]) {
+        uint8_t *co = realloc(ctx->coeff_store[w], coeffs_cap);
         if (co == NULL)
             return -1;
-        ctx->coeffs = co;
-        ctx->coeffs_cap = coeffs_cap;
+        ctx->coeff_store[w] = co;
+        ctx->coeff_store_cap[w] = coeffs_cap;
     }
+    ctx->descriptors = ctx->desc_store[w];
+    ctx->coeffs      = ctx->coeff_store[w];
+    ctx->coeffs_cap  = ctx->coeff_store_cap[w];
+    ctx->nb_mbs      = nb_mbs;
     memset(ctx->descriptors, 0, nb_mbs * MB_DESC_SIZE);
     ctx->mb_index = 0;
     ctx->coeffs_len = 0;
@@ -1196,11 +1605,74 @@ void dvddriver_picture_mb_block(dvddriver_ctx *ctx, const int16_t *dctblock,
     ctx->cur_block++;
 }
 
+/* Variante ALIMENTÉE PAR LA VLD : paires (position zigzag, valeur) capturées au
+ * moment même du parse (mpeg2_hw_rl dans slice.c) — plus aucun re-balayage des
+ * 64 positions ni lecture indirecte par la table de scan. Mêmes conventions que
+ * dvddriver_encode_block : échelle /16 arrondie, recentrage DC intra, clamp
+ * 12 bits, run = écart zigzag, level en ordre-octet natif. */
+void dvddriver_picture_mb_block_rl(dvddriver_ctx *ctx, const int16_t (*rl)[2],
+                                   int n)
+{
+    if (ctx->mb_index >= ctx->nb_mbs)
+        return;
+    while (ctx->cur_block < 6 && !(ctx->cur_cbp & (0x20 >> ctx->cur_block)))
+        ctx->cur_block++;
+    if (ctx->cur_block >= 6)
+        return;
+    uint8_t *desc = ctx->descriptors + ctx->mb_index * MB_DESC_SIZE;
+    int dc_bias = (desc[0x14] == 0) ? 1024 : 0;
+    uint8_t *out = ctx->coeffs + ctx->coeffs_len;
+    unsigned cnt = 0;
+    int last = -1;
+    for (int k = 0; k < n; k++) {
+        int pos = rl[k][0];
+        int v   = rl[k][1];
+        if (pos <= last)
+            continue;               /* garde : positions strictement croissantes */
+        v = (v >= 0) ? (v + 8) / 16 : -(((-v) + 8) / 16);
+        if (pos == 0)
+            v -= dc_bias;           /* recentrage DC (échelle driver) */
+        if (v == 0)
+            continue;
+        if (v > 2047) v = 2047; else if (v < -2047) v = -2047;
+        out[0] = (uint8_t)(pos - last - 1);
+        out[1] = 0;
+        int16_t lv = (int16_t) v;
+        memcpy(out + 2, &lv, sizeof lv);
+        out += 4;
+        cnt++;
+        last = pos;
+    }
+    desc[0x16 + ctx->cur_block] = (uint8_t) cnt;
+    ctx->coeffs_len += cnt * 4u;
+    ctx->cur_block++;
+}
+
 void dvddriver_picture_mb_end(dvddriver_ctx *ctx)
 {
     if (ctx->mb_index < ctx->nb_mbs)
         ctx->mb_index++;
 }
+
+/* Type de picture tel que le backend l'a mémorisé au dernier picture_begin.
+ * Diagnostic : s'il diffère de celui que libmpeg2 croit soumettre, c'est qu'un
+ * picture_begin s'est glissé entre la capture et la soumission — et il remet
+ * mb_index à zéro, d'où un [0/nb_mbs] alors que les macroblocs ont bien été vus. */
+
+
+/* Nombre de fois où le décodeur a dû ATTENDRE qu'une surface GPU se libère.
+ * Le pool est de 5, mais les deux références en occupent deux : il n'en reste
+ * que TROIS pour la sortie, et chacune reste prise tant que VLC détient la
+ * picture. Si ce compteur monte, le décodeur est cadencé par l'affichage et ne
+ * peut plus tenir le débit de la source. */
+
+unsigned dvddriver_surf_waits(const dvddriver_ctx *ctx)
+{
+    return (ctx != NULL) ? ctx->n_surf_wait : 0;
+}
+
+
+
 
 void dvddriver_last_progress(const dvddriver_ctx *ctx, unsigned *captured,
                              unsigned *total)
@@ -1220,8 +1692,139 @@ uint8_t dvddriver_cbp_from_libmpeg2(unsigned mpeg2_cbp)
 
 /* Construit pic_desc et appelle DVDDriverDecode. Retourne rc (0=succès ;
  * -4 = matériel abandonné après stalls répétés, l'appelant doit repasser CPU). */
+/* Attend, VERROU TENU, que le worker asynchrone ne soit plus dans Decode.
+ * À appeler avant tout appel driver hors worker (Show, SP) : on conserve la
+ * sérialisation historique « un seul appel driver à la fois ». */
+static void dd_wait_gpu_idle_locked(dvddriver_ctx *ctx)
+{
+    /* ⚠⚠ NE JAMAIS laisser Show/SP s'exécuter PENDANT un Decode. Essayé le
+     * 2026-07-28 sur 10.3.9 (gate /tmp/hw_showpar, retiré depuis) : GEL COMPLET
+     * de la machine dès les premières images du film. La sérialisation
+     * historique « un seul appel driver à la fois » n'est pas une précaution
+     * excessive, c'est une exigence du kext. */
+    while (ctx->async_busy) {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        struct timespec ts;
+        ts.tv_sec  = tv.tv_sec;
+        ts.tv_nsec = (long) tv.tv_usec * 1000L + 200000000L;   /* +200 ms */
+        if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+        pthread_cond_timedwait(&ctx->async_done_cv, &ctx->lock, &ts);
+    }
+}
+
+/* Fin de Decode + comptabilité, VERROU TENU. Partagé entre le chemin synchrone
+ * et le worker pour que les deux modes produisent les mêmes statistiques et le
+ * même garde-fou anti-wedge. */
+static void dd_decode_done_locked(dvddriver_ctx *ctx, int rc, unsigned long dt,
+                                  int out_idx)
+{
+    ctx->us_decode += dt;
+    ctx->n_decode++;
+    ctx->us_last_decode = dt;
+    {
+        int b = dt <  4000 ? 0 : dt <  8000 ? 1 : dt < 12000 ? 2
+              : dt < 16000 ? 3 : dt < 24000 ? 4 : dt < 40000 ? 5
+              : dt < 80000 ? 6 : 7;
+        ctx->dec_hist[b]++;
+    }
+    if (dt > DD_STALL_US && ctx->n_decode > 1) {
+        ctx->stalls++;
+        dd_recycle_locked(ctx, 0);
+        if (ctx->stalls >= DD_STALL_MAX)
+            ctx->gpu_disabled = true;
+    } else if (ctx->stalls > 0 && dt < DD_STALL_US / 4) {
+        /* « répétés » = CONSÉCUTIFS : un Decode redevenu rapide prouve que le
+         * driver draine. Un compteur cumulatif transformait une poignée de
+         * contre-pressions étalées sur 35 s en faux abandon du matériel. */
+        ctx->stalls = 0;
+    }
+    if (rc == 0 && out_idx >= 0 && out_idx < 5) {
+        dd_pending_drop(ctx, out_idx);
+        if (ctx->n_pending < (int)(sizeof ctx->pending / sizeof ctx->pending[0]))
+            ctx->pending[ctx->n_pending++] = out_idx;
+    }
+}
+
+static void *dd_async_worker(void *arg)
+{
+    dvddriver_ctx *ctx = arg;
+
+    pthread_mutex_lock(&ctx->lock);
+    for (;;) {
+        while (!ctx->async_quit && !ctx->async_job)
+            pthread_cond_wait(&ctx->async_in_cv, &ctx->lock);
+        if (ctx->async_quit)
+            break;
+
+        uint8_t  pic[0x40];
+        int16_t  rect[4];
+        memcpy(pic,  ctx->async_pic,  sizeof(pic));
+        memcpy(rect, ctx->async_rect, sizeof(rect));
+        int out_idx = ctx->async_out_idx;
+        int ctype   = ctx->async_coding;
+        ctx->async_job  = false;
+        ctx->async_busy = true;
+
+        if (ctx->closed || ctx->Decode == NULL || ctx->dev_ctx == NULL) {
+            ctx->async_last_rc = -1;
+            ctx->async_busy = false;
+            pthread_cond_broadcast(&ctx->async_done_cv);
+            continue;
+        }
+        dd_recycle_locked(ctx, 4);   /* filet anti-famine, cf. chemin synchrone */
+
+        dvd_decode_fn dec = ctx->Decode;
+        void *dev = ctx->dev_ctx;
+        /* Decode HORS verrou : pendant ce temps le thread décodeur fait la VLD
+         * de la picture suivante et le vout fait pick/hold/release librement.
+         * Les appels DRIVER concurrents, eux, attendent async_busy. */
+        pthread_mutex_unlock(&ctx->lock);
+        unsigned long t0 = dd_now_us();
+        int rc = dec(dev, pic, rect);
+        unsigned long dt = dd_now_us() - t0;
+        pthread_mutex_lock(&ctx->lock);
+
+        dd_decode_done_locked(ctx, rc, dt, out_idx);
+        ctx->async_last_rc = rc;
+        if (rc != 0 && ctx->async_fail_type == 0)
+            ctx->async_fail_type = ctype;
+        ctx->async_busy = false;
+        pthread_cond_broadcast(&ctx->async_done_cv);
+    }
+    pthread_mutex_unlock(&ctx->lock);
+    return NULL;
+}
+
+void dvddriver_set_async(dvddriver_ctx *ctx, bool on)
+{
+    if (ctx == NULL)
+        return;
+    if (on && !ctx->async_started) {
+        ctx->async_quit = false;
+        if (pthread_create(&ctx->async_th, NULL, dd_async_worker, ctx) == 0) {
+            ctx->async_started = true;
+            ctx->async_on = true;
+        }
+    } else if (!on) {
+        ctx->async_on = false;   /* le thread éventuel reste idle */
+    }
+}
+
+int dvddriver_async_take_failure(dvddriver_ctx *ctx)
+{
+    if (ctx == NULL)
+        return 0;
+    pthread_mutex_lock(&ctx->lock);
+    int v = ctx->async_fail_type;
+    ctx->async_fail_type = 0;
+    pthread_mutex_unlock(&ctx->lock);
+    return v;
+}
+
 int dvddriver_picture_submit(dvddriver_ctx *ctx)
 {
+
     if (ctx->dev_ctx == NULL || ctx->Decode == NULL)
         return -1;
     if (ctx->gpu_disabled)
@@ -1318,6 +1921,53 @@ int dvddriver_picture_submit(dvddriver_ctx *ctx)
             ctx->surf_gen[ctx->out_idx]++;
             pthread_mutex_unlock(&ctx->lock);
         }
+    } else if (ctx->async_on && ctx->async_started) {
+        /* ── Chemin ASYNCHRONE ── */
+        pthread_mutex_lock(&ctx->lock);
+        /* Profondeur 1 : attendre la fin du job précédent. C'est ici que le
+         * recouvrement se paie : la VLD de CETTE picture a déjà eu lieu
+         * pendant le Decode de la précédente. */
+        {
+            unsigned long w0 = dd_now_us();
+            while ((ctx->async_job || ctx->async_busy) && !ctx->closed)
+                pthread_cond_wait(&ctx->async_done_cv, &ctx->lock);
+            unsigned long w = dd_now_us() - w0;
+            ctx->us_submit_wait += w;
+            ctx->us_last_submit_wait = w;
+        }
+        if (ctx->closed) {
+            pthread_mutex_unlock(&ctx->lock);
+            return -1;
+        }
+        if (ctx->gpu_disabled) {
+            pthread_mutex_unlock(&ctx->lock);
+            return -4;
+        }
+        memcpy(ctx->async_pic,  pic,  sizeof(pic));
+        memcpy(ctx->async_rect, rect, sizeof(rect));
+        ctx->async_out_idx = ctx->out_idx;
+        ctx->async_coding  = ctx->coding_type;
+        ctx->async_job = true;
+        /* Génération bumpée DÈS l'enqueue : le codec attache le contexte
+         * {surface, génération} sitôt ce retour, et le present du vout doit
+         * retrouver cette valeur. Si le Decode échoue ensuite, le codec gèle
+         * l'affichage via async_fail_type — même politique que le rc≠0
+         * synchrone, décalée d'une picture. */
+        if (ctx->out_idx >= 0 && ctx->out_idx < 5)
+            ctx->surf_gen[ctx->out_idx]++;
+        pthread_cond_broadcast(&ctx->async_in_cv);
+        pthread_mutex_unlock(&ctx->lock);
+        /* Rotation OPTIMISTE des références (rc supposé 0) : picture_begin de
+         * la picture suivante — même thread — doit voir la rotation sans
+         * attendre le GPU. Un échec est rattrapé par le gel jusqu'à l'I
+         * suivante, comme sur le chemin synchrone. */
+        if (ctx->coding_type != 3) {
+            ctx->ref_idx[1] = ctx->ref_idx[0];
+            ctx->ref_idx[0] = ctx->out_idx;
+        }
+        /* La picture suivante s'écrira dans l'autre jeu de tampons. */
+        ctx->wset ^= 1;
+        return 0;
     } else {
         /* U4 — le device est partagé avec le thread vout (Show) → sérialiser. */
         pthread_mutex_lock(&ctx->lock);
@@ -1335,27 +1985,18 @@ int dvddriver_picture_submit(dvddriver_ctx *ctx)
          * /tmp/hw_norecycle rétablit l'ancien comportement pour l'A/B. */
         static int s_norecyc = -2;
         if (s_norecyc == -2) s_norecyc = (dd_gate_read("/tmp/hw_norecycle") > 0);
+        /* keep=4 et non DD_MAX_PENDING : le drainage nominal se fait désormais
+         * AU PRESENT (dd_show_locked, dans l'ordre) ; ici ce n'est plus qu'un
+         * filet anti-famine, et chaque Show hors present est une image hors
+         * ordre à l'écran — n'y recourir qu'en dernier ressort. */
         if (!s_norecyc)
-            dd_recycle_locked(ctx, DD_MAX_PENDING);
+            dd_recycle_locked(ctx, 4);
         unsigned long t0 = dd_now_us();
         rc = ctx->Decode(ctx->dev_ctx, pic, rect);
         unsigned long dt = dd_now_us() - t0;
-        ctx->us_decode += dt;
-        ctx->n_decode++;
-        /* Garde-fou : Decode anormalement long → le driver attend un buffer. On
-         * rend tout ; à la DD_STALL_MAX-ième fois on renonce au matériel. */
-        if (dt > DD_STALL_US && ctx->n_decode > 1) {
-            ctx->stalls++;
-            dd_recycle_locked(ctx, 0);
-            if (ctx->stalls >= DD_STALL_MAX)
-                ctx->gpu_disabled = true;
-        }
-        if (rc == 0 && ctx->out_idx >= 0 && ctx->out_idx < 5) {
+        if (rc == 0 && ctx->out_idx >= 0 && ctx->out_idx < 5)
             ctx->surf_gen[ctx->out_idx]++;   /* surface réécrite → nouvelle génération */
-            dd_pending_drop(ctx, ctx->out_idx);          /* une seule entrée par surface */
-            if (ctx->n_pending < (int)(sizeof ctx->pending / sizeof ctx->pending[0]))
-                ctx->pending[ctx->n_pending++] = ctx->out_idx;
-        }
+        dd_decode_done_locked(ctx, rc, dt, ctx->out_idx);
         pthread_mutex_unlock(&ctx->lock);
     }
 
@@ -1516,6 +2157,34 @@ static uint32_t dd_fingerprint(const volatile uint32_t *p, unsigned words,
 /* SP2 — pose un sous-titre de test dans le plan matériel et l'affiche.
  * Renvoie les codes de retour du driver dans rc[6] :
  *   0 EnableSP, 1 SetSPPalette, 2 ApplySPDCSQ, 3 SetSPBuffer, 4 ShowSPBuffer. */
+/* ── Accès au PLAN de destination du blit subpicture ─────────────────────────
+ * Base en ctx[0x204], pas de ligne en ctx[0x414] (cf. les champs lay_* et le
+ * relevé des trois bundles dans dvddriver_open). Sur 10.2 le pas de ligne n'est
+ * pas mémorisé par le pilote et suivre ctx[0x204] reviendrait à déréférencer ce
+ * qui traîne à cet offset : ces deux accesseurs rendent alors NULL/0, et TOUT
+ * déréférencement du plan doit passer par eux. Diagnostic uniquement — le
+ * chemin d'incrustation, lui, n'en a pas besoin. */
+static const volatile uint32_t *dd_sp_dest(dvddriver_ctx *ctx)
+{
+    if (ctx == NULL || ctx->dev_ctx == NULL || !ctx->lay_deref_ok)
+        return NULL;
+    return (const volatile uint32_t *)
+        ((const volatile uint32_t *) ctx->dev_ctx)[0x204 / 4];
+}
+
+static unsigned dd_sp_dest_pitch(dvddriver_ctx *ctx)
+{
+    if (ctx == NULL || ctx->dev_ctx == NULL)
+        return 0;
+    if (ctx->lay_mp_pitch != 0)
+        return ((const volatile uint32_t *) ctx->dev_ctx)[ctx->lay_mp_pitch / 4];
+    /* 10.2 ne mémorise pas le pas de ligne. OpenDevice, lui, rend les
+     * dimensions de la destination : mesuré 0x300 = 768 et 0x240 = 576 sur ce
+     * G3, soit exactement le « 720 arrondi à 64 » attendu pour 720x576. C'est
+     * donc un repli légitime, et non une valeur inventée. */
+    return ctx->open_dims[0];
+}
+
 bool dvddriver_sp_show_test(dvddriver_ctx *ctx, unsigned width, unsigned height,
                             int rc[6])
 {
@@ -1700,8 +2369,7 @@ bool dvddriver_sp_show_test(dvddriver_ctx *ctx, unsigned width, unsigned height,
      * (192 o × 576 lignes = 0x1B000), destination = ctx[0x204]. */
     {
         const volatile uint32_t *src = (const volatile uint32_t *) bufs_a[0];
-        const volatile uint32_t *dst =
-            (const volatile uint32_t *) dc_sp[0x204 / 4];
+        const volatile uint32_t *dst = dd_sp_dest(ctx);
         ctx->sp_stage[0] = dd_fingerprint(src, 0x1B000 / 4, 4);
         ctx->sp_stage[2] = dd_fingerprint(dst, 0x40000 / 4, 4);
         ctx->sp_stage_valid = 1;
@@ -1741,12 +2409,10 @@ bool dvddriver_sp_show_test(dvddriver_ctx *ctx, unsigned width, unsigned height,
     ctx->sp_stage[1] = dd_fingerprint((const volatile uint32_t *) bufs_a[0],
                                       0x1B000 / 4, 4);
     rc[3] = ctx->SetSPBuffer  ? ctx->SetSPBuffer(ctx->dev_ctx, 0, spdesc) : -999;
-    ctx->sp_stage[3] = dd_fingerprint((const volatile uint32_t *) dc_sp[0x204 / 4],
-                                      0x40000 / 4, 4);
+    ctx->sp_stage[3] = dd_fingerprint(dd_sp_dest(ctx), 0x40000 / 4, 4);
     ctx->sp_stage[5] = dc_sp[0x1D0 / 4];
     rc[4] = ctx->ShowSPBuffer ? ctx->ShowSPBuffer(ctx->dev_ctx, 0, rect) : -999;
-    ctx->sp_stage[4] = dd_fingerprint((const volatile uint32_t *) dc_sp[0x204 / 4],
-                                      0x40000 / 4, 4);
+    ctx->sp_stage[4] = dd_fingerprint(dd_sp_dest(ctx), 0x40000 / 4, 4);
     rc[5] = (int) n;
     for (int i = 0; i < 4; i++)
         ctx->sp_rect[i] = rect[i];
@@ -1822,9 +2488,8 @@ int dvddriver_sp_dest_probes(dvddriver_ctx *ctx, uint32_t out[3][8])
  * même quand l'incrustation est parfaite. */
 static uint32_t dd_sp_plane_opaque(dvddriver_ctx *ctx)
 {
-    const volatile uint32_t *dcp = (const volatile uint32_t *) ctx->dev_ctx;
-    const volatile uint32_t *pl  = (const volatile uint32_t *) dcp[0x204 / 4];
-    const unsigned pitch = dcp[0x414 / 4];
+    const volatile uint32_t *pl  = dd_sp_dest(ctx);
+    const unsigned pitch = dd_sp_dest_pitch(ctx);
     if (pl == NULL || pitch == 0)
         return 0;
     uint32_t n = 0;
@@ -1901,6 +2566,16 @@ static bool dd_sp_arm(dvddriver_ctx *ctx, const uint8_t palette[64])
         if (ctx->ClearSP) ctx->ClearSP(ctx->dev_ctx, 7);
         if (ctx->EnableSP(ctx->dev_ctx, 1) != 0)
             return false;
+        /* ⚠⚠ PAS D'EnableButton ICI — piège inversé, deux fois de suite.
+         * La trace du DVD Player d'Apple le montre : pendant TOUTE la séquence
+         * d'un sous-titre, `ctx[0x1D8]` vaut ZÉRO. Le blit du sous-titre part du
+         * chemin `ctx[0x1D0]` (0x2190), le drapeau qu'arme `SetSPBuffer`, et il
+         * est appelé avec l'argument 0 — lequel sélectionne le rect du PLAN
+         * (ctx+0x1E4) et le mot couleurs `ctx[0x1DC]`. L'argument 1 sélectionne
+         * le rect du BOUTON (ctx+0x1F4) et `ctx[0x1E0]` : c'est la SURBRILLANCE
+         * DE MENU. Armer le bouton détourne donc ShowSPBuffer vers la mauvaise
+         * branche. `PrepareButton`/`EnableButton` ne servent qu'aux menus — la
+         * trace le confirme (rect 270,312→327,436, soit un bouton). */
         ctx->sp_armed = true;
     }
     /* La palette peut changer d'un sous-titre à l'autre (menus, pistes). */
@@ -1926,6 +2601,7 @@ bool dvddriver_sp_submit(dvddriver_ctx *ctx, const dvddriver_sp_picture *sp,
         return false;
 
     pthread_mutex_lock(&ctx->lock);
+    dd_wait_gpu_idle_locked(ctx);
     if (!dd_sp_rate_ok(ctx)) {
         ctx->sp_dropped++;
         pthread_mutex_unlock(&ctx->lock);
@@ -2006,7 +2682,28 @@ bool dvddriver_sp_submit(dvddriver_ctx *ctx, const dvddriver_sp_picture *sp,
      * Decode. Une seule variable change ici : le contenu. */
     /* Le bitmap arrive déjà au pas du driver (192 o/ligne) : copie directe.
      * Les lignes au-delà sont mises à zéro (= valeur 0 = transparente). */
+    /* Le bitmap 2 bits/pixel va TOUJOURS dans la série a : c'est la SOURCE que
+     * lit le blit (`r29 = a[idx] + ligne × 192`, 0x404c…0x40b0). Le pilote ne
+     * décode PAS le RLE, sur 10.2 pas plus que sur 10.4.
+     * ⚠ J'ai cru le contraire un moment, en voyant `a[idx]` à zéro sur ses 64
+     * PREMIERS OCTETS dans la trace du DVD Player — c'est le faux négatif que ce
+     * fichier documente déjà deux fois : les premières lignes d'un sous-titre
+     * sont transparentes, donc nulles. Ne pas s'y reprendre. */
     memcpy(dst, sp->bitmap, (size_t) sp->lines * 192u);
+
+    /* ★★★★ 10.2 — EN PLUS, LE PAQUET SPU BRUT DANS LA SÉRIE b.
+     * Relevé sur le DVD Player (relais journalisant) : il y dépose le paquet
+     * complet, en-tête compris (`04 f8 04 e0` = taille 0x04f8, 1re DCSQ 0x04e0).
+     * Le blit de ce pilote l'ANALYSE pour en tirer la ligne de départ
+     * (`ctx[0x1B4]`) : nous n'y écrivions qu'un octet, et sa boucle balayait de
+     * la mémoire non initialisée. Sur 10.3/10.4 rien de tel n'est nécessaire —
+     * leur `SetSPBuffer` blitte directement depuis le descripteur. */
+    bool b_raw = false;
+    if (ctx->lay_sp_stub && sp->packet != NULL && sp->packet_size > 0
+        && bufs_b[idx] != 0) {
+        memcpy((uint8_t *) bufs_b[idx], sp->packet, sp->packet_size);
+        b_raw = true;
+    }
     if (sp->lines < 576)
         memset(dst + (size_t) sp->lines * 192u, 0,
                (576u - sp->lines) * 192u);
@@ -2038,9 +2735,21 @@ bool dvddriver_sp_submit(dvddriver_ctx *ctx, const dvddriver_sp_picture *sp,
      * la configuration validée en SP7/SP8. */
     int16_t rect[4] = { 0, 0, (int16_t) ctx->height, (int16_t) ctx->width };
 
-    if (ctx->SetMPRects) {
+    /* Le pilote de 10.3/10.4 mémorise le pas de ligne de la destination du blit
+     * en ctx[0x414] : on ne (re)joue SetMPRects que s'il n'est pas encore posé,
+     * ce qui en lecture n'arrive jamais — `DVDDriverDecode` établit la géométrie
+     * lui-même dès que le rect soumis change.
+     * ⚠⚠ SUR 10.2 ON N'Y TOUCHE PAS DU TOUT. Ce pilote ne mémorise rien, donc
+     * on ne peut PAS savoir si la géométrie est déjà posée ; l'appeler « une
+     * fois par session » a été essayé le 2026-07-29 et RÉGRESSE : ce rect plein
+     * cadre écrase la destination établie par le décodeur — la vidéo se
+     * DÉPLACE de quelques pixels vers le bas au premier sous-titre (fenêtré
+     * comme plein écran) et le plan subpicture cesse d'afficher. SetMPRects ne
+     * pose pas que des dimensions : il écrit ctx[0x18] et fait un appel IOKit
+     * avec le rectangle. Ne pas y revenir sans un moyen de LIRE l'état. */
+    if (ctx->SetMPRects && ctx->lay_mp_pitch != 0) {
         const volatile uint32_t *dcw = (const volatile uint32_t *) ctx->dev_ctx;
-        if (dcw[0x414 / 4] == 0)
+        if (dcw[ctx->lay_mp_pitch / 4] == 0)
             ctx->SetMPRects(ctx->dev_ctx, rect, 0, 0);
     }
     /* Empreintes par étape (lecture seule) — c'est ce qui a permis d'isoler
@@ -2050,7 +2759,7 @@ bool dvddriver_sp_submit(dvddriver_ctx *ctx, const dvddriver_sp_picture *sp,
      *   s'exécute pas dans ce contexte). */
     const volatile uint32_t *dcp = (const volatile uint32_t *) ctx->dev_ctx;
     if (probes != NULL) {
-        probes[4] = dcp[0x204 / 4];
+        probes[4] = ctx->lay_deref_ok ? dcp[0x204 / 4] : 0;
         /* Empreinte de la SOURCE telle qu'on vient de l'écrire, et mot
          * couleurs/contrastes tel que SetSPBuffer va le recevoir : si la source
          * est pleine et le mot correct alors que le blit ne produit rien, la
@@ -2080,6 +2789,26 @@ bool dvddriver_sp_submit(dvddriver_ctx *ctx, const dvddriver_sp_picture *sp,
      * le plan — ce qui correspond à l'intermittence observée (environ un blit
      * sur deux ne produit rien, sans qu'aucun de nos paramètres ne varie). */
     ctx->SetSPBuffer (ctx->dev_ctx, (uint32_t) idx, spdesc); /* couleurs+blit */
+    /* ★★ 10.2 — LA PIÈCE MANQUANTE, ET NOTRE SEULE ÉCRITURE DANS LE CONTEXTE
+     * PRIVÉ. Le `SetSPBuffer` de 10.4 extrait du descripteur un mot
+     * couleurs/contrastes et le range en ctx[0x1DC] :
+     *     lhz r0,0x10(r5) ; lhz r2,0x12(r5) ; r0<<=16 ; or ; stw r0,0x1dc(r3)
+     * Celui de 10.2 ne le fait pas. Or son blit LIT ce mot (cinq références à
+     * ctx[0x1DC] dans le bundle 10.2, autant que dans celui de 10.4), et un mot
+     * de contrastes nul ne peut produire QUE du transparent — mesuré sur
+     * matériel : source non nulle, drapeau armé, et pourtant zéro pixel opaque
+     * dans tout le plan.
+     * ⚠ On n'écrit que là où le pilote est ce stub, et JAMAIS si la valeur est
+     * déjà la bonne : sur 10.3/10.4 cette branche ne s'exécute donc pas.
+     * Le rectangle de découpe que 10.4 range en ctx[0x1EC…0x1F2] n'a PAS
+     * d'équivalent ici (zéro référence dans le bundle 10.2) : cette
+     * fonctionnalité n'y existe pas, il n'y a rien à poser. */
+    if (ctx->lay_sp_stub) {
+        const uint32_t cc = ((uint32_t) sp->colors << 16) | sp->contrasts;
+        volatile uint32_t *dcc = (volatile uint32_t *) ctx->dev_ctx;
+        if (dcc[0x1DC / 4] != cc)
+            dcc[0x1DC / 4] = cc;
+    }
     /* ★ Relevé JUSTE APRÈS le blit (c'est `SetSPBuffer` qui blitte), avant tout
      * autre appel. Seule mesure capable de distinguer « le blit ne produit
      * rien » de « il produit, puis quelque chose efface » — les deux donnent un
@@ -2097,9 +2826,8 @@ bool dvddriver_sp_submit(dvddriver_ctx *ctx, const dvddriver_sp_picture *sp,
      * l'incrustation est parfaite, et le verdict « blit muet » qu'elle produit
      * est un pur artefact de mesure. Le plan fait pas × hauteur pixels. */
     if (probes != NULL) {
-        const volatile uint32_t *pl =
-            (const volatile uint32_t *) dcp[0x204 / 4];
-        const unsigned pitch = dcp[0x414 / 4];
+        const volatile uint32_t *pl = dd_sp_dest(ctx);
+        const unsigned pitch = dd_sp_dest_pitch(ctx);
         if (pl != NULL && pitch != 0) {
             /* ⚠ Relever le PREMIER pixel opaque ne dit rien : sur du texte
              * c'est le contour. On collecte les couleurs DISTINCTES. */
@@ -2125,7 +2853,22 @@ bool dvddriver_sp_submit(dvddriver_ctx *ctx, const dvddriver_sp_picture *sp,
 
     /* ★ SP9 — armer l'affichage : sans ce drapeau, ShowMPBuffer saute son appel
      * d'affichage à chaque image et le plan reste invisible quoi qu'on y mette. */
-    dd_sp_set_display(ctx, bufs_b, idx, 0x01);
+    if (b_raw) {
+        /* Séquence exacte du DVD Player : une ApplySPDCSQ PAR COMMANDE, avec son
+         * offset RÉEL dans le paquet (Apple : 0x4e4, 0x4e5, 0x4e8, 0x4eb, 0x4f2
+         * — les longueurs 1/3/3/7/5 des commandes 00-01, 03, 04, 05, 06), puis
+         * un seul ShowSPBuffer, qui déclenche le blit.
+         * ⚠ NE PAS appeler dd_sp_set_display() ici : elle ÉCRASE le premier
+         * octet du paquet par une pseudo-commande, ce qui détruirait l'en-tête
+         * de taille que le blit vient y lire. */
+        unsigned k;
+        for (k = 0; k < sp->cmd_count; k++)
+            ctx->ApplySPDCSQ(ctx->dev_ctx, (uint32_t) idx,
+                             (const void *) (unsigned long) sp->cmd_off[k], 1);
+        ctx->ShowSPBuffer(ctx->dev_ctx, (uint32_t) idx, rect);
+    } else {
+        dd_sp_set_display(ctx, bufs_b, idx, 0x01);
+    }
 
     for (int i = 0; i < 4; i++)
         ctx->sp_rect[i] = rect[i];
@@ -2152,6 +2895,7 @@ bool dvddriver_sp_hide(dvddriver_ctx *ctx)
     if (!dvddriver_sp_usable(ctx))
         return false;
     pthread_mutex_lock(&ctx->lock);
+    dd_wait_gpu_idle_locked(ctx);
     if (!ctx->sp_visible) {
         pthread_mutex_unlock(&ctx->lock);
         return false;
@@ -2225,13 +2969,23 @@ void dvddriver_sp_display_words(dvddriver_ctx *ctx, int32_t out[6])
 {
     if (ctx == NULL || ctx->dev_ctx == NULL)
         return;
+    /* ★ CHANTIER 10.2 : ce sont les champs qui gouvernent le blit du pilote
+     * stubbé. Lectures pures, à des offsets présents dans les trois bundles.
+     *   [0] ctx[0x1D8] : « bouton actif » — SANS LUI ShowSPBuffer n'appelle le
+     *       blit qu'avec l'argument 0, c'est-à-dire pour rien (0x2174) ;
+     *   [1] ctx[0x1C4] : drapeau d'affichage, posé par ApplySPDCSQ ;
+     *   [2] ctx[0x1C8] : posé par EnableSP ;
+     *   [3]/[4] rect du PLAN, posé par ShowSPBuffer (0x1E4 = haut|gauche,
+     *       0x1E8 = bas|droite, deux int16 par mot) ;
+     *   [5] rect du BOUTON, posé par PrepareButton (0x1F4 = haut|gauche) — s'il
+     *       est nul, le découpage a échoué et le blit n'a rien à copier. */
     const volatile uint8_t *c = (const volatile uint8_t *) ctx->dev_ctx;
-    out[0] = *(const volatile int16_t *) (c + 0x1E4);   /* haut            */
-    out[1] = *(const volatile int16_t *) (c + 0x1E6);   /* gauche          */
-    out[2] = *(const volatile int16_t *) (c + 0x1EA);   /* droite          */
-    out[3] = (int32_t) *(const volatile uint32_t *) (c + 0x1B4); /* décalage */
-    out[4] = *(const volatile int16_t *) (c + 0x1EC);   /* découpe haut    */
-    out[5] = *(const volatile int16_t *) (c + 0x1F0);   /* découpe bas     */
+    out[0] = (int32_t) *(const volatile uint32_t *) (c + 0x1B4);
+    out[1] = (int32_t) *(const volatile uint32_t *) (c + 0x1C4);
+    out[2] = (int32_t) *(const volatile uint32_t *) (c + 0x1D0);
+    out[3] = (int32_t) *(const volatile uint32_t *) (c + 0x1E4);
+    out[4] = (int32_t) *(const volatile uint32_t *) (c + 0x1E8);
+    out[5] = (int32_t) *(const volatile uint32_t *) (c + 0x1F4);
 }
 
 /* SP7b — empreintes par ÉTAPE de la séquence SP (lecture seule) :
@@ -2260,17 +3014,21 @@ bool dvddriver_sp_geometry(dvddriver_ctx *ctx, uint32_t out[4])
 {
     if (ctx == NULL || ctx->dev_ctx == NULL)
         return false;
+    /* Le cache de rect du plan vidéo n'existe pas sur 10.2 : ne rien inventer,
+     * un zéro dit « inconnu » là où une valeur mentirait (cf. lay_mp_pitch). */
     const volatile uint32_t *dc = (const volatile uint32_t *) ctx->dev_ctx;
-    out[0] = dc[0x204 / 4];
-    out[1] = dc[0x410 / 4];
-    out[2] = dc[0x414 / 4];
-    out[3] = dc[0x418 / 4];
+    out[0] = ctx->lay_deref_ok ? dc[0x204 / 4] : 0;
+    out[1] = ctx->lay_mp_pitch ? dc[0x410 / 4] : 0;
+    out[2] = ctx->lay_mp_pitch ? dc[0x414 / 4] : 0;
+    out[3] = ctx->lay_mp_pitch ? dc[0x418 / 4] : 0;
     return true;
 }
 
 uint32_t dvddriver_sp_dest(dvddriver_ctx *ctx)
 {
     if (ctx == NULL || ctx->dev_ctx == NULL)
+        return 0;
+    if (!ctx->lay_deref_ok)
         return 0;
     const volatile uint32_t *dc = (const volatile uint32_t *) ctx->dev_ctx;
     return dc[0x204 / 4];
@@ -2282,6 +3040,7 @@ bool dvddriver_sp_reshow(dvddriver_ctx *ctx)
         || ctx->ShowSPBuffer == NULL || ctx->sp_rect[2] == 0)
         return false;
     pthread_mutex_lock(&ctx->lock);
+    dd_wait_gpu_idle_locked(ctx);
     ctx->ShowSPBuffer(ctx->dev_ctx, 0, ctx->sp_rect);
     pthread_mutex_unlock(&ctx->lock);
     return true;
@@ -2347,6 +3106,54 @@ static void dd_show_locked(dvddriver_ctx *ctx, int idx)
                           s_nopres = (v > 0) ? v : 0; }
     if (s_nopres >= 2)
         return;
+    /* ★★ ORDRE Z (10.3, découverte utilisateur) : quand l'app est ACTIVE au
+     * démarrage du film, le WindowServer se met à alterner la surface GPU et
+     * le backing de la fenêtre (on revoit la derniere image GL d'avant
+     * l'engagement matériel) — le processus est parfaitement sain au sample,
+     * le combat est côté compositeur. Ré-affirmer « surface au-dessus »
+     * périodiquement est quasi gratuit et stoppe l'alternance. */
+    if (ctx->OrderSurf != NULL && ctx->ext_win
+        && (ctx->n_order_reassert++ % 25) == 0)
+        ctx->OrderSurf(ctx->cid, ctx->wid, ctx->sid, 1, 0);
+
+    /* (« clic automatique » CGSOrderWindow/CGSFlushWindow essayé ici aux
+     * presents n°1/n°50 : SANS effet sur le scintillement — retiré. Le clic
+     * manuel de l'utilisateur répare par un mécanisme WindowServer encore non
+     * identifié ; mais la vraie parade est de ne jamais rouvrir le décodeur en
+     * cours de lecture, cf. libmpeg2.c Reset().) */
+
+    /* ★ SCINTILLEMENT (Panther/Jaguar) : les tampons soumis puis jamais
+     * présentés (pictures que le vout n'affichera pas) doivent être rendus au
+     * driver par ShowMPBuffer — qui AFFICHE. Les rendre au fil de l'eau avant
+     * chaque Decode intercalait des images HORS ORDRE entre les présents du
+     * vout : invisible sur Tiger (2 jetées/108), 1-2 images/s de travers sur
+     * Panther (26 %% de jetées) — le scintillement constaté à l'œil. Ici on les
+     * draine DANS L'ORDRE DE SOUMISSION, juste avant l'image courante, sous le
+     * même verrou : entre deux composites du WindowServer seul le DERNIER Show
+     * est visible, les périmées ne touchent jamais l'écran. */
+    for (int guard = 0; ctx->n_pending > 0 && guard < 8; guard++) {
+        int p0 = ctx->pending[0];
+        if (p0 == idx)
+            break;                       /* la cible sera montrée ci-dessous */
+        memmove(ctx->pending, ctx->pending + 1,
+                (--ctx->n_pending) * sizeof ctx->pending[0]);
+        ctx->Show(ctx->dev_ctx, (uint32_t) p0, NULL, NULL);
+        pthread_cond_broadcast(&ctx->surf_cv);
+    }
+    /* ⚠ RETIRÉ (29/07, établi par DÉSASSEMBLAGE de CoreGraphics 10.3) : une
+     * transaction CGSDisableUpdate/ReenableUpdate autour du present est
+     * CONTRE-PRODUCTIVE. Dans `CGXFlushSurface`, le blit accéléré
+     * (`IOAccelFlushSurfaceOnFramebuffers`) n'est exécuté QUE si
+     * `CGXAreUpdatesDisabled` est faux ; et `__CGXActivateSurfaces` DIFFÈRE
+     * tout son travail quand les updates sont désactivées. Encadrer chaque
+     * present d'une transaction revenait donc à désarmer le chemin GPU. */
+    /* ⚠ ANTI-TEARING PAR ATTENTE DU FAISCEAU : ESSAYÉ ET RETIRÉ (29/07).
+     * `CGDisplayWaitForBeamPositionOutsideLines` existe bien sur 10.3 et
+     * l'attente ne coûtait rien (temps de present inchangé), mais le tearing
+     * est resté strictement identique : depuis que la surface est COMPOSÉE,
+     * c'est le WindowServer qui blitte vers le framebuffer, dans sa propre
+     * passe asynchrone — synchroniser NOTRE écriture ne pilote donc pas le
+     * moment où l'image atteint l'écran. Rien à gagner côté client. */
     unsigned long t0 = dd_now_us();
     if (ctx->pres_last_us != 0) {
         const unsigned long d = (t0 - ctx->pres_last_us) / 1000;   /* ms */
@@ -2356,6 +3163,8 @@ static void dd_show_locked(dvddriver_ctx *ctx, int idx)
         ctx->pres_n++;
     }
     ctx->pres_last_us = t0;
+    ctx->prev_shown = ctx->last_shown;
+    ctx->last_shown = idx;
 
     /* ⚠ 2e argument de ShowMPBuffer : le lecteur d'Apple y passe TOUJOURS 0
      * (trace sptrace.c), jamais un index. Or c'est cet argument que la routine
@@ -2371,8 +3180,7 @@ static void dd_show_locked(dvddriver_ctx *ctx, int idx)
      * destination (ctx[0x204]) juste avant et juste après le Show, sur les
      * premières images seulement. Lecture pure : aucun appel supplémentaire. */
     if (ctx->sp_dest_probes < 3) {
-        const volatile uint32_t *dst =
-            (const volatile uint32_t *) ((const volatile uint32_t *) ctx->dev_ctx)[0x204 / 4];
+        const volatile uint32_t *dst = dd_sp_dest(ctx);
         if (dst != NULL) {
             /* Empreinte sur 64 Ko : lire seulement les premiers mots ne prouve
              * rien (le coin haut-gauche d'une incrustation est transparent).
@@ -2432,7 +3240,17 @@ shown:;
                 }
             }
         }
-        if (ctx->FlushSurf && ctx->region)
+        /* ★★ EXPÉRIENCE /tmp/hw_noflush (10.3, « app active au démarrage ») :
+         * le lecteur d'Apple n'importe NI CGSBindSurface NI CGSFlushSurface —
+         * il Show et ne flushe jamais. Hypothèse : une surface créée pendant
+         * que l'app est ACTIVE est double-bufferisée par le WindowServer, et
+         * chaque Flush bascule vers le tampon PÉRIMÉ pendant que le driver
+         * dessine dans l'autre → alternance image fraîche / image ancienne,
+         * état collant depuis la création, compositeur au repos (mesuré :
+         * WindowServer 0,9 % pendant le scintillement). */
+        static int s_noflush = -2;
+        if (s_noflush == -2) s_noflush = (dd_gate_read("/tmp/hw_noflush") > 0);
+        if (!s_noflush && ctx->FlushSurf && ctx->region)
             ctx->FlushSurf(ctx->cid, ctx->wid, ctx->sid, ctx->region);
     }
     ctx->us_present += dd_now_us() - t0;
@@ -2493,6 +3311,7 @@ void dvddriver_present_index(dvddriver_ctx *ctx, int idx)
     if (ctx == NULL || idx < 0)
         return;
     pthread_mutex_lock(&ctx->lock);
+    dd_wait_gpu_idle_locked(ctx);
     dd_show_locked(ctx, idx);
     pthread_mutex_unlock(&ctx->lock);
 }
@@ -2506,6 +3325,10 @@ void dvddriver_present_index_gen(dvddriver_ctx *ctx, int idx, unsigned gen)
     if (ctx == NULL || idx < 0 || idx >= 5)
         return;
     pthread_mutex_lock(&ctx->lock);
+    /* En asynchrone la génération est bumpée à l'enqueue : si le Decode de
+     * cette surface est encore en vol, attendre sa fin avant de la montrer
+     * (sinon on composerait une image à moitié écrite). */
+    dd_wait_gpu_idle_locked(ctx);
     if (ctx->surf_gen[idx] == gen)
         dd_show_locked(ctx, idx);
     else
@@ -2523,6 +3346,40 @@ void dvddriver_present(dvddriver_ctx *ctx)
 /* ==== FERMETURE ========================================================== */
 /* Régularité de la présentation : [0]<25 [1]<33 [2]<37 [3]<43 [4]<50 [5]<60
  * [6]<100 [7]>=100 ms, et le total. */
+unsigned long dvddriver_last_surf_wait_us(dvddriver_ctx *ctx)
+{
+    return ctx != NULL ? ctx->us_last_surf_wait : 0;
+}
+
+unsigned long dvddriver_last_submit_wait_us(dvddriver_ctx *ctx)
+{
+    return ctx != NULL ? ctx->us_last_submit_wait : 0;
+}
+
+unsigned long dvddriver_submit_wait_us(dvddriver_ctx *ctx)
+{
+    return ctx != NULL ? ctx->us_submit_wait : 0;
+}
+
+unsigned long dvddriver_surf_wait_total_us(dvddriver_ctx *ctx)
+{
+    return ctx != NULL ? ctx->us_surf_wait : 0;
+}
+
+unsigned long dvddriver_last_decode_us(dvddriver_ctx *ctx)
+{
+    return ctx != NULL ? ctx->us_last_decode : 0;
+}
+
+void dvddriver_decode_times(dvddriver_ctx *ctx, uint32_t out[8], uint32_t *n)
+{
+    if (n) *n = 0;
+    if (ctx == NULL) return;
+    uint32_t total = 0;
+    for (int i = 0; i < 8; i++) { out[i] = ctx->dec_hist[i]; total += out[i]; }
+    if (n) *n = total;
+}
+
 void dvddriver_present_intervals(dvddriver_ctx *ctx, uint32_t out[8],
                                  uint32_t *total)
 {
@@ -2533,10 +3390,52 @@ void dvddriver_present_intervals(dvddriver_ctx *ctx, uint32_t out[8],
     *total = ctx->pres_n;
 }
 
+/* ★ Escamoter/rendre la SURFACE (et non la fenêtre) : retirer la fenêtre hôte
+ * ne suffit pas, le WindowServer continue de composer la surface qui lui est
+ * attachée — la vidéo restait affichée par-dessus la liste de lecture. On la
+ * fait passer sous le contenu de la fenêtre, ce qui la rend invisible sans
+ * rien détruire ; l'ordre est rétabli au retour. */
+void dvddriver_set_surface_hidden(dvddriver_ctx *ctx, bool hidden)
+{
+    if (ctx == NULL || ctx->OrderSurf == NULL || !ctx->ext_win)
+        return;
+    pthread_mutex_lock(&ctx->lock);
+    if (!ctx->closed) {
+        ctx->OrderSurf(ctx->cid, ctx->wid, ctx->sid, hidden ? -1 : 1, 0);
+        /* ★ MESURÉ sur 10.3 : cet ordre RÉUSSIT (rc=0) et ne retire rien de
+         * l'écran. Ce n'est pas l'empilement qui décide de la présence de la
+         * surface, c'est sa FORME sur le framebuffer — le désassemblage de
+         * CoreGraphics 10.3 montre le blit accéléré gouverné par des champs
+         * armés depuis IOAccelSetSurfaceFramebufferShape. On réduit donc les
+         * bounds à rien : le serveur n'a plus de région à envoyer. */
+        if (hidden && ctx->SetBounds)
+            ctx->SetBounds(ctx->cid, ctx->wid, ctx->sid,
+                           CGRectMake(0, 0, 0, 0));
+        /* ⚠ Le present saute CGSSetSurfaceBounds quand le rect n'a pas changé
+         * (cf. last_bounds). Sans cette invalidation, le retour de la vidéo
+         * garderait des bounds vides et l'image ne reviendrait jamais. */
+        ctx->has_bounds = false;
+    }
+    pthread_mutex_unlock(&ctx->lock);
+}
+
 void dvddriver_close(dvddriver_ctx *ctx)
 {
     if (ctx == NULL)
         return;
+    /* Arrêter le worker asynchrone AVANT CloseDevice : un Decode encore en vol
+     * pendant la fermeture du device serait le wedge assuré. Le worker termine
+     * son Decode courant, voit async_quit et sort ; join garantit qu'il n'y a
+     * plus AUCUN appel driver en cours quand on ferme. */
+    if (ctx->async_started) {
+        pthread_mutex_lock(&ctx->lock);
+        ctx->async_quit = true;
+        pthread_cond_broadcast(&ctx->async_in_cv);
+        pthread_mutex_unlock(&ctx->lock);
+        pthread_join(ctx->async_th, NULL);
+        ctx->async_started = false;
+        ctx->async_on = false;
+    }
     /* Sérialiser avec un éventuel Show en cours sur le thread vout : l'appelant
      * (codec) DOIT avoir déjà retiré dvddriver-ctx du bus libvlc AVANT d'appeler
      * close, pour qu'aucun nouveau present ne démarre ; le lock couvre celui qui

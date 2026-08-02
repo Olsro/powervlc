@@ -1,0 +1,78 @@
+From: PowerVLC
+Subject: [PATCH] ppc/h264: prefetch the whole reference block, not a rolling
+ quarter of it
+
+prefetch_motion() spreads one macroblock's worth of prefetch over the
+next 4 (luma) or 8 (chroma) macroblocks, on the assumption stated in its
+comment that a 64-byte cache line covers four macroblock columns at
+once. A 7450 has 32-byte lines, so each touch brings in a quarter of
+what it does on the CPU the code was tuned for -- and the rolling scheme
+only pays at all while the motion vector stays put across those 4 or 8
+macroblocks.
+
+Motion compensation on this CPU is squarely memory-latency bound:
+instruction-level sampling of a 1080p decode puts the stalls on the
+first consumer of every reference load, not on the arithmetic. So fetch
+the whole block instead -- 32 dcbt per macroblock and list, 1 KiB into a
+32 KiB L1, still issued four macroblocks ahead.
+
+Measured on a Mac mini G4 (7447A, 1.42 GHz), decoder in isolation,
+output bit-identical (dcbt is only a hint):
+
+  1080p High 1.9 Mbit/s   14.78 -> 14.92 fps  (+1.0 %)
+  ... same, NONREF deblocking  16.99 -> 17.18 (+1.1 %)
+  720p  High 4.8 Mbit/s   28.74 -> 28.75 fps  (unchanged)
+
+720p is unchanged because its reference frames are small enough that the
+L2 already holds what the extra touches would fetch; the win is real
+only once the working set stops fitting.
+
+Guarded on ARCH_PPC: the upstream scheme is right for a 64-byte line,
+and there is no measurement for the other targets.
+---
+--- a/libavcodec/h264_mb.c	2024-06-15 22:59:55
++++ b/libavcodec/h264_mb.c	2026-07-28 13:57:08
+@@ -494,6 +494,35 @@
+         int off       =  mx * (1<< pixel_shift) +
+                         (my + (sl->mb_x & 3) * 4) * sl->mb_linesize +
+                         (64 << pixel_shift);
++#if ARCH_PPC
++        /* The scheme above spreads one macroblock's worth of prefetch over the
++         * next 4 (luma) or 8 (chroma) macroblocks, on the assumption that a
++         * 64-byte line covers four macroblock columns at once. A 7450 has
++         * 32-byte lines, so each touch brings in a quarter of what it does on
++         * the CPU this was tuned for -- and it only pays at all while the
++         * motion vector stays put across those 4 or 8 macroblocks. Motion
++         * compensation on this CPU is squarely memory-latency bound
++         * (instruction-level sampling puts the stalls on the first consumer of
++         * every reference load), so fetch the whole block instead: 32 dcbt per
++         * macroblock and list, 1 KiB into a 32 KiB L1, still four macroblocks
++         * ahead.
++         *
++         * Measured on a 1.42 GHz 7447A, decoder in isolation, output
++         * bit-identical (dcbt is only a hint): 1080p24 14.78 -> 14.92 fps
++         * (+1.0 %), and 16.99 -> 17.18 with the default NONREF deblocking.
++         * 720p is unchanged either way -- its reference frames are small
++         * enough that the L2 already covers what the extra touches fetch. */
++        off = mx * (1 << pixel_shift) + my * sl->mb_linesize + (64 << pixel_shift);
++        h->vdsp.prefetch(src[0] + off, sl->linesize, 16);
++        if (chroma_idc == 3 /* yuv444 */) {
++            h->vdsp.prefetch(src[1] + off, sl->linesize, 16);
++            h->vdsp.prefetch(src[2] + off, sl->linesize, 16);
++        } else {
++            off = ((mx >> 1) + 64) * (1 << pixel_shift) + (my >> 1) * sl->uvlinesize;
++            h->vdsp.prefetch(src[1] + off, sl->uvlinesize, 8);
++            h->vdsp.prefetch(src[2] + off, sl->uvlinesize, 8);
++        }
++#else
+         h->vdsp.prefetch(src[0] + off, sl->linesize, 4);
+         if (chroma_idc == 3 /* yuv444 */) {
+             h->vdsp.prefetch(src[1] + off, sl->linesize, 4);
+@@ -502,6 +531,7 @@
+             off= ((mx>>1)+64) * (1<<pixel_shift) + ((my>>1) + (sl->mb_x&7))*sl->uvlinesize;
+             h->vdsp.prefetch(src[1] + off, src[2] - src[1], 2);
+         }
++#endif
+     }
+ }
+ 

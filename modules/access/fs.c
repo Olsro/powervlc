@@ -39,6 +39,14 @@ vlc_module_begin ()
     set_capability( "access", 50 )
     add_shortcut( "file", "fd", "stream" )
     set_callbacks( FileOpen, FileClose )
+#ifdef __APPLE__
+    add_bool( "file-nocache", false, N_("Bypass the system file cache"),
+              N_("Read local files without going through the operating "
+                 "system's file cache (F_NOCACHE). On a Mac with little RAM "
+                 "this stops a large film from evicting the player's own "
+                 "memory mid-playback. It also disables kernel read-ahead, so "
+                 "leave it off on slow or network volumes."), true )
+#endif
 
     add_submodule()
     set_section( N_("Directory" ), NULL )

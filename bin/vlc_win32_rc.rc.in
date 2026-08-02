@@ -3,7 +3,7 @@
 
 #include <winuser.h>
 
-VLC_ICON ICON "vlc.ico"
+VLC_ICON ICON "powervlc.ico"
 
 1 VERSIONINFO
 FILETYPE 1

@@ -17,7 +17,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: vlc 3.0.22-rc1\n"
 "Report-Msgid-Bugs-To: vlc-devel@videolan.org\n"
-"POT-Creation-Date: 2026-07-25 11:39+0200\n"
+"POT-Creation-Date: 2026-07-25 12:36+0200\n"
 "PO-Revision-Date: 2017-12-10 22:48+0000\n"
 "Last-Translator: Junghee Lee <daemul72@gmail.com>, 2025\n"
 "Language-Team: Korean (https://app.transifex.com/yaron/teams/16553/ko/)\n"
@@ -87,12 +87,12 @@ msgstr "단축키 설정"
 #: modules/access/imem.c:64
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:672
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:359
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:603
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:590
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1356
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:284
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1295
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:171
-#: modules/gui/macosx/VLCMainMenu.m:431 modules/gui/macosx/VLCOutput.m:92
+#: modules/gui/macosx/VLCMainMenu.m:430 modules/gui/macosx/VLCOutput.m:92
 #: modules/gui/macosx/VLCPlaylistInfo.m:91
 #: modules/gui/macosx/VLCSimplePrefsController.m:368
 #: modules/gui/qt/components/info_panels.cpp:572
@@ -126,8 +126,8 @@ msgid "Audio resampler"
 msgstr "오디오 리샘플러"
 
 #: include/vlc_config_cat.h:63 src/audio_output/output.c:260
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:623
-#: modules/gui/macosx/VLCMainMenu.m:441 modules/gui/macosx/VLCMainMenu.m:442
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:610
+#: modules/gui/macosx/VLCMainMenu.m:440 modules/gui/macosx/VLCMainMenu.m:441
 msgid "Visualizations"
 msgstr "시각화"
 
@@ -159,13 +159,13 @@ msgstr "기타 오디오 설정 및 모듈"
 #: src/libvlc-module.c:1601 modules/access/imem.c:64
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:623
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:343
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:635
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:622
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1348
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:257
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:895
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1296
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:160
-#: modules/gui/macosx/VLCMainMenu.m:444 modules/gui/macosx/VLCOutput.m:82
+#: modules/gui/macosx/VLCMainMenu.m:443 modules/gui/macosx/VLCOutput.m:82
 #: modules/gui/macosx/VLCPlaylistInfo.m:86
 #: modules/gui/macosx/VLCSimplePrefsController.m:370
 #: modules/gui/macosx/VLCSimplePrefsController.m:513
@@ -378,9 +378,9 @@ msgstr "VLC의 VOD (주문형 동영상) 구현"
 #: include/vlc_config_cat.h:173 src/libvlc-module.c:2138
 #: src/playlist/engine.c:243 modules/demux/playlist/playlist.c:64
 #: modules/demux/playlist/playlist.c:65 modules/demux/playlist/wpl.c:99
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1131
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2530
-#: modules/gui/macosx/VLCMainWindow.m:984
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1124
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2523
+#: modules/gui/macosx/VLCMainWindow.m:981
 #: modules/gui/macosx/VLCSidebarDataSource.m:68
 #: modules/gui/qt/components/controller.hpp:109
 #: modules/gui/qt/components/playlist/playlist.cpp:165
@@ -482,17 +482,17 @@ msgid "&About"
 msgstr "정보(&A)"
 
 #: include/vlc_intf_strings.h:65 modules/control/oldrc.c:70
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:896
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1190
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:519
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:826
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1593
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:889
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1183
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:506
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:813
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1580
 #: modules/gui/macosx/VLCControlsBarCommon.m:81
 #: modules/gui/macosx/VLCControlsBarCommon.m:432
 #: modules/gui/macosx/VLCFSPanelController.m:245
-#: modules/gui/macosx/VLCMainMenu.m:402 modules/gui/macosx/VLCMainMenu.m:514
-#: modules/gui/macosx/VLCMainMenu.m:521 modules/gui/macosx/VLCMainMenu.m:1383
-#: modules/gui/macosx/VLCMainMenu.m:1384 modules/gui/macosx/VLCMainMenu.m:1385
+#: modules/gui/macosx/VLCMainMenu.m:401 modules/gui/macosx/VLCMainMenu.m:513
+#: modules/gui/macosx/VLCMainMenu.m:520 modules/gui/macosx/VLCMainMenu.m:1382
+#: modules/gui/macosx/VLCMainMenu.m:1383 modules/gui/macosx/VLCMainMenu.m:1384
 #: modules/gui/macosx/VLCPlaylist.m:223
 #: modules/gui/qt/components/controller.hpp:107
 #: modules/gui/qt/dialogs/vlm.cpp:532 modules/gui/qt/ui/open.h:256
@@ -539,21 +539,21 @@ msgstr "스트림하기..."
 msgid "Save..."
 msgstr "저장..."
 
-#: include/vlc_intf_strings.h:79 modules/gui/legacy_macosx/VLCLegacyMenu.m:581
+#: include/vlc_intf_strings.h:79 modules/gui/legacy_macosx/VLCLegacyMenu.m:568
 #: modules/gui/macosx/VLCCoreInteraction.m:515
-#: modules/gui/macosx/VLCMainMenu.m:416
+#: modules/gui/macosx/VLCMainMenu.m:415
 msgid "Repeat All"
 msgstr "전체 반복하기"
 
-#: include/vlc_intf_strings.h:80 modules/gui/legacy_macosx/VLCLegacyMenu.m:579
+#: include/vlc_intf_strings.h:80 modules/gui/legacy_macosx/VLCLegacyMenu.m:566
 #: modules/gui/macosx/VLCCoreInteraction.m:535
-#: modules/gui/macosx/VLCMainMenu.m:415
+#: modules/gui/macosx/VLCMainMenu.m:414
 msgid "Repeat One"
 msgstr "한개 반복"
 
 #: include/vlc_intf_strings.h:81 src/libvlc-module.c:1476
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:577
-#: modules/gui/macosx/VLCMainMenu.m:414
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:564
+#: modules/gui/macosx/VLCMainMenu.m:413
 #: modules/gui/qt/components/controller.hpp:111
 #: modules/gui/qt/components/controller.hpp:124
 msgid "Random"
@@ -568,7 +568,7 @@ msgid "Add to Playlist"
 msgstr "재생목록에 추가하기"
 
 #: include/vlc_intf_strings.h:85
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1227
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1220
 #: modules/gui/macosx/VLCPlaylist.m:230
 msgid "Add File..."
 msgstr "파일 추가하기..."
@@ -585,7 +585,7 @@ msgstr "폴더 추가하기..."
 msgid "Save Playlist to &File..."
 msgstr "재생목록을 파일로 저장(&F)..."
 
-#: include/vlc_intf_strings.h:91 modules/gui/macosx/VLCMainWindow.m:296
+#: include/vlc_intf_strings.h:91 modules/gui/macosx/VLCMainWindow.m:293
 #: modules/gui/qt/components/preferences_widgets.cpp:1133
 msgid "Search"
 msgstr "검색"
@@ -693,8 +693,8 @@ msgstr "오디오 필터"
 msgid "Replay gain"
 msgstr "리플레이 게인"
 
-#: src/audio_output/output.c:345 modules/gui/legacy_macosx/VLCLegacyMenu.m:620
-#: modules/gui/macosx/VLCMainMenu.m:437 modules/gui/macosx/VLCMainMenu.m:438
+#: src/audio_output/output.c:345 modules/gui/legacy_macosx/VLCLegacyMenu.m:607
+#: modules/gui/macosx/VLCMainMenu.m:436 modules/gui/macosx/VLCMainMenu.m:437
 msgid "Stereo audio mode"
 msgstr "스테레오 모드"
 
@@ -1008,8 +1008,8 @@ msgstr "%s [%s %d]"
 
 #: src/input/es_out.c:2078 src/input/es_out.c:2083 src/input/es_out.c:2098
 #: src/input/var.c:160 src/libvlc-module.c:611
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:598
-#: modules/gui/macosx/VLCMainMenu.m:424 modules/gui/macosx/VLCMainMenu.m:425
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:585
+#: modules/gui/macosx/VLCMainMenu.m:423 modules/gui/macosx/VLCMainMenu.m:424
 msgid "Program"
 msgstr "프로그램"
 
@@ -1023,10 +1023,10 @@ msgid "Scrambled"
 msgstr "암호화됨"
 
 #: src/input/es_out.c:2361 modules/demux/keydb.c:315
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2916
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1289
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2909
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1276
 #: modules/gui/legacy_macosx/misc.m:501 modules/gui/macosx/VLCMain.m:271
-#: modules/gui/macosx/VLCMainMenu.m:1279 modules/keystore/keychain.m:41
+#: modules/gui/macosx/VLCMainMenu.m:1278 modules/keystore/keychain.m:41
 #: modules/lua/extension.c:1199
 msgid "Yes"
 msgstr "예"
@@ -1056,9 +1056,9 @@ msgid "Codec"
 msgstr "코덱"
 
 #: src/input/es_out.c:4153 src/input/meta.c:66 modules/access/imem.c:71
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1633
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1626
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:104
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:501
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:488
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:678
 #: modules/gui/macosx/VLCPlaylist.m:98
 #: modules/gui/macosx/VLCSimplePrefsController.m:450
@@ -1067,9 +1067,9 @@ msgid "Language"
 msgstr "언어"
 
 #: src/input/es_out.c:4156 src/input/meta.c:61
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1631
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1624
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:100
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:499
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:486
 #: modules/gui/macosx/VLCBookmarksWindowController.m:80
 #: modules/gui/macosx/VLCPlaylist.m:96 modules/gui/qt/dialogs/bookmarks.cpp:75
 #: modules/gui/qt/dialogs/epg.cpp:55
@@ -1370,12 +1370,12 @@ msgid "VLC is unable to open the MRL '%s'. Check the log for details."
 msgstr "VLC에서 '%s' MRL을 열 수 없습니다. 자세한 내용은 로그를 확인하세요."
 
 #: src/input/meta.c:55 src/input/var.c:170
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1626
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1619
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:94
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:494
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:599
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:481
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:586
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:781
-#: modules/gui/macosx/VLCMainMenu.m:426 modules/gui/macosx/VLCMainMenu.m:427
+#: modules/gui/macosx/VLCMainMenu.m:425 modules/gui/macosx/VLCMainMenu.m:426
 #: modules/gui/macosx/VLCOpenWindowController.m:178
 #: modules/gui/macosx/VLCOpenWindowController.m:180
 #: modules/gui/macosx/VLCPlaylist.m:91 modules/gui/macosx/VLCPlaylistInfo.m:59
@@ -1392,9 +1392,9 @@ msgid "Artist"
 msgstr "아티스트"
 
 #: src/input/meta.c:57 modules/demux/mp4/meta.c:87
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1629
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1622
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:98
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:497
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:484
 #: modules/gui/macosx/VLCPlaylist.m:94 modules/mux/avi.c:51
 msgid "Genre"
 msgstr "장르"
@@ -1405,9 +1405,9 @@ msgid "Copyright"
 msgstr "저작권"
 
 #: src/input/meta.c:59 src/libvlc-module.c:248
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1630
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1623
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:96
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:498
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:485
 #: modules/gui/macosx/VLCPlaylist.m:95
 msgid "Album"
 msgstr "앨범"
@@ -1420,9 +1420,9 @@ msgstr "트랙 번호"
 msgid "Rating"
 msgstr "평가"
 
-#: src/input/meta.c:63 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1632
+#: src/input/meta.c:63 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1625
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:97
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:500
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:487
 #: modules/gui/macosx/VLCPlaylist.m:97 modules/mux/avi.c:50
 msgid "Date"
 msgstr "날짜"
@@ -1500,24 +1500,24 @@ msgstr "바로찾기"
 msgid "Programs"
 msgstr "프로그램"
 
-#: src/input/var.c:175 modules/gui/legacy_macosx/VLCLegacyMenu.m:600
+#: src/input/var.c:175 modules/gui/legacy_macosx/VLCLegacyMenu.m:587
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:790
-#: modules/gui/macosx/VLCMainMenu.m:428 modules/gui/macosx/VLCMainMenu.m:429
+#: modules/gui/macosx/VLCMainMenu.m:427 modules/gui/macosx/VLCMainMenu.m:428
 #: modules/gui/macosx/VLCOpenWindowController.m:179
 #: modules/gui/macosx/VLCOpenWindowController.m:181
 #: modules/gui/qt/ui/open_disk.h:307
 msgid "Chapter"
 msgstr "챕터"
 
-#: src/input/var.c:188 modules/gui/legacy_macosx/VLCLegacyMenu.m:658
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:838
-#: modules/gui/macosx/VLCMainMenu.m:452 modules/gui/macosx/VLCMainMenu.m:453
+#: src/input/var.c:188 modules/gui/legacy_macosx/VLCLegacyMenu.m:645
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:825
+#: modules/gui/macosx/VLCMainMenu.m:451 modules/gui/macosx/VLCMainMenu.m:452
 msgid "Video Track"
 msgstr "동영상 트랙"
 
-#: src/input/var.c:194 modules/gui/legacy_macosx/VLCLegacyMenu.m:618
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:836
-#: modules/gui/macosx/VLCMainMenu.m:435 modules/gui/macosx/VLCMainMenu.m:436
+#: src/input/var.c:194 modules/gui/legacy_macosx/VLCLegacyMenu.m:605
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:823
+#: modules/gui/macosx/VLCMainMenu.m:434 modules/gui/macosx/VLCMainMenu.m:435
 msgid "Audio Track"
 msgstr "오디오 트랙"
 
@@ -1564,9 +1564,9 @@ msgstr "이전 챕터"
 msgid "Media: %s"
 msgstr "미디어: %s"
 
-#: src/interface/interface.c:82 modules/gui/legacy_macosx/VLCLegacyMenu.m:396
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:399
-#: modules/gui/macosx/VLCMainMenu.m:363 modules/gui/macosx/VLCMainMenu.m:364
+#: src/interface/interface.c:82 modules/gui/legacy_macosx/VLCLegacyMenu.m:383
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:386
+#: modules/gui/macosx/VLCMainMenu.m:362 modules/gui/macosx/VLCMainMenu.m:363
 msgid "Add Interface"
 msgstr "인터페이스 추가하기"
 
@@ -1601,8 +1601,8 @@ msgstr "C"
 
 #: src/libvlc.h:166 src/libvlc-module.c:1479 src/libvlc-module.c:1480
 #: src/video_output/vout_intf.c:176
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:766
-#: modules/gui/macosx/VLCMainMenu.m:492
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:753
+#: modules/gui/macosx/VLCMainMenu.m:491
 msgid "Zoom"
 msgstr "화면 크기"
 
@@ -2261,8 +2261,8 @@ msgid "Hide mouse cursor and fullscreen controller after n milliseconds."
 msgstr "n 밀리초 후 마우스 커서 및 전체화면 조작바를 감춥니다."
 
 #: src/libvlc-module.c:351 src/libvlc-module.c:353
-#: src/video_output/interlacing.c:112 modules/gui/macosx/VLCMainMenu.m:460
-#: modules/gui/macosx/VLCMainMenu.m:461
+#: src/video_output/interlacing.c:112 modules/gui/macosx/VLCMainMenu.m:459
+#: modules/gui/macosx/VLCMainMenu.m:460
 #: modules/gui/macosx/VLCSimplePrefsController.m:511
 #: modules/gui/qt/dialogs/convert.cpp:123 modules/hw/vdpau/chroma.c:896
 #: modules/video_filter/deinterlace/deinterlace.c:300
@@ -2272,7 +2272,7 @@ msgstr "디인터레이스"
 
 #: src/libvlc-module.c:361 src/video_output/interlacing.c:128
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:927
-#: modules/gui/macosx/VLCMainMenu.m:462 modules/gui/macosx/VLCMainMenu.m:463
+#: modules/gui/macosx/VLCMainMenu.m:461 modules/gui/macosx/VLCMainMenu.m:462
 #: modules/gui/macosx/VLCSimplePrefsController.m:512
 #: modules/video_filter/deinterlace/deinterlace.c:256
 msgid "Deinterlace mode"
@@ -2716,7 +2716,7 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:1499
 #: modules/gui/macosx/VLCAudioEffectsWindowController.m:79
 #: modules/gui/macosx/VLCAudioEffectsWindowController.m:322
-#: modules/gui/macosx/VLCMainMenu.m:619
+#: modules/gui/macosx/VLCMainMenu.m:618
 #: modules/gui/macosx/VLCSimplePrefsController.m:794
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:54
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:388
@@ -4105,12 +4105,12 @@ msgstr ""
 "스 휠 동작은 끌 수 있습니다."
 
 #: src/libvlc-module.c:1273 src/video_output/vout_intf.c:268
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1016
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:648
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:842
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1009
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:635
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:829
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:868
 #: modules/gui/macosx/VLCControlsBarCommon.m:98
-#: modules/gui/macosx/VLCMainMenu.m:449 modules/gui/macosx/VLCMainMenu.m:528
+#: modules/gui/macosx/VLCMainMenu.m:448 modules/gui/macosx/VLCMainMenu.m:527
 #: modules/gui/qt/components/controller.hpp:108
 #: modules/gui/qt/ui/sprefs_video.h:385
 msgid "Fullscreen"
@@ -4153,7 +4153,7 @@ msgstr "재생"
 msgid "Select the hotkey to use to play."
 msgstr "재생 단축키를 선택하세요."
 
-#: src/libvlc-module.c:1283 modules/gui/macosx/VLCMainMenu.m:410
+#: src/libvlc-module.c:1283 modules/gui/macosx/VLCMainMenu.m:409
 #: modules/gui/qt/components/controller.hpp:108
 #: modules/gui/qt/components/controller.hpp:118
 msgid "Faster"
@@ -4163,7 +4163,7 @@ msgstr "0.5x 빠르게"
 msgid "Select the hotkey to use for fast forward playback."
 msgstr "앞으로 빨리 감기 단축키를 선택하세요."
 
-#: src/libvlc-module.c:1285 modules/gui/macosx/VLCMainMenu.m:408
+#: src/libvlc-module.c:1285 modules/gui/macosx/VLCMainMenu.m:407
 #: modules/gui/qt/components/controller.hpp:108
 #: modules/gui/qt/components/controller.hpp:118
 msgid "Slower"
@@ -4191,14 +4191,14 @@ msgstr "0.1x 느리게"
 
 #: src/libvlc-module.c:1293 modules/control/hotkeys.c:410
 #: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:258
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:907
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:573
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:832
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:900
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:560
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:819
 #: modules/gui/macosx/VLCControlsBarCommon.m:196
 #: modules/gui/macosx/VLCFSPanelController.m:125
 #: modules/gui/macosx/VLCHelpWindowController.m:48
-#: modules/gui/macosx/VLCMainMenu.m:413 modules/gui/macosx/VLCMainMenu.m:516
-#: modules/gui/macosx/VLCMainMenu.m:524
+#: modules/gui/macosx/VLCMainMenu.m:412 modules/gui/macosx/VLCMainMenu.m:515
+#: modules/gui/macosx/VLCMainMenu.m:523
 #: modules/gui/qt/components/controller.hpp:112
 #: modules/gui/qt/dialogs/sout.cpp:91 modules/notify/notify.c:335
 #: modules/gui/qt/ui/streampanel.h:179
@@ -4211,14 +4211,14 @@ msgstr "재생목록에서 다음 항목으로 이동할 단축키를 선택하�
 
 #: src/libvlc-module.c:1295 modules/control/hotkeys.c:414
 #: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:246
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:883
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:569
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:830
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:876
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:556
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:817
 #: modules/gui/macosx/VLCControlsBarCommon.m:193
 #: modules/gui/macosx/VLCFSPanelController.m:128
 #: modules/gui/macosx/VLCHelpWindowController.m:49
-#: modules/gui/macosx/VLCMainMenu.m:412 modules/gui/macosx/VLCMainMenu.m:517
-#: modules/gui/macosx/VLCMainMenu.m:523
+#: modules/gui/macosx/VLCMainMenu.m:411 modules/gui/macosx/VLCMainMenu.m:516
+#: modules/gui/macosx/VLCMainMenu.m:522
 #: modules/gui/qt/components/controller.hpp:112 modules/notify/notify.c:333
 msgid "Previous"
 msgstr "이전"
@@ -4227,11 +4227,11 @@ msgstr "이전"
 msgid "Select the hotkey to use to skip to the previous item in the playlist."
 msgstr "재생목록에서 이전 항목으로 이동할 단축키를 선택하세요."
 
-#: src/libvlc-module.c:1297 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:912
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:522
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:828
-#: modules/gui/macosx/VLCMainMenu.m:403 modules/gui/macosx/VLCMainMenu.m:515
-#: modules/gui/macosx/VLCMainMenu.m:522
+#: src/libvlc-module.c:1297 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:905
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:509
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:815
+#: modules/gui/macosx/VLCMainMenu.m:402 modules/gui/macosx/VLCMainMenu.m:514
+#: modules/gui/macosx/VLCMainMenu.m:521
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:65
 #: modules/gui/qt/components/controller.hpp:107
 #: modules/gui/qt/dialogs/vlm.cpp:538 modules/gui/qt/ui/streampanel.h:178
@@ -4243,7 +4243,7 @@ msgid "Select the hotkey to stop playback."
 msgstr "재생을 중지할 단축키를 선택하세요."
 
 #: src/libvlc-module.c:1299 modules/gui/legacy_macosx/VLCLegacyFSPanel.m:211
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:940
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:933
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:549
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:564
 #: modules/gui/macosx/VLCControlsBarCommon.m:92
@@ -4490,10 +4490,10 @@ msgstr "오디오 음량을 낮출 단축키를 선택하세요."
 
 #: src/libvlc-module.c:1366 modules/access/v4l2/v4l2.c:181
 #: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:223
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:971
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:612
-#: modules/gui/macosx/VLCMainMenu.m:434 modules/gui/macosx/VLCMainMenu.m:518
-#: modules/gui/macosx/VLCMainMenu.m:527
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:964
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:599
+#: modules/gui/macosx/VLCMainMenu.m:433 modules/gui/macosx/VLCMainMenu.m:517
+#: modules/gui/macosx/VLCMainMenu.m:526
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:82
 msgid "Mute"
 msgstr "음소거"
@@ -4863,8 +4863,8 @@ msgstr "동영상 스냅샷 찍기"
 msgid "Takes a video snapshot and writes it to disk."
 msgstr "동영상 스냅샷을 찍고 디스크에 기록합니다."
 
-#: src/libvlc-module.c:1470 modules/gui/legacy_macosx/VLCLegacyMenu.m:524
-#: modules/gui/macosx/VLCMainMenu.m:404
+#: src/libvlc-module.c:1470 modules/gui/legacy_macosx/VLCLegacyMenu.m:511
+#: modules/gui/macosx/VLCMainMenu.m:403
 #: modules/gui/qt/components/controller.hpp:110
 #: modules/gui/qt/components/controller.hpp:121 modules/gui/qt/menus.cpp:863
 #: modules/stream_out/record.c:60
@@ -4956,9 +4956,9 @@ msgid "Cycle through available audio devices"
 msgstr "다음 오디오 장치를 순차적으로 선택합니다."
 
 #: src/libvlc-module.c:1657 src/video_output/vout_intf.c:274
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:653
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:846
-#: modules/gui/macosx/VLCMainMenu.m:451 modules/gui/macosx/VLCMainMenu.m:529
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:640
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:833
+#: modules/gui/macosx/VLCMainMenu.m:450 modules/gui/macosx/VLCMainMenu.m:528
 #: modules/gui/qt/components/controller.hpp:109
 msgid "Snapshot"
 msgstr "스냅샷"
@@ -4976,10 +4976,10 @@ msgstr "서브픽처"
 #: modules/demux/xiph_metadata.h:62
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:704
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:736
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:674
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:661
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:158
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:178
-#: modules/gui/macosx/VLCMainMenu.m:467
+#: modules/gui/macosx/VLCMainMenu.m:466
 #: share/lua/http/dialogs/create_stream.html:153
 #: modules/gui/qt/ui/profiles.h:716 modules/gui/qt/ui/profiles.h:760
 #: modules/gui/qt/ui/profiles.h:763
@@ -5154,9 +5154,9 @@ msgstr "브라우저 검색"
 msgid "Browser Stop"
 msgstr "브라우저 중지"
 
-#: src/misc/actions.c:62 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1194
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:467
-#: modules/gui/macosx/VLCMainMenu.m:387 modules/gui/macosx/VLCPlaylist.m:224
+#: src/misc/actions.c:62 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1187
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:454
+#: modules/gui/macosx/VLCMainMenu.m:386 modules/gui/macosx/VLCPlaylist.m:224
 #: modules/gui/qt/dialogs/bookmarks.cpp:50
 #: modules/gui/qt/ui/podcast_configuration.h:102
 #: modules/gui/qt/ui/streampanel.h:170
@@ -5336,11 +5336,11 @@ msgid "Page Up"
 msgstr "Page Up"
 
 #: src/misc/actions.c:107 modules/control/oldrc.c:71
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1593
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1580
 #: modules/gui/macosx/VLCControlsBarCommon.m:423
 #: modules/gui/macosx/VLCFSPanelController.m:251
-#: modules/gui/macosx/VLCMainMenu.m:1390 modules/gui/macosx/VLCMainMenu.m:1391
-#: modules/gui/macosx/VLCMainMenu.m:1392
+#: modules/gui/macosx/VLCMainMenu.m:1389 modules/gui/macosx/VLCMainMenu.m:1390
+#: modules/gui/macosx/VLCMainMenu.m:1391
 #: modules/gui/qt/components/playlist/standardpanel.cpp:197
 #: modules/gui/qt/menus.cpp:837
 msgid "Pause"
@@ -5362,7 +5362,7 @@ msgstr "Tab"
 msgid "Up"
 msgstr "Up"
 
-#: src/misc/actions.c:114 modules/gui/macosx/VLCMainMenu.m:526
+#: src/misc/actions.c:114 modules/gui/macosx/VLCMainMenu.m:525
 msgid "Volume Down"
 msgstr "음량 낮추기"
 
@@ -5370,7 +5370,7 @@ msgstr "음량 낮추기"
 msgid "Volume Mute"
 msgstr "음소거"
 
-#: src/misc/actions.c:116 modules/gui/macosx/VLCMainMenu.m:525
+#: src/misc/actions.c:116 modules/gui/macosx/VLCMainMenu.m:524
 msgid "Volume Up"
 msgstr "음량 높이기"
 
@@ -5444,7 +5444,7 @@ msgstr "쓰기위해 \"%s\" 열기 실패"
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:757
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:984
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:1085
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1827
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1820
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1225
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1301
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1614
@@ -5464,8 +5464,8 @@ msgstr "쓰기위해 \"%s\" 열기 실패"
 #: modules/gui/macosx/VLCCoreDialogProvider.m:193
 #: modules/gui/macosx/VLCCoreDialogProvider.m:197
 #: modules/gui/macosx/VLCCoreDialogProvider.m:307
-#: modules/gui/macosx/VLCMainWindow.m:329
-#: modules/gui/macosx/VLCMainWindow.m:335
+#: modules/gui/macosx/VLCMainWindow.m:326
+#: modules/gui/macosx/VLCMainWindow.m:332
 #: modules/gui/macosx/VLCOpenWindowController.m:134
 #: modules/gui/macosx/VLCOpenWindowController.m:192
 #: modules/gui/macosx/VLCSimplePrefsController.m:419
@@ -5556,8 +5556,8 @@ msgid "Update VLC media player"
 msgstr "VLC 미디어 재생기 업데이트"
 
 #: src/playlist/engine.c:247 src/playlist/loadsave.c:159 lib/media_list.c:237
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2539
-#: modules/gui/macosx/VLCMainWindow.m:986
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2532
+#: modules/gui/macosx/VLCMainWindow.m:983
 #: modules/gui/macosx/VLCSidebarDataSource.m:70
 #: modules/gui/qt/components/playlist/selector.cpp:236
 msgid "Media Library"
@@ -6228,10 +6228,10 @@ msgid "Autoscale video"
 msgstr "동영상 자동배율"
 
 #: src/video_output/vout_intf.c:203
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:660
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:851
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:647
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:838
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:587
-#: modules/gui/macosx/VLCMainMenu.m:456 modules/gui/macosx/VLCMainMenu.m:457
+#: modules/gui/macosx/VLCMainMenu.m:455 modules/gui/macosx/VLCMainMenu.m:456
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:193
 #: modules/video_filter/croppadd.c:87 modules/gui/qt/ui/video_effects.h:1275
 msgid "Crop"
@@ -6240,10 +6240,10 @@ msgstr "자르기"
 #: src/video_output/vout_intf.c:230 modules/access/decklink.cpp:97
 #: modules/access/linsys/linsys_hdsdi.c:78
 #: modules/access/linsys/linsys_sdi.c:74 modules/demux/rawvid.c:58
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:659
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:850
-#: modules/gui/macosx/VLCMainMenu.m:454 modules/gui/macosx/VLCMainMenu.m:455
-#: modules/gui/macosx/VLCMainMenu.m:1502
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:646
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:837
+#: modules/gui/macosx/VLCMainMenu.m:453 modules/gui/macosx/VLCMainMenu.m:454
+#: modules/gui/macosx/VLCMainMenu.m:1501
 msgid "Aspect ratio"
 msgstr "화면 비율"
 
@@ -7616,7 +7616,7 @@ msgstr "파일 입력"
 
 #: modules/access/fs.c:35 modules/access_output/file.c:388
 #: modules/audio_output/file.c:113
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:425
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:412
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1566
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:180
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:407
@@ -8609,7 +8609,7 @@ msgstr "스크린 입력"
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1438
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1775
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:884
-#: modules/gui/macosx/VLCMainMenu.m:627
+#: modules/gui/macosx/VLCMainMenu.m:626
 #: modules/gui/macosx/VLCOpenWindowController.m:207
 #: modules/gui/macosx/VLCOpenWindowController.m:209
 #: modules/gui/macosx/VLCOpenWindowController.m:489
@@ -10997,7 +10997,7 @@ msgid ""
 msgstr "HDMI 리시버 사용시 HD 코덱에 문제가 있으면 이 값을 바꾸세요."
 
 #: modules/audio_output/mmdevice.c:1481
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:265
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:252
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:904
 #: modules/gui/legacy_macosx/macosx.c:70
 msgid "Disabled"
@@ -12120,8 +12120,8 @@ msgstr "흰색"
 msgid "Maroon"
 msgstr "고동색"
 
-#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:748
-#: modules/gui/macosx/VLCMainMenu.m:485 modules/gui/macosx/VLCMainMenu.m:1120
+#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:735
+#: modules/gui/macosx/VLCMainMenu.m:484 modules/gui/macosx/VLCMainMenu.m:1119
 #: modules/spu/marq.c:62 modules/spu/rss.c:70
 #: modules/text_renderer/freetype/freetype.c:140
 #: modules/video_filter/ball.c:119 modules/video_filter/colorthres.c:65
@@ -12134,8 +12134,8 @@ msgstr "빨간색"
 msgid "Fuchsia"
 msgstr "자홍색"
 
-#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:749
-#: modules/gui/macosx/VLCMainMenu.m:487 modules/gui/macosx/VLCMainMenu.m:1124
+#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:736
+#: modules/gui/macosx/VLCMainMenu.m:486 modules/gui/macosx/VLCMainMenu.m:1123
 #: modules/spu/marq.c:63 modules/spu/rss.c:71
 #: modules/text_renderer/freetype/freetype.c:140
 #: modules/video_filter/colorthres.c:65
@@ -12147,8 +12147,8 @@ msgstr "노란색"
 msgid "Olive"
 msgstr "황록색"
 
-#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:749
-#: modules/gui/macosx/VLCMainMenu.m:486 modules/gui/macosx/VLCMainMenu.m:1122
+#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:736
+#: modules/gui/macosx/VLCMainMenu.m:485 modules/gui/macosx/VLCMainMenu.m:1121
 #: modules/spu/marq.c:63 modules/spu/rss.c:71
 #: modules/text_renderer/freetype/freetype.c:140
 #: modules/video_filter/ball.c:119
@@ -12176,8 +12176,8 @@ msgstr "보라색"
 msgid "Navy"
 msgstr "남색"
 
-#: modules/codec/kate.c:209 modules/gui/legacy_macosx/VLCLegacyMenu.m:750
-#: modules/gui/macosx/VLCMainMenu.m:488 modules/gui/macosx/VLCMainMenu.m:1126
+#: modules/codec/kate.c:209 modules/gui/legacy_macosx/VLCLegacyMenu.m:737
+#: modules/gui/macosx/VLCMainMenu.m:487 modules/gui/macosx/VLCMainMenu.m:1125
 #: modules/spu/marq.c:64 modules/spu/rss.c:72
 #: modules/text_renderer/freetype/freetype.c:141
 #: modules/video_filter/ball.c:120 modules/video_filter/colorthres.c:65
@@ -14592,10 +14592,10 @@ msgstr "tesa"
 msgid "Fast"
 msgstr "빠르게"
 
-#: modules/codec/x264.c:429 modules/gui/legacy_macosx/VLCLegacyMenu.m:539
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:690
+#: modules/codec/x264.c:429 modules/gui/legacy_macosx/VLCLegacyMenu.m:526
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:677
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1143
-#: modules/gui/macosx/VLCMainMenu.m:306 modules/gui/macosx/VLCMainMenu.m:409
+#: modules/gui/macosx/VLCMainMenu.m:306 modules/gui/macosx/VLCMainMenu.m:408
 #: modules/gui/macosx/VLCSimplePrefsController.m:843
 #: modules/gui/qt/components/simple_preferences.cpp:723
 #: modules/misc/gnutls.c:798 modules/text_renderer/freetype/freetype.c:128
@@ -14729,12 +14729,20 @@ msgstr "DBus"
 msgid "D-Bus control interface"
 msgstr "D-Bus 제어 인터페이스"
 
-#: modules/control/dbus/dbus_root.c:81 modules/gui/macosx/VLCMainWindow.m:141
+#: modules/control/dbus/dbus_root.c:81 modules/gui/macosx/VLCMainWindow.m:140
 #: modules/gui/macosx/VLCStatusBarIcon.m:378 modules/gui/ncurses.c:1028
-#: modules/lua/libs/httpd.c:80 modules/video_output/wayland/shell.c:348
+#: modules/gui/qt/main_interface.cpp:1302
+#: modules/gui/qt/main_interface.cpp:1306
+#: modules/gui/qt/main_interface.cpp:1343
+#: modules/gui/qt/main_interface.cpp:1345
+#: modules/gui/qt/main_interface.cpp:1453
+#: modules/gui/qt/main_interface.cpp:1470
+#: modules/gui/qt/main_interface.cpp:1478
+#: modules/gui/qt/main_interface.cpp:1501 modules/lua/libs/httpd.c:80
+#: modules/notify/osx_notifications.m:317
+#: modules/video_output/wayland/shell.c:348
 #: modules/video_output/wayland/xdg-shell.c:291
 #: modules/video_output/xcb/window.c:464
-#: modules/notify/osx_notifications.m:317
 msgid "PowerVLC media player"
 msgstr "PowerVLC 미디어 재생기"
 
@@ -15811,7 +15819,7 @@ msgstr "AACS 키 데이터베이스 가져오기"
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:1173
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:1319
 #: modules/gui/legacy_macosx/VLCLegacyMain.m:267
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1818
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1811
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:683
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:345
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2377
@@ -15847,10 +15855,10 @@ msgid "A key database is already installed and will be replaced."
 msgstr "키 데이터베이스가 이미 설치되어 있으며 교체됩니다."
 
 #: modules/demux/keydb.c:315
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2916
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1289
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2909
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1276
 #: modules/gui/legacy_macosx/misc.m:502 modules/gui/macosx/VLCMain.m:272
-#: modules/gui/macosx/VLCMainMenu.m:1280 modules/keystore/keychain.m:41
+#: modules/gui/macosx/VLCMainMenu.m:1279 modules/keystore/keychain.m:41
 msgid "No"
 msgstr "아니오"
 
@@ -16391,9 +16399,9 @@ msgid "Spoken subtitles for the visually impaired"
 msgstr "시각 장애인용 음성 자막"
 
 #: modules/demux/mpeg/ts_psi.c:607
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:738
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:742
-#: modules/gui/macosx/VLCMainMenu.m:482 modules/gui/qt/dialogs/toolbar.cpp:541
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:725
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:729
+#: modules/gui/macosx/VLCMainMenu.m:481 modules/gui/qt/dialogs/toolbar.cpp:541
 msgid "Teletext"
 msgstr "문자다중방송"
 
@@ -16855,7 +16863,7 @@ msgstr "크레딧"
 
 #: modules/gui/legacy_macosx/VLCLegacyAbout.m:235
 #: modules/gui/macosx/VLCAboutWindowController.m:123
-#: modules/gui/macosx/VLCMainMenu.m:507 modules/gui/qt/dialogs/help.cpp:145
+#: modules/gui/macosx/VLCMainMenu.m:506 modules/gui/qt/dialogs/help.cpp:145
 msgid "License"
 msgstr "라이선스"
 
@@ -16867,9 +16875,9 @@ msgid "Authors"
 msgstr "작성자"
 
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m:137
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:392
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:379
 #: modules/gui/macosx/VLCAddonsWindowController.m:128
-#: modules/gui/macosx/VLCMainMenu.m:362 modules/gui/qt/dialogs/plugins.cpp:85
+#: modules/gui/macosx/VLCMainMenu.m:361 modules/gui/qt/dialogs/plugins.cpp:85
 msgid "Addons Manager"
 msgstr "애드온 관리자"
 
@@ -16909,11 +16917,11 @@ msgstr "아트 및 메타 가져오기"
 
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m:154
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m:306
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:383
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:387
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:370
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:374
 #: modules/gui/macosx/VLCAddonsWindowController.m:113
 #: modules/gui/macosx/VLCAddonsWindowController.m:361
-#: modules/gui/macosx/VLCMainMenu.m:360 modules/gui/macosx/VLCMainMenu.m:361
+#: modules/gui/macosx/VLCMainMenu.m:359 modules/gui/macosx/VLCMainMenu.m:360
 #: modules/gui/qt/dialogs/plugins.cpp:402
 #: modules/gui/qt/managers/addons_manager.cpp:96
 msgid "Extensions"
@@ -16946,8 +16954,8 @@ msgid "Name"
 msgstr "이름"
 
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m:211
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1627
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:495
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1620
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:482
 #: modules/gui/macosx/VLCAddonsWindowController.m:132
 #: modules/gui/macosx/VLCPlaylist.m:92 modules/gui/qt/dialogs/plugins.cpp:1404
 #: modules/gui/qt/dialogs/plugins.cpp:1509 modules/mux/asf.c:58
@@ -17036,7 +17044,7 @@ msgid "Headphone virtualization"
 msgstr "헤드폰 가상화"
 
 #: modules/gui/legacy_macosx/VLCLegacyAudioEffects.m:434
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1008
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1001
 #: modules/gui/macosx/VLCAudioEffectsWindowController.m:276
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:88
 #: modules/gui/macosx/VLCSimplePrefsController.m:405
@@ -17080,7 +17088,7 @@ msgstr "새 프리셋 이름 입력:"
 #: modules/gui/legacy_macosx/VLCLegacyAudioEffects.m:1135
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:391
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:984
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1471
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1458
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:629
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1364
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:1599
@@ -17088,7 +17096,7 @@ msgstr "새 프리셋 이름 입력:"
 #: modules/gui/macosx/VLCAudioEffectsWindowController.m:855
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:377
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:489
-#: modules/gui/macosx/VLCMainMenu.m:1181 modules/gui/macosx/VLCOutput.m:414
+#: modules/gui/macosx/VLCMainMenu.m:1180 modules/gui/macosx/VLCOutput.m:414
 #: modules/gui/macosx/VLCSimplePrefsController.m:445
 #: modules/gui/macosx/VLCSimplePrefsController.m:519
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:792
@@ -17207,16 +17215,16 @@ msgid "Convert & Stream"
 msgstr "변환 & 스트림하기"
 
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:300
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1275
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1268
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:138
-#: modules/gui/macosx/VLCMainWindow.m:301
+#: modules/gui/macosx/VLCMainWindow.m:298
 msgid "Drop media here"
 msgstr "미디어를 여기에 떨어뜨리세요"
 
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:302
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1280
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1273
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:139
-#: modules/gui/macosx/VLCMainWindow.m:317
+#: modules/gui/macosx/VLCMainWindow.m:314
 msgid "Open media..."
 msgstr "미디어 열기..."
 
@@ -17295,15 +17303,15 @@ msgid "Setup Streaming..."
 msgstr "스트리밍 설정하기.."
 
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:499
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1476
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1463
 #: modules/gui/macosx/VLCBookmarksWindowController.m:128
-#: modules/gui/macosx/VLCMainMenu.m:1171
+#: modules/gui/macosx/VLCMainMenu.m:1170
 msgid "Untitled"
 msgstr "제목없음"
 
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:526
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:281
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:283
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:268
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:270
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:908
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1140
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2009
@@ -17556,13 +17564,13 @@ msgid "Volume"
 msgstr "음량"
 
 #: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:241
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:998
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:991
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:85
 msgid "Full Volume"
 msgstr "최고 음량"
 
 #: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:249
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:890
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:883
 #: modules/gui/macosx/VLCControlsBarCommon.m:84
 #: modules/gui/macosx/VLCControlsBarCommon.m:182
 #: modules/gui/macosx/VLCFSPanelController.m:134
@@ -17570,7 +17578,7 @@ msgid "Backward"
 msgstr "뒤로"
 
 #: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:255
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:901
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:894
 #: modules/gui/macosx/VLCControlsBarCommon.m:88
 #: modules/gui/macosx/VLCControlsBarCommon.m:185
 #: modules/gui/macosx/VLCFSPanelController.m:131
@@ -17584,22 +17592,22 @@ msgid "Leave fullscreen"
 msgstr "전체화면 나가기"
 
 #: modules/gui/legacy_macosx/VLCLegacyMain.m:334
-#: modules/gui/macosx/VLCMainWindow.m:359
+#: modules/gui/macosx/VLCMainWindow.m:356
 msgid "Check for album art and metadata?"
 msgstr "앨범 아트와 메타데이터를 확인할까요?"
 
 #: modules/gui/legacy_macosx/VLCLegacyMain.m:336
-#: modules/gui/macosx/VLCMainWindow.m:359
+#: modules/gui/macosx/VLCMainWindow.m:356
 msgid "Enable Metadata Retrieval"
 msgstr "메타데이터 검색 활성화"
 
 #: modules/gui/legacy_macosx/VLCLegacyMain.m:337
-#: modules/gui/macosx/VLCMainWindow.m:359
+#: modules/gui/macosx/VLCMainWindow.m:356
 msgid "No, Thanks"
 msgstr "아니요, 괜찮습니다"
 
 #: modules/gui/legacy_macosx/VLCLegacyMain.m:339
-#: modules/gui/macosx/VLCMainWindow.m:359
+#: modules/gui/macosx/VLCMainWindow.m:356
 msgid ""
 "VLC can check online for album art and metadata to enrich your playback "
 "experience, e.g. by providing track information when playing Audio CDs. To "
@@ -17610,24 +17618,24 @@ msgstr ""
 "으로 검색할 수 있습니다. 이 기능을 제공하기 위해, VLC는 사용자의 컨텐츠 정보"
 "를 익명의 형태로 신뢰할 수 있는 서비스 제공자에 정보를 전송할 것입니다."
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:919
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:912
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:68
 msgid "Show/Hide Playlist"
 msgstr "재생목록 표시/숨김"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:929
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:922
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:71
 #: modules/gui/qt/dialogs/vlm.cpp:542 share/lua/http/index.html:259
 msgid "Repeat"
 msgstr "반복"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:934
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:927
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:75
 #: share/lua/http/index.html:257
 msgid "Shuffle"
 msgstr "순서섞기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:979
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:972
 #: modules/gui/macosx/VLCFSPanelController.m:325
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:78
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:503
@@ -17635,106 +17643,106 @@ msgstr "순서섞기"
 msgid "Volume: %i %%"
 msgstr "음량: %i %%"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1199
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:472
-#: modules/gui/macosx/VLCMainMenu.m:388 modules/gui/macosx/VLCPlaylist.m:227
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1192
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:459
+#: modules/gui/macosx/VLCMainMenu.m:387 modules/gui/macosx/VLCPlaylist.m:227
 msgid "Select All"
 msgstr "모두 선택"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1206
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1718
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1199
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1711
 #: modules/gui/macosx/VLCPlaylist.m:225
 msgid "Expand All"
 msgstr "모두 펼치기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1210
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1203
 #: modules/gui/macosx/VLCPlaylist.m:226
 msgid "Collapse All"
 msgstr "모두 접기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1214
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:777
-#: modules/gui/macosx/VLCMainMenu.m:499 modules/gui/macosx/VLCPlaylist.m:228
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1207
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:764
+#: modules/gui/macosx/VLCMainMenu.m:498 modules/gui/macosx/VLCPlaylist.m:228
 msgid "Media Information..."
 msgstr "미디어 정보..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1218
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:449
-#: modules/gui/macosx/VLCMainMenu.m:381 modules/gui/macosx/VLCPlaylist.m:229
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1211
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:436
+#: modules/gui/macosx/VLCMainMenu.m:380 modules/gui/macosx/VLCPlaylist.m:229
 msgid "Reveal in Finder"
 msgstr "Finder에서 보기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1223
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1216
 #: modules/gui/macosx/VLCPlaylist.m:231
 #: modules/gui/qt/components/playlist/standardpanel.cpp:274
 msgid "Shuffle playlist"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1625
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1618
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:99
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:493
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:480
 #: modules/gui/macosx/VLCPlaylist.m:90
 msgid "Track Number"
 msgstr "트랙 번호"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1628
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:496
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1621
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:483
 #: modules/gui/macosx/VLCPlaylist.m:93
 #: modules/gui/qt/components/playlist/sorting.h:61
 msgid "Duration"
 msgstr "재생시간"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1634
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:502
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1627
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:489
 #: modules/gui/macosx/VLCPlaylist.m:99
 #: modules/gui/qt/components/playlist/sorting.h:67
 msgid "URI"
 msgstr "URI"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1635
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:503
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1628
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:490
 #: modules/gui/macosx/VLCPlaylist.m:100
 msgid "File Size"
 msgstr "파일 크기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1795
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1805
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:566
-#: modules/gui/macosx/VLCMainMenu.m:421
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1788
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1798
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:553
+#: modules/gui/macosx/VLCMainMenu.m:420
 #: modules/gui/macosx/VLCTimeSelectionPanelController.m:53
 msgid "Jump to Time"
 msgstr "시간으로 건너뛰기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2527
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2520
 #: modules/gui/macosx/VLCSidebarDataSource.m:67
 msgid "LIBRARY"
 msgstr "라이브러리"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2548
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2541
 #: modules/gui/macosx/VLCSidebarDataSource.m:72
 msgid "MY COMPUTER"
 msgstr "내 컴퓨터"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2549
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2542
 #: modules/gui/macosx/VLCSidebarDataSource.m:73
 msgid "DEVICES"
 msgstr "장치"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2550
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2543
 #: modules/gui/macosx/VLCSidebarDataSource.m:74
 msgid "LOCAL NETWORK"
 msgstr "로컬 네트워크"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2551
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2544
 #: modules/gui/macosx/VLCSidebarDataSource.m:75
 msgid "INTERNET"
 msgstr "인터넷"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2914
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2907
 msgid "Enable this service?"
 msgstr "이 서비스를 사용할까요?"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2917
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2910
 msgid ""
 "This service uses a Lua script. Loading it can be slow and may affect the "
 "performance of this machine. Do you want to continue?"
@@ -17742,25 +17750,25 @@ msgstr ""
 "이 서비스는 Lua 스크립트를 사용합니다. 불러오는 데 시간이 걸리고 이 컴퓨터의 "
 "성능에 영향을 줄 수 있습니다. 계속하시겠습니까?"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3859
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3852
 #: modules/gui/macosx/VLCResumeDialogController.m:48 modules/gui/qt/qt.cpp:198
 #: modules/gui/qt/ui/sprefs_interface.h:558
 msgid "Continue playback?"
 msgstr "이어서 재생하시겠습니까?"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3861
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3854
 #: modules/gui/macosx/VLCResumeDialogController.m:69
 msgid "Playback of \"%@\" will continue at %@"
 msgstr "\"%@\" 재생은 %@ 에서 이어서 재생합니다"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3863
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3856
 #: modules/gui/macosx/VLCResumeDialogController.m:49
 #: modules/gui/macosx/VLCSimplePrefsController.m:968
 #: modules/gui/qt/dialogs/firstrun.cpp:106
 msgid "Continue"
 msgstr "계속"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3863
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3856
 #: modules/gui/macosx/VLCResumeDialogController.m:62
 #: modules/gui/macosx/VLCResumeDialogController.m:94
 msgid "Restart playback"
@@ -17848,407 +17856,407 @@ msgstr "코덱 상세정보"
 msgid "Save Metadata"
 msgstr "메타데이터 저장"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:255
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:260
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:242
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:247
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:917
 #: modules/gui/legacy_macosx/macosx.c:168 modules/gui/qt/ui/sprefs_video.h:394
 msgid "Deinterlacing"
 msgstr "디인터레이싱"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:266
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:253
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:905
 #: modules/gui/legacy_macosx/macosx.c:70
 msgid "Good quality"
 msgstr "좋은 품질"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:267
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:254
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:906
 #: modules/gui/legacy_macosx/macosx.c:71
 msgid "Optimal quality"
 msgstr "최적 품질"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:268
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:255
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:907
 #: modules/gui/legacy_macosx/macosx.c:71
 msgid "Best quality"
 msgstr "최고 품질"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:368
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:355
 #: modules/gui/macosx/VLCMainMenu.m:355
 msgid "About PowerVLC media player"
 msgstr "PowerVLC 미디어 재생기 정보"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:371
-#: modules/gui/macosx/VLCMainMenu.m:359
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:358
+#: modules/gui/macosx/VLCMainMenu.m:358
 msgid "Preferences..."
 msgstr "환경설정..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:377
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:364
 msgid "Switch to the modern interface"
 msgstr "최신 인터페이스로 전환"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:404
-#: modules/gui/macosx/VLCMainMenu.m:365
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:391
+#: modules/gui/macosx/VLCMainMenu.m:364
 msgid "Services"
 msgstr "서비스"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:411
-#: modules/gui/macosx/VLCMainMenu.m:366
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:398
+#: modules/gui/macosx/VLCMainMenu.m:365
 msgid "Hide PowerVLC"
 msgstr "PowerVLC 숨김"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:413
-#: modules/gui/macosx/VLCMainMenu.m:367
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:400
+#: modules/gui/macosx/VLCMainMenu.m:366
 msgid "Hide Others"
 msgstr "다른 창 숨김"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:417
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:404
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1354
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1925
-#: modules/gui/macosx/VLCMainMenu.m:368
+#: modules/gui/macosx/VLCMainMenu.m:367
 #: modules/gui/macosx/VLCSimplePrefsController.m:516
 msgid "Show All"
 msgstr "모두 표시"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:421
-#: modules/gui/macosx/VLCMainMenu.m:369
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:408
+#: modules/gui/macosx/VLCMainMenu.m:368
 msgid "Quit PowerVLC"
 msgstr "PowerVLC 종료"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:426
-#: modules/gui/macosx/VLCMainMenu.m:373
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:413
+#: modules/gui/macosx/VLCMainMenu.m:372
 msgid "Open File..."
 msgstr "파일 열기..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:428
-#: modules/gui/macosx/VLCMainMenu.m:372
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:415
+#: modules/gui/macosx/VLCMainMenu.m:371
 msgid "Advanced Open File..."
 msgstr "고급 파일 열기..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:431
-#: modules/gui/macosx/VLCMainMenu.m:374
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:418
+#: modules/gui/macosx/VLCMainMenu.m:373
 msgid "Open Disc..."
 msgstr "디스크 열기..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:433
-#: modules/gui/macosx/VLCMainMenu.m:375
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:420
+#: modules/gui/macosx/VLCMainMenu.m:374
 msgid "Open Network..."
 msgstr "네트워크 열기..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:435
-#: modules/gui/macosx/VLCMainMenu.m:376
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:422
+#: modules/gui/macosx/VLCMainMenu.m:375
 msgid "Open Capture Device..."
 msgstr "캡처 장치 열기..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:439
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:442
-#: modules/gui/macosx/VLCMainMenu.m:377
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:426
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:429
+#: modules/gui/macosx/VLCMainMenu.m:376
 msgid "Open Recent"
 msgstr "최근 파일 열기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:447
-#: modules/gui/macosx/VLCMainMenu.m:378
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:434
+#: modules/gui/macosx/VLCMainMenu.m:377
 msgid "Close Window"
 msgstr "창 닫기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:452
-#: modules/gui/macosx/VLCMainMenu.m:379
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:439
+#: modules/gui/macosx/VLCMainMenu.m:378
 msgid "Convert / Stream..."
 msgstr "변환하기 / 스트림하기..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:456
-#: modules/gui/macosx/VLCMainMenu.m:380
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:443
+#: modules/gui/macosx/VLCMainMenu.m:379
 msgid "Save Playlist..."
 msgstr "재생목록 저장..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:460
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:447
 #: modules/gui/macosx/VLCBookmarksWindowController.m:77
-#: modules/gui/macosx/VLCMainMenu.m:383
+#: modules/gui/macosx/VLCMainMenu.m:382
 msgid "Edit"
 msgstr "수정"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:461
-#: modules/gui/macosx/VLCMainMenu.m:384
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:448
+#: modules/gui/macosx/VLCMainMenu.m:383
 msgid "Cut"
 msgstr "잘라내기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:463
-#: modules/gui/macosx/VLCMainMenu.m:385
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:450
+#: modules/gui/macosx/VLCMainMenu.m:384
 msgid "Copy"
 msgstr "복사"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:465
-#: modules/gui/macosx/VLCMainMenu.m:386
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:452
+#: modules/gui/macosx/VLCMainMenu.m:385
 msgid "Paste"
 msgstr "붙여넣기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:476
-#: modules/gui/macosx/VLCMainMenu.m:391
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:463
+#: modules/gui/macosx/VLCMainMenu.m:390
 msgid "View"
 msgstr "보기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:477
-#: modules/gui/legacy_macosx/macosx.c:91 modules/gui/macosx/VLCMainMenu.m:392
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:464
+#: modules/gui/legacy_macosx/macosx.c:91 modules/gui/macosx/VLCMainMenu.m:391
 #: modules/gui/macosx/macosx.m:116
 msgid "Show Previous & Next Buttons"
 msgstr "이전 & 다음 버튼 표시"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:479
-#: modules/gui/legacy_macosx/macosx.c:95 modules/gui/macosx/VLCMainMenu.m:394
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:466
+#: modules/gui/legacy_macosx/macosx.c:95 modules/gui/macosx/VLCMainMenu.m:393
 #: modules/gui/macosx/macosx.m:119
 msgid "Show Shuffle & Repeat Buttons"
 msgstr "순서섞기 & 반복 버튼 표시"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:481
-#: modules/gui/legacy_macosx/macosx.c:99 modules/gui/macosx/VLCMainMenu.m:396
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:468
+#: modules/gui/legacy_macosx/macosx.c:99 modules/gui/macosx/VLCMainMenu.m:395
 #: modules/gui/macosx/macosx.m:122
 msgid "Show Audio Effects Button"
 msgstr "오디오 효과 버튼 표시"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:483
-#: modules/gui/macosx/VLCMainMenu.m:398
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:470
+#: modules/gui/macosx/VLCMainMenu.m:397
 msgid "Show Sidebar"
 msgstr "사이드바 표시"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:487
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:490
-#: modules/gui/macosx/VLCMainMenu.m:399
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:474
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:477
+#: modules/gui/macosx/VLCMainMenu.m:398
 msgid "Playlist Table Columns"
 msgstr "재생목록 테이블 행"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:518
-#: modules/gui/macosx/VLCMainMenu.m:401
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:505
+#: modules/gui/macosx/VLCMainMenu.m:400
 msgid "Playback"
 msgstr "재생"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:531
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:536
-#: modules/gui/macosx/VLCMainMenu.m:407
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:518
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:523
+#: modules/gui/macosx/VLCMainMenu.m:406
 msgid "Playback Speed"
 msgstr "재생 속도"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:556
-#: modules/gui/macosx/VLCMainMenu.m:419
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:543
+#: modules/gui/macosx/VLCMainMenu.m:418
 msgid "Step Forward"
 msgstr "한단계 앞으로"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:561
-#: modules/gui/macosx/VLCMainMenu.m:420
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:548
+#: modules/gui/macosx/VLCMainMenu.m:419
 msgid "Step Backward"
 msgstr "한단계 뒤로"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:583
-#: modules/gui/macosx/VLCMainMenu.m:417
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:570
+#: modules/gui/macosx/VLCMainMenu.m:416
 #: modules/gui/qt/components/controller.hpp:110
 msgid "A→B Loop"
 msgstr "A→B 순환"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:587
-#: modules/gui/macosx/VLCMainMenu.m:418
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:574
+#: modules/gui/macosx/VLCMainMenu.m:417
 msgid "Quit after Playback"
 msgstr "재생후 종료"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:591
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:593
-#: modules/gui/macosx/VLCMainMenu.m:422
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:578
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:580
+#: modules/gui/macosx/VLCMainMenu.m:421
 msgid "Renderer"
 msgstr "렌더러"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:604
-#: modules/gui/macosx/VLCMainMenu.m:432
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:591
+#: modules/gui/macosx/VLCMainMenu.m:431
 msgid "Increase Volume"
 msgstr "음량 증가"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:608
-#: modules/gui/macosx/VLCMainMenu.m:433
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:595
+#: modules/gui/macosx/VLCMainMenu.m:432
 msgid "Decrease Volume"
 msgstr "음량 감소"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:626
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:628
-#: modules/gui/macosx/VLCMainMenu.m:439 modules/gui/macosx/VLCMainMenu.m:440
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:613
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:615
+#: modules/gui/macosx/VLCMainMenu.m:438 modules/gui/macosx/VLCMainMenu.m:439
 msgid "Audio Device"
 msgstr "오디오 장치"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:638
-#: modules/gui/macosx/VLCMainMenu.m:445
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:625
+#: modules/gui/macosx/VLCMainMenu.m:444
 msgid "Half Size"
 msgstr "절반 크기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:641
-#: modules/gui/macosx/VLCMainMenu.m:446
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:628
+#: modules/gui/macosx/VLCMainMenu.m:445
 msgid "Normal Size"
 msgstr "보통 크기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:644
-#: modules/gui/macosx/VLCMainMenu.m:447
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:631
+#: modules/gui/macosx/VLCMainMenu.m:446
 msgid "Double Size"
 msgstr "2배 크기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:650
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:844
-#: modules/gui/macosx/VLCMainMenu.m:450
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:637
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:831
+#: modules/gui/macosx/VLCMainMenu.m:449
 #: modules/gui/macosx/VLCSimplePrefsController.m:496
 msgid "Float on Top"
 msgstr "항상 맨 앞"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:675
-#: modules/gui/macosx/VLCMainMenu.m:468
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:662
+#: modules/gui/macosx/VLCMainMenu.m:467
 msgid "Add Subtitle File..."
 msgstr "자막 파일 추가하기..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:678
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:840
-#: modules/gui/macosx/VLCMainMenu.m:469 modules/gui/macosx/VLCMainMenu.m:470
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:665
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:827
+#: modules/gui/macosx/VLCMainMenu.m:468 modules/gui/macosx/VLCMainMenu.m:469
 msgid "Subtitles Track"
 msgstr "자막 트랙"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:683
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:687
-#: modules/gui/macosx/VLCMainMenu.m:471
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:670
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:674
+#: modules/gui/macosx/VLCMainMenu.m:470
 msgid "Text Size"
 msgstr "텍스트 크기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:690
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:677
 #: modules/gui/macosx/VLCMainMenu.m:304
 #: modules/text_renderer/freetype/freetype.c:128
 msgid "Smaller"
 msgstr "매우 작음"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:690
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:677
 #: modules/gui/macosx/VLCMainMenu.m:305
 #: modules/text_renderer/freetype/freetype.c:128
 msgid "Small"
 msgstr "작음"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:691
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:678
 #: modules/gui/macosx/VLCMainMenu.m:307
 #: modules/text_renderer/freetype/freetype.c:128
 msgid "Large"
 msgstr "큼"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:691
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:678
 #: modules/gui/macosx/VLCMainMenu.m:308
 #: modules/text_renderer/freetype/freetype.c:128
 msgid "Larger"
 msgstr "매우 큼"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:702
-#: modules/gui/macosx/VLCMainMenu.m:472
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:689
+#: modules/gui/macosx/VLCMainMenu.m:471
 msgid "Text Color"
 msgstr "텍스트 색상"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:705
-#: modules/gui/macosx/VLCMainMenu.m:473
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:692
+#: modules/gui/macosx/VLCMainMenu.m:472
 msgid "Outline Thickness"
 msgstr "윤곽선 두께"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:714
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:719
-#: modules/gui/macosx/VLCMainMenu.m:479 modules/gui/macosx/VLCMainMenu.m:480
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:701
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:706
+#: modules/gui/macosx/VLCMainMenu.m:478 modules/gui/macosx/VLCMainMenu.m:479
 msgid "Background Opacity"
 msgstr "배경 불투명도"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:732
-#: modules/gui/macosx/VLCMainMenu.m:481
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:719
+#: modules/gui/macosx/VLCMainMenu.m:480
 msgid "Background Color"
 msgstr "배경 색상"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:744
-#: modules/gui/macosx/VLCMainMenu.m:483
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:731
+#: modules/gui/macosx/VLCMainMenu.m:482
 msgid "Transparent"
 msgstr "투명"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:748
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:735
 #: modules/gui/macosx/VLCHelpWindowController.m:50
-#: modules/gui/macosx/VLCMainMenu.m:484 modules/gui/macosx/VLCMainMenu.m:1118
+#: modules/gui/macosx/VLCMainMenu.m:483 modules/gui/macosx/VLCMainMenu.m:1117
 msgid "Index"
 msgstr "인덱스"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:762
-#: modules/gui/macosx/VLCMainMenu.m:490
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:749
+#: modules/gui/macosx/VLCMainMenu.m:489
 msgid "Window"
 msgstr "창"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:763
-#: modules/gui/macosx/VLCMainMenu.m:491
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:750
+#: modules/gui/macosx/VLCMainMenu.m:490
 msgid "Minimize"
 msgstr "최소화하기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:771
-#: modules/gui/macosx/VLCMainMenu.m:494
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:758
+#: modules/gui/macosx/VLCMainMenu.m:493
 msgid "Main Window..."
 msgstr "기본 창..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:774
-#: modules/gui/macosx/VLCMainMenu.m:498
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:761
+#: modules/gui/macosx/VLCMainMenu.m:497
 msgid "Playlist..."
 msgstr "재생목록..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:780
-#: modules/gui/macosx/VLCMainMenu.m:496
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:767
+#: modules/gui/macosx/VLCMainMenu.m:495
 msgid "Video Effects..."
 msgstr "동영상 효과..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:782
-#: modules/gui/macosx/VLCMainMenu.m:495
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:769
+#: modules/gui/macosx/VLCMainMenu.m:494
 msgid "Audio Effects..."
 msgstr "오디오 효과..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:785
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:772
 #: modules/gui/legacy_macosx/VLCLegacyTrackSync.m:90
-#: modules/gui/macosx/VLCMainMenu.m:411
+#: modules/gui/macosx/VLCMainMenu.m:410
 #: modules/gui/macosx/VLCTrackSynchronizationWindowController.m:48
 msgid "Track Synchronization"
 msgstr "트랙 동기화"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:787
-#: modules/gui/macosx/VLCMainMenu.m:497
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:774
+#: modules/gui/macosx/VLCMainMenu.m:496
 msgid "Bookmarks..."
 msgstr "바로찾기..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:790
-#: modules/gui/macosx/VLCMainMenu.m:501
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:777
+#: modules/gui/macosx/VLCMainMenu.m:500
 msgid "Errors and Warnings..."
 msgstr "오류 및 경고..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:793
-#: modules/gui/macosx/VLCMainMenu.m:500
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:780
+#: modules/gui/macosx/VLCMainMenu.m:499
 msgid "Messages..."
 msgstr "메시지..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:797
-#: modules/gui/macosx/VLCMainMenu.m:503
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:784
+#: modules/gui/macosx/VLCMainMenu.m:502
 msgid "Bring All to Front"
 msgstr "모두 앞으로 가져오기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:802
-#: modules/gui/macosx/VLCMainMenu.m:505 modules/gui/qt/dialogs/help.cpp:54
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:789
+#: modules/gui/macosx/VLCMainMenu.m:504 modules/gui/qt/dialogs/help.cpp:54
 #: modules/gui/qt/menus.cpp:956 modules/gui/qt/menus.cpp:1143
 msgid "Help"
 msgstr "도움말"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:803
-#: modules/gui/macosx/VLCMainMenu.m:506
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:790
+#: modules/gui/macosx/VLCMainMenu.m:505
 msgid "PowerVLC media player Help..."
 msgstr "PowerVLC 미디어 재생기 도움말..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:806
-#: modules/gui/macosx/VLCMainMenu.m:509
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:793
+#: modules/gui/macosx/VLCMainMenu.m:508
 msgid "VideoLAN Website..."
 msgstr "VideoLAN 웹 사이트..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:808
-#: modules/gui/macosx/VLCMainMenu.m:510
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:795
+#: modules/gui/macosx/VLCMainMenu.m:509
 msgid "Make a donation..."
 msgstr "후원하기..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:810
-#: modules/gui/macosx/VLCMainMenu.m:511
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:797
+#: modules/gui/macosx/VLCMainMenu.m:510
 msgid "Online Forum..."
 msgstr "온라인 포럼..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:968
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:955
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1229
 #: modules/gui/macosx/VLCBookmarksWindowController.m:76
 #: modules/gui/macosx/VLCSimplePrefsController.m:421
@@ -18256,49 +18264,49 @@ msgstr "온라인 포럼..."
 msgid "Clear"
 msgstr "비우기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1132
-#: modules/gui/macosx/VLCMainMenu.m:423
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1119
+#: modules/gui/macosx/VLCMainMenu.m:422
 msgid "No renderer"
 msgstr "렌더러 없음"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1211
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1198
 #: modules/gui/qt/extensions_manager.cpp:197
 msgid "Deactivate"
 msgstr "비활성화하기"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1287
-#: modules/gui/macosx/VLCMainMenu.m:1276
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1274
+#: modules/gui/macosx/VLCMainMenu.m:1275
 msgid "Change the interface?"
 msgstr "인터페이스를 변경할까요?"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1290
-#: modules/gui/macosx/VLCMainMenu.m:1277
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1277
+#: modules/gui/macosx/VLCMainMenu.m:1276
 msgid "VLC needs to restart to switch interfaces. Do you want to continue?"
 msgstr "인터페이스를 전환하려면 VLC를 다시 시작해야 합니다. 계속하시겠습니까?"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1460
-#: modules/gui/macosx/VLCMainMenu.m:1175
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1447
+#: modules/gui/macosx/VLCMainMenu.m:1174
 msgid "File Format:"
 msgstr "파일 형식:"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1464
-#: modules/gui/macosx/VLCMainMenu.m:1176
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1451
+#: modules/gui/macosx/VLCMainMenu.m:1175
 msgid "Extended M3U"
 msgstr "확장 M3U"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1466
-#: modules/gui/macosx/VLCMainMenu.m:1177
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1453
+#: modules/gui/macosx/VLCMainMenu.m:1176
 msgid "XML Shareable Playlist Format (XSPF)"
 msgstr "XML 공유 재생목록 형식 (XSPF)"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1467
-#: modules/gui/macosx/VLCMainMenu.m:1178
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1454
+#: modules/gui/macosx/VLCMainMenu.m:1177
 #: modules/gui/qt/dialogs_provider.cpp:659
 msgid "HTML playlist"
 msgstr "HTML 재생목록"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1470
-#: modules/gui/macosx/VLCMainMenu.m:1180
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1457
+#: modules/gui/macosx/VLCMainMenu.m:1179
 msgid "Save Playlist"
 msgstr "재생목록 저장"
 
@@ -18323,8 +18331,8 @@ msgstr "로그 비우기"
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:214
 #: modules/gui/macosx/VLCLogWindowController.m:198
 #, c-format
-msgid "VLC Debug Log (%s).txt"
-msgstr "VLC 디버그 로그 (%s).rtf"
+msgid "PowerVLC Debug Log (%s).txt"
+msgstr "PowerVLC 디버그 로그 (%s).rtf"
 
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:255
 #: modules/gui/macosx/VLCErrorWindowController.m:55
@@ -18791,7 +18799,7 @@ msgid "Black screens in fullscreen"
 msgstr "전체 화면 시 검은 화면"
 
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:889
-#: modules/gui/macosx/VLCMainMenu.m:458 modules/gui/macosx/VLCMainMenu.m:459
+#: modules/gui/macosx/VLCMainMenu.m:457 modules/gui/macosx/VLCMainMenu.m:458
 #: modules/gui/macosx/VLCSimplePrefsController.m:503
 #: modules/gui/qt/ui/sprefs_video.h:386
 msgid "Fullscreen Video Device"
@@ -19797,78 +19805,78 @@ msgstr "기존 인터페이스로 전환"
 msgid "Level %i"
 msgstr "단계 %i"
 
-#: modules/gui/macosx/VLCMainMenu.m:358
+#: modules/gui/macosx/VLCMainMenu.m:357
 msgid "Check for Update..."
 msgstr "업데이트 확인..."
 
-#: modules/gui/macosx/VLCMainMenu.m:371
+#: modules/gui/macosx/VLCMainMenu.m:370
 msgid "1:File"
 msgstr "1:파일"
 
-#: modules/gui/macosx/VLCMainMenu.m:389
+#: modules/gui/macosx/VLCMainMenu.m:388
 msgid "Find"
 msgstr "찾기"
 
-#: modules/gui/macosx/VLCMainMenu.m:448
+#: modules/gui/macosx/VLCMainMenu.m:447
 msgid "Fit to Screen"
 msgstr "화면에 맞추기"
 
-#: modules/gui/macosx/VLCMainMenu.m:464 modules/gui/macosx/VLCMainMenu.m:465
+#: modules/gui/macosx/VLCMainMenu.m:463 modules/gui/macosx/VLCMainMenu.m:464
 #: modules/video_filter/postproc.c:201
 msgid "Post processing"
 msgstr "후처리"
 
-#: modules/gui/macosx/VLCMainMenu.m:493
+#: modules/gui/macosx/VLCMainMenu.m:492
 msgid "Player..."
 msgstr "재생기..."
 
-#: modules/gui/macosx/VLCMainMenu.m:508
+#: modules/gui/macosx/VLCMainMenu.m:507
 msgid "Online Documentation..."
 msgstr "온라인 설명서..."
 
-#: modules/gui/macosx/VLCMainMenu.m:1504 modules/gui/macosx/macosx.m:111
+#: modules/gui/macosx/VLCMainMenu.m:1503 modules/gui/macosx/macosx.m:111
 msgid "Lock Aspect Ratio"
 msgstr "화면 비율 잠금"
 
-#: modules/gui/macosx/VLCMainWindow.m:295
+#: modules/gui/macosx/VLCMainWindow.m:292
 msgid "Search in Playlist"
 msgstr "재생목록에서 검색"
 
-#: modules/gui/macosx/VLCMainWindow.m:297
+#: modules/gui/macosx/VLCMainWindow.m:294
 msgid "Search the playlist. Results will be selected in the table."
 msgstr "재생목록을 검색합니다. 결과는 표에서 선택됩니다."
 
-#: modules/gui/macosx/VLCMainWindow.m:318
+#: modules/gui/macosx/VLCMainWindow.m:315
 msgid "Open a dialog to select the media to play"
 msgstr "재생할 미디어 선택 대화상자를 엽니다"
 
-#: modules/gui/macosx/VLCMainWindow.m:322
-#: modules/gui/macosx/VLCMainWindow.m:328
+#: modules/gui/macosx/VLCMainWindow.m:319
+#: modules/gui/macosx/VLCMainWindow.m:325
 #: modules/gui/qt/components/playlist/selector.cpp:593
 msgid "Subscribe"
 msgstr "구독하기"
 
-#: modules/gui/macosx/VLCMainWindow.m:323
-#: modules/gui/macosx/VLCMainWindow.m:334
+#: modules/gui/macosx/VLCMainWindow.m:320
+#: modules/gui/macosx/VLCMainWindow.m:331
 #: modules/gui/qt/components/playlist/selector.cpp:610
 msgid "Unsubscribe"
 msgstr "구독 중단하기"
 
-#: modules/gui/macosx/VLCMainWindow.m:326
+#: modules/gui/macosx/VLCMainWindow.m:323
 #: modules/gui/qt/components/playlist/selector.cpp:279
 msgid "Subscribe to a podcast"
 msgstr "팟캐스트 구독하기"
 
-#: modules/gui/macosx/VLCMainWindow.m:327
+#: modules/gui/macosx/VLCMainWindow.m:324
 #: modules/gui/qt/components/playlist/selector.cpp:594
 msgid "Enter URL of the podcast to subscribe to:"
 msgstr "구독할 팟캐스트 주소 입력:"
 
-#: modules/gui/macosx/VLCMainWindow.m:332
+#: modules/gui/macosx/VLCMainWindow.m:329
 msgid "Unsubscribe from a podcast"
 msgstr "팟캐스트 구독 중단하기"
 
-#: modules/gui/macosx/VLCMainWindow.m:333
+#: modules/gui/macosx/VLCMainWindow.m:330
 msgid "Select the podcast you would like to unsubscribe from:"
 msgstr "구독을 중단할 팟캐스트 선택:"
 
@@ -21706,6 +21714,30 @@ msgstr "비밀번호 저장하기"
 msgid "Privacy and Network Access Policy"
 msgstr "개인정보와 네트워크 접근 정책"
 
+#: modules/gui/qt/dialogs/firstrun.cpp:69
+msgid ""
+"<p>In order to protect your privacy, <i>PowerVLC media player</i> does "
+"<b>not</b> collect personal data or transmit them, not even in anonymized "
+"form, to anyone.</p>\n"
+"<p>Nevertheless, <i>PowerVLC</i> is able to automatically retrieve "
+"information about the media in your playlist from third party Internet-based "
+"services. This includes cover art, track names, artist names and other meta-"
+"data.</p>\n"
+"<p>Consequently, this may entail identifying some of your media files to "
+"third party entities. Therefore the <i>PowerVLC</i> developers require your "
+"express consent for the media player to access the Internet automatically.</"
+"p>\n"
+msgstr ""
+"<p>사용자의 개인정보를 보호하기 위해 <i>PowerVLC 미디어 재생기는</i> 개인 자"
+"료를 수집하거나 무단으로 전송하지 않습니다. 익명으로 된 형식의 자료도 누구에"
+"게도 전송하지 않습니다.</p>\n"
+"<p>그럼에도, <i>PowerVLC</i>는 인터넷 기반의 서비스를 제공하는 제삼자가 사용"
+"자의 재생목록에 있는 미디어의 정보를 검색하도록 할 수 있습니다. 이것은 표지 "
+"아트, 트랙 이름, 제작자와 다른 메다 테이터를 포함합니다.</p>\n"
+"<p>결국, 이것은 제삼자의 회사가 사용자의 미디어 파일을 확인하도록 할 것입니"
+"다. 그러므로 <i>PowerVLC</i> 개발자는 미디어 재생기가 인터넷에 자동으로 접근"
+"할 수 있도록 하는 사용자의 명백한 동의를 요구합니다.</p>\n"
+
 #: modules/gui/qt/dialogs/firstrun.cpp:88
 msgid "Network Access Policy"
 msgstr "네트워크 접근 정책"
@@ -22077,6 +22109,10 @@ msgstr "구성을 저장할 수 없습니다"
 #: modules/gui/qt/dialogs/preferences.cpp:312
 msgid "Preferences file could not be saved"
 msgstr "환경설정 파일을 저장하지 못했습니다"
+
+#: modules/gui/qt/dialogs/preferences.cpp:337
+msgid "Are you sure you want to reset your PowerVLC media player preferences?"
+msgstr "PowerVLC 미디어 재생기의 환경설정을 재설정 할까요?"
 
 #: modules/gui/qt/dialogs/sout.cpp:43 modules/gui/qt/ui/sout.h:198
 msgid "Stream Output"
@@ -22657,6 +22693,14 @@ msgstr "전체화면 나가기"
 #: modules/gui/qt/menus.cpp:1075
 msgid "&Playback"
 msgstr "재생(&P)"
+
+#: modules/gui/qt/menus.cpp:1180
+msgid "&Hide PowerVLC media player in taskbar"
+msgstr "작업표시줄에서 PowerVLC 미디어 재생기 숨김(&H)"
+
+#: modules/gui/qt/menus.cpp:1186
+msgid "Sho&w PowerVLC media player"
+msgstr "PowerVLC 미디어 재생기 표시(&W)"
 
 #: modules/gui/qt/menus.cpp:1197
 msgid "&Open Media"
@@ -29162,7 +29206,7 @@ msgstr "XDG 쉘"
 msgid "XDG shell surface"
 msgstr "XDG 쉘 표면"
 
-#. xgettext: This is a plain ASCII spelling of "VLC media player"
+#. xgettext: This is a plain ASCII spelling of "PowerVLC media player"
 #. for the ICCCM window name. This must be pure ASCII.
 #. The limitation is partially with ICCCM and partially with VLC.
 #. For Latin script languages, you may need to strip accents.
@@ -30898,6 +30942,77 @@ msgstr "AAAA; "
 msgid "Media Manager List"
 msgstr "미디어 관리자 목록"
 
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:806
+#: modules/gui/macosx/VLCMainMenu.m:143 modules/gui/qt/menus.cpp:810
+msgid "Open the libaacs folder (Blu-ray)"
+msgstr "libaacs 폴더 열기 (블루레이)"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:808
+#: modules/gui/macosx/VLCMainMenu.m:150 modules/gui/qt/menus.cpp:815
+msgid "Open the libbdplus folder (Blu-ray)"
+msgstr "libbdplus 폴더 열기 (블루레이)"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1609
+#: modules/gui/macosx/VLCMainMenu.m:1423
+#: modules/gui/qt/util/powervlc_disclibs.cpp:64
+#, c-format
+msgid "The folder %s could not be opened."
+msgstr "%s 폴더를 열 수 없습니다."
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr "시각 장애인용 오디오"
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr "감독 코멘터리"
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr "감독 대체 코멘터리"
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr "어린이용"
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr "청각 장애인용 자막"
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr "청각 장애인용 자막 (큰 글씨)"
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr "청각 장애인용 자막 (어린이)"
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr "강제 자막"
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr "감독 코멘터리 (큰 글씨)"
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr "감독 코멘터리 (어린이)"
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr "강제 자막"
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr "강제 자막 표시"
+
+#: modules/access/bluray.c:83
+msgid ""
+"When the disc hides the subtitle stream, keep decoding it and display only "
+"its forced captions, as a standalone Blu-ray player does."
+msgstr ""
+
 #, c-format
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "VLC 버전 %s (%s)\n"
@@ -30919,34 +31034,193 @@ msgstr "미디어 관리자 목록"
 #~ msgid "Missing AACS configuration file!"
 #~ msgstr "AACS 구성 파일이 없습니다!"
 
-msgid ""
-"<p>In order to protect your privacy, <i>PowerVLC media player</i> does "
-"<b>not</b> collect personal data or transmit them, not even in anonymized "
-"form, to anyone.</p>\n"
-"<p>Nevertheless, <i>PowerVLC</i> is able to automatically retrieve "
-"information about the media in your playlist from third party Internet-based "
-"services. This includes cover art, track names, artist names and other meta-"
-"data.</p>\n"
-"<p>Consequently, this may entail identifying some of your media files to "
-"third party entities. Therefore the <i>PowerVLC</i> developers require your "
-"express consent for the media player to access the Internet automatically.</"
-"p>\n"
+#~ msgid "Blu-ray Pop-Up Menu"
+#~ msgstr "블루레이 팝업 메뉴"
+
+#~ msgid "Show the Blu-ray pop-up menu"
+#~ msgstr "블루레이 팝업 메뉴 표시"
+
+#~ msgid ""
+#~ "Select the key that shows the pop-up menu a Blu-ray draws over the "
+#~ "running movie (not the disc root menu)."
+#~ msgstr ""
+#~ "블루레이가 재생 중인 영상 위에 그리는 팝업 메뉴를 표시할 키를 선택하세요"
+#~ "(디스크 최상위 메뉴가 아닙니다)."
+
+#~ msgid "Use the main playlist from the key database"
+#~ msgstr "키 데이터베이스의 주 재생목록 사용"
+
+#~ msgid ""
+#~ "Some discs hide the feature among hundreds of decoy playlists of the same "
+#~ "length, so the longest one is not the right one. When playing without "
+#~ "menus, start on the playlist your KEYDB.cfg records for this disc, if it "
+#~ "records one. Titles are named after their .mpls file either way, so "
+#~ "another one can still be picked."
+#~ msgstr ""
+#~ "일부 디스크는 길이가 같은 수백 개의 미끼 재생목록 사이에 본편을 숨겨 두므"
+#~ "로 가장 긴 것이 올바른 것은 아닙니다. 메뉴 없이 재생할 때, KEYDB.cfg에 이 "
+#~ "디스크의 재생목록이 기록되어 있으면 해당 재생목록에서 시작합니다. 어느 경"
+#~ "우든 제목은 해당 .mpls 파일 이름을 따르므로 다른 것을 선택할 수도 있습니"
+#~ "다."
+
+#, c-format
+#~ msgid "%05u.mpls (main playlist)"
+#~ msgstr "%05u.mpls (주 재생목록)"
+
+#~ msgid "Dynamic range"
+#~ msgstr "다이내믹 레인지"
+
+#~ msgid "Dolby Vision tracks"
+#~ msgstr "Dolby Vision 트랙"
+
+#~ msgid "SDR conversion notice"
+#~ msgstr "SDR 변환 알림"
+
+#~ msgid "Bypass the system file cache"
+#~ msgstr "시스템 파일 캐시 우회"
+
+#~ msgid ""
+#~ "Read local files without going through the operating system's file cache "
+#~ "(F_NOCACHE). On a Mac with little RAM this stops a large film from "
+#~ "evicting the player's own memory mid-playback. It also disables kernel "
+#~ "read-ahead, so leave it off on slow or network volumes."
+#~ msgstr ""
+#~ "운영체제의 파일 캐시를 거치지 않고 로컬 파일을 읽습니다(F_NOCACHE). 메모리"
+#~ "가 적은 Mac에서는 큰 영화가 재생 도중 재생기 자체의 메모리를 밀어내는 것"
+#~ "을 막아 줍니다. 커널의 미리 읽기도 함께 비활성화되므로 느린 볼륨이나 네트"
+#~ "워크 볼륨에서는 꺼 두세요."
+
+#~ msgid "Use MPEG-2 hardware acceleration when available"
+#~ msgstr "가능한 경우 MPEG-2 하드웨어 가속 사용"
+
+#~ msgid ""
+#~ "Decode MPEG-2 streams on the GPU (the AppleVA pipeline of Apple's DVD "
+#~ "Player) whenever a hardware decoder is present (ATI, Intel GMA950, "
+#~ "nVidia), falling back to the libmpeg2 software decoder automatically. "
+#~ "Cuts CPU load dramatically on old Macs."
+#~ msgstr ""
+#~ "하드웨어 디코더(ATI, Intel GMA950, nVidia)가 있으면 MPEG-2 스트림을 GPU에"
+#~ "서 디코딩합니다(Apple DVD 플레이어의 AppleVA 파이프라인). 사용할 수 없으"
+#~ "면 libmpeg2 소프트웨어 디코더로 자동 전환됩니다. 오래된 Mac에서 CPU 사용량"
+#~ "을 크게 줄여 줍니다."
+
+#~ msgid "Field mode of the MPEG-2 hardware decoder (advanced)"
+#~ msgstr "MPEG-2 하드웨어 디코더의 필드 모드(고급)"
+
+#~ msgid ""
+#~ "Hardware decoding of field-predicted macroblocks (interlaced streams, "
+#~ "DVD). 0 = off (interlaced content falls back to the processor); 4 = "
+#~ "equivalent frame prediction (the default: the field engine of the GPU "
+#~ "tears on motion); 1/2/3 = native field engine, for debugging only."
+#~ msgstr ""
+#~ "필드 예측 매크로블록의 하드웨어 디코딩(인터레이스 스트림, DVD). 0 = 끔(인"
+#~ "터레이스 영상은 프로세서로 넘어감), 4 = 동등한 프레임 예측(기본값: GPU의 "
+#~ "필드 엔진은 움직임에서 찢어짐이 발생), 1/2/3 = 기본 필드 엔진, 디버깅 전"
+#~ "용."
+
+#~ msgid "Subtitles and OSD over hardware-accelerated video"
+#~ msgstr "하드웨어 가속 영상 위에 자막과 OSD 표시"
+
+#~ msgid ""
+#~ "Compose the subtitles (DVD SPU) and the on-screen display over the "
+#~ "picture decoded by the GPU. Without this option the hardware output "
+#~ "covers everything and subtitles stay invisible. Only affects the video "
+#~ "shown in the VLC window."
+#~ msgstr ""
+#~ "GPU가 디코딩한 화면 위에 자막(DVD SPU)과 화면 표시를 합성합니다. 이 옵션"
+#~ "이 없으면 하드웨어 출력이 모든 것을 덮어 자막이 보이지 않습니다. VLC 창에 "
+#~ "표시되는 영상에만 적용됩니다."
+
+#~ msgid "Asynchronous GPU submission (advanced)"
+#~ msgstr "비동기 GPU 제출(고급)"
+
+#~ msgid ""
+#~ "Issue the DVDDriverDecode call on a dedicated thread, so that the VLD of "
+#~ "the next picture runs while the GPU works. Measured on the iBook G3: "
+#~ "Decode is time spent blocked in the driver, and overlapping it removes "
+#~ "the shortfall in the 40 ms per picture budget."
+#~ msgstr ""
+#~ "DVDDriverDecode 호출을 전용 스레드에서 실행하여 GPU가 작업하는 동안 다음 "
+#~ "화면의 VLD가 진행되도록 합니다. iBook G3에서 측정한 결과 Decode는 드라이버"
+#~ "에서 차단된 시간이며, 이를 겹치면 화면당 40 ms 예산의 부족분이 사라집니다."
+
+#~ msgid "10.2 port changes on the hardware path (advanced)"
+#~ msgstr "하드웨어 경로의 10.2 이식 변경 사항(고급)"
+
+#~ msgid ""
+#~ "-1 = automatic (on under Mac OS X 10.2 and 10.3, off from 10.4 on, where "
+#~ "they replaced behaviour validated on the machine itself), 0 = off, 1 = on."
+#~ msgstr ""
+#~ "-1 = 자동(Mac OS X 10.2와 10.3에서는 켜짐, 10.4부터는 꺼짐. 10.4 이후에는 "
+#~ "실제 기기에서 검증된 동작을 대체하고 있었습니다), 0 = 끔, 1 = 켬."
+
+#~ msgid "DVD subtitles drawn by the GPU"
+#~ msgstr "GPU가 그리는 DVD 자막"
+
+#~ msgid ""
+#~ "Hand the DVD subtitles to the subpicture plane of the ATI hardware "
+#~ "decoder: the GPU composes them onto the picture itself, at no per-picture "
+#~ "cost, where drawing them through a window costs 15 to 50 ms on this "
+#~ "hardware. No effect while hardware decoding is off, as software rendering "
+#~ "then takes over."
+#~ msgstr ""
+#~ "DVD 자막을 ATI 하드웨어 디코더의 subpicture 평면에 맡깁니다. GPU가 화면당 "
+#~ "비용 없이 직접 화면에 합성하는 반면, 창을 통해 그리면 이 하드웨어에서는 "
+#~ "15~50 ms가 듭니다. 하드웨어 디코딩이 꺼져 있는 동안에는 효과가 없으며, 이"
+#~ "때는 소프트웨어 렌더링이 대신합니다."
+
+#~ msgid "Embedded video in a child window"
+#~ msgstr "하위 창에 삽입된 영상"
+
+#~ msgid ""
+#~ "Host the embedded video in a borderless child window: switching to "
+#~ "fullscreen is instant and does not interrupt accelerated decoding. "
+#~ "Turning this off restores the former behaviour (a separate fullscreen "
+#~ "window). No effect under Mac OS X 10.4, where a child window displays "
+#~ "nothing."
+#~ msgstr ""
+#~ "삽입된 영상을 테두리 없는 하위 창에 배치합니다. 전체화면 전환이 즉시 이루"
+#~ "어지고 가속 디코딩도 중단되지 않습니다. 끄면 이전 동작(별도의 전체화면 창)"
+#~ "으로 되돌아갑니다. 하위 창이 아무것도 표시하지 않는 Mac OS X 10.4에서는 효"
+#~ "과가 없습니다."
+
+#~ msgid "Open a window at startup (debugging)"
+#~ msgstr "시작할 때 창 열기(디버그)"
+
+#~ msgid ""
+#~ "Name of the window to open at startup, like the VLC_LEGACY_SHOW "
+#~ "environment variable: prefs, prefsadv, mediainfo, errors, about, "
+#~ "bookmarks, messages, tracksync, effects, videoeffects, convert, fspanel, "
+#~ "open0..3."
+#~ msgstr ""
+#~ "VLC_LEGACY_SHOW 환경 변수와 마찬가지로, 시작할 때 열 창의 이름: prefs, "
+#~ "prefsadv, mediainfo, errors, about, bookmarks, messages, tracksync, "
+#~ "effects, videoeffects, convert, fspanel, open0..3"
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Installing %@..."
 msgstr ""
-"<p>사용자의 개인정보를 보호하기 위해 <i>PowerVLC 미디어 재생기는</i> 개인 자"
-"료를 수집하거나 무단으로 전송하지 않습니다. 익명으로 된 형식의 자료도 누구에"
-"게도 전송하지 않습니다.</p>\n"
-"<p>그럼에도, <i>PowerVLC</i>는 인터넷 기반의 서비스를 제공하는 제삼자가 사용"
-"자의 재생목록에 있는 미디어의 정보를 검색하도록 할 수 있습니다. 이것은 표지 "
-"아트, 트랙 이름, 제작자와 다른 메다 테이터를 포함합니다.</p>\n"
-"<p>결국, 이것은 제삼자의 회사가 사용자의 미디어 파일을 확인하도록 할 것입니"
-"다. 그러므로 <i>PowerVLC</i> 개발자는 미디어 재생기가 인터넷에 자동으로 접근"
-"할 수 있도록 하는 사용자의 명백한 동의를 요구합니다.</p>\n"
 
-msgid "Are you sure you want to reset your PowerVLC media player preferences?"
-msgstr "PowerVLC 미디어 재생기의 환경설정을 재설정 할까요?"
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Uninstalling %@..."
+msgstr ""
 
-msgid "&Hide PowerVLC media player in taskbar"
-msgstr "작업표시줄에서 PowerVLC 미디어 재생기 숨김(&H)"
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ installed."
+msgstr ""
 
-msgid "Sho&w PowerVLC media player"
-msgstr "PowerVLC 미디어 재생기 표시(&W)"
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ uninstalled."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not install this addon"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not remove this addon"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ could not be processed. The Messages window records what went wrong."
+msgstr ""

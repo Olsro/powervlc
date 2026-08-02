@@ -56,39 +56,35 @@
 #include <stdexcept>
 
 /* libebml and matroska */
-#include "ebml/EbmlHead.h"
-#include "ebml/EbmlSubHead.h"
-#include "ebml/EbmlStream.h"
-#include "ebml/EbmlContexts.h"
-#include "ebml/EbmlVoid.h"
-#include "ebml/EbmlVersion.h"
-#include "ebml/StdIOCallback.h"
+#include <ebml/EbmlHead.h>
+#include <ebml/EbmlSubHead.h>
+#include <ebml/EbmlStream.h>
+#include <ebml/EbmlContexts.h>
+#include <ebml/EbmlVoid.h>
+#include <ebml/EbmlVersion.h>
 
-#include "matroska/KaxAttachments.h"
-#include "matroska/KaxAttached.h"
-#include "matroska/KaxBlock.h"
-#include "matroska/KaxBlockData.h"
-#include "matroska/KaxChapters.h"
-#include "matroska/KaxCluster.h"
-#include "matroska/KaxClusterData.h"
-#include "matroska/KaxContexts.h"
-#include "matroska/KaxCues.h"
-#include "matroska/KaxCuesData.h"
-#include "matroska/KaxInfo.h"
-#include "matroska/KaxInfoData.h"
-#include "matroska/KaxSeekHead.h"
-#include "matroska/KaxSegment.h"
-#include "matroska/KaxTag.h"
-#include "matroska/KaxTags.h"
-//#include "matroska/KaxTagMulti.h"
-#include "matroska/KaxTracks.h"
-#include "matroska/KaxTrackAudio.h"
-#include "matroska/KaxTrackVideo.h"
-#include "matroska/KaxTrackEntryData.h"
-#include "matroska/KaxContentEncoding.h"
-#include "matroska/KaxVersion.h"
-
-#include "ebml/StdIOCallback.h"
+#include <matroska/KaxAttachments.h>
+#include <matroska/KaxAttached.h>
+#include <matroska/KaxBlock.h>
+#include <matroska/KaxBlockData.h>
+#include <matroska/KaxChapters.h>
+#include <matroska/KaxCluster.h>
+#include <matroska/KaxClusterData.h>
+#include <matroska/KaxContexts.h>
+#include <matroska/KaxCues.h>
+#include <matroska/KaxCuesData.h>
+#include <matroska/KaxInfo.h>
+#include <matroska/KaxInfoData.h>
+#include <matroska/KaxSeekHead.h>
+#include <matroska/KaxSegment.h>
+#include <matroska/KaxTag.h>
+#include <matroska/KaxTags.h>
+#include <matroska/KaxTracks.h>
+#include <matroska/KaxTrackAudio.h>
+#include <matroska/KaxTrackVideo.h>
+#include <matroska/KaxTrackEntryData.h>
+#include <matroska/KaxContentEncoding.h>
+#include <matroska/KaxVersion.h>
 
 #ifdef HAVE_ZLIB_H
 #   include <zlib.h>
@@ -113,10 +109,28 @@ enum
 
 #define MKVD_TIMECODESCALE 1000000
 
-#define MKV_IS_ID( el, C ) ( el != NULL && (el->operator const EbmlId&()) == (C::ClassInfos.ClassId()) && !el->IsDummy() )
+#define MKV_IS_ID( el, C ) ( el != NULL && (el->operator const EbmlId&()) == EBML_ID(C) && !el->IsDummy() )
 #define MKV_CHECKED_PTR_DECL( name, type, src ) type * name = MKV_IS_ID(src, type) ? static_cast<type*>(src) : NULL
 #define MKV_CHECKED_PTR_DECL_CONST( name, type, src ) const type * name = MKV_IS_ID(src, type) ? static_cast<const type*>(src) : NULL
 
+class MissingMandatory : public std::runtime_error
+{
+public:
+    MissingMandatory(const char * type_name)
+        :std::runtime_error(std::string("missing mandatory element without a default ") + type_name)
+    {}
+};
+
+template <typename Type>
+Type & GetMandatoryChild(const EbmlMaster & Master)
+{
+  auto p = static_cast<Type *>(Master.FindFirstElt(EBML_INFO(Type)));
+  if (p == nullptr)
+  {
+    throw MissingMandatory(EBML_INFO_NAME(EBML_INFO(Type)));
+  }
+  return *p;
+}
 #if LIBEBML_VERSION < 0x020000
 template <typename Type>
 Type * FindChild(const EbmlMaster & Master)
@@ -136,10 +150,10 @@ using namespace LIBMATROSKA_NAMESPACE;
 class attachment_c
 {
 public:
-    attachment_c( const std::string& _psz_file_name, const std::string& _psz_mime_type, int _i_size )
+    attachment_c( const std::string& _str_file_name, const std::string& _str_mime_type, int _i_size )
         :i_size(_i_size)
-        ,psz_file_name( _psz_file_name)
-        ,psz_mime_type( _psz_mime_type)
+        ,str_file_name( _str_file_name)
+        ,str_mime_type( _str_mime_type)
     {
         p_data = NULL;
     }
@@ -152,15 +166,15 @@ public:
         return (p_data != NULL);
     }
 
-    const char* fileName() const { return psz_file_name.c_str(); }
-    const char* mimeType() const { return psz_mime_type.c_str(); }
+    const char* fileName() const { return str_file_name.c_str(); }
+    const char* mimeType() const { return str_mime_type.c_str(); }
     int         size() const    { return i_size; }
 
     void          *p_data;
 private:
     int            i_size;
-    std::string    psz_file_name;
-    std::string    psz_mime_type;
+    std::string    str_file_name;
+    std::string    str_mime_type;
 };
 
 class matroska_segment_c;
@@ -188,7 +202,7 @@ class PrivateTrackData
 {
 public:
     virtual ~PrivateTrackData() {}
-    virtual int32_t Init() { return 0; }
+    virtual bool Init() { return true; }
 };
 
 class mkv_track_t
@@ -212,7 +226,7 @@ class mkv_track_t
         bool         b_pts_only;
 
         bool         b_no_duration;
-        uint64_t     i_default_duration;
+        vlc_tick_t   i_default_duration;
         float        f_timecodescale;
         vlc_tick_t   i_last_dts;
         uint64_t     i_skip_until_fpos; /*< any block before this fpos should be ignored */
@@ -221,6 +235,7 @@ class mkv_track_t
         es_format_t fmt;
         float       f_fps;
         es_out_id_t *p_es;
+        vlc_fourcc_t uncompressed_fourcc = 0;
 
         /* audio */
         unsigned int i_original_rate;

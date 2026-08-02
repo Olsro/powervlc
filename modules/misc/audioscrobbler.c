@@ -835,7 +835,7 @@ static void *Run(void *data)
         int i_net_ret = net_Printf(p_intf, i_post_socket,
             "POST %s HTTP/1.1\r\n"
             "Host: %s\r\n"
-            "User-Agent: "PACKAGE_NAME"/"PACKAGE_VERSION"\r\n"
+            "User-Agent: PowerVLC/"POWERVLC_VERSION"\r\n"
             "Connection: close\r\n"
             "Accept-Encoding: identity\r\n"
             "Content-Type: application/x-www-form-urlencoded\r\n"

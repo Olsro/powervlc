@@ -25,6 +25,7 @@
 
 @class VLCLegacyCoreInteraction;
 @class VLCLegacyMainWindow;
+@class VLCLegacyExtensionsDialogProvider;
 @class VLCLegacyMenu;
 @class VLCLegacyOpen;
 @class VLCLegacyPrefs;
@@ -62,6 +63,7 @@
     VLCLegacyBookmarks *bookmarks;
     VLCLegacyFSPanel *fsPanel;
     VLCLegacyAbout *about;
+    VLCLegacyExtensionsDialogProvider *extensionDialogs;
 }
 
 - (id)initWithIntf:(intf_thread_t *)intf;
@@ -78,7 +80,8 @@
 - (void)displayQuestion:(NSArray *)dialogData;
 
 /* Must run on the main thread */
-- (void)setup;
+- (void)setup;          /* guarded wrapper, catches and logs */
+- (void)setupInterface; /* the actual work */
 - (void)shutdown;
 
 @end

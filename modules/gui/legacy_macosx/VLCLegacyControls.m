@@ -23,6 +23,7 @@
 #endif
 
 #import "VLCLegacyControls.h"
+#import "misc.h"
 
 static BOOL b_legacy_dark = NO;
 
@@ -181,7 +182,8 @@ NSButton *VLCLegacyImageButton(NSView *parent, NSString *imageName,
             [button setAlternateImage:alternate];
         }
     }
-    [[button cell] setImageDimsWhenDisabled:YES];
+    if ([[button cell] respondsToSelector:@selector(setImageDimsWhenDisabled:)])
+        [[button cell] setImageDimsWhenDisabled:YES];
     [button setTarget:target];
     [button setAction:action];
     [parent addSubview:button];

@@ -2,12 +2,29 @@ dnl Autoconf settings for vlc
 
 AC_COPYRIGHT([Copyright 1999-2025 VLC authors and VideoLAN])
 
-AC_INIT(vlc, 3.0.23)
+AC_INIT(vlc, 3.0.24-beta1)
 VERSION_MAJOR=3
 VERSION_MINOR=0
-VERSION_REVISION=23
+VERSION_REVISION=24
 VERSION_EXTRA=0
-VERSION_DEV=
+VERSION_DEV=beta1
+
+VERSION_DATE=$(
+    VERSION_PATTERN='^v?([[0-9]]+\.?)+(-[[0-9]]+)?$'
+    VERSION_TAG=$(git tag --points-at HEAD --sort=-version:refname 2>/dev/null | grep -E "$VERSION_PATTERN" | head -n 1)
+    if test -n "$VERSION_TAG"; then
+        DATE=$(git for-each-ref --format='%(taggerdate:short)' "refs/tags/${VERSION_TAG}" 2>/dev/null)
+        if test -n "$TAG" && test -z "$DATE"; then
+            AC_MSG_ERROR([Building with TAG envvar set but no date found on the tag, please check that your git tag is annotated])
+            exit 1
+        fi
+        echo "$DATE"
+    else
+        date '+%Y-%m-%d'
+    fi
+) || exit $?
+
+AC_SUBST([VERSION_DATE])
 
 PKGDIR="vlc"
 AC_SUBST(PKGDIR)
@@ -15,7 +32,7 @@ AC_SUBST(PKGDIR)
 CONFIGURE_LINE="`echo "$0 $ac_configure_args" | sed -e 's/\\\/\\\\\\\/g'`"
 CODENAME="Vetinari"
 dnl PowerVLC product version, distinct from the VLC core version above
-POWERVLC_VERSION="1.0.0"
+POWERVLC_VERSION="1.1.0"
 AC_SUBST(POWERVLC_VERSION)
 COPYRIGHT_YEARS="1996-2026"
 
@@ -438,8 +455,8 @@ AS_IF([test "${SYS}" = "mingw32"],[
     AX_APPEND_FLAG([-DWINSTORECOMPAT],[CXXFLAGS])
     AX_APPEND_FLAG([-lwinstorecompat], [LDFLAGS])
     VLC_ADD_LIBS([libvlccore], [-lruntimeobject])
-    AC_LIBOBJ([gai_strerror])
   ],[])
+  AC_LIBOBJ([gai_strerror])
   AC_SUBST(LIBCOM)
   ])
 AC_DEFINE_UNQUOTED(VLC_WINSTORE_APP, ${vlc_winstore_app}, [Define to 1 if you want to build for Windows Store apps])
@@ -1213,13 +1230,13 @@ AX_APPEND_COMPILE_FLAGS([-pipe], [CFLAGS])
 dnl Checks for socket stuff
 VLC_SAVE_FLAGS
 SOCKET_LIBS=""
-AC_SEARCH_LIBS(connect, [socket], [
-  AS_IF([test "$ac_cv_search_connect" != "none required"], [
-    SOCKET_LIBS="$ac_cv_search_connect"
-  ])
-], [
-  AS_IF([test "${SYS}" = "mingw32"], [
-    SOCKET_LIBS="-lws2_32 -liphlpapi"
+AS_IF([test "${SYS}" = "mingw32"], [
+  SOCKET_LIBS="-lws2_32 -liphlpapi"
+],[
+  AC_SEARCH_LIBS(connect, [socket], [
+    AS_IF([test "$ac_cv_search_connect" != "none required"], [
+      SOCKET_LIBS="$ac_cv_search_connect"
+    ])
   ])
 ])
 
@@ -1449,7 +1466,10 @@ AH_BOTTOM([
   dnl Win32 requires linking to ssp for stack-protection
   AS_IF([test "${SYS}" = "mingw32"], [
       LDFLAGS="${LDFLAGS} -lssp"
-      AS_IF([test "${vlc_winstore_app}" != 1], [LDFLAGS="${LDFLAGS} -ladvapi32"])
+      dnl library for Crypt/BCrypt APIs
+      AS_IF([test "${vlc_winstore_app}" != 1],
+            [LDFLAGS="${LDFLAGS} -ladvapi32"],
+            [LDFLAGS="${LDFLAGS} -lbcrypt"])
   ])
 ])
 
@@ -1640,7 +1660,52 @@ asm volatile("maskmovq %%mm1,%%mm2"::"r"(p):"mm1", "mm2");
     have_mmxext="yes"
   ])
 ])
+dnl The MMX I420->RGB converter asks for far more operands at once than the
+dnl plain "does MMX assemble" probe above: four "r" inputs plus ten "m" ones in
+dnl a single asm statement (see MMX_CALL in modules/video_chroma/i420_rgb_mmx.h).
+dnl On 32-bit x86 that no longer fits -- GCC 13 rejects it with
+dnl   error: 'asm' operand has impossible constraints
+dnl and it is not the PIC base register: -fno-pic fails identically. The other
+dnl MMX chroma converters (i420_yuy2, i422_yuy2) and the SSE2 build of this very
+dnl file are unaffected, so gate this one converter rather than all of MMX.
+dnl
+dnl Measured on i686-apple-darwin8 / GCC 13.4: the plugin has never been in a
+dnl shipped bundle, because the target's build directory predated the probe
+dnl above answering "yes". Recreating that build directory turned a silent
+dnl absence into a hard build failure, which is what this test prevents.
+dnl A synthetic asm block of the same shape is NOT enough to reproduce this --
+dnl one was tried and compiled happily on the very compiler that rejects the
+dnl real thing. So compile the real macro out of the real header, in the loop
+dnl shape its caller uses (i420_rgb16_x86.c keeps the four pointers live across
+dnl iterations, which is what tips the allocator over).
+AS_IF([test "${have_mmx}" = "yes"], [
+  AC_CACHE_CHECK([if $CC groks the MMX I420->RGB asm], [ac_cv_mmx_i420_rgb], [
+    VLC_SAVE_FLAGS
+    CFLAGS="${CFLAGS} -mmmx"
+    CPPFLAGS="${CPPFLAGS} -I${srcdir}/modules"
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
+#include <stdint.h>
+#define CAN_COMPILE_MMX 1
+#include "video_chroma/i420_rgb_mmx.h"
+]],[[
+uint8_t *p_y = 0, *p_u = 0, *p_v = 0; uint16_t *p_buffer = 0;
+for (int i = 2; i--; ) {
+    MMX_CALL (MMX_INIT_16 MMX_YUV_MUL MMX_YUV_ADD MMX_UNPACK_15);
+    p_y += 8; p_u += 4; p_v += 4; p_buffer += 8;
+}
+]])
+    ], [
+      ac_cv_mmx_i420_rgb=yes
+    ], [
+      ac_cv_mmx_i420_rgb=no
+    ])
+    VLC_RESTORE_FLAGS
+  ])
+], [
+  ac_cv_mmx_i420_rgb=no
+])
 AM_CONDITIONAL([HAVE_MMX], [test "${have_mmx}" = "yes"])
+AM_CONDITIONAL([HAVE_MMX_I420_RGB], [test "${ac_cv_mmx_i420_rgb}" = "yes"])
 AM_CONDITIONAL([HAVE_MMXEXT], [test "${have_mmxext}" = "yes"])
 
 dnl  Check for fully workin SSE2 intrinsics
@@ -2441,7 +2506,18 @@ AM_CONDITIONAL(HAVE_AVFOUNDATION, [test "${have_avfoundation}" != "no"])
 dnl
 dnl  DCP plugin (using asdcplib)
 dnl
-PKG_WITH_MODULES([ASDCP], [asdcplib], [have_asdcp="yes"])
+PKG_WITH_MODULES([ASDCP], [asdcplib], [
+    have_asdcp="yes"
+
+    dnl asdcplib doesn't provide a version define
+    dnl check the factory necessary API from the package version
+    PKG_WITH_MODULES([ASDCP], [asdcplib >= 2.12.2], [
+        ASDCPLIB_FACTORY=1
+    ],[
+        ASDCPLIB_FACTORY=0
+    ])
+])
+AC_SUBST([ASDCPLIB_FACTORY])
 AM_CONDITIONAL(HAVE_ASDCP, [test "${have_asdcp}" = "yes"])
 
 dnl
@@ -3110,6 +3186,15 @@ dnl  Ambisonic channel mixer and binauralizer plugin
 dnl
 PKG_ENABLE_MODULES_VLC([SPATIALAUDIO], [], [spatialaudio], [Ambisonic channel mixer and binauralizer], [auto])
 
+AS_IF([test -n ${SPATIALAUDIO_CFLAGS+set}], [
+    VLC_SAVE_FLAGS
+    AX_APPEND_FLAG([$SPATIALAUDIO_CFLAGS], [CFLAGS])
+    AC_CHECK_HEADER([spatialaudio/SpatialaudioVersion.h], [
+        AX_APPEND_FLAG([-DHAVE_SPATIALAUDIOVERSION_H=1], [SPATIALAUDIO_CFLAGS])
+    ])
+    VLC_RESTORE_FLAGS
+])
+
 dnl
 dnl  theora decoder plugin
 dnl
@@ -3126,9 +3211,9 @@ dnl
 PKG_ENABLE_MODULES_VLC([DAALA], [], [daaladec daalaenc], [experimental daala codec], [disabled])
 
 dnl
-dnl  schroedinger decoder plugin (for dirac format video)
+dnl  OpenAPV decoder plugin
 dnl
-PKG_ENABLE_MODULES_VLC([SCHROEDINGER], [], [schroedinger-1.0 >= 1.0.10], [dirac decoder and encoder using schroedinger], [auto])
+PKG_ENABLE_MODULES_VLC([OPENAPV], [], [oapv >= 0.2], [OpenAPV decoder], [auto])
 
 dnl
 dnl  PNG decoder module
@@ -3246,9 +3331,9 @@ fi
 
 
 dnl
-dnl Intel QuickSync (aka MediaSDK) H264/H262 encoder
+dnl Intel Video Processing Library
 dnl
-PKG_ENABLE_MODULES_VLC([MFX], [qsv], [libmfx], [Intel QuickSync MPEG4-Part10/MPEG2 (aka H.264/H.262) encoder], [auto])
+PKG_ENABLE_MODULES_VLC([VPL], [qsv], [vpl], [Intel Video Processing Library encoder], [auto])
 
 dnl
 dnl libfluidsynth (MIDI synthetizer) plugin
@@ -4031,24 +4116,57 @@ m4_popdef([libchromaprint_version])
 dnl
 dnl  Chromecast streaming support
 dnl
-m4_pushdef([protobuf_lite_version], 2.5.0)
-AC_ARG_VAR(PROTOC, [protobuf compiler])
-AC_CHECK_PROGS(PROTOC, protoc, no)
-PKG_WITH_MODULES([CHROMECAST],[protobuf-lite >= protobuf_lite_version], [
-    AS_IF([test "x${PROTOC}" != "xno"], [
-        build_chromecast="yes"
-    ], [
-    AC_MSG_ERROR(protoc compiler needed for [chromecast] was not found)
+PKG_WITH_MODULES([CHROMECAST],[protobuf-lite], [],[
+    AS_IF([test "${enable_chromecast}" = "yes"],[
+        AC_MSG_ERROR(Library protobuf-lite needed for [chromecast] was not found)
+    ],[
+        AC_MSG_WARN(Library protobuf-lite needed for [chromecast] was not found)
     ])
-], [
-    AS_IF([test "${enable_chromecast}" = "yes"],
-        AC_MSG_ERROR(Library [protobuf-lite >= protobuf_lite_version] needed for [chromecast] was not found),
-        AC_MSG_WARN(Library [protobuf-lite >= protobuf_lite_version] needed for [chromecast] was not found)
-    )
-    enable_chromecast="no"
+    enable_chromecast=no
 ], [(Chromecast streaming support)], [auto])
-AM_CONDITIONAL([BUILD_CHROMECAST], [test "${build_chromecast}" = "yes"])
-m4_popdef([protobuf_lite_version])
+
+AC_ARG_VAR(PROTOC, [protobuf compiler])
+AS_IF([test -n "$PKG_CONFIG"],[
+    AC_PATH_PROGS(PROTOC, [protoc], no, ["${CONTRIB_DIR}/../bin:$PATH"])
+    AS_IF([test "${PROTOC}" != "no"], [
+        dnl silently checks the protoc version matches the protobuf library
+        PROTOC_FULL_VERSION="$(eval ${PROTOC} --version 2>/dev/null | head -1 | sed s/'.* '//)"
+        PROTOC_MAJ_VERSION="$(echo ${PROTOC_FULL_VERSION} | cut -d '.' -f -1)"
+        AS_IF([test "${PROTOC_MAJ_VERSION}" -lt "5" ], [
+            dnl protoc x.y.0 is compatible with protobuf x.y.*
+            PROTOBUF_VERSION="$(echo ${PROTOC_FULL_VERSION} | cut -d '.' -f -2)"
+            PROTOBUF_MAX_VERSION="${PROTOBUF_VERSION%.*}.$((${PROTOBUF_VERSION##*.}+1))"
+            PROTOBUF_TEST="protobuf-lite >= ${PROTOBUF_VERSION} protobuf-lite < ${PROTOBUF_MAX_VERSION}"
+        ],[
+          AS_IF([test "${PROTOC_MAJ_VERSION}" -lt "22" ], [
+            dnl protoc x.y.z is compatible with protobuf x.y.z
+            PROTOBUF_VERSION="$(echo ${PROTOC_FULL_VERSION} | cut -d '.' -f -3)"
+            dnl the protoc version is in the x.y.z format but protobuf version is in the x.y.z.r format
+            PROTOBUF_MAX_VERSION="${PROTOBUF_VERSION%.*}.$((${PROTOBUF_VERSION##*.}+1))"
+            PROTOBUF_TEST="protobuf-lite >= ${PROTOBUF_VERSION} protobuf-lite < ${PROTOBUF_MAX_VERSION}"
+          ],[
+            dnl protoc x.y is compatible with protobuf x.y.*
+            PROTOBUF_VERSION="$(echo ${PROTOC_FULL_VERSION} | cut -d '.' -f -2)"
+            PROTOBUF_MAX_VERSION="${PROTOBUF_VERSION%.*}.$((${PROTOBUF_VERSION##*.}+1))"
+            PROTOBUF_TEST="protobuf-lite >= ${PROTOBUF_VERSION} protobuf-lite < ${PROTOBUF_MAX_VERSION}"
+          ])
+        ])
+        AC_MSG_CHECKING([protobuf-lite matches ${PROTOC} version ${PROTOBUF_VERSION}])
+        ($PKG_CONFIG --exists --print-errors "${PROTOBUF_TEST}") 2>&AS_MESSAGE_FD
+        ac_status=$?
+        AS_IF([test $ac_status = 0],[
+            protoc_matching=yes
+            AC_MSG_RESULT([yes])
+        ],[
+            protoc_matching=no
+            AC_MSG_RESULT([no])
+        ])
+    ],[
+        protoc_matching=no
+    ])
+])
+AC_SUBST([PROTOBUF_VERSION])
+AM_CONDITIONAL([BUILD_CHROMECAST], [test "${enable_chromecast}" != "no" -a "${protoc_matching}" = yes])
 
 dnl
 dnl  Interface plugins
@@ -4439,6 +4557,11 @@ dnl  SRT plugin
 dnl
 PKG_ENABLE_MODULES_VLC([SRT], [access_srt access_output_srt], [srt >= 1.3.0], [SRT input/output plugin], [auto], [], [], [-DENABLE_SRT])
 
+dnl
+dnl  libRIST plugin
+dnl
+PKG_ENABLE_MODULES_VLC([LIBRIST], [rist access_output_rist], [librist], [RIST input/output plugin], [auto])
+
 EXTEND_HELP_STRING([Visualisations and Video filter plugins:])
 dnl
 dnl  goom visualization plugin
@@ -4538,6 +4661,11 @@ AS_IF([test "${enable_libgcrypt}" != "no"], [
 
   AS_IF([test "${ac_cv_lib_gcrypt}" = "yes"], [
     AC_DEFINE([HAVE_GCRYPT], 1, [Defined if having gcrypt])
+    PKG_CHECK_MODULES([GPGERROR], [gpg-error], [
+      have_gpg_error="yes"
+    ], [
+      have_gpg_error="no"
+    ])
   ], [
     AS_IF([test "${enable_libgcrypt}" = "yes"], [
       AC_MSG_ERROR([libgcrypt version 1.6.0 or higher not found. Install libgcrypt or pass --disable-libgcrypt.])
@@ -4546,7 +4674,11 @@ AS_IF([test "${enable_libgcrypt}" != "no"], [
 ])
 
 AS_IF([test -z "$GCRYPT_LIBS"], [
-  GCRYPT_LIBS="-lgcrypt -lgpg-error"
+  AS_IF([test "${have_gpg_error}" = "yes"],[
+    GCRYPT_LIBS="-lgcrypt ${GPGERROR_LIBS}"
+  ],[
+    GCRYPT_LIBS="-lgcrypt -lgpg-error"
+  ])
 ])
 
 AC_SUBST(GCRYPT_CFLAGS)

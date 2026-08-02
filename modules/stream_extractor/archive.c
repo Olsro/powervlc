@@ -374,12 +374,37 @@ static int archive_seek_subentry( private_sys_t* p_sys, char const* psz_subentry
             return VLC_EGENERIC;
     }
 
-    /* check if seeking is supported */
-
+    /* Check if seeking is supported -- by asking the format, NOT by trying.
+     *
+     * archive_seek_data() cannot be used as a capability probe: since
+     * libarchive 3.7, the "no seek_data handler" branch sets
+     * ARCHIVE_STATE_FATAL on the whole archive before returning, so the probe
+     * permanently kills it and every later archive_read_data() fails with
+     * "Internal error: No format_seek_data_block function registered".
+     * Only the two RAR readers implement seek_data, so a zip -- the format
+     * VLC's own addon installer feeds through here -- was destroyed by the
+     * very call that asked whether it could seek. Older libarchive only set
+     * the error string, which is why this went unnoticed until the contrib
+     * was moved to 3.8.x. */
     if( p_sys->b_seekable_source )
     {
-        if( archive_seek_data( p_sys->p_archive, 0, SEEK_CUR ) >= 0 )
-            p_sys->b_seekable_archive = true;
+        int i_format = archive_format( p_sys->p_archive );
+
+        /* ARCHIVE_FORMAT_RAR_V5 only exists since libarchive 3.4.0; the
+         * AppImage builders still run on distributions older than that
+         * (Ubuntu 18.04 ships 3.2.2). Nothing is lost when it is missing:
+         * such a libarchive does not report RAR v5 as a format of its own. */
+        if( i_format == ARCHIVE_FORMAT_RAR
+#if ARCHIVE_VERSION_NUMBER >= 3004000
+         || i_format == ARCHIVE_FORMAT_RAR_V5
+#endif
+          )
+        {
+            if( archive_seek_data( p_sys->p_archive, 0, SEEK_CUR ) >= 0 )
+                p_sys->b_seekable_archive = true;
+            else
+                archive_clear_error( p_sys->p_archive );
+        }
     }
 
     return VLC_SUCCESS;

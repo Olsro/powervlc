@@ -1,0 +1,295 @@
+From 6bec141fcf7219b44f3e29b165b9aa4d6bb03adf Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Tue, 28 Jul 2026 02:31:56 +0000
+Subject: [PATCH 5/6] PPC: Add AltiVec compound-prediction kernels
+ (avg/w_avg/mask)
+
+New 8bpc avg, w_avg and mask kernels for the big-endian AltiVec (G4/G5)
+sub-target, registered only when ARCH_PPC && !ARCH_PPC64LE so the ppc64le
+build is unchanged.
+
+avg exploits the documented 8bpc mct output range [-5132, 9212]: the sum
+tmp1+tmp2+16 fits int16_t exactly, so it is one modulo vec_add + shift +
+saturating pack per 8 pixels. w_avg and mask need 32-bit accumulation and
+use vmsumshm on interleaved (tmp1,tmp2) pairs against (w, 16-w) or
+(m, 64-m) weight pairs; after the shift the value range is [-321, 576],
+so the i32->i16 pack cannot saturate and the final vec_packsu implements
+iclip_pixel exactly.
+
+Verified bit-exact vs the C reference with checkasm under qemu-ppc
+(-cpu 7400, 32-bit big-endian): mc_8bpc.avg/w_avg/mask all pass, full
+checkasm suite regression-clean.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011ufaEhvCRX9nswQTF2pzdN
+---
+ src/ppc/mc.h      |  14 +++
+ src/ppc/mc_tmpl.c | 213 ++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 227 insertions(+)
+
+diff --git a/src/ppc/mc.h b/src/ppc/mc.h
+index 255b31dc..1101fa3a 100644
+--- a/src/ppc/mc.h
++++ b/src/ppc/mc.h
+@@ -36,6 +36,14 @@
+ decl_blend_fn(BF(dav1d_blend, pwr9));
+ decl_blend_dir_fn(BF(dav1d_blend_h, pwr9));
+ decl_blend_dir_fn(BF(dav1d_blend_v, pwr9));
++
++#if !ARCH_PPC64LE
++/* Compound-prediction kernels only built for the big-endian AltiVec (G4/G5)
++ * sub-target; ppc64le would need separate little-endian verification. */
++decl_avg_fn(BF(dav1d_avg, altivec));
++decl_w_avg_fn(BF(dav1d_w_avg, altivec));
++decl_mask_fn(BF(dav1d_mask, altivec));
++#endif
+ #endif
+ 
+ static ALWAYS_INLINE void mc_dsp_init_ppc(Dav1dMCDSPContext *const c) {
+@@ -48,6 +56,12 @@ static ALWAYS_INLINE void mc_dsp_init_ppc(Dav1dMCDSPContext *const c) {
+   c->blend = BF(dav1d_blend, pwr9);
+   c->blend_h = BF(dav1d_blend_h, pwr9);
+   c->blend_v = BF(dav1d_blend_v, pwr9);
++
++#if !ARCH_PPC64LE
++  c->avg = BF(dav1d_avg, altivec);
++  c->w_avg = BF(dav1d_w_avg, altivec);
++  c->mask = BF(dav1d_mask, altivec);
++#endif
+ #endif
+ #else
+   (void)c;
+diff --git a/src/ppc/mc_tmpl.c b/src/ppc/mc_tmpl.c
+index a0393cb1..6f73bb5d 100644
+--- a/src/ppc/mc_tmpl.c
++++ b/src/ppc/mc_tmpl.c
+@@ -27,6 +27,8 @@
+ 
+ #if defined(__VSX__) || defined(__POWER9_VECTOR__) || defined(DAV1D_ALTIVEC)
+ 
++#include <string.h>
++
+ #include "common/attributes.h"
+ #include "src/ppc/mc.h"
+ #include "src/tables.h"
+@@ -553,6 +555,217 @@ void dav1d_blend_h_8bpc_pwr9(pixel *dst, const ptrdiff_t dst_stride, const pixel
+     }
+ }
+ 
++/*
++ * Compound prediction: avg / w_avg / mask. New AltiVec (G4/G5, big-endian)
++ * kernels; kept off the ppc64le build (which has its own tuning priorities and
++ * would need separate little-endian verification) via !ARCH_PPC64LE.
++ *
++ * 8bpc facts these rely on (src/mc_tmpl.c): intermediate_bits = 4,
++ * PREP_BIAS = 0, and the prep/mct output range is [-5132, 9212], so
++ * tmp1 + tmp2 + 16 fits int16 exactly (plain modulo vec_add is bit-exact)
++ * while the weighted sums need 32-bit accumulation, done with vmsumshm
++ * (vec_msum) on interleaved (tmp1,tmp2) pairs.
++ */
++#if !ARCH_PPC64LE
++
++/* Store the low 4 or 8 bytes of a vector without touching the neighbouring
++ * memory: aligned spill + fixed-size memcpy (compiles to two scalar stores). */
++static inline void store_h8(uint8_t *dst, u8x16 v) {
++    ALIGN_STK_16(uint8_t, buf, 16,);
++    vec_st(v, 0, buf);
++    memcpy(dst, buf, 8);
++}
++
++static inline void store_2x4(uint8_t *dst, const ptrdiff_t stride, u8x16 v) {
++    ALIGN_STK_16(uint8_t, buf, 16,);
++    vec_st(v, 0, buf);
++    memcpy(dst, buf, 4);
++    memcpy(dst + stride, buf + 4, 4);
++}
++
++#define AVG8(v, a, b) \
++    i16x8 v = vec_sra(vec_add(vec_add(a, b), avg_rnd), avg_sh)
++
++void dav1d_avg_8bpc_altivec(pixel *dst, const ptrdiff_t dst_stride,
++                            const int16_t *tmp1, const int16_t *tmp2,
++                            const int w, int h)
++{
++    const i16x8 avg_rnd = vec_splats((int16_t)16);
++    const u16x8 avg_sh = vec_splat_u16(5);
++    const ptrdiff_t stride = PXSTRIDE(dst_stride);
++
++    if (w == 4) {
++        do { // 2 rows per iteration
++            const i16x8 a = vec_xl(0, tmp1);
++            const i16x8 b = vec_xl(0, tmp2);
++            AVG8(v, a, b);
++            store_2x4(dst, stride, vec_packsu(v, v));
++            tmp1 += 8; tmp2 += 8;
++            dst += 2 * stride;
++            h -= 2;
++        } while (h);
++    } else if (w == 8) {
++        do {
++            const i16x8 a = vec_xl(0, tmp1);
++            const i16x8 b = vec_xl(0, tmp2);
++            AVG8(v, a, b);
++            store_h8(dst, vec_packsu(v, v));
++            tmp1 += 8; tmp2 += 8;
++            dst += stride;
++        } while (--h);
++    } else {
++        do {
++            for (int x = 0; x < w; x += 16) {
++                const i16x8 a0 = vec_xl(0, tmp1 + x);
++                const i16x8 a1 = vec_xl(16, tmp1 + x);
++                const i16x8 b0 = vec_xl(0, tmp2 + x);
++                const i16x8 b1 = vec_xl(16, tmp2 + x);
++                AVG8(v0, a0, b0);
++                AVG8(v1, a1, b1);
++                vec_xst(vec_packsu(v0, v1), 0, dst + x);
++            }
++            tmp1 += w; tmp2 += w;
++            dst += stride;
++        } while (--h);
++    }
++}
++
++/* 8 weighted pixels: interleave (tmp1,tmp2) pairs and multiply-sum against
++ * per-pixel (weight1,weight2) pairs into 32-bit lanes. After the shift the
++ * value range is [-321, 576], so the i32->i16 pack cannot saturate and the
++ * final packsu provides exactly the iclip_pixel of the C reference. */
++#define WSUM8(v, a, b, wp_h, wp_l, rndv, shv) \
++    const i16x8 v ## ab_h = vec_mergeh(a, b); \
++    const i16x8 v ## ab_l = vec_mergel(a, b); \
++    const i32x4 v ## s_h = vec_sra(vec_msum(v ## ab_h, wp_h, rndv), shv); \
++    const i32x4 v ## s_l = vec_sra(vec_msum(v ## ab_l, wp_l, rndv), shv); \
++    const i16x8 v = vec_packs(v ## s_h, v ## s_l)
++
++void dav1d_w_avg_8bpc_altivec(pixel *dst, const ptrdiff_t dst_stride,
++                              const int16_t *tmp1, const int16_t *tmp2,
++                              const int w, int h, const int weight)
++{
++    const i16x8 wp = vec_mergeh(vec_splats((int16_t)weight),
++                                vec_splats((int16_t)(16 - weight)));
++    const i32x4 rndv = vec_splats((int32_t)128); // 8 << intermediate_bits
++    const u32x4 shv = vec_splats(8u);            // intermediate_bits + 4
++    const ptrdiff_t stride = PXSTRIDE(dst_stride);
++
++    if (w == 4) {
++        do {
++            const i16x8 a = vec_xl(0, tmp1);
++            const i16x8 b = vec_xl(0, tmp2);
++            WSUM8(v, a, b, wp, wp, rndv, shv);
++            store_2x4(dst, stride, vec_packsu(v, v));
++            tmp1 += 8; tmp2 += 8;
++            dst += 2 * stride;
++            h -= 2;
++        } while (h);
++    } else if (w == 8) {
++        do {
++            const i16x8 a = vec_xl(0, tmp1);
++            const i16x8 b = vec_xl(0, tmp2);
++            WSUM8(v, a, b, wp, wp, rndv, shv);
++            store_h8(dst, vec_packsu(v, v));
++            tmp1 += 8; tmp2 += 8;
++            dst += stride;
++        } while (--h);
++    } else {
++        do {
++            for (int x = 0; x < w; x += 16) {
++                const i16x8 a0 = vec_xl(0, tmp1 + x);
++                const i16x8 a1 = vec_xl(16, tmp1 + x);
++                const i16x8 b0 = vec_xl(0, tmp2 + x);
++                const i16x8 b1 = vec_xl(16, tmp2 + x);
++                WSUM8(v0, a0, b0, wp, wp, rndv, shv);
++                WSUM8(v1, a1, b1, wp, wp, rndv, shv);
++                vec_xst(vec_packsu(v0, v1), 0, dst + x);
++            }
++            tmp1 += w; tmp2 += w;
++            dst += stride;
++        } while (--h);
++    }
++}
++
++/* Build the two 8-lane (m, 64-m) pair vectors for 16 mask bytes. */
++#define MASK_PAIRS(m, wp_a, wp_b) \
++    const i16x8 m ## _h = u8h_to_i16(m); \
++    const i16x8 m ## _l = u8l_to_i16(m); \
++    const i16x8 m ## i_h = vec_sub(v64, m ## _h); \
++    const i16x8 m ## i_l = vec_sub(v64, m ## _l); \
++    const i16x8 wp_a ## _h = vec_mergeh(m ## _h, m ## i_h); \
++    const i16x8 wp_a ## _l = vec_mergel(m ## _h, m ## i_h); \
++    const i16x8 wp_b ## _h = vec_mergeh(m ## _l, m ## i_l); \
++    const i16x8 wp_b ## _l = vec_mergel(m ## _l, m ## i_l)
++
++void dav1d_mask_8bpc_altivec(pixel *dst, const ptrdiff_t dst_stride,
++                             const int16_t *tmp1, const int16_t *tmp2,
++                             const int w, int h, const uint8_t *mask)
++{
++    const i16x8 v64 = vec_splats((int16_t)64);
++    const i32x4 rndv = vec_splats((int32_t)512); // 32 << intermediate_bits
++    const u32x4 shv = vec_splats(10u);           // intermediate_bits + 6
++    const ptrdiff_t stride = PXSTRIDE(dst_stride);
++
++    if (w == 4) {
++        do { // 4 rows per iteration (16 px)
++            const u8x16 m = vec_xl(0, mask);
++            const i16x8 a0 = vec_xl(0, tmp1);
++            const i16x8 a1 = vec_xl(16, tmp1);
++            const i16x8 b0 = vec_xl(0, tmp2);
++            const i16x8 b1 = vec_xl(16, tmp2);
++            MASK_PAIRS(m, wpa, wpb);
++            WSUM8(v0, a0, b0, wpa_h, wpa_l, rndv, shv);
++            WSUM8(v1, a1, b1, wpb_h, wpb_l, rndv, shv);
++            const u8x16 p = vec_packsu(v0, v1);
++            ALIGN_STK_16(uint8_t, buf, 16,);
++            vec_st(p, 0, buf);
++            memcpy(dst,              buf,      4);
++            memcpy(dst +     stride, buf + 4,  4);
++            memcpy(dst + 2 * stride, buf + 8,  4);
++            memcpy(dst + 3 * stride, buf + 12, 4);
++            tmp1 += 16; tmp2 += 16; mask += 16;
++            dst += 4 * stride;
++            h -= 4;
++        } while (h);
++    } else if (w == 8) {
++        do { // 2 rows per iteration
++            const u8x16 m = vec_xl(0, mask);
++            const i16x8 a0 = vec_xl(0, tmp1);
++            const i16x8 a1 = vec_xl(16, tmp1);
++            const i16x8 b0 = vec_xl(0, tmp2);
++            const i16x8 b1 = vec_xl(16, tmp2);
++            MASK_PAIRS(m, wpa, wpb);
++            WSUM8(v0, a0, b0, wpa_h, wpa_l, rndv, shv);
++            WSUM8(v1, a1, b1, wpb_h, wpb_l, rndv, shv);
++            const u8x16 p = vec_packsu(v0, v1);
++            store_h8(dst, p);
++            store_h8(dst + stride, (u8x16)MERGEL64(p, p));
++            tmp1 += 16; tmp2 += 16; mask += 16;
++            dst += 2 * stride;
++            h -= 2;
++        } while (h);
++    } else {
++        do {
++            for (int x = 0; x < w; x += 16) {
++                const u8x16 m = vec_xl(0, mask + x);
++                const i16x8 a0 = vec_xl(0, tmp1 + x);
++                const i16x8 a1 = vec_xl(16, tmp1 + x);
++                const i16x8 b0 = vec_xl(0, tmp2 + x);
++                const i16x8 b1 = vec_xl(16, tmp2 + x);
++                MASK_PAIRS(m, wpa, wpb);
++                WSUM8(v0, a0, b0, wpa_h, wpa_l, rndv, shv);
++                WSUM8(v1, a1, b1, wpb_h, wpb_l, rndv, shv);
++                vec_xst(vec_packsu(v0, v1), 0, dst + x);
++            }
++            tmp1 += w; tmp2 += w; mask += w;
++            dst += stride;
++        } while (--h);
++    }
++}
++
++#endif // !ARCH_PPC64LE
++
+ #endif // BITDEPTH
+ 
+ #endif // __VSX__ || __POWER9_VECTOR__ || DAV1D_ALTIVEC
+-- 
+2.43.0
+

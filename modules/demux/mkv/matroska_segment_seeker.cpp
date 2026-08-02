@@ -66,7 +66,7 @@ SegmentSeeker::add_cluster( KaxCluster * const p_cluster )
 {
     Cluster cinfo = {
         /* fpos     */ p_cluster->GetElementPosition(),
-        /* pts      */ vlc_tick_t( p_cluster->GlobalTimecode() / INT64_C( 1000 ) ),
+        /* pts      */ vlc_tick_t( VLC_TICK_FROM_NS( p_cluster->GlobalTimecode() ) ),
         /* duration */ vlc_tick_t( -1 ),
         /* size     */ p_cluster->IsFiniteSize()
             ? p_cluster->GetEndPosition() - p_cluster->GetElementPosition()
@@ -372,16 +372,13 @@ SegmentSeeker::index_unsearched_range( matroska_segment_c& ms, Range search_area
         }
         delete additions;
 
-        if( simpleblock ) {
-            block_pos = simpleblock->GetElementPosition();
-            block_pts = simpleblock->GlobalTimecode() / 1000;
-            track_id  = simpleblock->TrackNum();
-        }
-        else {
-            block_pos = block->GetElementPosition();
-            block_pts = block->GlobalTimecode() / 1000;
-            track_id  = block->TrackNum();
-        }
+        KaxInternalBlock& internal_block = simpleblock
+            ? static_cast<KaxInternalBlock&>( *simpleblock )
+            : static_cast<KaxInternalBlock&>( *block );
+
+        block_pos = internal_block.GetElementPosition();
+        block_pts = VLC_TICK_FROM_NS(internal_block.GlobalTimecode());
+        track_id  = internal_block.TrackNum();
 
         bool const b_valid_track = ms.FindTrackByBlock( block, simpleblock ) != NULL;
 
@@ -434,7 +431,7 @@ SegmentSeeker::mark_range_as_searched( Range data )
             merged.push_back( *it );
         }
 
-        _ranges_searched = merged;
+        _ranges_searched = std::move(merged);
     }
 }
 
@@ -493,7 +490,10 @@ SegmentSeeker::mkv_jump_to( matroska_segment_c& ms, fptr_t fpos )
             return;
         }
         if (!MKV_IS_ID( el, KaxCluster ))
-        continue; // look for the next element
+        {
+            ms.cluster = nullptr; // the previous cluster found is not valid anymore
+            continue; // look for the next element
+        }
 
         ms.cluster = static_cast<KaxCluster*>( el );
 

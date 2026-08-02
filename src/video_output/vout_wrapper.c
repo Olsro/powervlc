@@ -188,6 +188,14 @@ int vout_InitWrapper(vout_thread_t *vout)
         msg_Warn(vout, "Not enough display buffers in the pool, requested %d got %d",
                  display_pool_size, picture_pool_GetSize(display_pool));
 #endif
+    /* Worth a line in a normal build: on the old Macs this port targets the
+     * pool is the single largest allocation in the process (a 1080p picture is
+     * 3.1 MB), and how many it holds follows from the decoder's DPB request in
+     * a way that is otherwise invisible. */
+    if (allow_dr)
+        msg_Dbg(vout, "display pool: %d pictures (dpb %u + reserved %u, floor %u)",
+                picture_pool_GetSize(display_pool), decoder_picture,
+                reserved_picture, (unsigned)VOUT_MAX_PICTURES);
 
     if (allow_dr &&
         picture_pool_GetSize(display_pool) >= reserved_picture + decoder_picture) {

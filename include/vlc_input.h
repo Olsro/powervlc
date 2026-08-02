@@ -574,6 +574,46 @@ static inline input_state_e input_GetState( input_thread_t * p_input )
 }
 
 /**
+ * Name of the input variable telling whether the medium being played offers a
+ * pop-up menu right now.
+ *
+ * A Blu-ray pop-up menu is not the disc root menu: it is drawn over the
+ * running movie, and the disc only offers it during the titles that carry one.
+ * The disc demuxer creates this boolean on the input thread and keeps it up to
+ * date; the variable simply does not exist for anything else.
+ *
+ * Interfaces should not read it directly, but go through input_HasPopupMenu()
+ * and input_ShowPopupMenu() so that all of them behave the same way.
+ */
+#define INPUT_POPUP_MENU_VAR "menu-popup-available"
+
+/**
+ * Whether a pop-up menu can be shown for the medium being played.
+ *
+ * Interfaces use it to enable (or hide) their "Blu-ray Pop-Up Menu" entry.
+ * Safe to call with a NULL input, and at any point of the input lifetime.
+ */
+static inline bool input_HasPopupMenu( input_thread_t *p_input )
+{
+    return p_input != NULL
+        && var_Type( p_input, INPUT_POPUP_MENU_VAR ) != 0
+        && var_GetBool( p_input, INPUT_POPUP_MENU_VAR );
+}
+
+/**
+ * Ask the medium being played to show its pop-up menu.
+ *
+ * Fails harmlessly when the medium has no such menu, so an interface may call
+ * it without testing input_HasPopupMenu() first.
+ */
+static inline int input_ShowPopupMenu( input_thread_t *p_input )
+{
+    if( p_input == NULL )
+        return VLC_EGENERIC;
+    return input_Control( p_input, INPUT_NAV_POPUP, NULL );
+}
+
+/**
  * Return one of the video output (if any). If possible, you should use
  * INPUT_GET_VOUTS directly and process _all_ video outputs instead.
  * @param p_input an input thread from which to get a video output

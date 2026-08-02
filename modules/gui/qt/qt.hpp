@@ -51,6 +51,16 @@
 #define HAS_QT57 ( QT_VERSION >= 0x050700 )
 #define HAS_QT510 ( QT_VERSION >= 0x051000 )
 
+#if ( QT_VERSION < QT_VERSION_CHECK(5, 15, 0) )
+# define QSIGNALMAPPER_MAPPEDINT_SIGNAL QOverload<int>::of(&QSignalMapper::mapped)
+# define QSIGNALMAPPER_MAPPEDSTR_SIGNAL QOverload<const QString &>::of(&QSignalMapper::mapped)
+# define QSIGNALMAPPER_MAPPEDOBJ_SIGNAL QOverload<QObject *>::of(&QSignalMapper::mapped)
+#else
+# define QSIGNALMAPPER_MAPPEDINT_SIGNAL &QSignalMapper::mappedInt
+# define QSIGNALMAPPER_MAPPEDSTR_SIGNAL &QSignalMapper::mappedString
+# define QSIGNALMAPPER_MAPPEDOBJ_SIGNAL &QSignalMapper::mappedObject
+#endif
+
 enum {
     IMEventTypeOffset     = 100,
     PLEventTypeOffset     = 200,
@@ -119,11 +129,16 @@ struct vlc_playlist_locker {
 #define qtr( i ) QString::fromUtf8( vlc_gettext(i) )
 #define qtu( i ) ((i).toUtf8().constData())
 
-#define CONNECT( a, b, c, d ) \
-        connect( a, SIGNAL(b), c, SLOT(d) )
-#define DCONNECT( a, b, c, d ) \
-        connect( a, SIGNAL(b), c, SLOT(d), Qt::DirectConnection )
-#define BUTTONACT( b, a ) connect( b, SIGNAL(clicked()), this, SLOT(a) )
+#if QT_VERSION < QT_VERSION_CHECK(5, 7, 0)
+template<typename... Args> struct QOverload {
+    template<typename T, typename Ret> static Ret(T::*of(Ret(T::*f)(Args...)))(Args...)
+    {
+        return f;
+    }
+};
+#endif
+
+#define BUTTONACT( b, a ) connect( b, &QPushButton::clicked, this, QOverload<>::of(&std::remove_pointer<decltype(this)>::type::a) )
 
 #define BUTTON_SET( button, text, tooltip )  \
     button->setText( text );                 \

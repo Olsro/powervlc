@@ -128,12 +128,25 @@ vlc_module_begin ()
      * à être réouverte — bascule instantanée, sans image noire. Repli prévu au
      * cas où le comportement des fenêtres enfants de 10.4 poserait problème. */
     add_bool( "legacy-macosx-childvideo", true,
-              N_("Vidéo intégrée dans une fenêtre enfant"),
-              N_("Héberge la vidéo intégrée dans une fenêtre enfant sans "
-                 "bordure : le passage en plein écran est instantané et "
-                 "n'interrompt pas le décodage accéléré. Désactiver rétablit "
-                 "l'ancien comportement (fenêtre de plein écran séparée)."),
+              N_("Embedded video in a child window"),
+              N_("Host the embedded video in a borderless child window: "
+                 "switching to fullscreen is instant and does not interrupt "
+                 "accelerated decoding. Turning this off restores the former "
+                 "behaviour (a separate fullscreen window). No effect under "
+                 "Mac OS X 10.4, where a child window displays nothing."),
               true )
+    /* Debug affordance, mirroring VLC_LEGACY_SHOW: names a window to open at
+     * startup (prefs, prefsadv, mediainfo, errors, about, bookmarks...). An
+     * application started by the Finder inherits loginwindow's environment,
+     * so the variable never reaches it -- this is the way in. */
+    add_string( "legacy-macosx-show", "",
+                N_("Open a window at startup (debugging)"),
+                N_("Name of the window to open at startup, like the "
+                   "VLC_LEGACY_SHOW environment variable: prefs, "
+                   "prefsadv, mediainfo, errors, about, bookmarks, "
+                   "messages, tracksync, effects, videoeffects, convert, "
+                   "fspanel, open0..3."),
+                true )
     add_bool( "legacy-macosx-black", false,
               N_("Black screens in fullscreen"),
               N_("In fullscreen mode, keep screen where there is no video "
@@ -164,7 +177,21 @@ vlc_module_begin ()
                  "playback."),
               false )
         change_integer_list( legacy_itunes_list, legacy_itunes_list_text )
-    add_integer( "legacy-macosx-deinterlace", 2,
+/* Deinterlacing costs a full software filter pass per picture, and VLC's are
+ * AltiVec-accelerated -- exactly like Apple's own DVDAltivecMADeInterlacer.
+ * A slice built without AltiVec runs them scalar, and a G3 cannot sustain
+ * that at DVD resolution: the picture stutters instead of being merely
+ * combed. So those machines default to Off, the way Apple's DVD Player
+ * greys out what a given model cannot do. Everything else keeps "Optimal";
+ * the setting stays fully user-changeable either way. */
+#if (defined(__ppc__) || defined(__ppc64__) || defined(__POWERPC__)) \
+ && !defined(HAVE_ALTIVEC_H)
+# define LEGACY_DEINT_DEFAULT 0
+#else
+# define LEGACY_DEINT_DEFAULT 2
+#endif
+
+    add_integer( "legacy-macosx-deinterlace", LEGACY_DEINT_DEFAULT,
               N_("Deinterlacing"),
               N_("Removes the interlacing combing from interlaced video such "
                  "as most PAL DVDs. Higher settings look better but use more "

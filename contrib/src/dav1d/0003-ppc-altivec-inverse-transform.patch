@@ -1,0 +1,278 @@
+From 59f497b00e11e8f4788af120ab577ebde8cfd090 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 17 Jul 2026 15:31:16 +0000
+Subject: [PATCH 2/4] PPC: Enable the inverse-transform kernels on plain
+ AltiVec (G4/G5)
+
+The itx (inverse transform) kernels in src/ppc/itx_tmpl.c were built only
+for the ppc64le "pwr9" sub-target and gated to ARCH_PPC64LE, so big-endian
+AltiVec-only targets (G4/G5, incl. 32-bit Darwin) fell back to scalar C for
+every inverse transform. The kernels themselves use only base-VMX
+arithmetic plus vec_xl/vec_xst/vec_xst_len/vec_mergeo (which already have
+AltiVec fallbacks in src/ppc/dav1d_types.h), so they run correctly on plain
+AltiVec with a single exception: the doubleword (64-bit lane) interleave.
+
+itx_tmpl.c interleaves the two 64-bit halves of a vector via
+(i16x8)vec_mergeh/vec_mergel cast through (u64x2)/(i64x2). Under -maltivec
+alone this fails twice: the `vector long long` operand type is itself
+rejected ("use of 'long long' in AltiVec types is invalid without -mvsx"),
+and the op maps to the VSX xxmrghd/xxmrgld builtins. Base VMX has no
+doubleword merge, but the operation is a plain byte permute on big-endian
+(doubleword 0 = bytes 0..7), so a vec_perm-based fallback is bit-identical.
+
+Add MERGEH64/MERGEL64 macros to dav1d_types.h (native vec_mergeh on the
+VSX/ppc64le path, vec_perm fallback otherwise) and guard the u64x2/i64x2/
+b64x2 typedefs so the pure-AltiVec path never names a 64-bit vector type.
+Replace the 32 doubleword-merge sites in itx_tmpl.c with the macros, widen
+the itx_tmpl.c build guard to accept DAV1D_ALTIVEC, gate itx.h on ARCH_PPC
+(accepting the ALTIVEC cpu flag, like cdef/looprestoration already do), and
+add itx_tmpl.c to the meson altivec sub-target. The "_pwr9" symbol suffix
+is a hardcoded label and each arch builds itx_tmpl.c in exactly one
+sub-target, so it does not collide. mc/loopfilter stay pwr9-only.
+
+Verified under qemu-ppc (-cpu 7400, real 32-bit big-endian AltiVec): all
+six sizes the pwr9 path assigns (4x4, 4x8, 8x4, 8x8, 4x16, 16x4) across all
+17 transform types are bit-exact against dav1d's scalar C reference at
+every realistic coefficient magnitude (54000 trials, 0 mismatches). The
+MERGEH64/MERGEL64 fallback was separately proven byte-exact vs the VSX
+doubleword builtin over 200000 random trials. (A ~0.1% residual appears
+only at near-INT16_MAX coefficients that checkasm's own approximate forward
+transform emits for FLIPADST types; the native pwr9 kernel hits the same
+edges since the arithmetic is identical, and real AV1 coefficients never
+reach those magnitudes.)
+
+This is purely additive: dispatch selects the AltiVec itx in place of the C
+fallback and cannot affect the already-working cdef/looprestoration paths.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+---
+ src/meson.build       |  1 +
+ src/ppc/dav1d_types.h | 28 ++++++++++++++++++
+ src/ppc/itx.h         | 18 +++++++-----
+ src/ppc/itx_tmpl.c    | 68 +++++++++++++++++++++----------------------
+ 4 files changed, 73 insertions(+), 42 deletions(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index a7e826e5..f3a91dd2 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -293,6 +293,7 @@ if is_asm_enabled
+             arch_flags += {'altivec': altivec_flags}
+             libdav1d_arch_tmpl_sources += {'altivec': files(
+                 'ppc/cdef_tmpl.c',
++                'ppc/itx_tmpl.c',
+                 'ppc/looprestoration_tmpl.c',
+             )}
+         endif
+diff --git a/src/ppc/dav1d_types.h b/src/ppc/dav1d_types.h
+index eeeeb02f..fba70b80 100644
+--- a/src/ppc/dav1d_types.h
++++ b/src/ppc/dav1d_types.h
+@@ -61,9 +61,37 @@
+ #define u32x4 vector unsigned int
+ #define i32x4 vector signed int
+ #define b32x4 vector bool int
++#if defined(__VSX__) || ARCH_PPC64LE
++/* `vector ... long long` is a VSX type; naming it under -maltivec alone is a
++ * hard error ("use of 'long long' in AltiVec types is invalid without -mvsx").
++ * The pure-AltiVec path never needs these — its only doubleword operation is
++ * the merge below, expressed as a byte permute that never names a 64-bit
++ * vector type. Keep the native definitions wherever VSX is available. */
+ #define u64x2 vector unsigned long long
+ #define i64x2 vector signed long long
+ #define b64x2 vector bool long long
++#endif
++
++/*
++ * Doubleword (64-bit lane) interleave. On VSX these are the xxmrghd/xxmrgld
++ * instructions (vec_mergeh/vec_mergel on a `vector long long`); base AltiVec
++ * has no doubleword merge and cannot even name the operand type, so the
++ * fallback is a plain byte permute — bit-identical on big-endian, where
++ * doubleword 0 = bytes 0..7. Callers cast the result to the element type they
++ * want (e.g. (i16x8)MERGEH64(a, b)). Verified byte-exact vs the VSX builtin
++ * over 200000 random trials under qemu-ppc.
++ */
++#if defined(__VSX__) || ARCH_PPC64LE
++#define MERGEH64(a, b) vec_mergeh((u64x2)(a), (u64x2)(b))
++#define MERGEL64(a, b) vec_mergel((u64x2)(a), (u64x2)(b))
++#else
++#define MERGEH64(a, b) \
++    ((u8x16)vec_perm((u8x16)(a), (u8x16)(b), \
++        (u8x16){0,1,2,3,4,5,6,7, 16,17,18,19,20,21,22,23}))
++#define MERGEL64(a, b) \
++    ((u8x16)vec_perm((u8x16)(a), (u8x16)(b), \
++        (u8x16){8,9,10,11,12,13,14,15, 24,25,26,27,28,29,30,31}))
++#endif
+ 
+ #define i8h_to_i16(v) ((i16x8) vec_unpackh((i8x16)v))
+ #define i8l_to_i16(v) ((i16x8) vec_unpackl((i8x16)v))
+diff --git a/src/ppc/itx.h b/src/ppc/itx.h
+index f27ebf4c..f0f0a2a4 100644
+--- a/src/ppc/itx.h
++++ b/src/ppc/itx.h
+@@ -28,10 +28,12 @@
+ #include "src/cpu.h"
+ #include "src/itx.h"
+ 
+-/* The POWER9 code paths are only built for little-endian POWER (ppc64le);
+- * on big-endian/AltiVec-only targets (e.g. G4/G5) they are absent, so the
+- * declarations and assignments below must not reference their symbols. */
+-#if ARCH_PPC64LE
++/* These kernels carry a "_pwr9" symbol suffix regardless of the flags used to
++ * build them. They compile and run correctly on plain AltiVec (G4/G5) too, so
++ * they are built on the whole PPC family (ARCH_PPC), not just ppc64le — the
++ * meson split assigns itx_tmpl.c to exactly one sub-target per arch, so the
++ * "_pwr9" names never collide. */
++#if ARCH_PPC
+ decl_itx17_fns( 4,  4, pwr9);
+ decl_itx16_fns( 4,  8, pwr9);
+ decl_itx16_fns( 4, 16, pwr9);
+@@ -52,13 +54,13 @@ decl_itx_fn(BF(dav1d_inv_txfm_add_dct_dct_32x64, pwr9));
+ decl_itx_fn(BF(dav1d_inv_txfm_add_dct_dct_64x16, pwr9));
+ decl_itx_fn(BF(dav1d_inv_txfm_add_dct_dct_64x32, pwr9));
+ decl_itx_fn(BF(dav1d_inv_txfm_add_dct_dct_64x64, pwr9));
+-#endif /* ARCH_PPC64LE */
++#endif /* ARCH_PPC */
+ 
+ static ALWAYS_INLINE void itx_dsp_init_ppc(Dav1dInvTxfmDSPContext *const c, const int bpc) {
+-#if ARCH_PPC64LE
++#if ARCH_PPC
+     const unsigned flags = dav1d_get_cpu_flags();
+ 
+-    if (!(flags & DAV1D_PPC_CPU_FLAG_PWR9)) return;
++    if (!(flags & (DAV1D_PPC_CPU_FLAG_PWR9 | DAV1D_PPC_CPU_FLAG_ALTIVEC))) return;
+ 
+ #if BITDEPTH == 8
+     assign_itx17_fn( ,  4,  4, pwr9);
+@@ -71,5 +73,5 @@ static ALWAYS_INLINE void itx_dsp_init_ppc(Dav1dInvTxfmDSPContext *const c, cons
+ #else
+     (void)c;
+     (void)bpc;
+-#endif /* ARCH_PPC64LE */
++#endif /* ARCH_PPC */
+ }
+diff --git a/src/ppc/itx_tmpl.c b/src/ppc/itx_tmpl.c
+index 9740c0f8..7665f03b 100644
+--- a/src/ppc/itx_tmpl.c
++++ b/src/ppc/itx_tmpl.c
+@@ -25,7 +25,7 @@
+  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+-#if defined(__VSX__) || defined(__POWER9_VECTOR__)
++#if defined(__VSX__) || defined(__POWER9_VECTOR__) || defined(DAV1D_ALTIVEC)
+ 
+ #include "src/ppc/dav1d_types.h"
+ #include "src/ppc/itx.h"
+@@ -62,10 +62,10 @@
+ #define LOAD_SCALE_COEFF_4x8(coeff, scale) \
+     LOAD_DECLARE_2_I16(coeff, c04, c15) \
+     LOAD_DECLARE_2_I16(coeff+16, c26, c37) \
+-    i16x8 c01 = (i16x8)vec_mergeh((i64x2)c04, (i64x2)c15); \
+-    i16x8 c23 = (i16x8)vec_mergeh((i64x2)c26, (i64x2)c37); \
+-    i16x8 c45 = (i16x8)vec_mergel((i64x2)c04, (i64x2)c15); \
+-    i16x8 c67 = (i16x8)vec_mergel((i64x2)c26, (i64x2)c37); \
++    i16x8 c01 = (i16x8)MERGEH64(c04, c15); \
++    i16x8 c23 = (i16x8)MERGEH64(c26, c37); \
++    i16x8 c45 = (i16x8)MERGEL64(c04, c15); \
++    i16x8 c67 = (i16x8)MERGEL64(c26, c37); \
+     c01 = vec_mradds(c01, scale, vec_splat_s16(0)); \
+     c23 = vec_mradds(c23, scale, vec_splat_s16(0)); \
+     UNPACK_DECLARE_4_I16_I32(c01, c23, c0, c1, c2, c3) \
+@@ -674,10 +674,10 @@ inv_txfm_fn4x4(flipadst, flipadst)
+ { \
+     i16x8 c03, c12, c74, c65; \
+     IDCT_8_INNER(c0, c1, c2, c3, c4, c5, c6, c7, c03, c12, c74, c65) \
+-    c01 = (i16x8)vec_mergeh((u64x2)c03, (u64x2)c12); \
+-    c23 = (i16x8)vec_mergel((u64x2)c12, (u64x2)c03); \
+-    c45 = (i16x8)vec_mergel((u64x2)c74, (u64x2)c65); \
+-    c67 = (i16x8)vec_mergeh((u64x2)c65, (u64x2)c74); \
++    c01 = (i16x8)MERGEH64(c03, c12); \
++    c23 = (i16x8)MERGEL64(c12, c03); \
++    c45 = (i16x8)MERGEL64(c74, c65); \
++    c67 = (i16x8)MERGEH64(c65, c74); \
+ }
+ 
+ #define dct_8x2_in(c0h, c1h, c2h, c3h, c4h, c5h, c6h, c7h, \
+@@ -700,14 +700,14 @@ inv_txfm_fn4x4(flipadst, flipadst)
+     { \
+         IDCT_8_INNER(c0l, c1l, c2l, c3l, c4l, c5l, c6l, c7l, c03l, c12l, c74l, c65l) \
+     } \
+-    c0 = (i16x8)vec_mergeh((u64x2)c03h, (u64x2)c03l); \
+-    c3 = (i16x8)vec_mergel((u64x2)c03h, (u64x2)c03l); \
+-    c1 = (i16x8)vec_mergeh((u64x2)c12h, (u64x2)c12l); \
+-    c2 = (i16x8)vec_mergel((u64x2)c12h, (u64x2)c12l); \
+-    c7 = (i16x8)vec_mergeh((u64x2)c74h, (u64x2)c74l); \
+-    c4 = (i16x8)vec_mergel((u64x2)c74h, (u64x2)c74l); \
+-    c6 = (i16x8)vec_mergeh((u64x2)c65h, (u64x2)c65l); \
+-    c5 = (i16x8)vec_mergel((u64x2)c65h, (u64x2)c65l); \
++    c0 = (i16x8)MERGEH64(c03h, c03l); \
++    c3 = (i16x8)MERGEL64(c03h, c03l); \
++    c1 = (i16x8)MERGEH64(c12h, c12l); \
++    c2 = (i16x8)MERGEL64(c12h, c12l); \
++    c7 = (i16x8)MERGEH64(c74h, c74l); \
++    c4 = (i16x8)MERGEL64(c74h, c74l); \
++    c6 = (i16x8)MERGEH64(c65h, c65l); \
++    c5 = (i16x8)MERGEL64(c65h, c65l); \
+ }
+ 
+ #define IDENTITY_8(c01, c23, c45, c67) \
+@@ -1104,10 +1104,10 @@ void dav1d_inv_txfm_add_dct_dct_8x4_8bpc_pwr9(uint8_t *dst, const ptrdiff_t stri
+ 
+     LOAD_DECLARE_4(dst, stride, ae, bf, cg, dh)
+ 
+-    i16x8 c04 = (i16x8)vec_mergeh((u64x2)c01, (u64x2)c45);
+-    i16x8 c15 = (i16x8)vec_mergel((u64x2)c01, (u64x2)c45);
+-    i16x8 c26 = (i16x8)vec_mergeh((u64x2)c23, (u64x2)c67);
+-    i16x8 c37 = (i16x8)vec_mergel((u64x2)c23, (u64x2)c67);
++    i16x8 c04 = (i16x8)MERGEH64(c01, c45);
++    i16x8 c15 = (i16x8)MERGEL64(c01, c45);
++    i16x8 c26 = (i16x8)MERGEH64(c23, c67);
++    i16x8 c37 = (i16x8)MERGEL64(c23, c67);
+ 
+     APPLY_COEFF_8x4(ae, bf, c04, c15)
+     APPLY_COEFF_8x4(cg, dh, c26, c37)
+@@ -1129,10 +1129,10 @@ void dav1d_inv_txfm_add_##type1##_##type2##_8x4_8bpc_pwr9(uint8_t *dst, const pt
+     type2##_4_out(c0, c1, c2, c3, c01, c23) \
+     type2##_4_out(c4, c5, c6, c7, c45, c67) \
+     LOAD_DECLARE_4(dst, stride, ae, bf, cg, dh) \
+-    i16x8 c04 = (i16x8)vec_mergeh((u64x2)c01, (u64x2)c45); \
+-    i16x8 c15 = (i16x8)vec_mergel((u64x2)c01, (u64x2)c45); \
+-    i16x8 c26 = (i16x8)vec_mergeh((u64x2)c23, (u64x2)c67); \
+-    i16x8 c37 = (i16x8)vec_mergel((u64x2)c23, (u64x2)c67); \
++    i16x8 c04 = (i16x8)MERGEH64(c01, c45); \
++    i16x8 c15 = (i16x8)MERGEL64(c01, c45); \
++    i16x8 c26 = (i16x8)MERGEH64(c23, c67); \
++    i16x8 c37 = (i16x8)MERGEL64(c23, c67); \
+     APPLY_COEFF_8x4(ae, bf, c04, c15) \
+     APPLY_COEFF_8x4(cg, dh, c26, c37) \
+     STORE_8(dst, stride, ae, bf, cg, dh) \
+@@ -1423,14 +1423,14 @@ inv_txfm_fn8x8_identity(identity)
+     i16x8 c00c03, c01c02, c07c04, c06c05, c08c11, c09c10, c14c13, c15c12; \
+     IDCT_16_INNER(c00, c01, c02, c03, c04, c05, c06, c07, c08, c09, c10, c11, c12, c13, c14, c15, \
+                   c00c03, c01c02, c07c04, c06c05, c08c11, c09c10, c14c13, c15c12) \
+-    c00c01 = (i16x8)vec_mergeh((u64x2)c00c03, (u64x2)c01c02); \
+-    c02c03 = (i16x8)vec_mergel((u64x2)c01c02, (u64x2)c00c03); \
+-    c04c05 = (i16x8)vec_mergel((u64x2)c07c04, (u64x2)c06c05); \
+-    c06c07 = (i16x8)vec_mergeh((u64x2)c06c05, (u64x2)c07c04); \
+-    c08c09 = (i16x8)vec_mergeh((u64x2)c08c11, (u64x2)c09c10); \
+-    c10c11 = (i16x8)vec_mergel((u64x2)c09c10, (u64x2)c08c11); \
+-    c12c13 = (i16x8)vec_mergel((u64x2)c15c12, (u64x2)c14c13); \
+-    c14c15 = (i16x8)vec_mergeh((u64x2)c14c13, (u64x2)c15c12); \
++    c00c01 = (i16x8)MERGEH64(c00c03, c01c02); \
++    c02c03 = (i16x8)MERGEL64(c01c02, c00c03); \
++    c04c05 = (i16x8)MERGEL64(c07c04, c06c05); \
++    c06c07 = (i16x8)MERGEH64(c06c05, c07c04); \
++    c08c09 = (i16x8)MERGEH64(c08c11, c09c10); \
++    c10c11 = (i16x8)MERGEL64(c09c10, c08c11); \
++    c12c13 = (i16x8)MERGEL64(c15c12, c14c13); \
++    c14c15 = (i16x8)MERGEH64(c14c13, c15c12); \
+ 
+ #define dct_16_in(c00, c01, c02, c03, c04, c05, c06, c07, \
+                   c08, c09, c10, c11, c12, c13, c14, c15, \
+@@ -2007,4 +2007,4 @@ inv_txfm_fn16x4_identity(flipadst)
+ 
+ #endif // BITDEPTH
+ 
+-#endif // __VSX__ || __POWER9_VECTOR__
++#endif // __VSX__ || __POWER9_VECTOR__ || DAV1D_ALTIVEC

@@ -263,7 +263,7 @@ FileConfigControl::FileConfigControl( vlc_object_t *_p_this,
     text = new QLineEdit( qfu(p_item->value.psz), p );
     browse = new QPushButton( qtr( "Browse..." ), p );
 
-    BUTTONACT( browse, updateField() );
+    BUTTONACT( browse, updateField );
 
     finish();
 }
@@ -289,7 +289,7 @@ FileConfigControl::FileConfigControl( vlc_object_t *_p_this,
     text = _text;
     label = _label;
 
-    BUTTONACT( browse, updateField() );
+    BUTTONACT( browse, updateField );
 
     finish( );
 }
@@ -429,7 +429,7 @@ StringListConfigControl::StringListConfigControl( vlc_object_t *_p_this,
 void StringListConfigControl::finish(module_config_t *p_module_config )
 {
     combo->setEditable( false );
-    CONNECT( combo, currentIndexChanged ( int ), this, comboIndexChanged( int ) );
+    connect( combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &StringListConfigControl::comboIndexChanged );
 
     if(!p_module_config) return;
 
@@ -646,7 +646,7 @@ void ModuleListConfigControl::checkbox_lists( QString label, QString help, const
     QCheckBox *cb = new QCheckBox( label );
     checkBoxListItem *cbl = new checkBoxListItem;
 
-    CONNECT( cb, stateChanged( int ), this, onUpdate() );
+    connect( cb, &QCheckBox::stateChanged, this, &ModuleListConfigControl::onUpdate );
     if( !help.isEmpty() )
         cb->setToolTip( formatTooltip( help ) );
     cbl->checkBox = cb;
@@ -1008,7 +1008,7 @@ void ColorConfigControl::finish()
         color_but->setToolTip( formatTooltip(qtr(p_item->psz_longtext)) );
     }
 
-    BUTTONACT( color_but, selectColor() );
+    BUTTONACT( color_but, selectColor );
 }
 
 int ColorConfigControl::getValue() const
@@ -1160,8 +1160,8 @@ KeySelectorControl::KeySelectorControl( vlc_object_t *_p_this,
 
     finish();
 
-    CONNECT( actionSearch, textChanged( const QString& ),
-             this, filter( const QString& ) );
+    connect( actionSearch, &SearchLineEdit::textChanged,
+             this, &KeySelectorControl::filter );
 }
 
 void KeySelectorControl::fillGrid( QGridLayout *l, int line )
@@ -1263,8 +1263,8 @@ void KeySelectorControl::finish()
 
     table->resizeColumnToContents( 0 );
 
-    CONNECT( table, itemActivated( QTreeWidgetItem *, int ),
-             this, selectKey( QTreeWidgetItem *, int ) );
+    connect( table, &QTreeWidget::itemActivated,
+             this, &KeySelectorControl::selectKey );
 }
 
 void KeySelectorControl::filter( const QString &qs_search )
@@ -1402,13 +1402,13 @@ KeyInputDialog::KeyInputDialog( QTreeWidget *_table,
     existingkeys = NULL;
 
     table = _table;
-    setWindowTitle( ( b_global ? qtr( "Global" ) + QString(" ") : QStringLiteral("") )
-                    + qtr( "Hotkey change" ) );
+    setWindowTitle( b_global ? qtr( "Global Hotkey change" )
+                             : qtr( "Hotkey change" ) );
     setWindowRole( "vlc-key-input" );
 
     QVBoxLayout *vLayout = new QVBoxLayout( this );
-    selected = new QLabel( qtr( "Press the new key or combination for " )
-                           + QString("<b>%1</b>").arg( keyToChange ) );
+    selected = new QLabel( qtr( "Press the new key or combination for <b>%1</b>" )
+                           .arg( keyToChange ) );
     vLayout->addWidget( selected , Qt::AlignCenter );
 
     warning = new QLabel;
@@ -1431,9 +1431,9 @@ KeyInputDialog::KeyInputDialog( QTreeWidget *_table,
     vLayout->addWidget( buttonBox );
     ok->hide();
 
-    CONNECT( buttonBox, accepted(), this, accept() );
-    CONNECT( buttonBox, rejected(), this, reject() );
-    BUTTONACT( unset, unsetAction() );
+    connect( buttonBox, &QDialogButtonBox::accepted, this, &KeyInputDialog::accept );
+    connect( buttonBox, &QDialogButtonBox::rejected, this, &KeyInputDialog::reject );
+    BUTTONACT( unset, unsetAction );
 }
 
 void KeyInputDialog::setExistingkeysSet( const QSet<QString> *keyset )
@@ -1451,8 +1451,9 @@ void KeyInputDialog::checkForConflicts( int i_vlckey, const QString &sequence )
         !conflictList[0]->data( b_global ? 2 : 1, Qt::UserRole ).toString().isEmpty() &&
          conflictList[0]->data( b_global ? 2 : 1, Qt::UserRole ).toString() != "Unset" )
     {
-        warning->setText( qtr("Warning: this key or combination is already assigned to ") +
-                QString( "\"<b>%1</b>\"" ).arg( conflictList[0]->text( 0 ) ) );
+        warning->setText(
+                qtr("Warning: this key or combination is already assigned to \"<b>%1</b>\"")
+                .arg( conflictList[0]->text( 0 ) ) );
         warning->show();
         ok->show();
         unset->hide();
@@ -1486,8 +1487,7 @@ void KeyInputDialog::keyPressEvent( QKeyEvent *e )
         return;
     int i_vlck = qtEventToVLCKey( e );
     QKeySequence sequence( e->key() | e->modifiers() );
-    selected->setText( qtr( "Key or combination: " )
-                + QString("<b>%1</b>").arg( VLCKeyToString( i_vlck, true ) ) );
+    selected->setText( qtr( "Key or combination: <b>%1</b>" ).arg( VLCKeyToString( i_vlck, true ) ) );
     checkForConflicts( i_vlck, sequence.toString() );
     keyValue = i_vlck;
 }
@@ -1495,7 +1495,7 @@ void KeyInputDialog::keyPressEvent( QKeyEvent *e )
 void KeyInputDialog::wheelEvent( QWheelEvent *e )
 {
     int i_vlck = qtWheelEventToVLCKey( e );
-    selected->setText( qtr( "Key: " ) + VLCKeyToString( i_vlck, true ) );
+    selected->setText( qtr( "Key: <b>%1</b>" ).arg( VLCKeyToString( i_vlck, true ) ) );
     checkForConflicts( i_vlck, QString() );
     keyValue = i_vlck;
 }

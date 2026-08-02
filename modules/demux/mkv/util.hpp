@@ -37,59 +37,81 @@ block_t *WEBVTT_Repack_Sample(block_t *p_block, bool b_webm = false,
 void send_Block( demux_t * p_demux, mkv_track_t * p_tk, block_t * p_block, unsigned int i_number_frames, vlc_tick_t i_duration );
 int UpdatePCR( demux_t * p_demux );
 
-
-struct real_audio_private
+class ByteReader
 {
-    uint32_t fourcc;
-    uint16_t version;
-    uint16_t unknown1;
-    uint8_t  unknown2[12];
-    uint16_t unknown3;
-    uint16_t flavor;
-    uint32_t coded_frame_size;
-    uint32_t unknown4[3];
-    uint16_t sub_packet_h;
-    uint16_t frame_size;
-    uint16_t sub_packet_size;
-    uint16_t unknown5;
+public:
+    ByteReader(const uint8_t *reader_, size_t reader_len_):
+        reader(reader_), reader_left(reader_len_) {}
+
+    bool skip(size_t bytes) {
+        if (error) return false;
+        if (reader_left < bytes) {
+            reader_left = 0;
+            error = true;
+            return false;
+        }
+        reader_left -= bytes;
+        reader += bytes;
+        return true;
+    }
+
+    uint16_t GetBE16() {
+        if (error) return 0;
+        if (reader_left < 2) {
+            reader_left = 0;
+            error = true;
+            return 0;
+        }
+        uint16_t v = GetWBE(reader);
+        reader_left -= 2;
+        reader += 2;
+        return v;
+    }
+
+    uint32_t GetBE32() {
+        if (error) return 0;
+        if (reader_left < 4) {
+            reader_left = 0;
+            error = true;
+            return 0;
+        }
+        uint16_t v = GetDWBE(reader);
+        reader_left -= 4;
+        reader += 4;
+        return v;
+    }
+
+    bool hasErrors() const { return error; }
+
+private:
+    const uint8_t *reader;
+    size_t        reader_left;
+    bool          error = false;
 };
 
-struct real_audio_private_v4
-{
-    real_audio_private header;
-    uint16_t sample_rate;
-    uint16_t unknown;
-    uint16_t sample_size;
-    uint16_t channels;
-};
-
-
-struct real_audio_private_v5
-{
-    real_audio_private header;
-    uint32_t unknown1;
-    uint16_t unknown2;
-    uint16_t sample_rate;
-    uint16_t unknown3;
-    uint16_t sample_size;
-    uint16_t channels;
-};
+#define SIZEOF_REALAUDIO_PRIVATE  (4+2+2+12+2+2+4+(3*4)+2+2+2+2)
 
 class Cook_PrivateTrackData : public PrivateTrackData
 {
 public:
-    Cook_PrivateTrackData(uint16_t sph, uint16_t fs, uint16_t sps):
-        i_sub_packet_h(sph), i_frame_size(fs), i_subpacket_size(sps),
-        p_subpackets(NULL), i_subpackets(0), i_subpacket(0){}
+    Cook_PrivateTrackData(const uint8_t *reader, size_t reader_len):
+        bytes(reader, reader_len) {}
     ~Cook_PrivateTrackData();
-    int32_t Init();
+    bool Init() override;
 
+    uint32_t coded_frame_size;
     uint16_t i_sub_packet_h;
     uint16_t i_frame_size;
     uint16_t i_subpacket_size;
-    block_t  **p_subpackets;
-    size_t   i_subpackets;
-    size_t   i_subpacket;
+
+    uint16_t i_rate;
+    uint16_t i_bitspersample;
+    uint16_t i_channels;
+
+    std::vector<block_t *> p_subpackets;
+    size_t   i_subpacket = 0;
+private:
+    ByteReader bytes;
 };
 
 block_t * packetize_wavpack( const mkv_track_t &, uint8_t *, size_t);

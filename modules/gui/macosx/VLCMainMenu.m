@@ -27,6 +27,7 @@
 #import <vlc_common.h>
 #import <vlc_playlist.h>
 #import <vlc_input.h>
+#import <vlc_intf_strings.h>
 #import <vlc_modules.h>
 
 #import "VLCAboutWindowController.h"
@@ -66,6 +67,12 @@
     NSTimer *_cancelRendererDiscoveryTimer;
 
     NSMenu *_playlistTableColumnsContextMenu;
+
+    /* Blu-ray Pop-Up Menu, built in -awakeFromNib rather than carried by
+     * MainMenu.xib. Two items, one per menu: an NSMenuItem cannot live in two
+     * menus at once. */
+    NSMenuItem *_discPopupMenuItem;     /* Playback menu */
+    NSMenuItem *_voutDiscPopupMenuItem; /* right-click on the video */
 
     __strong VLCTimeSelectionPanelController *_timeSelectionPanel;
 }
@@ -115,6 +122,40 @@
 
     [self initStrings];
 
+    /* Blu-ray pop-up menu, at the end of the Playback menu right below
+     * Chapter, and in the video contextual menu -- the only menu within reach
+     * in fullscreen. Added here instead of in MainMenu.xib so that the entry,
+     * its wiring and its enable rule live in one place, next to the other
+     * three interfaces doing exactly the same. */
+    NSMenu *playbackMenu = [_chapter menu];
+    if (playbackMenu) {
+        _discPopupMenuItem = [[NSMenuItem alloc]
+            initWithTitle:_NS(I_MENU_DISC_POPUP)
+                   action:@selector(showDiscPopupMenu:)
+            keyEquivalent:@""];
+        [_discPopupMenuItem setTarget:self];
+        [playbackMenu insertItem:_discPopupMenuItem
+                         atIndex:[playbackMenu indexOfItem:_chapter] + 1];
+    }
+    if (_voutMenu) {
+        _voutDiscPopupMenuItem = [[NSMenuItem alloc]
+            initWithTitle:_NS(I_MENU_DISC_POPUP)
+                   action:@selector(showDiscPopupMenu:)
+            keyEquivalent:@""];
+        [_voutDiscPopupMenuItem setTarget:self];
+        /* set apart by a separator: it acts on the disc, not on our playback */
+        NSInteger snapshotIndex = [_voutMenu indexOfItem:_voutMenusnapshot];
+        if (snapshotIndex < 0) {
+            [_voutMenu addItem:[NSMenuItem separatorItem]];
+            [_voutMenu addItem:_voutDiscPopupMenuItem];
+        } else {
+            [_voutMenu insertItem:[NSMenuItem separatorItem]
+                          atIndex:snapshotIndex + 1];
+            [_voutMenu insertItem:_voutDiscPopupMenuItem
+                          atIndex:snapshotIndex + 2];
+        }
+    }
+
     /* interface switcher, below Preferences and its separator (only when
      * this build also ships the legacy interface) */
     if (module_exists("legacy_macosx")) {
@@ -128,6 +169,35 @@
         [switchItem setTarget:self];
         [appMenu insertItem:switchItem atIndex:prefsIndex + 2];
         [appMenu insertItem:[NSMenuItem separatorItem] atIndex:prefsIndex + 3];
+    }
+
+    /* libaacs and libbdplus ship with the player but decrypt nothing until the
+     * user drops their own files next to them -- in a folder inside
+     * ~/Library/Preferences that nobody would ever find on their own. Offer to
+     * open it, but only when this build can play Blu-ray at all. Appended to
+     * the Help menu rather than declared in the nib: nothing here depends on
+     * the layout of that menu.
+     *
+     * "libbluray", not "bluray": module_find() only ever compares
+     * pp_shortcuts[0], which is the module's object name (the plugin is built
+     * as liblibbluray_plugin). The "bluray" of add_shortcut() sits at index 1
+     * and can never match. */
+    if (module_exists("libbluray")) {
+        [_helpMenu addItem:[NSMenuItem separatorItem]];
+
+        NSMenuItem *item = [[NSMenuItem alloc]
+            initWithTitle:_NS("Open the libaacs folder (Blu-ray)")
+                   action:@selector(openAACSFolder:)
+            keyEquivalent:@""];
+        [item setTarget:self];
+        [_helpMenu addItem:item];
+
+        item = [[NSMenuItem alloc]
+            initWithTitle:_NS("Open the libbdplus folder (Blu-ray)")
+                   action:@selector(openBDPlusFolder:)
+            keyEquivalent:@""];
+        [item setTarget:self];
+        [_helpMenu addItem:item];
     }
 
     key = config_GetPsz(p_intf, "key-quit");
@@ -821,6 +891,11 @@
     [[VLCCoreInteraction sharedInstance] toggleRecord];
 }
 
+- (IBAction)showDiscPopupMenu:(id)sender
+{
+    [[VLCCoreInteraction sharedInstance] showDiscPopupMenu];
+}
+
 - (void)updateRecordState:(BOOL)b_value
 {
     [_record setState:b_value];
@@ -1370,6 +1445,57 @@
     [VLCMain openURLWithVideoLANConfirmation: url];
 }
 
+/* Reveals <config home>/<lib> in the Finder, creating it first: the folder
+ * does not exist until something writes there, and an "open" that silently did
+ * nothing would look like a broken menu item. config_GetDiscLibDir() is what
+ * the key database importer uses too, so the two can never disagree. */
+- (void)openDiscLibFolder:(const char *)psz_lib
+{
+    char *psz_dir = config_GetDiscLibDir(psz_lib);
+    NSString *path = psz_dir ? toNSStr(psz_dir) : nil;
+
+    if (path != nil
+     && [[NSFileManager defaultManager] createDirectoryAtPath:path
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:nil]
+     && [[NSWorkspace sharedWorkspace] openFile:path]) {
+        free(psz_dir);
+        return;
+    }
+
+    msg_Err(getIntf(), "cannot open the %s folder", psz_lib);
+
+    /* The "%s" is substituted by hand rather than through -stringWithFormat:,
+     * whose %s decodes the bytes in the *system* encoding rather than UTF-8,
+     * and this is a path. The msgid keeps VLC's "%s" so that the three
+     * interfaces share a single string to translate. */
+    NSMutableString *msg = [NSMutableString stringWithString:
+        _NS("The folder %s could not be opened.")];
+    [msg replaceOccurrencesOfString:@"%s"
+                         withString:(path != nil ? path : toNSStr(psz_lib))
+                            options:0
+                              range:NSMakeRange(0, [msg length])];
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:_NS("Error")];
+    [alert setInformativeText:msg];
+    [alert addButtonWithTitle:_NS("OK")];
+    [alert runModal];
+
+    free(psz_dir);
+}
+
+- (IBAction)openAACSFolder:(id)sender
+{
+    [self openDiscLibFolder:"aacs"];
+}
+
+- (IBAction)openBDPlusFolder:(id)sender
+{
+    [self openDiscLibFolder:"bdplus"];
+}
+
 - (IBAction)showInformationPanel:(id)sender
 {
     [[[VLCMain sharedInstance] currentMediaInfoPanel] toggleWindow:sender];
@@ -1733,6 +1859,9 @@
     } else if (mi == _openSubtitleFile) {
         enabled = [mi isEnabled];
         [self setupMenus]; /* Make sure subtitles menu is up to date */
+    } else if (mi == _discPopupMenuItem || mi == _voutDiscPopupMenuItem) {
+        /* only the Blu-ray titles that carry a pop-up menu offer one */
+        enabled = [[VLCCoreInteraction sharedInstance] hasDiscPopupMenu];
     } else {
         NSMenuItem *_parent = [mi parentItem];
         if (_parent == _subtitle_size || mi == _subtitle_size           ||

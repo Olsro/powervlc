@@ -65,6 +65,11 @@
 
     VLCPLModel *_model;
 
+    /* id -> NSDate of the last expand-to-browse preparse, so a
+     * collapse/expand cycle does not re-request a directory while its
+     * fetch may still be running — but can retry a failed one */
+    NSMutableDictionary *_browseRequestedItemIds;
+
     // information for playlist table columns menu
 
     NSDictionary *_translationsForPlaylistTableColumns;
@@ -84,6 +89,8 @@
         _descendingSortingImage = [NSImage imageNamed:@"NSDescendingSortIndicator"];
 
         [[NSNotificationCenter defaultCenter] addObserver: self selector: @selector(applicationWillTerminate:) name: NSApplicationWillTerminateNotification object: nil];
+
+        _browseRequestedItemIds = [[NSMutableDictionary alloc] init];
 
 
         _translationsForPlaylistTableColumns = [[NSDictionary alloc] initWithObjectsAndKeys:
@@ -775,6 +782,46 @@
         [cell setFont: [[NSFontManager sharedFontManager] convertFont:fontToUse toHaveTrait:NSBoldFontMask]];
     else
         [cell setFont: [[NSFontManager sharedFontManager] convertFont:fontToUse toNotHaveTrait:NSBoldFontMask]];
+}
+
+- (void)outlineViewItemDidExpand:(NSNotification *)notification
+{
+    VLCPLItem *item = [[notification userInfo] objectForKey:@"NSObject"];
+    if (![item isKindOfClass:[VLCPLItem class]] || [[item children] count] > 0)
+        return;
+
+    /* expanding an unbrowsed directory (file browser folder, radio
+     * directory country...) sends it to the preparser: its sub-items
+     * reach the model through the regular playlist callbacks */
+    input_item_t *p_input = [item input];
+    if (!p_input || p_input->i_type != ITEM_TYPE_DIRECTORY)
+        return;
+
+    /* a directory still childless once its request is surely over
+     * (failed fetch) can be retried by folding and unfolding it again */
+    NSNumber *itemId = [NSNumber numberWithInt:[item plItemId]];
+    NSDate *lastRequest = [_browseRequestedItemIds objectForKey:itemId];
+    if (lastRequest && [lastRequest timeIntervalSinceNow] > -150.0)
+        return;
+
+    intf_thread_t *p_intf = getIntf();
+    if (!p_intf)
+        return;
+    playlist_t *p_playlist = pl_Get(p_intf);
+    PL_LOCK;
+    playlist_item_t *p_item = playlist_ItemGetById(p_playlist, [item plItemId]);
+    /* i_children on the core item: the view may just be filtering
+     * everything out, which is no reason to fetch again */
+    if (p_item && p_item->p_input && p_item->i_children <= 0) {
+        [_browseRequestedItemIds setObject:[NSDate date] forKey:itemId];
+        /* the network scope is required for on-line directories, else the
+         * preparser silently skips them; the explicit timeout replaces the
+         * 5-second preparse default, far too short for the biggest
+         * countries of an on-line radio directory */
+        libvlc_MetadataRequest(p_intf->obj.libvlc, p_item->p_input,
+                               META_REQUEST_OPTION_SCOPE_ANY, 120000, p_item);
+    }
+    PL_UNLOCK;
 }
 
 // TODO remove method

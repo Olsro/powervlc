@@ -1,7 +1,7 @@
 # matroska
 
-MATROSKA_VERSION := 1.7.0
-MATROSKA_URL := http://dl.matroska.org/downloads/libmatroska/libmatroska-$(MATROSKA_VERSION).tar.xz
+MATROSKA_VERSION := 1.7.2
+MATROSKA_URL := https://dl.matroska.org/downloads/libmatroska/libmatroska-$(MATROSKA_VERSION).tar.xz
 
 PKGS += matroska
 
@@ -23,7 +23,7 @@ matroska: libmatroska-$(MATROSKA_VERSION).tar.xz .sum-matroska
 
 .matroska: matroska toolchain.cmake
 	$(CMAKECLEAN)
-	$(HOSTVARS) $(CMAKE)
+	$(HOSTVARS_CMAKE) $(CMAKE)
 	+$(CMAKEBUILD)
 	$(CMAKEINSTALL)
 	touch $@

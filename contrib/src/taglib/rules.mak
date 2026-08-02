@@ -16,9 +16,10 @@ $(TARBALLS)/taglib-$(TAGLIB_VERSION).tar.gz:
 taglib: taglib-$(TAGLIB_VERSION).tar.gz .sum-taglib
 	$(UNPACK)
 	$(APPLY) $(SRC)/taglib/0001-Implement-ID3v2-readStyle-avoid-worst-case.patch
+	$(APPLY) $(SRC)/taglib/0001-Fix-crash-with-invalid-WAV-files-1163-1164.patch
 	$(MOVE)
 
-TAGLIB_CONF := -DBUILD_BINDINGS=OFF
+TAGLIB_CONF := -DBUILD_BINDINGS=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 ifdef HAVE_WINSTORE
 TAGLIB_CONF += -DPLATFORM_WINRT=ON
 endif
@@ -26,7 +27,7 @@ endif
 
 .taglib: taglib toolchain.cmake
 	$(CMAKECLEAN)
-	$(HOSTVARS) $(CMAKE) $(TAGLIB_CONF)
+	$(HOSTVARS_CMAKE) $(CMAKE) $(TAGLIB_CONF)
 	+$(CMAKEBUILD)
 	$(CMAKEINSTALL)
 	touch $@

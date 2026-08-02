@@ -17,7 +17,6 @@ $(TARBALLS)/tremor-git.tar.xz:
 tremor: tremor-git.tar.xz .sum-tremor
 	# Stuff that does not depend on libogg
 	$(UNPACK)
-	$(UPDATE_AUTOCONFIG)
 	$(APPLY) $(SRC)/tremor/tremor.patch
 	$(MOVE)
 
@@ -26,7 +25,8 @@ DEPS_tremor = ogg $(DEPS_ogg)
 .tremor: tremor
 	# Stuff that depends on libogg
 	$(RECONF)
-	cd $< && \
-	$(HOSTVARS) CFLAGS="$(CFLAGS) $(NOTHUMB)" ./configure $(HOSTCONF)
-	$(MAKE) -C $< install
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE)
+	+$(MAKEBUILD)
+	+$(MAKEBUILD) install
 	touch $@

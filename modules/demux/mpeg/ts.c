@@ -1418,10 +1418,105 @@ static block_t * ConvertPESBlock( demux_t *p_demux, ts_es_t *p_es,
 }
 
 /****************************************************************************
+ * HDMV PGS forced-caption track detection.
+ *
+ * A Blu-ray PG stream carries no track-level "forced" attribute: the flag
+ * only exists per composition object, inside the Presentation Composition
+ * Segments of the stream itself.  Discs authored with a dedicated
+ * forced-captions track can therefore only be recognized by watching the
+ * stream go by.  Each PES payload of a display set starts with its PCS, so
+ * peeking at the head of every payload is enough.  Once every composition
+ * seen so far is forced (and at least one was), the track is marked forced
+ * (fmt.subs.b_forced): the UI can label it and the pgssub decoder then only
+ * renders forced compositions, which for such a track changes nothing.  The
+ * first non-forced composition definitively marks the track as normal.
+ ****************************************************************************/
+#define TS_PGS_FORCED_DETECT_UNKNOWN 0 /* nothing conclusive seen yet */
+#define TS_PGS_FORCED_DETECT_FORCED  1 /* marked forced, still watched */
+#define TS_PGS_FORCED_DETECT_NORMAL  2 /* saw a non-forced composition, final */
+
+static void ProbePGSForcedFlags( demux_t *p_demux, ts_es_t *p_es,
+                                 const block_t *p_chain )
+{
+    /* Walk the segments at the head of each PES payload; only the PCS
+     * (segment type 0x16) matters and it comes first in a display set */
+    for( const block_t *p_block = p_chain; p_block; p_block = p_block->p_next )
+    {
+        const uint8_t *p = p_block->p_buffer;
+        size_t i_left = p_block->i_buffer;
+
+        if( i_left < 3 || p[0] != 0x16 )
+            continue;
+
+        const size_t i_seg = GetWBE( &p[1] );
+        if( i_seg > i_left - 3 )
+            continue;
+        p += 3;
+
+        /* PCS: video_descriptor(5) composition_descriptor(3)
+         * palette_update_flag(1) palette_id(1) composition_count(1) */
+        if( i_seg < 11 )
+            continue;
+        const uint8_t i_pcs_objects = p[10];
+        if( i_pcs_objects == 0 )
+            continue; /* display clear, neutral */
+        uint8_t i_objects = i_pcs_objects;
+        p += 11;
+        size_t i_object_bytes = i_seg - 11;
+
+        bool b_all_forced = true;
+        while( i_objects > 0 && i_object_bytes >= 8 )
+        {
+            /* object_id(2) window_id(1) flags(1) x(2) y(2) [crop(8)] */
+            const uint8_t i_flags = p[3];
+            if( !(i_flags & 0x40 /* forced_on_flag */) )
+                b_all_forced = false;
+            const size_t i_entry = (i_flags & 0x80 /* cropped */) ? 16 : 8;
+            if( i_entry > i_object_bytes )
+                break;
+            p += i_entry;
+            i_object_bytes -= i_entry;
+            i_objects--;
+        }
+
+        if( i_objects > 0 )
+            continue; /* truncated parse, don't conclude either way */
+
+        if( !b_all_forced )
+        {
+            if( p_es->bdpg.detection == TS_PGS_FORCED_DETECT_FORCED )
+            {
+                /* Mixed track after all: revert the mark */
+                msg_Dbg( p_demux, "PGS track pid has non-forced compositions, unmarking" );
+                p_es->fmt.subs.b_forced = false;
+                es_out_Control( p_demux->out, ES_OUT_SET_ES_FMT,
+                                p_es->id, &p_es->fmt );
+            }
+            p_es->bdpg.detection = TS_PGS_FORCED_DETECT_NORMAL;
+        }
+        else if( p_es->bdpg.detection == TS_PGS_FORCED_DETECT_UNKNOWN )
+        {
+            msg_Dbg( p_demux, "PGS track carries only forced compositions, "
+                     "marking it as forced" );
+            p_es->bdpg.detection = TS_PGS_FORCED_DETECT_FORCED;
+            p_es->fmt.subs.b_forced = true;
+            if( p_es->fmt.psz_description == NULL )
+                p_es->fmt.psz_description = strdup( _("Forced subtitles") );
+            es_out_Control( p_demux->out, ES_OUT_SET_ES_FMT,
+                            p_es->id, &p_es->fmt );
+        }
+    }
+}
+
+/****************************************************************************
  * fanouts current block to all subdecoders / shared pid es
  ****************************************************************************/
 static void SendDataChain( demux_t *p_demux, ts_es_t *p_es, block_t *p_chain )
 {
+    if( p_es->fmt.i_codec == VLC_CODEC_BD_PG && p_es->id &&
+        p_es->bdpg.detection != TS_PGS_FORCED_DETECT_NORMAL )
+        ProbePGSForcedFlags( p_demux, p_es, p_chain );
+
     while( p_chain )
     {
         block_t *p_block = p_chain;
@@ -1713,9 +1808,60 @@ static void PESDataChainHandle( vlc_object_t *p_obj, void *priv, block_t *p_data
     ParsePESDataChain( (demux_t *)p_obj, (ts_pid_t *) priv, p_data, i_append_pcr );
 }
 
+static bool CheckAndResync( demux_t *p_demux )
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+
+    const uint8_t *p_peek;
+    if( vlc_stream_Peek( p_sys->stream, &p_peek, 1 + p_sys->i_packet_header_size )
+            != 1 + p_sys->i_packet_header_size )
+        return true;
+
+    /* Check sync byte and re-sync if needed */
+    if( p_peek[p_sys->i_packet_header_size] == 0x47 )
+        return true;
+
+    msg_Warn( p_demux, "lost synchro at %" PRIu64, vlc_stream_Tell( p_sys->stream ) );
+
+    for( ;; )
+    {
+        ssize_t i_peek = 0;
+        unsigned i_skip = 0;
+
+        i_peek = vlc_stream_Peek( p_sys->stream, &p_peek,
+                                  p_sys->i_packet_size * 10 );
+        if( i_peek < 0 || (size_t)i_peek < p_sys->i_packet_size + 1 )
+        {
+            msg_Dbg( p_demux, "eof ?" );
+            return false;
+        }
+
+        while( i_skip < i_peek - p_sys->i_packet_size )
+        {
+            if( p_peek[i_skip + p_sys->i_packet_header_size] == 0x47 &&
+                p_peek[i_skip + p_sys->i_packet_header_size + p_sys->i_packet_size] == 0x47 )
+                break;
+            i_skip++;
+        }
+        msg_Dbg( p_demux, "skipping %d bytes of garbage at %"PRIu64,
+                 i_skip, vlc_stream_Tell( p_sys->stream ) );
+        if (vlc_stream_Read( p_sys->stream, NULL, i_skip ) != i_skip)
+            return false;
+
+        if( i_skip < i_peek - p_sys->i_packet_size )
+            break;
+    }
+    msg_Dbg( p_demux, "resynced at %" PRIu64, vlc_stream_Tell( p_sys->stream ) );
+
+    return true;
+}
+
 static block_t* ReadTSPacket( demux_t *p_demux )
 {
     demux_sys_t *p_sys = p_demux->p_sys;
+
+    if( !CheckAndResync( p_demux) )
+        return NULL;
 
     block_t     *p_pkt;
 
@@ -1743,51 +1889,6 @@ static block_t* ReadTSPacket( demux_t *p_demux )
     p_pkt->p_buffer += p_sys->i_packet_header_size;
     p_pkt->i_buffer -= p_sys->i_packet_header_size;
 
-    /* Check sync byte and re-sync if needed */
-    if( p_pkt->p_buffer[0] != 0x47 )
-    {
-        msg_Warn( p_demux, "lost synchro" );
-        block_Release( p_pkt );
-        for( ;; )
-        {
-            const uint8_t *p_peek;
-            int i_peek = 0;
-            unsigned i_skip = 0;
-
-            i_peek = vlc_stream_Peek( p_sys->stream, &p_peek,
-                    p_sys->i_packet_size * 10 );
-            if( i_peek < 0 || (unsigned)i_peek < p_sys->i_packet_size + 1 )
-            {
-                msg_Dbg( p_demux, "eof ?" );
-                return NULL;
-            }
-
-            while( i_skip < i_peek - p_sys->i_packet_size )
-            {
-                if( p_peek[i_skip + p_sys->i_packet_header_size] == 0x47 &&
-                        p_peek[i_skip + p_sys->i_packet_header_size + p_sys->i_packet_size] == 0x47 )
-                {
-                    break;
-                }
-                i_skip++;
-            }
-            msg_Dbg( p_demux, "skipping %d bytes of garbage at %"PRIu64,
-                     i_skip, vlc_stream_Tell( p_sys->stream ) );
-            if (vlc_stream_Read( p_sys->stream, NULL, i_skip ) != i_skip)
-                return NULL;
-
-            if( i_skip < i_peek - p_sys->i_packet_size )
-            {
-                break;
-            }
-        }
-        msg_Dbg( p_demux, "resynced at %" PRIu64, vlc_stream_Tell( p_sys->stream ) );
-        if( !( p_pkt = vlc_stream_Block( p_sys->stream, p_sys->i_packet_size ) ) )
-        {
-            msg_Dbg( p_demux, "eof ?" );
-            return NULL;
-        }
-    }
     return p_pkt;
 }
 
@@ -1955,7 +2056,7 @@ static int SeekToTime( demux_t *p_demux, const ts_pmt_t *p_pmt, vlc_tick_t i_see
                     }
                 }
 
-                if( i_pktpcr == TS_90KHZ_INVALID && p_pid->type == TYPE_STREAM &&
+                if( p_pkt->i_buffer > 4 && p_pkt->i_buffer > i_skip && i_pktpcr == TS_90KHZ_INVALID && p_pid->type == TYPE_STREAM &&
                     ts_stream_Find_es( p_pid->u.p_stream, p_pmt ) &&
                    (p_pkt->p_buffer[1] & 0xC0) == 0x40 && /* Payload start but not corrupt */
                    (p_pkt->p_buffer[3] & 0xD0) == 0x10    /* Has payload but is not encrypted */
@@ -2051,6 +2152,8 @@ static int ProbeChunk( demux_t *p_demux, int i_program, bool b_end, ts_90khz_t *
                 if ( b_adaptfield ) // adaptation field
                     i_skip += 1 + __MIN(p_pkt->p_buffer[4], 182);
 
+                if (p_pkt->i_buffer > i_skip)
+                {
                 if ( VLC_SUCCESS == ParsePESHeader( VLC_OBJECT(p_demux), &p_pkt->p_buffer[i_skip],
                                                     p_pkt->i_buffer - i_skip, &i_skip,
                                                     &i_dts, &i_pts, &i_stream_id, NULL ) )
@@ -2059,6 +2162,7 @@ static int ProbeChunk( demux_t *p_demux, int i_program, bool b_end, ts_90khz_t *
                         *pi_pcr = i_dts;
                     else if( i_pts != TS_90KHZ_INVALID )
                         *pi_pcr = i_pts;
+                }
                 }
             }
 

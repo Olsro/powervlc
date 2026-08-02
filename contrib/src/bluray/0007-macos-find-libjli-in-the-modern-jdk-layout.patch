@@ -1,0 +1,41 @@
+macOS: find libjli in the layout JDK 9 and later use
+
+_load_jli_macos() exists to work around JDK-7131356, where the wrong JVM gets
+picked unless libjli is loaded first. It looks for the library in
+
+    <java_home>/jre/lib/jli/libjli
+    <java_home>/lib/jli/libjli
+
+which is the layout of JDK 8 and earlier. JDK 9 dropped the separate jre/ tree
+and moved the launcher library up one level, so on every modern JDK the file is
+
+    <java_home>/lib/libjli.dylib
+
+and neither candidate exists. The result on a current macOS install is
+
+    Opening /.../Contents/Home/jre/lib/jli/libjli ...
+    Opening /.../Contents/Home/lib/jli/libjli ...
+    Wasn't able to load JLI
+
+so the workaround silently never applies. It is not fatal -- bdj_open() logs
+and carries on to load the JVM -- which is exactly why it has gone unnoticed.
+
+Add the modern directory as a third candidate. It is tried last, so a JDK 8 or
+older keeps resolving through the same path it always did, and Apple's Java 6
+on 10.5/10.6 (which has no jli launcher at all, see the JavaVM framework patch)
+is unaffected either way.
+
+--- a/src/libbluray/bdj/bdj.c
++++ b/src/libbluray/bdj/bdj.c
+@@ -348,7 +348,10 @@
+ {
+     const char *java_home = NULL;
+     static const char * const jli_dir[]  = {
+-        "jre/lib/jli", "lib/jli",
++        /* JDK 8 and earlier, then JDK 9+, which dropped the jre/ tree and
++         * moved libjli from lib/jli/ up into lib/. Tried in that order so the
++         * older layouts keep resolving exactly as before. */
++        "jre/lib/jli", "lib/jli", "lib",
+     };
+     const unsigned num_jli_dir  = sizeof(jli_dir)  / sizeof(jli_dir[0]);
+

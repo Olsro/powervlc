@@ -1,0 +1,61 @@
+From 1def00f0b864977a7477219c5a8277fcc0e8b9a3 Mon Sep 17 00:00:00 2001
+From: Steve Lhomme <robux4@ycbcr.xyz>
+Date: Thu, 23 Oct 2025 12:17:08 +0200
+Subject: [PATCH 04/14] use WCHAR API for temporary windows folder
+
+---
+ src/estream.c | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/src/estream.c b/src/estream.c
+index 7e1d55c..6062001 100644
+--- a/src/estream.c
++++ b/src/estream.c
+@@ -5115,27 +5115,27 @@ tmpfd (void)
+ {
+ #ifdef HAVE_W32_SYSTEM
+   int attempts, n;
+-  char buffer[MAX_PATH+9+12+1];
+-# define mystrlen(a) strlen (a)
+-  char *name, *p;
++  WCHAR buffer[MAX_PATH+9+12+1];
++# define mystrlen(a) wcslen (a)
++  WCHAR *name, *p;
+   HANDLE file;
+   int pid = GetCurrentProcessId ();
+   unsigned int value;
+   int i;
+ 
+-  n = GetTempPath (MAX_PATH+1, buffer);
++  n = GetTempPathW (MAX_PATH+1, buffer);
+   if (!n || n > MAX_PATH || mystrlen (buffer) > MAX_PATH)
+     {
+       _set_errno (ENOENT);
+       return -1;
+     }
+   p = buffer + mystrlen (buffer);
+-  strcpy (p, "_estream");
++  wcscpy (p, L"_estream");
+   p += 8;
+   /* We try to create the directory but don't care about an error as
+      it may already exist and the CreateFile would throw an error
+      anyway.  */
+-  CreateDirectory (buffer, NULL);
++  CreateDirectoryW (buffer, NULL);
+   *p++ = '\\';
+   name = p;
+   for (attempts=0; attempts < 10; attempts++)
+@@ -5147,8 +5147,8 @@ tmpfd (void)
+           *p++ = tohex (((value >> 28) & 0x0f));
+           value <<= 4;
+         }
+-      strcpy (p, ".tmp");
+-      file = CreateFile (buffer,
++      wcscpy (p, L".tmp");
++      file = CreateFileW (buffer,
+                          GENERIC_READ | GENERIC_WRITE,
+                          0,
+                          NULL,
+-- 
+2.45.1.windows.1
+

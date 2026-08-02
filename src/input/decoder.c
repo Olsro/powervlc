@@ -185,6 +185,7 @@ static int LoadDecoder( decoder_t *p_dec, bool b_packetizer,
 {
     p_dec->b_frame_drop_allowed = true;
     p_dec->i_extra_picture_buffers = 0;
+    p_dec->i_dpb_size = 0;
 
     p_dec->pf_decode = NULL;
     p_dec->pf_get_cc = NULL;
@@ -543,7 +544,16 @@ static int vout_update_format( decoder_t *p_dec )
         case VLC_CODEC_HEVC:
         case VLC_CODEC_H264:
         case VLC_CODEC_DIRAC: /* FIXME valid ? */
+            /* 18 is the worst case the codec allows -- 16 reference frames
+             * plus reordering -- and almost no real stream comes near it. At
+             * 1080p it asks the vout for 26 pictures, 81 MB, on machines that
+             * may have 1 GB in total; four reference frames need half that.
+             * Prefer what the decoder read out of the sequence header, capped
+             * at the worst case so a stream that really does use 16 references
+             * behaves exactly as before. */
             dpb_size = 18;
+            if( p_dec->i_dpb_size > 0 && (unsigned)p_dec->i_dpb_size < dpb_size )
+                dpb_size = p_dec->i_dpb_size;
             break;
         case VLC_CODEC_AV1:
             dpb_size = 8; /* NUM_REF_FRAMES from the AV1 spec */
@@ -558,6 +568,9 @@ static int vout_update_format( decoder_t *p_dec )
             dpb_size = 2;
             break;
         }
+        msg_Dbg( p_dec, "picture pool: dpb %u + %d extra + 1 (%s)", dpb_size,
+                 p_dec->i_extra_picture_buffers,
+                 p_dec->i_dpb_size > 0 ? "from the stream" : "codec worst case" );
         p_vout = input_resource_RequestVout( p_owner->p_resource,
                                              p_vout, &fmt,
                                              dpb_size +

@@ -23,12 +23,18 @@ aribb24: aribb24-$(ARIBB24_VERSION).tar.gz .sum-aribb24
 	$(call pkg_static,"src/aribb24.pc.in")
 	$(MOVE)
 
-DEPS_aribb24 = png
+DEPS_aribb24 = png $(DEPS_png)
 
 .aribb24: aribb24
 	$(REQUIRE_GPL)
 	$(REQUIRE_GNUV3)
-	cd $< && $(SHELL) ./bootstrap
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF)
-	$(MAKE) -C $< && $(MAKE) -C $< install
+	mkdir -p $</m4
+	# a parallel run can leave a stray in-tree config.status behind, and
+	# the out-of-tree configure then refuses the source directory
+	rm -f $</config.status $</config.log
+	$(RECONF)
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE)
+	+$(MAKEBUILD)
+	+$(MAKEBUILD) install
 	touch $@

@@ -17351,7 +17351,7 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:214
 #: modules/gui/macosx/VLCLogWindowController.m:198
 #, c-format
-msgid "VLC Debug Log (%s).txt"
+msgid "PowerVLC Debug Log (%s).txt"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyMessages.m:255
@@ -29429,6 +29429,105 @@ msgstr "AAAA; "
 #: modules/gui/qt/ui/vlm.h:299
 msgid "Media Manager List"
 msgstr "የ መገናኛ ዝርዝር አስታዳዳሪ"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:806
+#: modules/gui/macosx/VLCMainMenu.m:143 modules/gui/qt/menus.cpp:810
+msgid "Open the libaacs folder (Blu-ray)"
+msgstr "የlibaacs ፎልደር መክፈቻ (ብሉ-ሬይ)"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:808
+#: modules/gui/macosx/VLCMainMenu.m:150 modules/gui/qt/menus.cpp:815
+msgid "Open the libbdplus folder (Blu-ray)"
+msgstr "የlibbdplus ፎልደር መክፈቻ (ብሉ-ሬይ)"
+
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1609
+#: modules/gui/macosx/VLCMainMenu.m:1423
+#: modules/gui/qt/util/powervlc_disclibs.cpp:64
+#, c-format
+msgid "The folder %s could not be opened."
+msgstr "ፎልደር %s መክፈት አልተቻለም።"
+
+#: modules/access/dvd_description.h:30
+msgid "Audio for visually impaired"
+msgstr ""
+
+#: modules/access/dvd_description.h:31
+msgid "Director's comments"
+msgstr ""
+
+#: modules/access/dvd_description.h:32
+msgid "Alternate director's comments"
+msgstr ""
+
+#: modules/access/dvd_description.h:48
+msgid "For children"
+msgstr ""
+
+#: modules/access/dvd_description.h:50
+msgid "Closed caption"
+msgstr ""
+
+#: modules/access/dvd_description.h:51
+msgid "Closed caption (large)"
+msgstr ""
+
+#: modules/access/dvd_description.h:52
+msgid "Closed caption (children)"
+msgstr ""
+
+#: modules/access/dvd_description.h:54
+msgid "Forced caption"
+msgstr ""
+
+#: modules/access/dvd_description.h:58
+msgid "Director's comments (large)"
+msgstr ""
+
+#: modules/access/dvd_description.h:59
+msgid "Director's comments (children)"
+msgstr ""
+
+#: modules/demux/mpeg/ts.c:1516
+msgid "Forced subtitles"
+msgstr ""
+
+#: modules/access/bluray.c:82
+msgid "Show forced subtitles"
+msgstr ""
+
+#: modules/access/bluray.c:83
+msgid ""
+"When the disc hides the subtitle stream, keep decoding it and display only "
+"its forced captions, as a standalone Blu-ray player does."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Installing %@..."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Uninstalling %@..."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ installed."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ uninstalled."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not install this addon"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not remove this addon"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ could not be processed. The Messages window records what went wrong."
+msgstr ""
 
 #, c-format
 #~ msgid "VLC version %s (%s)\n"

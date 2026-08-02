@@ -69,7 +69,13 @@ static int vlc_http_file_req(const struct vlc_http_resource *res,
         }
     }
 
-    if (vlc_http_msg_add_header(req, "Range", "bytes=%" PRIuMAX "-", *offset)
+    /* NOTE: 64-bit conversions, not the intmax_t ones: the C99 'j' length
+     * modifier is absent from the Mac OS X 10.2 libc, which emits/reads it
+     * literally ("Range: bytes=ju-"). uintmax_t is 64-bit on every target we
+     * build for, so this is lossless. Same reason below and in message.c,
+     * chunked.c and adaptive/http/HTTPConnection.cpp. */
+    if (vlc_http_msg_add_header(req, "Range", "bytes=%" PRIu64 "-",
+                                (uint64_t)*offset)
      && *offset != 0)
         return -1;
     return 0;
@@ -88,8 +94,8 @@ static int vlc_http_file_resp(const struct vlc_http_resource *res,
              * and we do not support it. */
             goto fail;
 
-        uintmax_t start, end;
-        if (sscanf(str, "bytes %" SCNuMAX "-%" SCNuMAX, &start, &end) != 2
+        uint64_t start, end;
+        if (sscanf(str, "bytes %" SCNu64 "-%" SCNu64, &start, &end) != 2
          || start != *offset || start > end)
             /* A single range response is what we asked for, but not at that
              * start offset. */
@@ -138,12 +144,12 @@ static uintmax_t vlc_http_msg_get_file_size(const struct vlc_http_msg *resp)
     {   /* IETF RFC7233 §4.1 */
         assert(range != NULL); /* checked by vlc_http_file_resp() */
 
-        uintmax_t end, total;
+        uint64_t end, total;
 
-        switch (sscanf(range, "bytes %*u-%" SCNuMAX "/%" SCNuMAX, &end, &total))
+        switch (sscanf(range, "bytes %*u-%" SCNu64 "/%" SCNu64, &end, &total))
         {
             case 1:
-                if (unlikely(end == UINTMAX_MAX))
+                if (unlikely(end == UINT64_MAX))
                     return -1; /* avoid wrapping to zero */
                 return end + 1;
             case 2:
@@ -154,12 +160,12 @@ static uintmax_t vlc_http_msg_get_file_size(const struct vlc_http_msg *resp)
 
     if (status == 416 /* Range Not Satisfiable */)
     {   /* IETF RFC7233 §4.4 */
-        uintmax_t total;
+        uint64_t total;
 
         if (range == NULL)
             return -1; /* valid but helpless response */
 
-        if (sscanf(range, "bytes */%" SCNuMAX, &total) == 1)
+        if (sscanf(range, "bytes */%" SCNu64, &total) == 1)
             return total; /* this occurs when seeking beyond EOF */
     }
 

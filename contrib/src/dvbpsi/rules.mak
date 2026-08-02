@@ -15,7 +15,8 @@ $(TARBALLS)/libdvbpsi-$(DVBPSI_VERSION).tar.bz2:
 
 libdvbpsi: libdvbpsi-$(DVBPSI_VERSION).tar.bz2 .sum-dvbpsi
 	$(UNPACK)
-	$(UPDATE_AUTOCONFIG) && cd $(UNPACK_DIR) && mv config.guess config.sub .auto
+	$(UPDATE_AUTOCONFIG)
+	cd $(UNPACK_DIR) && mv config.guess config.sub .auto
 	$(APPLY) $(SRC)/dvbpsi/dvbpsi-noexamples.patch
 	$(APPLY) $(SRC)/dvbpsi/dvbpsi-sys-types.patch
 	$(APPLY) $(SRC)/dvbpsi/0001-really-identify-duplicates.patch
@@ -27,6 +28,8 @@ libdvbpsi: libdvbpsi-$(DVBPSI_VERSION).tar.bz2 .sum-dvbpsi
 	$(MOVE)
 
 .dvbpsi: libdvbpsi
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF)
-	$(MAKE) -C $< install
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE)
+	+$(MAKEBUILD)
+	+$(MAKEBUILD) install
 	touch $@

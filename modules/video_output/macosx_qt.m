@@ -388,12 +388,12 @@ static int Open (vlc_object_t *this)
 
         vout_display_SendEventDisplaySize (vd, vd->fmt.i_visible_width, vd->fmt.i_visible_height);
 
-        [pool drain];
+        [pool release];
         return VLC_SUCCESS;
 
     error:
         Close(this);
-        [pool drain];
+        [pool release];
         return VLC_EGENERIC;
     }
 }
@@ -445,7 +445,7 @@ void Close (vlc_object_t *this)
         vlc_mutex_destroy (&sys->place_lock);
         free (sys);
     }
-    [pool drain];
+    [pool release];
 }
 
 /*****************************************************************************
@@ -697,7 +697,13 @@ static int Control (vout_display_t *vd, int query, va_list ap)
         CGDirectDisplayID display = kCGDirectMainDisplay;
         if (win) {
             NSRect inWin = [self convertRect:bounds toView:nil];
-            NSRect content = [win contentRectForFrameRect:[win frame]];
+            /* -contentRectForFrameRect: is 10.3; the class method that takes
+             * the style mask is not, and answers the same for this window */
+            NSRect content =
+                [win respondsToSelector:@selector(contentRectForFrameRect:)]
+                ? [win contentRectForFrameRect:[win frame]]
+                : [NSWindow contentRectForFrameRect:[win frame]
+                                          styleMask:[win styleMask]];
             off_x = inWin.origin.x;
             off_y = content.size.height
                   - (inWin.origin.y + inWin.size.height);

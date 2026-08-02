@@ -46,6 +46,8 @@ liblegacy_macosx_plugin_la_SOURCES = \
 	gui/legacy_macosx/VLCLegacyMessages.h gui/legacy_macosx/VLCLegacyMessages.m \
 	gui/legacy_macosx/VLCLegacyConvertAndSave.h gui/legacy_macosx/VLCLegacyConvertAndSave.m \
 	gui/legacy_macosx/VLCLegacyAddons.h gui/legacy_macosx/VLCLegacyAddons.m \
+	gui/legacy_macosx/VLCLegacyExtensionsDialogProvider.h \
+	gui/legacy_macosx/VLCLegacyExtensionsDialogProvider.m \
 	gui/legacy_macosx/VLCLegacyMediaInfo.h gui/legacy_macosx/VLCLegacyMediaInfo.m \
 	gui/legacy_macosx/VLCLegacyBookmarks.h gui/legacy_macosx/VLCLegacyBookmarks.m \
 	gui/legacy_macosx/VLCLegacyFSPanel.h gui/legacy_macosx/VLCLegacyFSPanel.m \
@@ -53,7 +55,7 @@ liblegacy_macosx_plugin_la_SOURCES = \
 	gui/legacy_macosx/VLCLegacyAbout.h gui/legacy_macosx/VLCLegacyAbout.m \
 	gui/legacy_macosx/VLCLegacyAppleRemote.h gui/legacy_macosx/VLCLegacyAppleRemote.m \
 	gui/legacy_macosx/VLCLegacyMediaKeys.h gui/legacy_macosx/VLCLegacyMediaKeys.m \
-	gui/legacy_macosx/VLCLegacySystemVolume.h gui/legacy_macosx/VLCLegacySystemVolume.m \
+	gui/legacy_macosx/VLCLegacySystemVolume.h gui/legacy_macosx/VLCLegacySystemVolume.c \
 	gui/legacy_macosx/macosx.c
 liblegacy_macosx_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -fobjc-exceptions
 # Force per-target object names for the C sources too: without this,

@@ -840,6 +840,30 @@ static void ReadMetaFromXiph( Ogg::XiphComment* tag, demux_meta_t* p_demux_meta,
 #undef SET
 #undef SET_EXTRA
 
+    /* ReadMetaFromBasicTag() already set the fields below, but TagLib's
+     * generic accessors concatenate every value of a repeated comment. Files
+     * that carry one ARTIST (or GENRE...) line per track of the album then
+     * report the same name over and over. Rebuild those fields keeping the
+     * distinct values, in order, with the separator TagLib would have used. */
+#define SET_UNIQUE( keyName, metaName ) \
+    { \
+        const StringList values { tag->fieldListMap()[keyName] }; \
+        StringList unique; \
+        for( StringList::ConstIterator it = values.begin(); \
+             it != values.end(); ++it ) \
+            if( !unique.contains( *it ) ) \
+                unique.append( *it ); \
+        if( !unique.isEmpty() ) \
+            vlc_meta_Set##metaName( p_meta, \
+                                    unique.toString( " " ).toCString( true ) ); \
+    }
+
+    SET_UNIQUE( "ARTIST", Artist );
+    SET_UNIQUE( "ALBUM", Album );
+    SET_UNIQUE( "TITLE", Title );
+    SET_UNIQUE( "GENRE", Genre );
+#undef SET_UNIQUE
+
     StringList track_number_list = tag->fieldListMap()["TRACKNUMBER"];
     if( !track_number_list.isEmpty() )
     {

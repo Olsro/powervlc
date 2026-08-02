@@ -44,6 +44,12 @@ bool decoder_SynchroChoose( decoder_synchro_t *, int, int, bool );
 void decoder_SynchroTrash( decoder_synchro_t * );
 void decoder_SynchroDecode( decoder_synchro_t * );
 void decoder_SynchroEnd( decoder_synchro_t *, int, bool );
+/* Retranche du coût mesuré d'une picture un temps qui n'est PAS du travail de
+ * décodage : sur le chemin matériel, l'attente d'une surface GPU libre est le
+ * signe que le décodeur a pris de l'AVANCE, pas qu'il peine. La compter dans
+ * p_tau fait croire au synchro qu'il ne tient pas la cadence et lui fait
+ * jeter des images sans raison. */
+void decoder_SynchroExcludeTime( decoder_synchro_t *, vlc_tick_t );
 vlc_tick_t decoder_SynchroDate( decoder_synchro_t * ) VLC_USED;
 void decoder_SynchroNewPicture( decoder_synchro_t *, int, int, vlc_tick_t, vlc_tick_t, bool );
 

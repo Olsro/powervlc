@@ -15,6 +15,7 @@ $(TARBALLS)/speexdsp-$(SPEEXDSP_VERSION).tar.gz:
 
 speexdsp: speexdsp-$(SPEEXDSP_VERSION).tar.gz .sum-speexdsp
 	$(UNPACK)
+	$(call pkg_static,"speexdsp.pc.in")
 	$(MOVE)
 
 SPEEXDSP_CONF := --enable-resample-full-sinc-table --disable-examples
@@ -43,8 +44,8 @@ endif
 
 .speexdsp: speexdsp
 	$(RECONF)
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) $(SPEEXDSP_CONF)
-	$(MAKE) -C $<
-	$(call pkg_static,"speexdsp.pc")
-	$(MAKE) -C $< install
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE) $(SPEEXDSP_CONF)
+	+$(MAKEBUILD)
+	+$(MAKEBUILD) install
 	touch $@

@@ -94,7 +94,8 @@ typedef unsigned int NSUInteger;
     NSScrollView *scroll = [[[NSScrollView alloc]
         initWithFrame:NSMakeRect(0, 48, 400, 232)] autorelease];
     [scroll setHasVerticalScroller:YES];
-    [scroll setAutohidesScrollers:YES];
+    if ([scroll respondsToSelector:@selector(setAutohidesScrollers:)])
+        [scroll setAutohidesScrollers:YES];
     [scroll setBorderType:NSBezelBorder];
     [scroll setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
 

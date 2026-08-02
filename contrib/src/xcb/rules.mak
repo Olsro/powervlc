@@ -53,6 +53,8 @@ XCBCONF := \
 DEPS_xcb = xau $(DEPS_xau) xcb-proto $(DEPS_xcb-proto)
 
 .xcb: libxcb
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) $(XCBCONF)
-	$(MAKE) -C $< install
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE) $(XCBCONF)
+	+$(MAKEBUILD)
+	+$(MAKEBUILD) install
 	touch $@

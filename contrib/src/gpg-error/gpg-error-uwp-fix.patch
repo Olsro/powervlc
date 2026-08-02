@@ -1,6 +1,56 @@
---- libgpg-error/src/mkheader.c.orig	2023-05-12 13:24:34.270562700 +0200
-+++ libgpg-error/src/mkheader.c	2023-05-15 08:26:10.678024100 +0200
-@@ -518,7 +518,7 @@ write_special (const char *fname, int ln
+From d246bd0c4eba45b78f18786898ec4f8d6af86c72 Mon Sep 17 00:00:00 2001
+From: Steve Lhomme <robux4@ycbcr.xyz>
+Date: Mon, 15 May 2023 08:20:15 +0200
+Subject: [PATCH 03/15] fix UWP build
+
+---
+ src/init.c     | 11 ++++++++++-
+ src/mkheader.c |  2 +-
+ 2 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/src/init.c b/src/init.c
+index 7f970d9..321da10 100644
+--- a/src/init.c
++++ b/src/init.c
+@@ -81,8 +81,9 @@ static void *(*custom_realloc)(void *a, size_t n);
+ static void
+ windows_specific_init (void)
+ {
++#if WINAPI_FAMILY_PARTITION (WINAPI_PARTITION_DESKTOP)
+   OSVERSIONINFO osvi;
+-  HMODULE hntdll = GetModuleHandle ("ntdll.dll");
++  HMODULE hntdll = GetModuleHandleA ("ntdll.dll");
+ 
+   memset (&osvi,0,sizeof(osvi));
+   osvi.dwOSVersionInfoSize = sizeof(osvi);
+@@ -94,6 +95,10 @@ windows_specific_init (void)
+ 
+   if (hntdll && GetProcAddress (hntdll, "wine_get_version"))
+     windows_features.semihosted_by_wine = 1;
++#else
++  windows_features.is_vista_or_later = 1;
++  windows_features.semihosted_by_wine = 0;
++#endif
+ }
+ #endif
+ 
+@@ -589,7 +594,11 @@ _gpgrt_windows_feature (int k)
+   switch (k)
+     {
+     case GPGRT_WINDOWS_PROC_ATTRIBUTE:
++#if !WINAPI_FAMILY_PARTITION (WINAPI_PARTITION_DESKTOP)
++      return 0;
++#else
+       return windows_features.is_vista_or_later;
++#endif
+ 
+     case GPGRT_WINDOWS_UNDER_WINE:
+       return windows_features.semihosted_by_wine;
+diff --git a/src/mkheader.c b/src/mkheader.c
+index 7c772e6..779e0ab 100644
+--- a/src/mkheader.c
++++ b/src/mkheader.c
+@@ -623,7 +623,7 @@ write_special (const char *fname, int lnr, const char *tag)
      }
    else if (!strcmp (tag, "include:os-add"))
      {
@@ -9,3 +59,6 @@
          {
            include_file (fname, lnr, "w32-add.h", write_line);
          }
+-- 
+2.52.0.windows.1
+

@@ -275,12 +275,27 @@ static void block_mmap_Release (block_t *block)
     free (block);
 }
 
+/* Darwin 6 (Mac OS X 10.2) implements no page-size name in sysconf() at all:
+ * _SC_PAGESIZE fails with EINVAL, which the arithmetic below turns into a
+ * page mask of -2 -- and then p_start is NULL and i_size is the address of
+ * the mapping. munmap(NULL, <address>) at the end of the plugin cache's life
+ * is what that looks like from the outside. getpagesize() has always worked
+ * there. Measured on 10.2.1: sysconf(29) = -1, getpagesize() = 4096. */
+static size_t block_PageSize (void)
+{
+    long page = sysconf(_SC_PAGESIZE);
+
+    if (page <= 0)
+        page = getpagesize();
+    return (size_t)page;
+}
+
 block_t *block_mmap_Alloc (void *addr, size_t length)
 {
     if (addr == MAP_FAILED)
         return NULL;
 
-    long page_mask = sysconf(_SC_PAGESIZE) - 1;
+    size_t page_mask = block_PageSize() - 1;
     size_t left = ((uintptr_t)addr) & page_mask;
     size_t right = (-length) & page_mask;
 

@@ -281,9 +281,10 @@ int main(int i_argc, const char *ppsz_argv[])
         }
     }
     if (lang && strncmp( lang, "auto", 4 )) {
-        char tmp[11];
-        snprintf(tmp, 11, "LANG%s", lang);
-        putenv(tmp);
+        /* lang points at the "=..." of "--language=xx"; skip the separator.
+         * setenv() copies, unlike the putenv() of a stack buffer this used to
+         * do. */
+        setenv("LANG", lang + 1, 1);
     }
 
     if (!lang) {
@@ -293,14 +294,21 @@ int main(int i_argc, const char *ppsz_argv[])
         if (language) {
             lang = FromCFString(language, kCFStringEncodingUTF8);
             if (strncmp( lang, "auto", 4 )) {
-                char tmp[11];
-                snprintf(tmp, 11, "LANG=%s", lang);
-                putenv(tmp);
+                /* setenv(), not putenv(): putenv() keeps the caller's pointer,
+                 * and the buffer this used to build was on the stack -- the
+                 * environment entry dangled as soon as the block returned.
+                 * The buffer was also 11 bytes, which truncated anything past
+                 * a two-letter code plus "LANG=". */
+                setenv("LANG", lang, 1);
             }
             free(lang);
             CFRelease(language);
         }
     }
+
+    /* When nothing above asked for a language, LANG is left unset on purpose:
+     * system_Init() (src/darwin/specific.c) derives it from the user's
+     * preferred localisations, and skips itself when LANG is already set. */
 
     ppsz_argv++; i_argc--; /* skip executable path */
 
@@ -322,8 +330,8 @@ int main(int i_argc, const char *ppsz_argv[])
 
     int ret = 1;
     libvlc_set_exit_handler(vlc, vlc_terminate, NULL);
-    libvlc_set_app_id(vlc, "org.VideoLAN.VLC", PACKAGE_VERSION, PACKAGE_NAME);
-    libvlc_set_user_agent(vlc, "VLC media player", "VLC/"PACKAGE_VERSION);
+    libvlc_set_app_id(vlc, "com.github.PowerVLC", POWERVLC_VERSION, "powervlc");
+    libvlc_set_user_agent(vlc, "PowerVLC media player", "PowerVLC/"POWERVLC_VERSION);
 
     libvlc_add_intf(vlc, "hotkeys,none");
 
@@ -340,13 +348,34 @@ int main(int i_argc, const char *ppsz_argv[])
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     {
         if(NSApp == nil) {
+            /* CFRunLoopRun() returns AT ONCE when the main run loop owns no
+             * input source: measured on 10.3.9, it came back in 0 s, so every
+             * interface-less run (-I dummy, -I rc, any CLI use) fell straight
+             * through to libvlc_release() about a second into playback and
+             * the file was cut short. 10.4 and later keep a source of their
+             * own on that loop, which is why it never showed anywhere else.
+             *
+             * Give the loop a source that is never signalled: it then blocks
+             * like everywhere else, and +stopRunLoop's CFRunLoopStop() still
+             * ends it. Inert on 10.4+. */
+            CFRunLoopSourceContext keepAliveCtx;
+            memset(&keepAliveCtx, 0, sizeof (keepAliveCtx));
+
+            CFRunLoopSourceRef keepAlive =
+                CFRunLoopSourceCreate(kCFAllocatorDefault, 0, &keepAliveCtx);
+            if (keepAlive != NULL) {
+                CFRunLoopAddSource(CFRunLoopGetCurrent(), keepAlive,
+                                   kCFRunLoopDefaultMode);
+                CFRelease(keepAlive);   /* the run loop retains it */
+            }
+
             CFRunLoopRun();
 
         } else {
             [NSApp run];
         }
     }
-    [pool drain];
+    [pool release];
 
     ret = 0;
     /* Cleanup */

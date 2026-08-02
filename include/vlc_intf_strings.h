@@ -61,6 +61,10 @@
 
 #define I_MENU_ABOUT N_("&About")
 
+/* Disc pop-up menu (Blu-ray), shared by every interface so that the entry
+ * reads the same everywhere and is translated once. */
+#define I_MENU_DISC_POPUP N_("Blu-ray Pop-Up Menu")
+
 /* Playlist popup */
 #define I_POP_PLAY N_("Play")
 #define I_POP_DEL N_("Remove Selected")

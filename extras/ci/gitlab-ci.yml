@@ -1,33 +1,31 @@
 stages:
     - build
+    - repo
 
 default:
     before_script:
         - set -x
         - export VLC_CONTRIB_SHA="$(extras/ci/get-contrib-sha.sh)"
-        - export VLC_PREBUILT_CONTRIBS_URL="https://artifacts.videolan.org/vlc-3.0/${CI_JOB_NAME##nightly-}/vlc-contrib-${TRIPLET}-${VLC_CONTRIB_SHA}.tar.bz2"
+        - export VLC_PREBUILT_CONTRIBS_URL="https://artifacts.videolan.org/vlc-3.0/${CI_JOB_NAME##nightly-}/vlc-contrib-${TRIPLET}-${VLC_CONTRIB_SHA}.tar.zst"
         - if ! extras/ci/check-url.sh "$VLC_PREBUILT_CONTRIBS_URL"; then unset VLC_PREBUILT_CONTRIBS_URL; fi
     after_script:
         - export VLC_CONTRIB_SHA="$(extras/ci/get-contrib-sha.sh)"
-        - mv contrib/vlc-contrib-*.tar.bz2 contrib/vlc-contrib-${TRIPLET}-${VLC_CONTRIB_SHA}.tar.bz2 2>/dev/null || true
+        - mv contrib/vlc-contrib-*.tar.zst contrib/vlc-contrib-${TRIPLET}-${VLC_CONTRIB_SHA}.tar.zst 2>/dev/null || true
     interruptible: true
 
 variables:
     FF_DISABLE_UMASK_FOR_DOCKER_EXECUTOR: "true"
-    VLC_WIN32_IMAGE: registry.videolan.org/vlc-debian-win32-3.0:20251208092116
-    VLC_WIN64_IMAGE: registry.videolan.org/vlc-debian-win64-3.0:20251208092116
+    VLC_WIN32_IMAGE: registry.videolan.org/vlc-debian-win32-3.0:20260721134159
+    VLC_WIN64_IMAGE: registry.videolan.org/vlc-debian-win64-3.0:20260721134159
     VLC_UWP_LLVM_IMAGE: registry.videolan.org/vlc-debian-llvm-uwp:20211020111246
-    VLC_WIN_LLVM_UCRT_IMAGE: registry.videolan.org/vlc-debian-llvm-ucrt:20251223015425
+    VLC_WIN_LLVM_UCRT_IMAGE: registry.videolan.org/vlc-debian-llvm-ucrt:20260611225331
     VLC_DEBIAN_IMAGE: registry.videolan.org/vlc-debian-unstable:20200229201904
-    VLC_ANDROID_IMAGE: registry.videolan.org/vlc-debian-android-3.0:20250626142950
-    VLC_ANDROID4_IMAGE: registry.videolan.org/vlc-debian-android:20250626142950
-    VLC_SNAP_IMAGE: registry.videolan.org/vlc-ubuntu-bionic:20250904134924
+    VLC_DEBIAN_QT6_IMAGE: registry.videolan.org/vlc-debian-unstable:20260121072258
+    VLC_ANDROID_IMAGE: registry.videolan.org/vlc-debian-android-3.0:20260701183656
+    VLC_ANDROID4_IMAGE: registry.videolan.org/vlc-debian-android:20260611225331
+    VLC_FLATPAK_IMAGE: registry.videolan.org/vlc-flatpak:20260516184439
 
 .variables-debian: &variables-debian
-        HOST_ARCH: x86_64
-        TRIPLET: $HOST_ARCH-linux-gnu
-
-.variables-snap: &variables-snap
         HOST_ARCH: x86_64
         TRIPLET: $HOST_ARCH-linux-gnu
 
@@ -93,7 +91,7 @@ variables:
         - schedules
     artifacts:
         paths:
-            - contrib/vlc-contrib-${TRIPLET}-*.tar.bz2
+            - contrib/vlc-contrib-${TRIPLET}-*.tar.zst
 
 # Common rules for jobs using docker
 .docker-template:
@@ -118,6 +116,9 @@ variables:
         if [ "${CI_COMMIT_BRANCH}" = "3.0.x" -a "${CI_PROJECT_PATH}" = "videolan/vlc" ]; then
             EXTRA_BUILD_FLAGS="${EXTRA_BUILD_FLAGS} -c"
         fi
+        if [ -n "${STRICT_COMPILER}" ]; then
+            export CONFIGFLAGS="CFLAGS=-std=gnu11 CXXFLAGS=-std=gnu++11"
+        fi
         extras/package/win32/build.sh -a $HOST_ARCH $EXTRA_BUILD_FLAGS $LIBVLC_EXTRA_BUILD_FLAGS $UWP_EXTRA_BUILD_FLAGS
 
 win32:
@@ -138,14 +139,25 @@ win64-arm-llvm:
         name: $VLC_WIN_LLVM_UCRT_IMAGE
     variables:
         <<: *variables-win64-arm
+        STRICT_COMPILER: yes
 
-uwp32-libvlc-llvm:
+uwp64-libvlc-llvm:
     extends: .win-common
     image:
         name: $VLC_UWP_LLVM_IMAGE
     variables:
-        <<: *variables-win32
-        VLCARCH: win32-uwp
+        <<: *variables-win64
+        VLCARCH: win64-uwp
+        LIBVLC_EXTRA_BUILD_FLAGS: -z
+        UWP_EXTRA_BUILD_FLAGS: -u -w
+
+uwparm64-libvlc-llvm:
+    extends: .win-common
+    image:
+        name: $VLC_WIN_LLVM_UCRT_IMAGE
+    variables:
+        <<: *variables-win64-arm
+        VLCARCH: winarm64-uwp
         LIBVLC_EXTRA_BUILD_FLAGS: -z
         UWP_EXTRA_BUILD_FLAGS: -u -w
 
@@ -306,6 +318,9 @@ debian:
         cd ../../
 
         # Build VLC
+        export CFLAGS="$CFLAGS -std=gnu11"
+        export CXXFLAGS="$CXXFLAGS -std=gnu++11"
+
         ./bootstrap
         ./configure
         make -j$NCPU
@@ -313,9 +328,31 @@ debian:
         # Run tests
         VLC_TEST_TIMEOUT=60 sh -x ./test/make_check_wrapper.sh -j4
         if [ "${CI_JOB_NAME:0:8}" = "nightly-" ]; then
+            # dvdread from the system fails to link when forcing CFLAGS
+            unset CFLAGS
+            unset CXXFLAGS
             export XZ_OPT="-T 0"
             make -j$NCPU distcheck
         fi
+    variables: *variables-debian
+
+debian-qt6:
+    extends: .docker-template
+    image:
+        name: $VLC_DEBIAN_QT6_IMAGE
+    script: |
+        export NCPU=$(getconf _NPROCESSORS_ONLN)
+
+        export CFLAGS="$CFLAGS -Werror=missing-field-initializers -Werror=format -Werror=incompatible-pointer-types -Werror=restrict -Werror=int-conversion -Werror=implicit-int -Werror=return-mismatch -Werror=declaration-missing-parameter-type"
+        export CXXFLAGS="$CXXFLAGS -Werror=missing-field-initializers -Werror=format"
+
+        # patch VLC to disable Qt5 detection
+        sed -i.orig 's/Qt5Svg/Qt5Svg Qt5DisableDetection/' configure.ac
+
+        # Build VLC
+        ./bootstrap
+        ./configure --disable-nls
+        make -j$NCPU -k
     variables: *variables-debian
 
 nightly-debian:
@@ -326,41 +363,84 @@ nightly-debian:
     after_script:
     artifacts:
 
-#
-# Snap builds
-#
-.snap-common:
+.flatpak-common:
     extends: .docker-template
-    image:
-        name: $VLC_SNAP_IMAGE
-    script: |
-            cd extras/package/snap
-            make -f package.mak snap
-    after_script:
-        - export VLC_CONTRIB_SHA="$(extras/ci/get-contrib-sha.sh)"
-        - mv extras/package/snap/parts/vlc/build/contrib/vlc-contrib-*.tar.bz2 contrib/vlc-contrib-${TRIPLET}-${VLC_CONTRIB_SHA}.tar.bz2 2>/dev/null || true
-    allow_failure: true
-    variables: *variables-snap
+    script:
+        - flatpak-builder-lint --exceptions --exceptions-repo stable manifest extras/package/flatpak/org.videolan.VLC.yaml
+        - flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+        - flatpak install --user -y flathub org.kde.Sdk//5.15-25.08
+        - flatpak run --user --command="./extras/package/flatpak/prepare-sources.sh" --filesystem=host --share=network org.kde.Sdk//5.15-25.08
+        - flatpak-builder --user --default-branch ${FLATPAK_BRANCH} --install-deps-from=flathub --arch=${HOST_ARCH} --force-clean --disable-rofiles-fuse --ccache
+            --mirror-screenshots-url=https://dl.flathub.org/media --compose-url-policy=full
+            ${BUNDLE_SOURCES:+--bundle-sources} --repo=repo-${HOST_ARCH} build extras/package/flatpak/org.videolan.VLC.yaml
+        - flatpak-builder-lint --exceptions --exceptions-repo stable repo repo-${HOST_ARCH}
+        - flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
+            repo-${HOST_ARCH} org.videolan.VLC_${HOST_ARCH}.flatpak org.videolan.VLC ${FLATPAK_BRANCH}
+    cache:
+        key: flatpak-ccache-${HOST_ARCH}
+        paths:
+            - .flatpak-builder/ccache/
+    artifacts:
+        paths:
+            - repo-${HOST_ARCH}
+            - org.videolan.VLC_${HOST_ARCH}.flatpak
 
-snap:
-    extends: .snap-common
-
-nightly-snap:
-    extends: .snap-common
+nightly-flatpak-x86_64:
+    extends: .flatpak-common
     only:
         - schedules
     except:
-    after_script:
-        - if [ "$CI_PROJECT_NAMESPACE" = "videolan" ]; then /bin/true; else exit 0; fi
-        - mkdir nightlies
-        - mv extras/package/snap/vlc_*.snap nightlies/
-        - echo $SNAP_LOGIN | base64 --decode | snapcraft login --with -
-        - snapcraft push nightlies/vlc_*.snap --release beta
-        - snapcraft logout
-        - cd nightlies && find . -maxdepth 1 -type f -not -name SHA512SUM | xargs shasum -a 512 | tee SHA512SUM
+    image:
+        name: $VLC_FLATPAK_IMAGE
+        entrypoint: [""]
+    variables:
+        FLATPAK_BRANCH: 3.0-nightly
+        HOST_ARCH: x86_64
+    tags:
+        - dind-amd64
+
+.release-flatpak:
+    extends: .flatpak-common
+    only:
+        - tags
+    variables:
+        FLATPAK_BRANCH: stable
+
+release-flatpak-x86_64:
+    extends: .release-flatpak
+    image:
+        name: $VLC_FLATPAK_IMAGE
+        entrypoint: [""]
+    variables:
+        HOST_ARCH: x86_64
+        BUNDLE_SOURCES: 1
+    tags:
+        - dind-amd64
+
+flatpak-repo:
+    stage: repo
+    extends: .docker-template
+    only:
+        - tags
+    image:
+        name: $VLC_FLATPAK_IMAGE
+        entrypoint: [""]
+    script:
+        - flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+        # Install published version of VLC from Flathub to be able to generate deltas
+        - flatpak install --user -y flathub org.videolan.VLC//stable
+        - ostree init --repo=repo --mode archive-z2
+        - for ref in $(ostree --repo=repo-x86_64 refs); do
+            flatpak build-commit-from --no-update-summary --disable-fsync --src-repo=repo-x86_64 repo "$ref";
+          done
+        - flatpak build-update-repo --generate-static-deltas --static-delta-ignore-ref=*.Debug --static-delta-ignore-ref=*.Sources repo
+        - flatpak-builder-lint --exceptions --exceptions-repo stable repo repo
+        - tar -czf repo.tar.gz repo
     artifacts:
         paths:
-           - nightlies/*
+            - repo.tar.gz
+    dependencies:
+      - release-flatpak-x86_64
 
 #
 # macOS
@@ -431,7 +511,7 @@ nightly-macos-arm64:
         name: $VLC_ANDROID_IMAGE
     script: |
         git clone https://code.videolan.org/videolan/libvlcjni.git
-        (cd libvlcjni && git checkout a3613013538860adc74eb1783473bc9405cd5028)
+        (cd libvlcjni && git checkout cfe024f6cf9d188f6057d1c8c30d317cb4ba4b1f)
         if [ -n "$VLC_PREBUILT_CONTRIBS_URL" ]; then
             /bin/sh ./libvlcjni/buildsystem/compile-libvlc.sh --no-jni -a $ANDROID_ARCH --with-prebuilt-contribs
         else
@@ -457,22 +537,3 @@ android-x86_64:
     image:
         name: $VLC_ANDROID4_IMAGE
     variables: *variables-android-x86_64
-
-#
-# VLC Documentation
-#
-pages:
-    extends: .docker-template
-    image:
-        name: $VLC_DEBIAN_IMAGE
-    script:
-        - ./bootstrap
-        - ./configure
-        - make doc
-        - mv doc/doxygen/html public
-    artifacts:
-        paths:
-            - public
-    only:
-        - schedules
-    except:

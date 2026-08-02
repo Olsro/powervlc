@@ -22,6 +22,7 @@
 
 //#define YYDEBUG 1
 //#define CSS_PARSER_DEBUG
+#define YYSTYPE CSSSTYPE
 
 typedef struct vlc_css_parser_t vlc_css_parser_t;
 typedef struct vlc_css_selector_t vlc_css_selector_t;
@@ -36,6 +37,7 @@ typedef struct
     vlc_css_expr_t *function;
     enum
     {
+        TYPE_INVALID,
         TYPE_NONE = 0,
         TYPE_EMS,
         TYPE_EXS,

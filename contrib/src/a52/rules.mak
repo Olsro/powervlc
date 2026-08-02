@@ -14,7 +14,6 @@ $(TARBALLS)/a52dec-$(A52DEC_VERSION).tar.gz:
 
 a52dec: a52dec-$(A52DEC_VERSION).tar.gz .sum-a52
 	$(UNPACK)
-	$(UPDATE_AUTOCONFIG)
 	$(APPLY) $(SRC)/a52/liba52-pic.patch
 	$(APPLY) $(SRC)/a52/liba52-silence.patch
 	$(APPLY) $(SRC)/a52/liba52-inline.patch
@@ -26,7 +25,10 @@ endif
 .a52: a52dec
 	$(REQUIRE_GPL)
 	$(RECONF)
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF)
-	$(MAKE) -C $< -C liba52 install
-	$(MAKE) -C $< -C include install
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE)
+	+$(MAKEBUILD) -C liba52
+	+$(MAKEBUILD) -C include
+	+$(MAKEBUILD) -C liba52 install
+	+$(MAKEBUILD) -C include install
 	touch $@

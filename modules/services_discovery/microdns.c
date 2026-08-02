@@ -120,7 +120,12 @@ struct srv
     const char *psz_protocol;
     char *      psz_device_name;
     uint16_t    i_port;
-    int         i_renderer_flags;
+    struct
+    {
+        char *      psz_model;
+        char *      psz_icon;
+        int         i_renderer_flags;
+    } renderer;
 };
 
 static const char *const ppsz_options[] = {
@@ -279,6 +284,17 @@ items_clear( struct discovery_sys *p_sys )
     vlc_array_clear( &p_sys->items );
 }
 
+static void clear_srvs( struct srv *p_srvs, unsigned int i_nb_srv )
+{
+    for( unsigned int i = 0; i < i_nb_srv; ++i )
+    {
+        free( p_srvs[i].psz_device_name );
+        free( p_srvs[i].renderer.psz_model);
+        free( p_srvs[i].renderer.psz_icon );
+    }
+    free( p_srvs );
+}
+
 static int
 parse_entries( const struct rr_entry *p_entries, bool b_renderer,
                struct srv **pp_srvs, unsigned int *p_nb_srv,
@@ -322,7 +338,7 @@ parse_entries( const struct rr_entry *p_entries, bool b_renderer,
                         break;
                     p_srv->psz_protocol = protocols[i].psz_protocol;
                     p_srv->i_port = p_entry->data.SRV.port;
-                    p_srv->i_renderer_flags = protocols[i].i_renderer_flags;
+                    p_srv->renderer.i_renderer_flags = protocols[i].i_renderer_flags;
                     ++i_nb_srv;
                     break;
                 }
@@ -356,9 +372,19 @@ parse_entries( const struct rr_entry *p_entries, bool b_renderer,
                          * 0x04 to indivate audio support
                          */
                         if ( ( ca & 0x01 ) != 0 )
-                            p_srv->i_renderer_flags |= VLC_RENDERER_CAN_VIDEO;
+                            p_srv->renderer.i_renderer_flags |= VLC_RENDERER_CAN_VIDEO;
                         if ( ( ca & 0x04 ) != 0 )
-                            p_srv->i_renderer_flags |= VLC_RENDERER_CAN_AUDIO;
+                            p_srv->renderer.i_renderer_flags |= VLC_RENDERER_CAN_AUDIO;
+                    }
+                    else if( !strncmp("md=", p_txt->txt, 3) )
+                    {
+                        free( p_srv->renderer.psz_model );
+                        p_srv->renderer.psz_model = strdup( p_txt->txt + 3 );
+                    }
+                    else if( !strncmp("ic=", p_txt->txt, 3) )
+                    {
+                        free( p_srv->renderer.psz_icon );
+                        p_srv->renderer.psz_icon = strdup( p_txt->txt + 3 );
                     }
                 }
             }
@@ -366,9 +392,7 @@ parse_entries( const struct rr_entry *p_entries, bool b_renderer,
     }
     if( psz_ip == NULL || i_nb_srv == 0 )
     {
-        for( unsigned int i = 0; i < i_nb_srv; ++i )
-            free( p_srvs[i].psz_device_name );
-        free( p_srvs );
+        clear_srvs( p_srvs, i_nb_srv );
         return VLC_EGENERIC;
     }
 
@@ -426,9 +450,7 @@ new_entries_sd_cb( void *p_this, int i_status, const struct rr_entry *p_entries 
         items_add_input( p_sys, p_sd, psz_uri, p_srv->psz_device_name );
     }
 
-    for( unsigned int i = 0; i < i_nb_srv; ++i )
-        free( p_srvs[i].psz_device_name );
-    free( p_srvs );
+    clear_srvs( p_srvs, i_nb_srv );
 }
 
 
@@ -484,26 +506,6 @@ new_entries_rd_cb( void *p_this, int i_status, const struct rr_entry *p_entries 
                        &psz_ip, &b_ipv6 ) != VLC_SUCCESS )
         return;
 
-    const char *psz_model = NULL;
-    const char *psz_icon = NULL;
-    for( const struct rr_entry *p_entry = p_entries;
-         p_entry != NULL && ( psz_model == NULL || psz_icon == NULL );
-         p_entry = p_entry->next )
-    {
-        if( p_entry->type == RR_TXT )
-        {
-            const struct rr_data_txt *p_txt = p_entry->data.TXT;
-            while( p_txt && ( psz_model == NULL || psz_icon == NULL ) )
-            {
-                if( !strncmp("md=", p_txt->txt, 3) )
-                    psz_model = p_txt->txt + 3;
-                else if( !strncmp("ic=", p_txt->txt, 3) )
-                    psz_icon = p_txt->txt + 3;
-                p_txt = p_txt->next;
-            }
-        }
-    }
-
     /* send new input items (if they don't already exist) */
     for( unsigned int i = 0; i < i_nb_srv; ++i )
     {
@@ -522,12 +524,22 @@ new_entries_rd_cb( void *p_this, int i_status, const struct rr_entry *p_entries 
             continue;
         }
 
-        if( psz_icon != NULL
-         && asprintf( &psz_icon_uri, "http://%s:8008%s", psz_ip, psz_icon )
+        if( p_srv->renderer.psz_icon != NULL
+         && asprintf( &psz_icon_uri, "http://%s:8008%s", psz_ip, p_srv->renderer.psz_icon )
                       == -1 )
         {
             free( psz_uri );
             break;
+        }
+        if( p_srv->renderer.psz_model != NULL )
+        {
+            char* psz_name;
+            if ( asprintf( &psz_name, "%s (%s)", p_srv->psz_device_name,
+                           p_srv->renderer.psz_model ) > 0 )
+            {
+                free( p_srv->psz_device_name );
+                p_srv->psz_device_name = psz_name;
+            }
         }
 
         if( strcmp( p_srv->psz_protocol, "chromecast" ) == 0)
@@ -535,13 +547,11 @@ new_entries_rd_cb( void *p_this, int i_status, const struct rr_entry *p_entries 
 
         items_add_renderer( p_sys, p_rd, p_srv->psz_device_name, psz_uri,
                             psz_demux_filter, psz_icon_uri,
-                            p_srv->i_renderer_flags );
+                            p_srv->renderer.i_renderer_flags );
         free(psz_icon_uri);
     }
 
-    for( unsigned int i = 0; i < i_nb_srv; ++i )
-        free( p_srvs[i].psz_device_name );
-    free( p_srvs );
+    clear_srvs( p_srvs, i_nb_srv );
 }
 
 static bool

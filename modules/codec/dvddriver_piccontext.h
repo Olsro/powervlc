@@ -27,6 +27,8 @@
 /* Noms des variables libvlc (bus partagé décodeur ↔ vout). */
 #define DVDDRIVER_VAR_CTX     "dvddriver-ctx"
 #define DVDDRIVER_VAR_PRESENT "dvddriver-present"
+/* Callback d'escamotage de la surface (cf. dvddriver_set_surface_hidden). */
+#define DVDDRIVER_VAR_HIDE    "dvddriver-hide"
 /* Sous-titres/OSD par-dessus la surface HW (chantier S) — SOURCE DE VÉRITÉ
  * UNIQUE, posée par le décodeur à l'ouverture HW (option `mpeg2-hwaccel-subs`)
  * et lue par le vout au premier present matériel (avant, elle n'a pas encore sa
@@ -36,6 +38,15 @@
  * ordres et fenêtre non opaque comprise) — le vout passe par une fenêtre enfant
  * transparente. */
 #define DVDDRIVER_VAR_SUBS    "dvddriver-subs"
+/* ★ SUSPENSION D'AFFICHAGE pendant la réouverture du décodeur matériel (bascule
+ * plein écran ⇄ fenêtré : la surface est liée à UNE fenêtre CGS, il faut rouvrir
+ * sur la nouvelle). Le décodeur la lève à la fermeture et la baisse dès que le
+ * nouveau contexte est publié. Sans elle, le vout voyait `hw` à NULL alors que
+ * les pictures déjà en file portaient encore un contexte matériel : il retombait
+ * sur le rendu OpenGL avec des plans logiciels VIDES (jamais reconstruits en mode
+ * remplacement) — d'où l'écran vert/blanc et les glitchs à chaque bascule. Le vout
+ * doit alors NE RIEN DESSINER : la dernière image correcte reste à l'écran. */
+#define DVDDRIVER_VAR_HOLD    "dvddriver-hold"
 /* Variables de géométrie publiées par le vout (U1). */
 #define DVDDRIVER_VAR_WID     "dvddriver-vout-wid"
 #define DVDDRIVER_VAR_RECT_X  "dvddriver-vout-rect-x"
@@ -54,6 +65,8 @@
  * au passage en plein écran (l'interface legacy déplace la vue vidéo dans une
  * autre fenêtre) ; le décodeur ré-attache alors sa surface, sans quoi elle reste
  * liée à une fenêtre invisible et l'écran est noir. */
+typedef void (*dvddriver_hide_cb)(dvddriver_ctx *hw, bool hidden);
+
 typedef bool (*dvddriver_present_cb)(dvddriver_ctx *hw, picture_context_t *pctx,
                                      int wid, int x, int y, int w, int h);
 

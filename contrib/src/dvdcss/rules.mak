@@ -1,26 +1,23 @@
 # DVDCSS
-DVDCSS_VERSION := 1.4.3
-DVDCSS_URL := $(VIDEOLAN)/libdvdcss/$(DVDCSS_VERSION)/libdvdcss-$(DVDCSS_VERSION).tar.bz2
+DVDCSS_VERSION := 1.6.0
+DVDCSS_URL := $(VIDEOLAN)/libdvdcss/$(DVDCSS_VERSION)/libdvdcss-$(DVDCSS_VERSION).tar.xz
 
 ifeq ($(call need_pkg,"libdvdcss"),)
 PKGS_FOUND += dvdcss
 endif
 
-$(TARBALLS)/libdvdcss-$(DVDCSS_VERSION).tar.bz2:
+$(TARBALLS)/libdvdcss-$(DVDCSS_VERSION).tar.xz:
 	$(call download,$(DVDCSS_URL))
 
-.sum-dvdcss: libdvdcss-$(DVDCSS_VERSION).tar.bz2
+.sum-dvdcss: libdvdcss-$(DVDCSS_VERSION).tar.xz
 
-
-dvdcss: libdvdcss-$(DVDCSS_VERSION).tar.bz2 .sum-dvdcss
+dvdcss: libdvdcss-$(DVDCSS_VERSION).tar.xz .sum-dvdcss
 	$(UNPACK)
 	$(MOVE)
 
-DVDCSS_CONF := --disable-doc
-
-.dvdcss: dvdcss
+.dvdcss: dvdcss crossfile.meson
 	$(REQUIRE_GPL)
-	$(RECONF)
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) $(DVDCSS_CONF)
-	$(MAKE) -C $< install
+	$(MESONCLEAN)
+	$(MESON)
+	+$(MESONBUILD)
 	touch $@

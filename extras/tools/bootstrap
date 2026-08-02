@@ -15,6 +15,18 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
 
+MIN_AUTOCONF=2.71
+MIN_AUTOMAKE=1.15
+MIN_BISON=3.0.0
+MIN_CMAKE=3.18.0
+MIN_LIBTOOL=2.4
+MIN_M4=1.4.16
+MIN_MESON=0.60.0
+MIN_NASM=2.15
+MIN_PROTOC=3.4.0
+MIN_NINJA=1.13.0
+MIN_ZSTD=1.2.0
+
 export LC_ALL=
 FOUND=
 
@@ -28,7 +40,7 @@ check_version() {
     needminor=`echo $3|cut -d. -f2`
     needmicro=`echo $3|cut -d. -f3`
     [ -z "$needmicro" ] && needmicro=0
-    if [ "$needmajor" -ne "$gotmajor" ] ||
+    if [ "$needmajor" -gt "$gotmajor" ] ||
        [ "$needmajor" -eq "$gotmajor" -a "$needminor" -gt "$gotminor" ] ||
        [ "$needmajor" -eq "$gotmajor" -a "$needminor" -eq "$gotminor" -a "$needmicro" -gt "$gotmicro" ];
     then
@@ -57,14 +69,75 @@ check_version_majmin() {
 
 }
 
+check() {
+if ! $1 --version >/dev/null 2>&1 && ! $1 -version >/dev/null 2>&1
+then
+    echo "$1 not found"
+    NEEDED="$NEEDED $1"
+else
+    # found, need to check version ?
+    if [ -z "$2" ];then
+        FOUND="$FOUND $1"
+    else
+        gotver=`$1 --version | head -1 | grep -o '[0-9]\+\.[0-9]\+\(\.[0-9]\+\)\?' | head -1`
+        check_version $1 $gotver $2
+    fi
+fi
+}
+
 check_tar() {
-if ! tar PcJ /dev/null >/dev/null 2>&1
+if ! { check_tar_autocompress && check_tar_xz && check_tar_zstd ; }
+then
+    NEEDED="$NEEDED tar"
+else
+    FOUND="$FOUND tar"
+fi
+}
+
+check_tar_autocompress() {
+tmp="check_tar"
+ret=0
+echo "Hello Cone" > "$tmp"
+if ! ( tar -caf "$tmp.tar.gz" "$tmp" && tar xfo "$tmp.tar.gz" )
+then
+    echo "tar can't auto-detect compression"
+    ret=1
+fi
+rm -f "$tmp" "$tmp.tar.gz" 2>/dev/null
+return "$ret"
+}
+
+check_tar_xz() {
+if ! tar PcJ /dev/null >/dev/null 2>&1 && ! tar PcJf /dev/null /dev/null 2>&1
 then
     echo "tar doesn't support xz (J option)"
-    NEEDED="$NEEDED tar xz"
-else
-    FOUND="$FOUND tar xz"
+    return 1
 fi
+return 0
+}
+
+check_tar_zstd() {
+output="$(tar Pc --zstd /dev/null 2>&1 >/dev/null)"
+ret="$?"
+case "$output" in
+    *"unrecognized option"*|*"not supported"*)
+        echo "tar doesn't support zstd"
+        return 1
+        ;;
+    *"not found"*|*"Can't launch external program"*)
+        echo "tar is new enough but zstd not installed"
+        NEEDED="$NEEDED zstd"
+        return 0
+        ;;
+    *)
+        if [ "$ret" -gt 0 ]; then
+            echo "tar has some unspecific error with zstd"
+            return 1
+        else
+            return 0
+        fi
+        ;;
+esac
 }
 
 check_sed() {
@@ -96,18 +169,36 @@ else
 fi
 }
 
-check() {
-if ! $1 --version >/dev/null 2>&1 && ! $1 -version >/dev/null 2>&1
+check_ninja() {
+# with GNU make 4.4 we should use ninja 1.13.x and above
+# otherwise we must use the patched version from kitware
+
+isgnu=$(make -v | head -1 | cut -d ' ' -f 1)
+if [ "$isgnu" = "GNU" ];
 then
-    echo "$1 not found"
-    NEEDED="$NEEDED $1"
+    gotver=$(make -v | head -1 | cut -d ' ' -f 3)
+    gotmajor=$(echo $gotver|cut -d. -f1)
+    gotminor=$(echo $gotver|cut -d. -f2)
+fi
+if [ 4 -lt $gotmajor ] ||
+   [ 4 -eq $gotmajor ] && [ 4 -le $gotminor ];
+then
+    # GNU Make 4.4+
+    check ninja $1
 else
-    # found, need to check version ?
-    if [ -z "$2" ];then
-        FOUND="$FOUND $1"
+    if ! ninja --version >/dev/null 2>&1
+    then
+        echo "ninja not found"
+        NEEDED="$NEEDED ninja"
     else
-        gotver=`$1 --version | head -1 | grep -o '[0-9]\+\.[0-9]\+\(\.[0-9]\+\)\?' | head -1`
-        check_version $1 $gotver $2
+        jobserver=$(ninja --version | head -1 | grep .jobserver)
+        if [ -z "$jobserver" ]; then
+            echo "ninja missing jobserver support"
+            NEEDED="$NEEDED ninja"
+        else
+            # check the known working jobserver kitware version
+            check ninja 1.11.1
+        fi
     fi
 fi
 }
@@ -128,10 +219,10 @@ else
 fi
 }
 
-check autoconf 2.69
-check automake 1.15
-check m4 1.4.16
-check libtool 2.4
+check autoconf $MIN_AUTOCONF
+check automake $MIN_AUTOMAKE
+check m4 $MIN_M4
+check libtool $MIN_LIBTOOL
 # PowerVLC: always build pkg-config. Which binary answers matters as much as its
 # version: the one built here is configured --prefix=build, so its BUILT-IN
 # default search path is only build/lib/pkgconfig, which is what keeps VLC's
@@ -141,19 +232,19 @@ check libtool 2.4
 # libdbus-1.3.dylib into the executable and ~all plugins, producing a bundle
 # that cannot launch on a Mac without Homebrew.
 NEEDED="$NEEDED pkg-config"
-check cmake 3.17.0
+check cmake $MIN_CMAKE
 check yasm
 check_tar
 check_sed
-check protoc 2.6.0
+check_majmin protoc $MIN_PROTOC
 check ant
 check xz
-check bison 3.0.0
+check bison $MIN_BISON
 check flex
-check_nasm 2.14
+check_nasm $MIN_NASM
 check help2man
-check meson 0.60.0
-check ninja
+check meson $MIN_MESON
+check_ninja $MIN_NINJA
 # PowerVLC: gettext is needed for its autoconf MACROS, not just its binaries, so
 # "does gettext --version work" is the wrong question. contrib packages autoreconf
 # with -I extras/tools/build/share/aclocal, and libcddb's configure.ac calls
@@ -161,12 +252,13 @@ check ninja
 # binary check but is keg-only, so its share/aclocal is on nobody's search path
 # and .cddb then dies on "possibly undefined macro: AM_ICONV". Always build it.
 NEEDED="$NEEDED gettext"
+check zstd $MIN_ZSTD
 
 DEPS_ONLY="help2man"
 
 CPUS=
 case `uname` in
-    Linux|MINGW32*|MINGW64*)
+    Linux|MINGW32*|MINGW64*|*MSYS*)
         CPUS=`getconf _NPROCESSORS_ONLN 2>&1`
      ;;
     Darwin|FreeBSD|NetBSD)
@@ -185,35 +277,42 @@ esac
 
 BOOTSTRAP_PATH="$( cd "$(dirname "$0")" ; pwd -P )"
 
+for t in $FOUND; do
+    TARGET_FOUND=".$t $TARGET_FOUND"
+done
+
+for t in $NEEDED; do
+    TARGET_NEEDED=".$t $TARGET_NEEDED"
+    case "$t" in
+        *$DEPS_ONLY*)
+            ;; # Dependency only, not build by default
+        *)
+            TARGETS="$TARGETS .build$t"
+            ;;
+    esac
+done
+
+[ -n "$TARGETS" ] && mkdir -p build/bin && echo "To-be-built packages: $(echo $TARGETS | sed 's/.build//g')"
+
 cat > Makefile << EOF
 TOOLS = $BOOTSTRAP_PATH
 MAKEFLAGS += -j$CPUS
 CMAKEFLAGS += --parallel=$CPUS
 PREFIX=\$(abspath ./build)
 PATH=\${PREFIX}/bin:$PATH
-EOF
 
-for t in $FOUND; do
-    echo ".$t:" >> Makefile
-done
+$TARGET_FOUND:
+	@echo "Available in the system"
+	touch \$@
 
-for t in $NEEDED; do
-    echo .$t: .build$t >> Makefile
-    case "$t" in
-        *$DEPS_ONLY*)
-            ;; # Dependency only, not build by default
-        *)
-            PACKAGES="$PACKAGES $t"
-            TARGETS="$TARGETS .build$t"
-            ;;
-    esac
-done
+.SECONDEXPANSION:
+$TARGET_NEEDED: \$\$(subst .,.build,\$\$@)
+	touch \$@
 
-[ -n "$PACKAGES" ] && mkdir -p build/bin && echo "To-be-built packages: $PACKAGES"
-
-cat >> Makefile << EOF
 all: $TARGETS
 	@echo "You are ready to build VLC and its contribs"
 
 include \$(TOOLS)/tools.mak
+
+fetch: $(echo $TARGETS | sed 's/.build/.get/g')
 EOF

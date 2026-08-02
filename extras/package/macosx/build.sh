@@ -146,12 +146,21 @@ LEGACY_VLC_CPUFLAGS=""        # CPU flags for VLC itself (per variant)
 LEGACY_PPC_ALTIVEC=""         # set to yes on AltiVec-capable PowerPC
 case $ARCH in
     ppc)
-        # PowerPC G3 (750), Mac OS X 10.4 Tiger. No SIMD.
+        # PowerPC G3 (750), Mac OS X **10.2 Jaguar**. No SIMD.
+        # The floor dropped from 10.4 to 10.2: old Macs usually still run the
+        # release they shipped with rather than the newest one they could take.
+        # Validated on a real iBook G3 (PowerBook4,3) -- interface, audio,
+        # video, DVD and the ATI hardware decoder. See MACOS_INCOMPATIBILITIES
+        # §1.3 for everything Jaguar lacks and how it is worked around.
         LEGACY_TRIPLE="powerpc-apple-darwin8"
         LEGACY_GCC="$LEGACY_TOOLCHAIN_ROOT/opt/gcc-ppc-tiger"
-        MINIMAL_OSX_VERSION="10.4"
+        MINIMAL_OSX_VERSION="10.2"
         SDKROOT="$LEGACY_TOOLCHAIN_ROOT/sdks/MacOSX10.4u.sdk"
         HOST_TRIPLET="$LEGACY_TRIPLE"
+        # Reuse the contribs proven at 10.2 by the former `ppc-jaguar` staging
+        # target: same triple, same -mcpu=750, same no-AltiVec, same deployment
+        # target -- rebuilding them under another name would only burn hours.
+        LEGACY_CONTRIB_SUFFIX="-jaguar"
         # The G3 slice is tagged ppc750: schedule for the 750 pipeline
         # (short 4-stage, single load/store unit). Without these flags
         # GCC schedules for a generic PowerPC model.
@@ -159,13 +168,14 @@ case $ARCH in
         LEGACY_VLC_CPUFLAGS="-mcpu=750 -mtune=750"
         ;;
     g4|g4e|g5)
-        # PowerPC with AltiVec, Mac OS X 10.4 Tiger. The contribs are
+        # PowerPC with AltiVec, Mac OS X **10.2 Jaguar** (floor lowered with
+        # the G3 slice; see the `ppc` case). The contribs are
         # shared between the three variants and built for the lowest
         # common ISA (7400 + AltiVec: a 7450 or a 970 runs all of it);
         # VLC itself is tuned per variant below.
         LEGACY_TRIPLE="powerpc-apple-darwin8"
         LEGACY_GCC="$LEGACY_TOOLCHAIN_ROOT/opt/gcc-ppc-tiger"
-        MINIMAL_OSX_VERSION="10.4"
+        MINIMAL_OSX_VERSION="10.2"
         SDKROOT="$LEGACY_TOOLCHAIN_ROOT/sdks/MacOSX10.4u.sdk"
         HOST_TRIPLET="$LEGACY_TRIPLE"
         LEGACY_CONTRIB_SUFFIX="-av"
@@ -257,6 +267,7 @@ export CC="`xcrun --find clang`"
 export CXX="`xcrun --find clang++`"
 export NM="`xcrun --find nm`"
 export OBJC="`xcrun --find clang`"
+export OBJCXX="`xcrun --find clang++`"
 export RANLIB="`xcrun --find ranlib`"
 export STRINGS="`xcrun --find strings`"
 export STRIP="`xcrun --find strip`"
@@ -323,6 +334,18 @@ export ac_cv_func_strnlen=no
 # libnetwork does not exist yet on 10.7 (used by libcddb)
 export ac_cv_lib_network_connect=no
 
+# poll() arrived with Mac OS X 10.3. The 10.4u SDK declares it either way and
+# <poll.h> carries no availability annotation, so configure would happily
+# detect it and the link would emit a HARD reference that 10.2 cannot resolve
+# -- nothing weak-imported, so check-weak-symbols.sh would stay silent about
+# it. Force the select()-based replacement instead (compat/poll.c, listed in
+# configure.ac's AC_REPLACE_FUNCS).
+case "$MINIMAL_OSX_VERSION" in
+    10.0|10.1|10.2)
+        export ac_cv_func_poll=no
+        ;;
+esac
+
 #
 # vlc/extras/tools
 #
@@ -381,8 +404,65 @@ fi
 # features/packages that require a newer minimum OS than $MINIMAL_OSX_VERSION).
 export VLC_DEPLOYMENT_TARGET="$MINIMAL_OSX_VERSION"
 
-export EXTRA_CFLAGS="-isysroot $SDKROOT -mmacosx-version-min=$MINIMAL_OSX_VERSION -DMACOSX_DEPLOYMENT_TARGET=$MINIMAL_OSX_VERSION $ARCH_CFLAG $LEGACY_CONTRIB_CPUFLAGS"
-export EXTRA_LDFLAGS="-Wl,-syslibroot,$SDKROOT -mmacosx-version-min=$MINIMAL_OSX_VERSION -isysroot $SDKROOT -DMACOSX_DEPLOYMENT_TARGET=$MINIMAL_OSX_VERSION $ARCH_CFLAG $LEGACY_CONTRIB_CPUFLAGS"
+# PowerPC long-double ABI: 10.4 widened `long double` from 64 to 128 bits, so
+# when the deployment target is older the 10.4u SDK headers redirect the whole
+# printf family to _<fn>$LDBLStub (sys/cdefs.h, gated on < 1040). Those stubs
+# are NOT in libSystem -- Apple ships them in the SDK's static
+# libSystemStubs.a, and GCC's darwin driver links it automatically... but only
+# from 10.3 on: at 10.2 its spec assumes the redirect cannot happen, which is
+# wrong when a 10.4u SDK is used. Without this, every contrib that calls
+# snprintf() fails to link (zlib, lua, nettle, vorbis...).
+LEGACY_LDBL_STUBS=""
+case "$MINIMAL_OSX_VERSION" in
+    10.0|10.1|10.2)
+        # -ljaguarcompat is the libc 10.2 lacks (dlopen, C99 float math,
+        # tsearch, the $LDBL128/$UNIX2003 aliases...). It is built into the
+        # contrib prefix a few dozen lines below, before anything links.
+        # The compat archive is passed as -Wl,<absolute path> rather than
+        # -L<dir> -ljaguarcompat, because neither of the other two forms
+        # survives every build system here: CMake never sees EXTRA_LDFLAGS
+        # (contrib's toolchain.cmake sets CMAKE_LD_FLAGS, not a CMake
+        # variable) and meson drops the -L when it splits the flags it takes
+        # from the environment. A -Wl, argument is opaque to both, is passed
+        # straight to ld, and is silently ignored when only compiling --
+        # unlike a bare archive path, which warns "linker input file unused"
+        # on every compile and would eventually break a configure probe.
+        # -lSystemStubs needs no path: it lives in the SDK, under -isysroot.
+        # -no_uuid: LC_UUID (0x1b) only appeared in Mac OS X 10.4, and the
+        # 2002 tools do not know it -- gdb prints "unable to read unknown load
+        # command 0x1b" for every image, and 10.2's own ld refuses a dylib
+        # carrying one ("unknown cmd field"). dyld walks the same load command
+        # list, so leave it out rather than trust it to skip what it cannot
+        # parse.
+        LEGACY_LDBL_STUBS="-lSystemStubs -Wl,-no_uuid -Wl,${vlcroot}/contrib/${HOST_TRIPLET}${LEGACY_CONTRIB_SUFFIX}/lib/libjaguarcompat.a"
+
+        # NOTE: resist the temptation to switch VLC's own replacements on with
+        # ac_cv_func_<fn>=no for the rest of what 10.2 lacks. That tells VLC
+        # the function is not DECLARED, when the 10.4u SDK declares all of
+        # them -- only the runtime symbol is missing. compat/lldiv.c then
+        # redefines lldiv_t against <stdlib.h>, and vlc_fixups.h redefines
+        # getc_unlocked against <stdio.h>: both fail to compile. Everything
+        # else is provided by libjaguarcompat.a instead, where the SDK
+        # declarations are simply implemented rather than contradicted.
+        #
+        # That includes the xlocale family: <xlocale.h> is in the SDK, so
+        # ac_cv_func_newlocale=no makes vlc_fixups.h redeclare locale_t
+        # against it. libjaguarcompat.a implements those too.
+        #
+        # poll is the one exception and is handled further up: <poll.h>
+        # exists, so vlc_fixups.h includes it instead of redeclaring, and
+        # compat/poll.c builds cleanly.
+        ;;
+esac
+
+# ...and it has to go in the CFLAGS too, not just the LDFLAGS: contrib's
+# generated toolchain.cmake sets CMAKE_LD_FLAGS, which is not a CMake variable
+# at all (the real ones are CMAKE_{EXE,SHARED,MODULE}_LINKER_FLAGS), so
+# EXTRA_LDFLAGS never reaches a CMake link line -- libpng's shared target fails
+# on _fprintf$LDBLStub otherwise. CMAKE_C_FLAGS *is* passed when linking, and
+# GCC ignores a -l silently when it is only compiling.
+export EXTRA_CFLAGS="-isysroot $SDKROOT -mmacosx-version-min=$MINIMAL_OSX_VERSION -DMACOSX_DEPLOYMENT_TARGET=$MINIMAL_OSX_VERSION $ARCH_CFLAG $LEGACY_CONTRIB_CPUFLAGS $LEGACY_LDBL_STUBS"
+export EXTRA_LDFLAGS="-Wl,-syslibroot,$SDKROOT -mmacosx-version-min=$MINIMAL_OSX_VERSION -isysroot $SDKROOT -DMACOSX_DEPLOYMENT_TARGET=$MINIMAL_OSX_VERSION $ARCH_CFLAG $LEGACY_CONTRIB_CPUFLAGS $LEGACY_LDBL_STUBS"
 # Lets contrib rules.mak files (ffmpeg...) keep AltiVec enabled on G4/G5
 # while the G3 build still disables it.
 if [ "$LEGACY_PPC_ALTIVEC" = "yes" ]; then
@@ -400,8 +480,54 @@ elif [ "$PACKAGETYPE" = "n" ]; then
     CONTRIBFLAGS="$CONTRIBFLAGS --enable-growl"
 fi
 
+# The libc that Mac OS X 10.2 does not have. Built here rather than as a
+# contrib package because everything else -- contribs included -- links it:
+# it has to exist in the prefix before the first of them is configured.
+# See extras/package/macosx/jaguar-compat/ for what it provides and why.
+if [ -n "$LEGACY_LDBL_STUBS" ]; then
+    JAGUAR_SRC="${vlcroot}/extras/package/macosx/jaguar-compat"
+    JAGUAR_PREFIX="${vlcroot}/contrib/${HOST_TRIPLET}${LEGACY_CONTRIB_SUFFIX}"
+
+    info "Building the 10.2 compatibility library"
+    mkdir -p "$JAGUAR_PREFIX/lib" "$builddir/jaguar-compat"
+    for src in "$JAGUAR_SRC"/*.c; do
+        obj="$builddir/jaguar-compat/$(basename "$src" .c).o"
+        # -fno-builtin is not optional here. Every function in libc102.c is a
+        # libc function implemented in terms of other libc functions, and GCC
+        # recognises those shapes: it folds (float)sin((double)x) back into
+        # sinf(), and exp(a)*cos(b) + exp(a)*sin(b)*i back into cexp(). Each
+        # definition then calls itself. Measured: MPEG-1 decoding died in a
+        # runaway cexp() recursion on the 10.2 machine.
+        $CC -c "$src" -o "$obj" -O2 -fno-builtin -isysroot "$SDKROOT" \
+            -mmacosx-version-min="$MINIMAL_OSX_VERSION" \
+            $LEGACY_CONTRIB_CPUFLAGS || exit 1
+    done
+    "$XT/ar" crs "$JAGUAR_PREFIX/lib/libjaguarcompat.a" \
+        "$builddir"/jaguar-compat/*.o || exit 1
+    "$XT/ranlib" "$JAGUAR_PREFIX/lib/libjaguarcompat.a" || exit 1
+fi
+
 info "Building contribs"
 spushd "${vlcroot}/contrib"
+
+# ⚠ A contrib prefix is reused as-is when it already exists -- nothing in it
+# records WHICH deployment target it was built for. Lowering the PowerPC floor
+# from 10.4 to 10.2 would therefore have linked 10.4-era static libraries into
+# a 10.2 binary, silently: no build error, no warning, and a hard reference to
+# a symbol Jaguar does not have only shows up as a dyld failure on the machine.
+# Stamp the target in the prefix and refuse to reuse a mismatched set.
+CONTRIB_STAMP="${vlcroot}/contrib/${HOST_TRIPLET}${LEGACY_CONTRIB_SUFFIX}/.powervlc-osx-min"
+if [ -f "$CONTRIB_STAMP" ]; then
+    stamped=$(cat "$CONTRIB_STAMP")
+    if [ "$stamped" != "$MINIMAL_OSX_VERSION" ]; then
+        echo "ERROR: contribs in contrib/${HOST_TRIPLET}${LEGACY_CONTRIB_SUFFIX}" >&2
+        echo "       were built for macOS $stamped, this target needs $MINIMAL_OSX_VERSION." >&2
+        echo "       Remove that prefix (and contrib/contrib-${HOST_TRIPLET}${LEGACY_CONTRIB_SUFFIX})" >&2
+        echo "       so they are rebuilt, then run this build again." >&2
+        exit 1
+    fi
+fi
+
 CONTRIB_PREFIX_FLAG=""
 if [ -n "$LEGACY_CONTRIB_SUFFIX" ]; then
     # CPU-variant contribs live in their own prefix so different -mcpu
@@ -449,7 +575,7 @@ fi
 # rules or patches have changed. These two carry the Blu-ray support and are
 # cheap no-ops once their stamps are current, so ask for them by name. Deleting
 # a stamp (and the unpacked source, so the patches re-apply) is what forces a
-# rebuild after touching contrib/src/{bluray,aacs}.
+# rebuild after touching contrib/src/{bluray,aacs,bdplus}.
 #
 # libaacs additionally has to exist at all: libbluray dlopen()s it, it is
 # bundled with the player (see contrib/src/aacs), and packaging refuses to ship
@@ -458,9 +584,41 @@ fi
 # but no symbol from that header was ever used, and
 # libaacs-powervlc-tiger-and-external-mmc.patch drops the include, so every
 # slice gets AACS now and AACS_OPTIONAL is no longer set for any of them.
+#
+# libbdplus is the BD+ layer, dlopen()ed and bundled the same way; it is only a
+# warning when missing, but it is just as cheap to keep current.
 info "Making sure the Blu-ray contribs are current"
 make .bluray
 make .aacs
+make .bdplus
+
+# fontconfig and libass for the same reason, and specifically because both
+# changed with the move to fontconfig 2.16.0: libbluray needs fontconfig to
+# resolve BD-J menu fonts on Darwin (without it a disc that ships no font of
+# its own draws its menus with no text at all), and libass was switched from
+# "no font provider on this platform" to using the system fonts like it does
+# everywhere else. Neither is rebuilt by anything above in the non -c path, so
+# a prefix built before the change would keep a fontconfig-less libass and a
+# libbluray that cannot link against the new one.
+make .fontconfig
+make .ass
+
+# Same reasoning for ffmpeg, which carries the PowerPC H.264 patches in
+# contrib/src/ffmpeg/000*-ppc-*: without this the prefix built before those
+# patches existed is reused for ever, and the build still reports success --
+# there is no message at all, because `make list` decides ffmpeg is "to be
+# built" while nothing in the non -c path ever runs it. Worse, deleting the
+# stamp and the unpacked source is NOT enough on its own: need_pkg finds the
+# already-installed libav*.pc in the prefix and marks the package found. To
+# force a rebuild, delete the stamp, the unpacked source *and*
+# contrib/<triple>/lib/pkgconfig/{libav*,libswscale,libpostproc}.pc.
+# A no-op (one stat) once the stamp is current.
+make .ffmpeg
+
+# Record the deployment target this prefix was built for (see the guard above).
+mkdir -p "${vlcroot}/contrib/${HOST_TRIPLET}${LEGACY_CONTRIB_SUFFIX}"
+echo "$MINIMAL_OSX_VERSION" \
+    > "${vlcroot}/contrib/${HOST_TRIPLET}${LEGACY_CONTRIB_SUFFIX}/.powervlc-osx-min"
 spopd
 
 unset CFLAGS
@@ -484,7 +642,20 @@ if [ -n "$LEGACY_GCC" ]; then
     # Static GCC runtimes: the target OS does not ship libstdc++/libgcc
     # matching our FSF GCC, and shipping them as dylibs needs install_name
     # surgery. gcc silently ignores these when linking plain C.
-    export LDFLAGS="-static-libgcc -static-libstdc++"
+    export LDFLAGS="-static-libgcc -static-libstdc++ $LEGACY_LDBL_STUBS"
+    case "$MINIMAL_OSX_VERSION" in
+        10.0|10.1|10.2)
+            # Mac OS X 10.2's dyld crashes in __dyld_map_image when it has to
+            # pull OpenGL.framework in as a dependency of a bundle being
+            # linked -- every plugin that touches GL (screen, vout_macosx,
+            # macosx_gl1) takes the process down on its own. Loading the same
+            # framework at startup is fine: verified with
+            # DYLD_INSERT_LIBRARIES, where all 326 plugins then load. So link
+            # it into everything here and let it be there before any bundle
+            # asks. Costs one load command; the framework is on every Mac.
+            LDFLAGS="$LDFLAGS -framework OpenGL"
+            ;;
+    esac
     # i386: ffmpeg's re-enabled x86 asm (SSE2+ IDCT / motion-comp / DSP, a big
     # decode speedup for every codec) emits a few text relocations that the
     # legacy ld64 rejects by default. Allow them (the affected text pages
@@ -518,6 +689,25 @@ fi
 #
 
 CONFIGFLAGS=""
+
+# VLC's configure turns AltiVec on for every host_cpu matching powerpc*, which
+# is wrong for the G3 (750): it has no vector unit, and this target is built
+# with -mcpu=750 and no -maltivec. The probe still succeeds -- it only asks the
+# *assembler* about "vperm", and that answers yes (via -Wa,-maltivec) -- so
+# CAN_COMPILE_ALTIVEC gets defined and the C intrinsics are then compiled
+# without -maltivec:
+#   i420_yuy2.c: implicit declaration of function 'vec_ld'
+#   algo_x.c:    AltiVec argument passed to unprototyped function
+# The G4/G5 slices are unaffected: they set LEGACY_PPC_ALTIVEC and do pass
+# -maltivec. So gate on that rather than on the CPU family.
+case "$HOST_TRIPLET" in
+    powerpc-*)
+        if [ "$LEGACY_PPC_ALTIVEC" != "yes" ]; then
+            CONFIGFLAGS="$CONFIGFLAGS --disable-altivec"
+        fi
+        ;;
+esac
+
 if [ ! -z "$BREAKPAD" ]; then
      CONFIGFLAGS="$CONFIGFLAGS --with-breakpad=$BREAKPAD"
 fi
@@ -553,6 +743,44 @@ if [ "${vlcroot}/configure" -nt Makefile ]; then
       $VLC_CONFIGURE_ARGS > $out
 fi
 
+# Mac OS X 10.2 cannot load an Objective-C plugin that is a dylib. VLC's
+# plugins are MH_DYLIB here because libtool's Darwin module_cmds link them
+# with -dynamiclib; on 10.3 and later that is fine, since dlopen() takes a
+# dylib. On 10.2 there is no dlopen() at all, so our dlcompat has to reach for
+# NSAddImage() -- and dyld then runs the ObjC runtime's add-image hook, which
+# dies in _objcInit for every image carrying an __OBJC segment (measured: the
+# legacy interface, then nsspeechsynthesizer, then the next one...).
+#
+# Bundles are the format that era expects for loadable code:
+# NSCreateObjectFileImageFromFile()/NSLinkModule() handle them, ObjC included,
+# and that path is verified on the machine. So link modules with -bundle here.
+# Everything else about them is unchanged -- same name, same exported symbol
+# list, and no table of contents needed, since NSLinkModule() resolves through
+# the symbol table rather than the TOC.
+#
+# Settle the autotools chain FIRST. AM_MAINTAINER_MODE is enabled, so when
+# configure.ac is newer than aclocal.m4 -- which is exactly what a version bump
+# leaves behind -- the *make* below re-runs aclocal, autoconf and
+# `config.status --recheck`, and config.status regenerates libtool. Patching
+# libtool before that happens silently loses the patch, and every plugin gets
+# linked MH_DYLIB again: on 10.3+ the bundle then builds and packages without a
+# single error, but no plugin loads at runtime and `--list` reports core alone.
+# `am--refresh` forces that regeneration now, so the patch below is the last
+# word on libtool.
+if [ -f Makefile ]; then
+    make am--refresh > $out 2>&1 || true
+fi
+case "$MINIMAL_OSX_VERSION" in
+    10.0|10.1|10.2)
+        if [ -f libtool ] && grep -q 'module_cmds=.*-dynamiclib' libtool; then
+            info "Linking plugins as bundles (10.2 cannot NSAddImage ObjC)"
+            sed -i.orig-dynamiclib \
+                -e '/^module_cmds=/s/-dynamiclib/-bundle/' \
+                -e '/^module_expsym_cmds=/s/-dynamiclib/-bundle/' libtool
+        fi
+        ;;
+esac
+
 #
 # make
 #
@@ -579,15 +807,32 @@ fi
 # keep their absolute build-tree install names, unusable on the target machine.
 # Rewrite everything to @executable_path (supported since 10.0), in the bundled
 # libraries' ids and in every Mach-O referencing them.
-if [ "$MINIMAL_OSX_VERSION" = "10.4" ] && [ -n "$LEGACY_GCC" ] && [ -d VLC.app/Contents/MacOS/lib ]; then
+case "$MINIMAL_OSX_VERSION" in
+    10.2|10.3|10.4) NEEDS_EXECUTABLE_PATH=yes ;;
+    *)              NEEDS_EXECUTABLE_PATH=no  ;;
+esac
+if [ "$NEEDS_EXECUTABLE_PATH" = "yes" ] && [ -n "$LEGACY_GCC" ] && [ -d VLC.app/Contents/MacOS/lib ]; then
     # Tiger's Finder only understands the legacy icns elements (is32/il32/
     # ih32/it32); the stock VLC.icns is PNG-based (10.7+) and shows as a
     # generic icon there (and blurry in NSImage). VLC-tiger.icns carries
     # both families (generated with libicns png2icns).
-    if [ -f "$vlcroot/modules/gui/legacy_macosx/Resources/VLC-tiger.icns" ]; then
-        info "Installing Tiger-compatible application icon"
-        cp "$vlcroot/modules/gui/legacy_macosx/Resources/VLC-tiger.icns" \
-           VLC.app/Contents/Resources/VLC.icns
+    #
+    # 10.2 needs more than that: it shows a generic icon even for the Tiger
+    # file. Its Icon Services predate ic08/ic09 (10.5 and 10.7), and an
+    # element it does not know appears to cost it the whole file rather than
+    # just that size. VLC-jaguar.icns is the same artwork with only the
+    # classic elements left.
+    ICNS_SRC="$vlcroot/modules/gui/legacy_macosx/Resources/VLC-tiger.icns"
+    case "$MINIMAL_OSX_VERSION" in
+        10.0|10.1|10.2)
+            if [ -f "$vlcroot/modules/gui/legacy_macosx/Resources/VLC-jaguar.icns" ]; then
+                ICNS_SRC="$vlcroot/modules/gui/legacy_macosx/Resources/VLC-jaguar.icns"
+            fi
+            ;;
+    esac
+    if [ -f "$ICNS_SRC" ]; then
+        info "Installing legacy application icon ($(basename "$ICNS_SRC"))"
+        cp "$ICNS_SRC" VLC.app/Contents/Resources/VLC.icns
     fi
     # The Icecast directory SD (a ~20MB XML parsed in Lua, minutes at 100%
     # CPU on a G4) ships again: the legacy interface now asks the user for
@@ -615,6 +860,31 @@ if [ "$MINIMAL_OSX_VERSION" = "10.4" ] && [ -n "$LEGACY_GCC" ] && [ -d VLC.app/C
             -exec "$XT/install_name_tool" -change "$GCC_RT_LIB/$rt" "@executable_path/lib/$rt" {} \;
     done
 fi
+
+# Mac OS X 10.2's dyld finds a dylib's exported symbols only through the
+# LC_DYSYMTAB table of contents, which modern ld64 no longer emits (it builds
+# single-module dylibs, and -multi_module is accepted then ignored). Without
+# it the library loads and every one of its symbols reads as undefined --
+# measured on a 10.2.1 iBook, down to a five-line test dylib. Rebuild the
+# table afterwards; 10.3 and later ignore it, so this is inert everywhere
+# else. It has to run LAST: install_name_tool relays out what it edits.
+case "$MINIMAL_OSX_VERSION" in
+    10.0|10.1|10.2)
+        if [ -d VLC.app/Contents/MacOS/lib ]; then
+            info "Adding the dylib table of contents (10.2 dyld)"
+            python3 "${vlcroot}/extras/package/macosx/add-dylib-toc.py" \
+                VLC.app/Contents/MacOS/lib/*.dylib || exit 1
+        fi
+
+        # An Objective-C file that defines no class leaves module->symtab
+        # NULL, and 10.2's _objcInit() dereferences it: the process dies on
+        # dlopen() of the plug-in, silently, before any log line. Cheap to
+        # check, invisible if it is not checked.
+        info "Checking for Objective-C modules with a NULL symtab (10.2)"
+        sh "${vlcroot}/extras/package/macosx/check-objc-modules.sh" \
+            VLC.app || exit 1
+        ;;
+esac
 
 if [ "$PACKAGETYPE" = "u" ]; then
     info "Copying app with debug symbols into VLC-debug.app and stripping"

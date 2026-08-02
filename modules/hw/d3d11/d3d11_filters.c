@@ -243,6 +243,7 @@ static picture_t *Filter(filter_t *p_filter, picture_t *p_pic)
     {
         /* the output filter configuration may have changed since the filter
          * was opened */
+        picture_Release( p_outpic );
         picture_Release( p_pic );
         return NULL;
     }
@@ -526,13 +527,14 @@ static int D3D11OpenAdjust(vlc_object_t *obj)
 
     hr = ID3D11Device_CreateTexture2D( sys->d3d_dev.d3ddevice, &texDesc, NULL, &sys->out[0].texture );
     if (FAILED(hr)) {
-        msg_Err(filter, "CreateTexture2D failed. (hr=0x%0lx)", hr);
+        msg_Err(filter, "CreateTexture2D failed. (hr=0x%lX)", hr);
         goto error;
     }
     hr = ID3D11Device_CreateTexture2D( sys->d3d_dev.d3ddevice, &texDesc, NULL, &sys->out[1].texture );
     if (FAILED(hr)) {
         ID3D11Texture2D_Release(sys->out[0].texture);
-        msg_Err(filter, "CreateTexture2D failed. (hr=0x%0lx)", hr);
+        sys->out[0].texture = NULL;
+        msg_Err(filter, "CreateTexture2D failed. (hr=0x%lX)", hr);
         goto error;
     }
 

@@ -41,6 +41,7 @@
 #include <vlc_playlist.h>
 #include <vlc_modules.h>
 #include <vlc_input.h>
+#include <vlc_intf_strings.h>
 #include <vlc_vout.h>
 #include <vlc_aout.h>
 #include <vlc_actions.h>
@@ -188,8 +189,7 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
                                                    action:@selector(inputDependentParent:)
                                             keyEquivalent:@""] autorelease];
     [item setTarget:self];
-    NSMenu *menu = [[[NSMenu alloc] initWithTitle:title] autorelease];
-    [menu setDelegate:(id)self];
+    NSMenu *menu = VLCLegacyMakeDynamicMenu(title, self);
     [item setSubmenu:menu];
     [parent addItem:item];
     return menu;
@@ -371,9 +371,7 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
                action:@selector(extensionsParent:)
         keyEquivalent:@""] autorelease];
     [extensionsItem setTarget:self];
-    extensionsMenu = [[[NSMenu alloc] initWithTitle:_NS("Extensions")]
-        autorelease];
-    [extensionsMenu setDelegate:(id)self];
+    extensionsMenu = VLCLegacyMakeDynamicMenu(_NS("Extensions"), self);
     [extensionsItem setSubmenu:extensionsMenu];
     [appMenu addItem:extensionsItem];
     [self addItemTo:appMenu title:_NS("Addons Manager")
@@ -381,10 +379,10 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     [appMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *addIntfItem = [[[NSMenuItem alloc]
         initWithTitle:_NS("Add Interface")
-               action:nil keyEquivalent:@""] autorelease];
-    addInterfaceMenu = [[[NSMenu alloc]
-        initWithTitle:_NS("Add Interface")] autorelease];
-    [addInterfaceMenu setDelegate:(id)self];
+               action:@selector(dynamicSubmenuParent:)
+        keyEquivalent:@""] autorelease];
+    [addIntfItem setTarget:self];
+    addInterfaceMenu = VLCLegacyMakeDynamicMenu(_NS("Add Interface"), self);
     [addIntfItem setSubmenu:addInterfaceMenu];
     [appMenu addItem:addIntfItem];
     [appMenu addItem:[NSMenuItem separatorItem]];
@@ -423,12 +421,12 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
              action:@selector(openCapture:) key:@"r"];
     /* separators and ordering cloned from the 3.0 MainMenu.xib */
     [fileMenu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *recentItem = [fileMenu addItemWithTitle:_NS("Open Recent")
-                                                 action:nil
-                                          keyEquivalent:@""];
-    recentMenu = [[[NSMenu alloc] initWithTitle:_NS("Open Recent")]
-        autorelease];
-    [recentMenu setDelegate:(id)self];
+    NSMenuItem *recentItem = [fileMenu
+        addItemWithTitle:_NS("Open Recent")
+                  action:@selector(dynamicSubmenuParent:)
+           keyEquivalent:@""];
+    [recentItem setTarget:self];
+    recentMenu = VLCLegacyMakeDynamicMenu(_NS("Open Recent"), self);
     [recentItem setSubmenu:recentMenu];
     [fileMenu addItem:[NSMenuItem separatorItem]];
     [fileMenu addItemWithTitle:_NS("Close Window")
@@ -576,15 +574,20 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     [playMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *rendererItem = [[[NSMenuItem alloc]
         initWithTitle:_NS("Renderer")
-               action:nil keyEquivalent:@""] autorelease];
-    rendererMenu = [[[NSMenu alloc] initWithTitle:_NS("Renderer")]
-        autorelease];
-    [rendererMenu setDelegate:(id)self];
+               action:@selector(dynamicSubmenuParent:)
+        keyEquivalent:@""] autorelease];
+    [rendererItem setTarget:self];
+    rendererMenu = VLCLegacyMakeDynamicMenu(_NS("Renderer"), self);
     [rendererItem setSubmenu:rendererMenu];
     [playMenu addItem:rendererItem];
     programMenu = [self addDynamicMenuTo:playMenu title:_NS("Program")];
     titleMenu = [self addDynamicMenuTo:playMenu title:_NS("Title")];
     chapterMenu = [self addDynamicMenuTo:playMenu title:_NS("Chapter")];
+    /* Blu-ray pop-up menu: drawn by the disc over the running movie, so it is
+     * a plain item next to Title/Chapter rather than a submenu. Greyed out
+     * unless the title being played carries one (see -validateMenuItem:). */
+    [self addItemTo:playMenu title:_NS(I_MENU_DISC_POPUP)
+             action:@selector(showDiscPopupMenu:) key:@""];
 
     /* --- Audio --- */
     NSMenu *audioMenu = [self addMenuTo:menubar title:_NS("Audio")];
@@ -611,10 +614,10 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     [audioMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *audioDeviceItem = [[[NSMenuItem alloc]
         initWithTitle:_NS("Audio Device")
-               action:nil keyEquivalent:@""] autorelease];
-    audioDeviceMenu = [[[NSMenu alloc] initWithTitle:_NS("Audio Device")]
-        autorelease];
-    [audioDeviceMenu setDelegate:(id)self];
+               action:@selector(dynamicSubmenuParent:)
+        keyEquivalent:@""] autorelease];
+    [audioDeviceItem setTarget:self];
+    audioDeviceMenu = VLCLegacyMakeDynamicMenu(_NS("Audio Device"), self);
     [audioDeviceItem setSubmenu:audioDeviceMenu];
     [audioMenu addItem:audioDeviceItem];
 
@@ -797,6 +800,26 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     [self addItemTo:helpMenu title:_NS("Online Forum...")
              action:@selector(openForum:) key:@""];
 
+    /* libaacs and libbdplus ship with the player but decrypt nothing until
+     * the user drops their own files next to them -- in a folder inside
+     * ~/Library/Preferences that nobody would ever find on their own. Offer to
+     * open it, but only where Blu-ray playback works at all: the plugin has to
+     * be in this build, and the disc access needs Mac OS X 10.4 (Tiger is the
+     * floor for IOKit's optical-drive and DiskArbitration APIs libaacs uses;
+     * this interface itself runs as far down as 10.2).
+     *
+     * "libbluray", not "bluray": module_find() only ever compares
+     * pp_shortcuts[0], which is the module's object name (the plugin is built
+     * as liblibbluray_plugin). The "bluray" of add_shortcut() sits at index 1
+     * and can never match. */
+    if (module_exists("libbluray") && VLCLegacyOSVersionAtLeast(10, 4, 0)) {
+        [helpMenu addItem:[NSMenuItem separatorItem]];
+        [self addItemTo:helpMenu title:_NS("Open the libaacs folder (Blu-ray)")
+                 action:@selector(openAACSFolder:) key:@""];
+        [self addItemTo:helpMenu title:_NS("Open the libbdplus folder (Blu-ray)")
+                 action:@selector(openBDPlusFolder:) key:@""];
+    }
+
     [NSApp setMainMenu:menubar];
 
     /* On Mac OS X 10.4, the application menu must be declared explicitly
@@ -825,6 +848,12 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
                                           title:_NS("Video Track")];
     voutSubtitleTrackMenu = [self addDynamicMenuTo:voutMenu
                                              title:_NS("Subtitles Track")];
+    /* the only way to reach the Blu-ray pop-up menu in fullscreen, where the
+     * menu bar is out of reach (besides the key-disc-popup-menu hotkey); set
+     * apart by a separator, it acts on the disc and not on our playback */
+    [voutMenu addItem:[NSMenuItem separatorItem]];
+    [self addItemTo:voutMenu title:_NS(I_MENU_DISC_POPUP)
+             action:@selector(showDiscPopupMenu:) key:@""];
     [voutMenu addItem:[NSMenuItem separatorItem]];
     [self addItemTo:voutMenu title:_NS("Fullscreen")
              action:@selector(toggleFullscreen:) key:@""];
@@ -1229,9 +1258,9 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     vlc_mutex_unlock(&p_extensions_manager->lock);
 
     if (i_action == 0) {
-        /* toggle activation, or plain trigger for trigger-only ones.
-         * NOTE: extension dialogs have no provider in this interface yet;
-         * they are a safe no-op (core returns VLC_EGENERIC). */
+        /* toggle activation, or plain trigger for trigger-only ones. Dialogs
+         * raised by the extension are rendered by
+         * VLCLegacyExtensionsDialogProvider. */
         if (extension_TriggerOnly(p_extensions_manager, p_ext))
             extension_Trigger(p_extensions_manager, p_ext);
         else if (extension_IsActivated(p_extensions_manager, p_ext))
@@ -1342,6 +1371,17 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
 - (void)jump:(id)sender               { [core jumpWithSeconds:(int)[sender tag]]; }
 - (void)jumpToTime:(id)sender         { [mainWindow showJumpToTimePanel]; }
 - (void)toggleRecord:(id)sender       { [core toggleRecord]; }
+
+/* Blu-ray pop-up menu (INPUT_NAV_POPUP), not the disc root menu */
+- (void)showDiscPopupMenu:(id)sender
+{
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (!p_input)
+        return;
+    input_ShowPopupMenu(p_input);
+    vlc_object_release(p_input);
+}
+
 - (void)toggleAtoBLoop:(id)sender     { [core setAtoB]; }
 - (void)showConvertAndSave:(id)sender { [convertAndSave showWindow]; }
 
@@ -1424,9 +1464,43 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
                    [[sender representedObject] UTF8String], [sender tag]);
 }
 
+/* debug: exercise the very call AppKit makes before showing a menu, and
+ * report what each dynamic submenu ends up containing. VLC_LEGACY_SHOW /
+ * legacy-macosx-show = "menucheck". */
+- (void)debugDumpDynamicMenus
+{
+    struct { const char *name; NSMenu *menu; } dyn[8] = {
+        { "audioDevice",  audioDeviceMenu },
+        { "renderer",     rendererMenu },
+        { "extensions",   extensionsMenu },
+        { "addInterface", addInterfaceMenu },
+        { "recent",       recentMenu },
+        { "crop",         cropMenu },
+        { "title",        titleMenu },
+        { "chapter",      chapterMenu },
+    };
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        if (dyn[i].menu == nil)
+            continue;
+        [dyn[i].menu update];
+        msg_Info(p_intf, "menucheck: %s -> %d entrée(s)", dyn[i].name,
+                 (int)[dyn[i].menu numberOfItems]);
+    }
+}
+
 /* Never fired (the items carry submenus); exists so validateMenuItem:
  * can gray those entries without a playing input */
 - (void)inputDependentParent:(id)sender
+{
+}
+
+/* Never fired either. It marks the items whose submenu is rebuilt on the
+ * fly, and it exists because AppKit only validates items that HAVE an
+ * action -- which is how those submenus get refreshed where NSMenu has no
+ * delegate (see -validateMenuItem:). Always enabled. */
+- (void)dynamicSubmenuParent:(id)sender
 {
 }
 
@@ -1529,6 +1603,57 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
         [NSURL URLWithString:@"https://forum.videolan.org/"]);
 }
 
+/* Reveals <config home>/<lib> in the Finder, creating it first: the folder
+ * does not exist until something writes there, and an "open" that silently did
+ * nothing would look like a broken menu item. config_GetDiscLibDir() is what
+ * the key database importer uses too, so the two can never disagree.
+ *
+ * -createDirectoryAtPath:attributes: creates one level only, which is all that
+ * is needed: its parent is ~/Library/Preferences, which every account has.
+ * (The recursive -createDirectoryAtPath:withIntermediateDirectories:... is
+ * 10.5 and would take this interface's Tiger builds down with it.) */
+- (void)openDiscLibFolder:(const char *)psz_lib
+{
+    char *psz_dir = config_GetDiscLibDir(psz_lib);
+    NSString *path = psz_dir ? [NSString stringWithUTF8String:psz_dir] : nil;
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    if (path != nil
+     && ([fm fileExistsAtPath:path]
+      || [fm createDirectoryAtPath:path attributes:nil])
+     && [[NSWorkspace sharedWorkspace] openFile:path]) {
+        free(psz_dir);
+        return;
+    }
+
+    msg_Err(p_intf, "cannot open the %s folder", psz_lib);
+
+    /* The "%s" is substituted by hand rather than through -stringWithFormat:,
+     * whose %s decodes the bytes in the *system* encoding -- which is not
+     * necessarily UTF-8 here, and this is a path. The msgid keeps VLC's "%s"
+     * so that the three interfaces share a single string to translate. */
+    NSMutableString *msg = [NSMutableString stringWithString:
+        _NS("The folder %s could not be opened.")];
+    [msg replaceOccurrencesOfString:@"%s"
+                         withString:(path != nil ? path
+                                     : [NSString stringWithUTF8String:psz_lib])
+                            options:0
+                              range:NSMakeRange(0, [msg length])];
+    NSRunAlertPanel(_NS("Error"), @"%@", _NS("OK"), nil, nil, msg);
+    free(psz_dir);
+}
+
+- (void)openAACSFolder:(id)sender
+{
+    [self openDiscLibFolder:"aacs"];
+}
+
+- (void)openBDPlusFolder:(id)sender
+{
+    [self openDiscLibFolder:"bdplus"];
+}
+
 /* An input must be playing for these to make sense */
 - (BOOL)hasInput
 {
@@ -1537,6 +1662,18 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
         return NO;
     vlc_object_release(p_input);
     return YES;
+}
+
+/* Only the Blu-ray titles carrying a pop-up menu offer one; the demuxer
+ * publishes it on the input (see INPUT_POPUP_MENU_VAR). */
+- (BOOL)hasDiscPopupMenu
+{
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (!p_input)
+        return NO;
+    BOOL b_available = input_HasPopupMenu(p_input) ? YES : NO;
+    vlc_object_release(p_input);
+    return b_available;
 }
 
 - (BOOL)hasVout
@@ -1557,6 +1694,9 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
 {
     SEL action = [item action];
     playlist_t *p_playlist = pl_Get(p_intf);
+
+    if (action == @selector(dynamicSubmenuParent:))
+        return YES;
     const char *name = NULL;
     if (action == @selector(toggleRandom:))
         name = "random";
@@ -1629,6 +1769,8 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
             || action == @selector(snapshot:)
             || action == @selector(toggleFullscreen:)) {
         return [self hasVout];
+    } else if (action == @selector(showDiscPopupMenu:)) {
+        return [self hasDiscPopupMenu];
     } else if (action == @selector(addSubtitleFile:)
             || action == @selector(inputDependentParent:)) {
         return [self hasInput];

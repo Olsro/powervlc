@@ -66,6 +66,7 @@ dvdnav_status_t dvdnav_jump_to_sector_by_time(dvdnav_t *, uint64_t, int32_t);
 #include "../demux/mpeg/ps.h"
 
 #include "disc_helper.h"
+#include "dvd_description.h"
 
 #ifndef DVDREAD_VERSION_CODE /* defined de facto in 6.0 */
 # define DVDREAD_VERSION_CODE(major, minor, micro) (((major) * 10000) + ((minor) * 100) +  ((micro) * 1))
@@ -85,6 +86,10 @@ dvdnav_status_t dvdnav_jump_to_sector_by_time(dvdnav_t *, uint64_t, int32_t);
     "will try to skip all the useless warning introductions." )
 
 #define LANGUAGE_DEFAULT ("en")
+
+/* dvdnav_get_active_spu_stream sets this bit when subtitles are hidden
+   and only forced captions should show */
+#define DVDNAV_SPU_HIDDEN 0x80
 
 static int  AccessDemuxOpen ( vlc_object_t * );
 static void Close( vlc_object_t * );
@@ -899,6 +904,17 @@ static void DvdnavCacheInhibitUpdate( demux_t *p_demux )
  * exactly the stock handler body, run only once the pipeline is empty. */
 static void DemuxProcessVtsChange( demux_t *p_demux )
 {
+    /* ★ Signal au décodeur MPEG-2 matériel (libmpeg2/ATI, PowerPC) : un
+     * changement de domaine (MENU→FILM notamment) n'émet ni redémarrage de
+     * décodeur ni discontinuité de bloc, et les horodatages restent continus —
+     * or un décodeur GPU ouvert sur le contenu du MENU tisse des champs
+     * croisés pour tout le film (images dédoublées, mesuré sur 10.3). On
+     * incrémente une génération de domaine sur le bus libvlc ; le décodeur la
+     * consulte et fait renaître son contexte matériel à l'image I suivante. */
+    var_Create( p_demux->obj.libvlc, "dvddriver-domain-gen", VLC_VAR_INTEGER );
+    var_SetInteger( p_demux->obj.libvlc, "dvddriver-domain-gen",
+        var_GetInteger( p_demux->obj.libvlc, "dvddriver-domain-gen" ) + 1 );
+
     demux_sys_t *p_sys = p_demux->p_sys;
     int32_t i_title = 0;
     int32_t i_part  = 0;
@@ -926,6 +942,18 @@ static void DemuxProcessVtsChange( demux_t *p_demux )
         }
         tk->b_configured = false;
     }
+
+    /* ★ BUG A (images dédoublées via les menus DVD) : la frontière de domaine
+     * ne portait AUCUN drapeau de bloc — le décodeur enchaînait menu→film sans
+     * flush et son association horodatage→picture (mpeg2_tag_picture) restait
+     * décalée pour tout le film (chaque image affichée à la date de sa voisine
+     * = ±40 ms de va-et-vient permanent, invisible aux compteurs internes).
+     * Marquer le premier bloc de chaque piste comme au CELL_CHANGE : converti
+     * en BLOCK_FLAG_DISCONTINUITY dès le premier bloc à DTS valide, il déclenche
+     * côté libmpeg2 SynchroReset + resynchronisation du tagging + renaissance
+     * du décodeur matériel. */
+    for( int i = 0; i < PS_TK_COUNT; i++ )
+        p_sys->tk[i].i_next_block_flags |= BLOCK_FLAG_CELL_DISCONTINUITY;
 
     uint32_t i_width, i_height;
     if( dvdnav_get_video_resolution( p_sys->dvdnav,
@@ -1688,6 +1716,17 @@ static void ESNew( demux_t *p_demux, int i_id )
             {
                 b_select = true;
             }
+
+            /* Audio track description from code_extension */
+            audio_attr_t audio_attr;
+            if( dvdnav_get_audio_attr( p_sys->dvdnav, i_audio, &audio_attr )
+                == DVDNAV_STATUS_OK )
+            {
+                    if( audio_attr.code_extension < ARRAY_SIZE(dvd_audio_code_ext)
+                    && dvd_audio_code_ext[audio_attr.code_extension] )
+                    tk->fmt.psz_description =
+                        strdup( vlc_gettext( dvd_audio_code_ext[audio_attr.code_extension] ) );
+            }
         }
     }
     else if( tk->fmt.i_cat == SPU_ES )
@@ -1702,17 +1741,34 @@ static void ESNew( demux_t *p_demux, int i_id )
             tk->fmt.psz_language[2] = 0;
         }
 
+        /* Subtitle track description from code_extension */
+        subp_attr_t subp_attr;
+        if( dvdnav_get_spu_attr( p_sys->dvdnav, i_id&0x1f, &subp_attr )
+            == DVDNAV_STATUS_OK )
+        {
+            if( subp_attr.code_extension < ARRAY_SIZE(dvd_spu_code_ext)
+                && dvd_spu_code_ext[subp_attr.code_extension] )
+                tk->fmt.psz_description =
+                    strdup( vlc_gettext( dvd_spu_code_ext[subp_attr.code_extension] ) );
+
+            if( subp_attr.code_extension == DVD_SUBP_CODE_EXT_FORCED )
+                tk->fmt.subs.b_forced = true;
+        }
+
         /* Palette */
         tk->fmt.subs.spu.palette[0] = SPU_PALETTE_DEFINED;
         memcpy( &tk->fmt.subs.spu.palette[1], p_sys->clut,
                 16 * sizeof( uint32_t ) );
 
         /* We select only when we are not in the menu */
-        dvdnav_current_title_info( p_sys->dvdnav, &i_title, &i_part );
-        if( i_title > 0 &&
-            dvdnav_get_active_spu_stream( p_sys->dvdnav ) == (i_id&0x1f) )
+        int i_active_spu = dvdnav_get_active_spu_stream( p_sys->dvdnav );
+        if( dvdnav_current_title_info( p_sys->dvdnav, &i_title, &i_part ) == DVDNAV_STATUS_OK &&
+            i_title > 0 && i_active_spu != -1 &&
+            (i_active_spu & 0x1f) == (i_id&0x1f) )
         {
             b_select = true;
+            if( i_active_spu & DVDNAV_SPU_HIDDEN )
+                tk->fmt.subs.b_forced = true;
         }
     }
 

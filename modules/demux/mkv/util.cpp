@@ -167,19 +167,18 @@ block_t *MemToBlock( uint8_t *p_mem, size_t i_mem, size_t offset)
 void handle_real_audio(demux_t * p_demux, mkv_track_t * p_tk, block_t * p_blk, vlc_tick_t i_pts)
 {
     uint8_t * p_frame = p_blk->p_buffer;
-    Cook_PrivateTrackData * p_sys = (Cook_PrivateTrackData *) p_tk->p_sys;
+    Cook_PrivateTrackData * p_sys = static_cast<Cook_PrivateTrackData *>(p_tk->p_sys);
     size_t size = p_blk->i_buffer;
 
     if( p_tk->i_last_dts == VLC_TICK_INVALID )
     {
-        for( size_t i = 0; i < p_sys->i_subpackets; i++)
+        for( size_t i = 0; i < p_sys->p_subpackets.size(); i++)
             if( p_sys->p_subpackets[i] )
             {
                 block_Release(p_sys->p_subpackets[i]);
                 p_sys->p_subpackets[i] = NULL;
             }
         p_sys->i_subpacket = 0;
-        p_sys->i_subpackets = 0;
 
         if ( !( p_blk->i_flags & BLOCK_FLAG_TYPE_I) )
         {
@@ -201,45 +200,51 @@ void handle_real_audio(demux_t * p_demux, mkv_track_t * p_tk, block_t * p_blk, v
         {
             size_t i_index = (size_t) p_sys->i_sub_packet_h * i +
                           ((p_sys->i_sub_packet_h + 1) / 2) * (y&1) + (y>>1);
-            if( i_index >= p_sys->i_subpackets )
-                return;
-
-            block_t *p_block = block_Alloc( p_sys->i_subpacket_size );
-            if( !p_block )
+            if( unlikely(i_index >= p_sys->p_subpackets.size()) )
                 return;
 
             if( size < p_sys->i_subpacket_size )
                 return;
 
-            memcpy( p_block->p_buffer, p_frame, p_sys->i_subpacket_size );
-            p_block->i_dts = VLC_TICK_INVALID;
-            p_block->i_pts = VLC_TICK_INVALID;
-            if( !p_sys->i_subpacket )
+            if (likely(p_sys->p_subpackets[i_index] == nullptr))
             {
-                p_tk->i_last_dts =
-                p_block->i_pts = i_pts;
+                // the index was not used
+                block_t *p_block = block_Alloc( p_sys->i_subpacket_size );
+                if( !p_block )
+                    return;
+
+                memcpy( p_block->p_buffer, p_frame, p_sys->i_subpacket_size );
+                p_block->i_dts = VLC_TICK_INVALID;
+                p_block->i_pts = VLC_TICK_INVALID;
+                if( p_sys->i_subpacket == 0 )
+                {
+                    p_tk->i_last_dts =
+                    p_block->i_pts = i_pts;
+                }
+                p_sys->p_subpackets[i_index] = p_block;
             }
 
             p_frame += p_sys->i_subpacket_size;
             size -=  p_sys->i_subpacket_size;
 
             p_sys->i_subpacket++;
-            p_sys->p_subpackets[i_index] = p_block;
         }
     }
     else
     {
         /*TODO*/
     }
-    if( p_sys->i_subpacket == p_sys->i_subpackets )
+    if( p_sys->i_subpacket == p_sys->p_subpackets.size() )
     {
-        for( size_t i = 0; i < p_sys->i_subpackets; i++)
+        for( size_t i = 0; i < p_sys->p_subpackets.size(); i++)
         {
-            send_Block( p_demux, p_tk, p_sys->p_subpackets[i], 1, 0 );
-            p_sys->p_subpackets[i] = NULL;
+            if (likely(p_sys->p_subpackets[i]))
+            {
+                send_Block( p_demux, p_tk, p_sys->p_subpackets[i], 1, 0 );
+                p_sys->p_subpackets[i] = NULL;
+            }
         }
         p_sys->i_subpacket = 0;
-        p_sys->i_subpackets = 0;
     }
 }
 
@@ -384,27 +389,98 @@ void send_Block( demux_t * p_demux, mkv_track_t * p_tk, block_t * p_block, unsig
     es_out_Send( p_demux->out, p_tk->p_es, p_block);
 }
 
-int32_t Cook_PrivateTrackData::Init()
+struct real_audio_private
 {
-    i_subpackets = (size_t) i_sub_packet_h * (size_t) i_frame_size / (size_t) i_subpacket_size;
-    p_subpackets = static_cast<block_t**> ( calloc(i_subpackets, sizeof(block_t*)) );
+    uint32_t fourcc;
+    uint16_t version;
+    uint16_t unknown1;
+    uint8_t  unknown2[12];
+    uint16_t unknown3;
+    uint16_t flavor;
+    uint32_t coded_frame_size;
+    uint32_t unknown4[3];
+    uint16_t sub_packet_h;
+    uint16_t frame_size;
+    uint16_t sub_packet_size;
+    uint16_t unknown5;
+};
 
-    if( unlikely( !p_subpackets ) )
+struct real_audio_private_v4
+{
+    real_audio_private header;
+    uint16_t sample_rate;
+    uint16_t unknown;
+    uint16_t sample_size;
+    uint16_t channels;
+};
+
+
+struct real_audio_private_v5
+{
+    real_audio_private header;
+    uint32_t unknown1;
+    uint16_t unknown2;
+    uint16_t sample_rate;
+    uint16_t unknown3;
+    uint16_t sample_size;
+    uint16_t channels;
+};
+
+bool Cook_PrivateTrackData::Init()
+{
+    // real_audio_private
+    bytes.skip(4);                      // fourcc
+
+    /* FIXME RALF and SIPR */
+    uint16_t version = bytes.GetBE16(); // version
+    bytes.skip(2);                      // unknown1
+    bytes.skip(12);                     // unknown2
+    bytes.skip(2);                      // unknown3
+    bytes.skip(2);                      // flavor
+    coded_frame_size = bytes.GetBE32(); // coded_frame_size
+    bytes.skip(3*4);                    // unknown4
+    i_sub_packet_h   = bytes.GetBE16(); // sub_packet_h
+    i_frame_size     = bytes.GetBE16(); // frame_size
+    i_subpacket_size = bytes.GetBE16(); // sub_packet_size
+    bytes.skip(2);                      // unknown5
+
+    if ( i_subpacket_size == 0 )
+        return false;
+
+    if( version == 4 )
     {
-        i_subpackets = 0;
-        return 1;
+        // real_audio_private_v4
+        i_rate          = bytes.GetBE16(); // sample_rate
+        bytes.skip(2);                     // unknown
+        i_bitspersample = bytes.GetBE16(); // sample_size
+        i_channels      = bytes.GetBE16(); // channels
     }
+    else if( version == 5 )
+    {
+        // real_audio_private_v5
+        bytes.skip(4);                     // unknown1
+        bytes.skip(2);                     // unknown2
+        i_rate          = bytes.GetBE16(); // sample_rate
+        bytes.skip(2);                     // unknown2
+        i_bitspersample = bytes.GetBE16(); // sample_size
+        i_channels      = bytes.GetBE16(); // channels
+    }
+    else
+        return false;
+    if (bytes.hasErrors())
+        return false;
 
-    return 0;
+    size_t i_subpackets = (size_t) i_sub_packet_h * (size_t) i_frame_size / (size_t) i_subpacket_size;
+    p_subpackets.resize(i_subpackets);
+
+    return true;
 }
 
 Cook_PrivateTrackData::~Cook_PrivateTrackData()
 {
-    for( size_t i = 0; i < i_subpackets; i++ )
+    for( size_t i = 0; i < p_subpackets.size(); i++ )
         if( p_subpackets[i] )
             block_Release( p_subpackets[i] );
-
-    free( p_subpackets );
 }
 
 static inline void fill_wvpk_block(uint16_t version, uint32_t block_samples, uint32_t flags,

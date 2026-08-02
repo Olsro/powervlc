@@ -107,7 +107,7 @@ StandardPLPanel::StandardPLPanel( PlaylistWidget *_parent,
     frames << ":/util/wait3.svg";
     frames << ":/util/wait4.svg";
     spinnerAnimation = new PixmapAnimator( this, frames, SPINNER_SIZE, SPINNER_SIZE );
-    CONNECT( spinnerAnimation, pixmapReady( const QPixmap & ), this, updateViewport() );
+    connect( spinnerAnimation, &PixmapAnimator::pixmapReady, this, &StandardPLPanel::updateViewport );
 
     /* Saved Settings */
     int i_savedViewMode = getSettings()->value( "Playlist/view-mode", TREE_VIEW ).toInt();
@@ -118,12 +118,12 @@ StandardPLPanel::StandardPLPanel( PlaylistWidget *_parent,
 
     showView( i_savedViewMode );
 
-    DCONNECT( THEMIM, leafBecameParent( int ),
-              this, browseInto( int ) );
+    connect( THEMIM, &MainInputManager::leafBecameParent,
+             this, QOverload<int>::of(&StandardPLPanel::browseInto), Qt::DirectConnection );
 
-    CONNECT( model, currentIndexChanged( const QModelIndex& ),
-             this, handleExpansion( const QModelIndex& ) );
-    CONNECT( model, rootIndexChanged(), this, browseInto() );
+    connect( model, &VLCModel::currentIndexChanged,
+             this, &StandardPLPanel::handleExpansion );
+    connect( model, &VLCModel::rootIndexChanged, this, QOverload<>::of(&StandardPLPanel::browseInto) );
 
     setRootItem( p_root, false );
 }
@@ -281,7 +281,7 @@ bool StandardPLPanel::popup( const QPoint &point )
     zoomMenu->addAction( qtr( "Decrease" ), this, SLOT( decreaseZoom() ) );
     menu.addMenu( zoomMenu );
 
-    CONNECT( &menu, triggered( QAction * ), this, popupAction( QAction * ) );
+    connect( &menu, &QMenu::triggered, this, &StandardPLPanel::popupAction );
 
     menu.addMenu( StandardPLPanel::viewSelectionMenu( this ) );
 
@@ -413,7 +413,7 @@ QMenu* StandardPLPanel::viewSelectionMenu( StandardPLPanel *panel )
 {
     QMenu *viewMenu = new QMenu( qtr( "Playlist View Mode" ), panel );
     QSignalMapper *viewSelectionMapper = new QSignalMapper( viewMenu );
-    CONNECT( viewSelectionMapper, mapped( int ), panel, showView( int ) );
+    connect( viewSelectionMapper, QSIGNALMAPPER_MAPPEDINT_SIGNAL, panel, &StandardPLPanel::showView );
 
     QActionGroup *viewGroup = new QActionGroup( viewMenu );
 # define MAX_VIEW StandardPLPanel::VIEW_COUNT
@@ -423,7 +423,7 @@ QMenu* StandardPLPanel::viewSelectionMenu( StandardPLPanel *panel )
         action->setCheckable( true );
         viewGroup->addAction( action );
         viewSelectionMapper->setMapping( action, i );
-        CONNECT( action, triggered(), viewSelectionMapper, map() );
+        connect( action, &QAction::triggered, viewSelectionMapper, QOverload<>::of(&QSignalMapper::map) );
         if( panel->currentViewIndex() == i )
             action->setChecked( true );
     }
@@ -452,7 +452,7 @@ void StandardPLPanel::popupSelectColumn( QPoint )
         option->setCheckable( true );
         option->setChecked( !treeView->isColumnHidden( j ) );
         selectColumnsSigMapper->setMapping( option, j );
-        CONNECT( option, triggered(), selectColumnsSigMapper, map() );
+        connect( option, &QAction::triggered, selectColumnsSigMapper, QOverload<>::of(&QSignalMapper::map) );
     }
     menu.exec( QCursor::pos() );
 }
@@ -623,10 +623,10 @@ void StandardPLPanel::createIconView()
 {
     iconView = new PlIconView( model, this );
     iconView->setContextMenuPolicy( Qt::CustomContextMenu );
-    CONNECT( iconView, customContextMenuRequested( const QPoint & ),
-             this, popupPlView( const QPoint & ) );
-    CONNECT( iconView, activated( const QModelIndex & ),
-             this, activate( const QModelIndex & ) );
+    connect( iconView, &PlIconView::customContextMenuRequested,
+             this, &StandardPLPanel::popupPlView );
+    connect( iconView, &PlIconView::activated,
+             this, &StandardPLPanel::activate );
     iconView->installEventFilter( this );
     iconView->viewport()->installEventFilter( this );
     viewStack->addWidget( iconView );
@@ -636,10 +636,10 @@ void StandardPLPanel::createListView()
 {
     listView = new PlListView( model, this );
     listView->setContextMenuPolicy( Qt::CustomContextMenu );
-    CONNECT( listView, customContextMenuRequested( const QPoint & ),
-             this, popupPlView( const QPoint & ) );
-    CONNECT( listView, activated( const QModelIndex & ),
-             this, activate( const QModelIndex & ) );
+    connect( listView, &PlListView::customContextMenuRequested,
+             this, &StandardPLPanel::popupPlView );
+    connect( listView, &PlListView::activated,
+             this, &StandardPLPanel::activate );
     listView->installEventFilter( this );
     listView->viewport()->installEventFilter( this );
     viewStack->addWidget( listView );
@@ -649,10 +649,10 @@ void StandardPLPanel::createCoverView()
 {
     picFlowView = new PicFlowView( model, this );
     picFlowView->setContextMenuPolicy( Qt::CustomContextMenu );
-    CONNECT( picFlowView, customContextMenuRequested( const QPoint & ),
-             this, popupPlView( const QPoint & ) );
-    CONNECT( picFlowView, activated( const QModelIndex & ),
-             this, activate( const QModelIndex & ) );
+    connect( picFlowView, &PicFlowView::customContextMenuRequested,
+             this, &StandardPLPanel::popupPlView );
+    connect( picFlowView, &PicFlowView::activated,
+             this, &StandardPLPanel::activate );
     viewStack->addWidget( picFlowView );
     picFlowView->installEventFilter( this );
 }
@@ -665,19 +665,19 @@ void StandardPLPanel::createTreeView()
     /* setModel after setSortingEnabled(true), or the model will sort immediately! */
 
     /* Connections for the TreeView */
-    CONNECT( treeView, activated( const QModelIndex& ),
-             this, activate( const QModelIndex& ) );
-    CONNECT( treeView->header(), customContextMenuRequested( const QPoint & ),
-             this, popupSelectColumn( QPoint ) );
-    CONNECT( treeView, customContextMenuRequested( const QPoint & ),
-             this, popupPlView( const QPoint & ) );
+    connect( treeView, &PlTreeView::activated,
+             this, &StandardPLPanel::activate );
+    connect( treeView->header(), &QHeaderView::customContextMenuRequested,
+             this, &StandardPLPanel::popupSelectColumn );
+    connect( treeView, &PlTreeView::customContextMenuRequested,
+             this, &StandardPLPanel::popupPlView );
     treeView->installEventFilter( this );
     treeView->viewport()->installEventFilter( this );
 
     /* SignalMapper for columns */
     selectColumnsSigMapper = new QSignalMapper( this );
-    CONNECT( selectColumnsSigMapper, mapped( int ),
-             this, toggleColumnShown( int ) );
+    connect( selectColumnsSigMapper, QSIGNALMAPPER_MAPPEDINT_SIGNAL,
+             this, &StandardPLPanel::toggleColumnShown );
 
     viewStack->addWidget( treeView );
 }

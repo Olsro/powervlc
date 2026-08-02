@@ -1,0 +1,98 @@
+app-id: org.videolan.VLC
+runtime: org.kde.Platform
+runtime-version: 5.15-25.08
+sdk: org.kde.Sdk
+sdk-extensions: [org.freedesktop.Sdk.Extension.openjdk17]
+command: vlc
+finish-args:
+  - --require-version=0.11.4
+  - --share=ipc
+  - --socket=x11
+  - --socket=pulseaudio
+  - --share=network
+  - --filesystem=host
+  - --talk-name=org.freedesktop.PowerManagement
+  - --talk-name=org.freedesktop.ScreenSaver
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.kde.kwalletd5
+  - --talk-name=org.kde.kwalletd
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.mpris.MediaPlayer2.Player
+  - --own-name=org.mpris.MediaPlayer2.vlc
+  - --device=all
+  - --filesystem=xdg-run/gvfs
+add-extensions:
+  org.videolan.VLC.Plugin:
+    versions: 3-5.15-25.08;3-25.08
+    directory: share/vlc/extra
+    subdirectories: true
+    merge-dirs: plugins
+    add-ld-path: lib
+    no-autodownload: true
+    autodelete: true
+rename-appdata-file: org.videolan.vlc.appdata.xml
+rename-desktop-file: vlc.desktop
+rename-icon: vlc
+copy-icon: true
+separate-locales: false
+cleanup:
+  - /share/doc
+  - /share/gtk-doc
+  - /share/info
+  - /share/man
+  - '*.la'
+  - '*.a'
+cleanup-commands:
+  - mv /app/contrib/share/java /app/share
+  - rm -rf /app/contrib
+  - rm -rf /app/jre/ant
+  - mkdir -p /app/share/vlc/extra
+  - ln -s /app/share/vlc/extra/plugins /app/lib/vlc/plugins/extra
+  - rm -f /app/lib/vlc/plugins/plugins.dat
+  - TZ=UTC find /app/lib/vlc/plugins -exec touch -t 197001010000 {} \;
+  - /app/lib/vlc/vlc-cache-gen /app/lib/vlc/plugins
+build-options:
+  env:
+    JAVA_HOME: /usr/lib/sdk/openjdk17
+  prepend-path: /app/contrib/bin:/usr/lib/sdk/openjdk17/bin
+  prepend-pkg-config-path: /app/contrib/lib/pkgconfig
+  cflags: -I/app/contrib/include -L/app/contrib/lib
+  cxxflags: -I/app/contrib/include -L/app/contrib/lib
+modules:
+  - name: openjdk
+    buildsystem: simple
+    build-commands:
+      - /usr/lib/sdk/openjdk17/install.sh
+  - name: vlc
+    buildsystem: simple
+    build-commands:
+      - tar xf tools.tar && rm tools.tar
+      - tar xf contrib.tar && rm contrib.tar
+      - cd extras/tools && ./bootstrap && make -j $FLATPAK_BUILDER_N_JOBS
+      - cd contrib/linux && PATH=$PWD/extras/tools/build/bin:$PATH ../bootstrap --prefix=/app/contrib --enable-ffmpeg --enable-dav1d --enable-fluidlite --disable-fluid --disable-chromaprint
+      - cd contrib/linux && make list
+      - cd contrib/linux && PATH=$PWD/extras/tools/build/bin:$PATH make -j $FLATPAK_BUILDER_N_JOBS
+      - PATH=$PWD/extras/tools/build/bin:$PATH BUILDCC=/usr/bin/gcc ./configure --prefix=/app --disable-wayland --enable-merge-ffmpeg
+      - PATH=$PWD/extras/tools/build/bin:$PATH make install -j $FLATPAK_BUILDER_N_JOBS
+    cleanup:
+      - /share/macosx
+    post-install:
+      - mv /app/bin/vlc /app/bin/vlc.bin
+      - mv vlc.sh /app/bin/vlc
+      - chmod +x /app/bin/vlc
+      - echo "StartupWMClass=VLC" >> /app/share/applications/vlc.desktop
+      - sed -i -e 's/Icon=vlc/Icon=org.videolan.VLC/g' /app/share/applications/vlc-*.desktop
+      - for s in openbd opendvd opencda openvcd; do mv /app/share/applications/vlc-$s.desktop
+        /app/share/applications/org.videolan.VLC-$s.desktop; done
+      - rm /app/share/icons/hicolor/16x16/apps/vlc.xpm /app/share/icons/hicolor/32x32/apps/vlc.xpm
+    sources:
+      - type: archive
+        path: vlc.tar.xz
+      - type: file
+        path: tools.tar
+      - type: file
+        path: contrib.tar
+      - type: patch
+        path: vlc-appdata-manifest-url.patch
+      - type: file
+        path: vlc.sh

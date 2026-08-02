@@ -179,6 +179,7 @@ modules/access/dc1394.c
 modules/access/dcp/dcp.cpp
 modules/access/decklink.cpp
 modules/access/disc_helper.h
+modules/access/dvd_description.h
 modules/access/dshow/dshow.cpp
 modules/access/dsm/access.c
 modules/access/dsm/sd.c
@@ -339,7 +340,6 @@ modules/codec/png.c
 modules/codec/qsv.c
 modules/codec/rawvideo.c
 modules/codec/rtpvideo.c
-modules/codec/schroedinger.c
 modules/codec/scte18.c
 modules/codec/scte18.h
 modules/codec/scte27.c
@@ -500,7 +500,7 @@ modules/gui/legacy_macosx/VLCLegacyOutput.m
 modules/gui/legacy_macosx/VLCLegacyPrefs.h
 modules/gui/legacy_macosx/VLCLegacyPrefs.m
 modules/gui/legacy_macosx/VLCLegacySystemVolume.h
-modules/gui/legacy_macosx/VLCLegacySystemVolume.m
+modules/gui/legacy_macosx/VLCLegacySystemVolume.c
 modules/gui/legacy_macosx/VLCLegacyTrackSync.h
 modules/gui/legacy_macosx/VLCLegacyTrackSync.m
 modules/gui/legacy_macosx/VLCLegacyVideoEffects.h
@@ -842,6 +842,8 @@ modules/gui/qt/util/input_slider.cpp
 modules/gui/qt/util/input_slider.hpp
 modules/gui/qt/util/pictureflow.cpp
 modules/gui/qt/util/pictureflow.hpp
+modules/gui/qt/util/powervlc_disclibs.cpp
+modules/gui/qt/util/powervlc_disclibs.hpp
 modules/gui/qt/util/qmenuview.cpp
 modules/gui/qt/util/qmenuview.hpp
 modules/gui/qt/util/qt_dirs.cpp

@@ -1,0 +1,69 @@
+BD-J: do not depend on a security manager to materialise BD-ROM files
+
+When the disc is read through libudfread (an image file or a raw device, i.e.
+whenever the player does not hand libbluray a plain directory), BD-ROM files
+are not reachable with standard Java I/O. VFSCache copies them into its cache
+on demand -- but the only thing that ever triggers that copy is
+BDJSecurityManager.checkPermission(), and the only thing that calls *that* is
+the security manager check inside java.io.FileInputStream:
+
+    SecurityManager security = System.getSecurityManager();
+    if (security != null) {
+        security.checkRead(name);      /* -> BDJLoader.accessFile() */
+    }
+
+Java 17 disabled the security manager by default and Java 18 made installing
+one throw; libbluray works around that by reflecting on
+System.implSetSecurityManager(). Measured on Java 21 (JBR 21.0.7) that
+workaround does not take: getSecurityManager() still answers null on every
+single file open -- 20 out of 20 in a BD-J title. So accessFile() is never
+called, nothing is ever fetched from the disc, and every read of a BD-ROM file
+that was not explicitly listed in the BDJO application cache fails.
+
+That is not a corner case. Discs routinely keep their resources in a directory
+next to the .jar rather than inside it, and only the .jar is declared in the
+cache info. Measured on Rio (org 0x7fff646c): BDMV/JAR/01001/ holds 21 loose
+PNGs, the menu Xlet loads seven of them by absolute VFS path, all seven fail,
+and sun.awt.image.FileImageSource reports imageComplete(IMAGEERROR) for each.
+The Xlet then draws those empty images successfully, so the root window's back
+buffer stays all-zero, libbluray withholds the overlay ("sync() ignored
+(overlay not open, empty overlay)") and the disc shows no menu at all -- while
+BD-J itself, the Xlets and the menu's background playlist all run correctly.
+The same failure explains the FileNotFoundExceptions the disc's own code logs
+for BDMV/JAR/89000/preroll.properties and CERTIFICATE/id.bdmv.
+
+Call accessFile() from the open path itself. It checks the cache before doing
+any work, guards against re-entry, and returns immediately when the disc is a
+directory (cacheAll false), so this costs nothing where things already worked
+and does not change behaviour when a security manager *is* active -- the file
+is simply already cached by the time checkRead() would have asked for it.
+
+--- a/src/libbluray/bdj/java/org/videolan/BDJLoader.java	2026-07-30 13:04:41
++++ b/src/libbluray/bdj/java/org/videolan/BDJLoader.java	2026-07-30 13:04:41
+@@ -116,7 +116,7 @@
+     }
+ 
+     /* called by BDJSecurityManager */
+-    protected static void accessFile(String file) {
++    public static void accessFile(String file) {
+         VFSCache localCache = vfsCache;
+         if (localCache != null) {
+             localCache.accessFile(file);
+--- a/src/libbluray/bdj/java-j2se/java/io/FileInputStream.java	2026-07-30 13:04:41
++++ b/src/libbluray/bdj/java-j2se/java/io/FileInputStream.java	2026-07-30 13:04:41
+@@ -72,6 +72,15 @@
+         fdAttach();
+ 
+         if (file.isAbsolute()) {
++            /* Materialise the file from the BD-ROM if it is not in the cache
++             * yet. This used to happen only as a side effect of the security
++             * manager's checkRead() above, which is never reached on a JVM
++             * that refuses to install one -- measured on Java 21, where the
++             * implSetSecurityManager() workaround leaves getSecurityManager()
++             * returning null, so no BD-ROM file was ever fetched on demand.
++             * accessFile() checks the cache first and is a no-op once the
++             * file is there. */
++            BDJLoader.accessFile(name);
+             String cachedName = BDJLoader.getCachedFile(name);
+             if (!cachedName.equals(name)) {
+                 getLogger().info("Using cached " + cachedName + " for " + name);

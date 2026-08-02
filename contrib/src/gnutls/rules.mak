@@ -1,7 +1,7 @@
 # GnuTLS
 
 GNUTLS_MAJVERSION := 3.8
-GNUTLS_VERSION := $(GNUTLS_MAJVERSION).10
+GNUTLS_VERSION := $(GNUTLS_MAJVERSION).13
 GNUTLS_URL := $(GNUGPG)/gnutls/v$(GNUTLS_MAJVERSION)/gnutls-$(GNUTLS_VERSION).tar.xz
 
 # nettle/gmp can't be used with the LGPLv2 license
@@ -31,6 +31,7 @@ $(TARBALLS)/gnutls-$(GNUTLS_VERSION).tar.xz:
 
 gnutls: gnutls-$(GNUTLS_VERSION).tar.xz .sum-gnutls
 	$(UNPACK)
+	$(UPDATE_AUTOCONFIG) && cd $(UNPACK_DIR) && mv config.guess config.sub build-aux
 	# fix forbidden UWP call which can't be upstreamed as they won't
 	# differentiate for winstore, only _WIN32_WINNT
 	$(APPLY) $(SRC)/gnutls/0001-fcntl-do-not-call-GetHandleInformation-in-Winstore-a.patch
@@ -43,16 +44,18 @@ gnutls: gnutls-$(GNUTLS_VERSION).tar.xz .sum-gnutls
 
 	# emulate _Thread_local with pthread keys when targeting Mac OS X < 10.7
 	$(APPLY) $(SRC)/gnutls/0001-emulate-thread-local-with-pthread-keys-on-old-macOS.patch
+	$(APPLY) $(SRC)/gnutls/0002-audit-emulate-thread-local-with-pthread-key-on-old-m.patch
 
 	# replace HANDLE_FLAG_INHERIT which may not be available in older UWP
 	sed -i.orig -e s/HANDLE_FLAG_INHERIT/0x1/g $(UNPACK_DIR)/gl/fcntl.c
 
 	$(call pkg_static,"lib/gnutls.pc.in")
 
+	# backport build fix for some Apple targets
+	$(APPLY) $(SRC)/gnutls/0001-Fix-CRAU_MAYBE_UNUSED-definition-for-old-compilers.patch
 	# use CreateFile2 in Win8 as CreateFileW is forbidden in UWP
 	$(APPLY) $(SRC)/gnutls/0001-Use-CreateFile2-in-UWP-builds.patch
 
-	$(UPDATE_AUTOCONFIG) && cd $(UNPACK_DIR) && mv config.guess config.sub build-aux
 	$(MOVE)
 
 GNUTLS_CONF := \
@@ -109,7 +112,11 @@ endif
 endif
 
 .gnutls: gnutls
-	$(GNUTLS_ENV) cd $< && $(HOSTVARS) ./configure $(HOSTCONF) $(GNUTLS_CONF)
-	$(MAKE) -C $< -C gl install
-	$(MAKE) -C $< -C lib install
+	$(MAKEBUILDDIR)
+	$(GNUTLS_ENV) $(MAKECONFIGURE) $(GNUTLS_CONF)
+	$(call pkg_static,"$(BUILD_DIRUNPACK)/lib/gnutls.pc")
+	+$(MAKEBUILD) -C gl
+	+$(MAKEBUILD) -C lib
+	+$(MAKEBUILD) -C gl install
+	+$(MAKEBUILD) -C lib install
 	touch $@

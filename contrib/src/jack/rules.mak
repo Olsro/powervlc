@@ -19,11 +19,12 @@ jack: jack1-$(JACK_VERSION).tar.gz .sum-jack
 ifdef HAVE_MACOSX
 	$(APPLY) $(SRC)/jack/config-osx.patch
 endif
-	$(UPDATE_AUTOCONFIG)
 	$(MOVE)
 
 .jack: jack
 	$(RECONF)
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF)
-	$(MAKE) -C $< install
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE)
+	+$(MAKEBUILD)
+	+$(MAKEBUILD) install
 	touch $@

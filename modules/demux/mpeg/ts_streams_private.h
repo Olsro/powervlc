@@ -93,6 +93,11 @@ struct ts_es_t
     int         i_next_block_flags;
     ts_es_t *p_extraes; /* Some private streams encapsulate several ES (eg. DVB subtitles) */
     ts_es_t *p_next; /* Next es on same pid from different pmt (shared pid) */
+    /* HDMV PGS forced-caption track detection (see ProbePGSForcedFlags) */
+    struct
+    {
+        uint8_t detection; /* TS_PGS_FORCED_DETECT_* */
+    } bdpg;
     /* J2K stuff */
     uint8_t  b_interlaced;
     /* Metadata */

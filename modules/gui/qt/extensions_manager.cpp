@@ -47,12 +47,12 @@ ExtensionsManager::ExtensionsManager( intf_thread_t *_p_intf, QObject *parent )
     instance = this;
 
     menuMapper = new QSignalMapper( this );
-    CONNECT( menuMapper, mapped( int ), this, triggerMenu( int ) );
-    CONNECT( THEMIM->getIM(), playingStatusChanged( int ), this, playingChanged( int ) );
-    DCONNECT( THEMIM, inputChanged( bool ),
-              this, inputChanged( ) );
-    CONNECT( THEMIM->getIM(), metaChanged( input_item_t* ),
-             this, metaChanged( input_item_t* ) );
+    connect( menuMapper, QSIGNALMAPPER_MAPPEDINT_SIGNAL, this, &ExtensionsManager::triggerMenu );
+    connect( THEMIM->getIM(), &InputManager::playingStatusChanged, this, &ExtensionsManager::playingChanged );
+    connect( THEMIM, &MainInputManager::inputChanged,
+             this, &ExtensionsManager::inputChanged, Qt::DirectConnection );
+    connect( THEMIM->getIM(), &InputManager::metaChanged,
+             this, &ExtensionsManager::metaChanged );
     b_unloading = false;
     b_failed = false;
 }
@@ -173,7 +173,7 @@ void ExtensionsManager::menu( QMenu *current )
                     action = submenu->addAction( qfu( ppsz_titles[i] ) );
                     menuMapper->setMapping( action,
                                             MENU_MAP( pi_ids[i], i_ext ) );
-                    CONNECT( action, triggered(), menuMapper, map() );
+                    connect( action, &QAction::triggered, menuMapper, QOverload<>::of(&QSignalMapper::map) );
                     free( ppsz_titles[i] );
                 }
                 if( !i_num )
@@ -196,14 +196,14 @@ void ExtensionsManager::menu( QMenu *current )
             action = submenu->addAction( QIcon( ":/toolbar/clear.svg" ),
                                          qtr( "Deactivate" ) );
             menuMapper->setMapping( action, MENU_MAP( 0, i_ext ) );
-            CONNECT( action, triggered(), menuMapper, map() );
+            connect( action, &QAction::triggered, menuMapper, QOverload<>::of(&QSignalMapper::map) );
         }
         else
         {
             action = current->addAction(
                     qfu( p_ext->psz_shortdescription ? p_ext->psz_shortdescription: p_ext->psz_title ) );
             menuMapper->setMapping( action, MENU_MAP( 0, i_ext ) );
-            CONNECT( action, triggered(), menuMapper, map() );
+            connect( action, &QAction::triggered, menuMapper, QOverload<>::of(&QSignalMapper::map) );
 
             if( !extension_TriggerOnly( p_extensions_manager, p_ext ) )
             {

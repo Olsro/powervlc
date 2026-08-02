@@ -55,7 +55,7 @@ void chapter_codec_cmds_c::AddCommand( const KaxChapterProcessCommand & command 
 
 int16 dvd_chapter_codec_c::GetTitleNumber()
 {
-    if ( p_private_data->GetSize() >= 3)
+    if ( p_private_data != nullptr && p_private_data->GetSize() > 3)
     {
         const binary* p_data = p_private_data->GetBuffer();
         if ( p_data[0] == MATROSKA_DVD_LEVEL_SS )
@@ -101,7 +101,7 @@ bool dvd_chapter_codec_c::EnterLeaveHelper( char const * str_diag, std::vector<K
 std::string dvd_chapter_codec_c::GetCodecName( bool f_for_title ) const
 {
     std::string result;
-    if ( p_private_data->GetSize() >= 3)
+    if ( p_private_data != nullptr && p_private_data->GetSize() >= 3)
     {
         const binary* p_data = p_private_data->GetBuffer();
 /*        if ( p_data[0] == MATROSKA_DVD_LEVEL_TT )
@@ -125,7 +125,7 @@ std::string dvd_chapter_codec_c::GetCodecName( bool f_for_title ) const
                 result = "First Played";
             else if ( p_data[1] == 0xC0 )
                 result = "Video Manager";
-            else if ( p_data[1] == 0x80 )
+            else if ( p_data[1] == 0x80 && p_private_data->GetSize() > 3)
             {
                 uint16_t i_title = (p_data[2] << 8) + p_data[3];
                 char psz_str[20];

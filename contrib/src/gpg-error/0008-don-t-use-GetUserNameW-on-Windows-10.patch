@@ -1,0 +1,52 @@
+From e2df6855f455bf3731d407e00da7d6a39827b0ea Mon Sep 17 00:00:00 2001
+From: Steve Lhomme <robux4@ycbcr.xyz>
+Date: Thu, 23 Oct 2025 12:19:44 +0200
+Subject: [PATCH 08/14] don't use GetUserNameW on Windows 10+
+
+It's not available in UWP
+---
+ src/sysutils.c | 18 +++++++++++++++++-
+ 1 file changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/src/sysutils.c b/src/sysutils.c
+index b6d6a55..2830452 100644
+--- a/src/sysutils.c
++++ b/src/sysutils.c
+@@ -685,10 +685,11 @@ _gpgrt_getusername (void)
+   char *result = NULL;
+ 
+ #ifdef HAVE_W32_SYSTEM
++  char *buf;
++#if _WIN32_WINNT < 0x0A00 // _WIN32_WINNT_WIN10
+   wchar_t wtmp[1];
+   wchar_t *wbuf;
+   DWORD wsize = 1;
+-  char *buf;
+ 
+   GetUserNameW (wtmp, &wsize);
+   wbuf = _gpgrt_malloc (wsize * sizeof *wbuf);
+@@ -705,6 +706,21 @@ _gpgrt_getusername (void)
+     }
+   buf = _gpgrt_wchar_to_utf8 (wbuf, wsize);
+   xfree (wbuf);
++#else
++  buf = _gpgrt_malloc (32767);
++  if (!buf)
++    {
++      _gpgrt_w32_set_errno (-1);
++      return NULL;
++    }
++  DWORD written = GetEnvironmentVariableA("USERNAME", buf, 32767);
++  if (written == 0)
++    {
++      _gpgrt_w32_set_errno (-1);
++      xfree (buf);
++      return NULL;
++    }
++#endif
+   return buf;
+ 
+ #else /* !HAVE_W32_SYSTEM */
+-- 
+2.45.1.windows.1
+

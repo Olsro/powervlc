@@ -13,6 +13,8 @@ ifeq ($(ARCH),mips64el)
 GMP_CONF += --disable-assembly
 endif
 endif
+# gmp requires C99 and is _not_ forward-compatible with C23.
+GMP_CONF += CFLAGS="$(CFLAGS) -std=gnu99"
 
 ifdef HAVE_WIN32
 ifeq ($(ARCH),arm)
@@ -31,7 +33,6 @@ $(TARBALLS)/gmp-$(GMP_VERSION).tar.xz:
 
 gmp: gmp-$(GMP_VERSION).tar.xz .sum-gmp
 	$(UNPACK)
-	$(UPDATE_AUTOCONFIG)
 	$(APPLY) $(SRC)/gmp/gmp-fix-asm-detection.patch
 	# do not try the cross compiler to detect the build compiler
 	sed -i.orig 's/"$$CC" "$$CC $$CFLAGS $$CPPFLAGS" cc gcc c89 c99/cc gcc c89 c99/' $(UNPACK_DIR)/acinclude.m4
@@ -43,7 +44,8 @@ ifndef GPL
 	$(REQUIRE_GNUV3)
 endif
 	$(RECONF)
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) $(GMP_CONF)
-	$(MAKE) -C $<
-	$(MAKE) -C $< install
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE) $(GMP_CONF)
+	+$(MAKEBUILD)
+	+$(MAKEBUILD) install
 	touch $@

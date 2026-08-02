@@ -27,6 +27,7 @@ struct decoder_sys_t
 {
     bool b_packetizer;
     bool b_disabletrans;
+    bool b_forcedonly;
 
     vlc_tick_t i_pts;
     unsigned int i_spu_size;
@@ -35,8 +36,8 @@ struct decoder_sys_t
 
     block_t *p_block;
 
-    /* We will never overflow */
-    uint8_t buffer[65536];
+    uint8_t *buffer;
+    size_t  buffer_size;
 };
 
 /*****************************************************************************

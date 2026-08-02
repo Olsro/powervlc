@@ -31,7 +31,7 @@ OPTIONS:
    -D <win_path> Create PDB files during the build, map the VLC sources to <win_path>
                  e.g.: -D c:/sources/vlc
    -x            Add extra checks when compiling
-   -S <sdkver>   Use maximum Windows API version (0x0601000 by default)
+   -S <sdkver>   Use maximum Windows API version (0x05020000 by default XP SP1)
    -u            Use the Universal C Runtime (instead of msvcrt)
    -w            Restrict to Windows Store APIs
    -z            Build without GUI (libvlc only)
@@ -156,8 +156,6 @@ cd extras/tools
 export VLC_TOOLS="$PWD/build"
 
 export PATH="$PWD/build/bin":"$PATH"
-# Force patched meson as newer versions don't add -lpthread properly in libplacebo.pc
-FORCED_TOOLS="meson"
 # Force libtool build when compiling with clang
 if [ "$COMPILING_WITH_CLANG" -gt 0 ] && [ ! -d "libtool" ]; then
     FORCED_TOOLS="$FORCED_TOOLS libtool"
@@ -337,12 +335,12 @@ if [ -n "$WITH_PDB" ]; then
         VLC_CXXFLAGS="$VLC_CXXFLAGS --end-no-unused-arguments"
         VLC_LDFLAGS="$VLC_LDFLAGS --end-no-unused-arguments"
     fi
+else
+    VLC_CFLAGS="$VLC_CFLAGS -g"
+    VLC_CXXFLAGS="$VLC_CXXFLAGS -g"
 fi
 if [ -n "$BREAKPAD" ]; then
      CONTRIBFLAGS="$CONTRIBFLAGS --enable-breakpad"
-fi
-if [ "$RELEASE" != "yes" ]; then
-     CONTRIBFLAGS="$CONTRIBFLAGS --disable-optim"
 fi
 if [ -n "$DISABLEGUI" ]; then
     CONTRIBFLAGS="$CONTRIBFLAGS --disable-qt --disable-qtsvg --disable-qtdeclarative --disable-qtgraphicaleffects --disable-qtquickcontrols2"
@@ -445,6 +443,14 @@ if ! ls ../$CONTRIB_PREFIX/bin/libaacs*.dll >/dev/null 2>&1; then
     info "Building libaacs contrib"
     make .aacs
 fi
+
+# Same for libbdplus (BD+, the layer above AACS on some retail discs): dlopen()ed
+# by libbluray, shipped next to powervlc.exe, and never present in a prebuilt
+# contrib set.
+if ! ls ../$CONTRIB_PREFIX/bin/libbdplus*.dll >/dev/null 2>&1; then
+    info "Building libbdplus contrib"
+    make .bdplus
+fi
 cd ../..
 
 info "Bootstrapping"
@@ -501,6 +507,14 @@ fi
 if [ -n "$DISABLEGUI" ]; then
     CONFIGFLAGS="$CONFIGFLAGS --disable-vlc --disable-qt --disable-skins2"
 else
+    # No --enable-update-check: the fork ships no integrated updater, and this
+    # line used to silently override the --disable-update-check that
+    # extras/package/win32/configure.sh already asks for. With it on, Windows
+    # offered to look for updates at first launch and kept a "Check for
+    # Updates" entry in the Help menu, both pointing at videolan.org releases
+    # that have nothing to do with PowerVLC. The Linux and macOS targets have
+    # always been built without it. It is also what dragged libgcrypt (and so
+    # libgpg-error) into libvlccore.
     CONFIGFLAGS="$CONFIGFLAGS --enable-qt --enable-skins2"
 fi
 if [ -n "$WINSTORE" ]; then

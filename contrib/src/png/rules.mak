@@ -1,5 +1,5 @@
 # PNG
-PNG_VERSION := 1.6.50
+PNG_VERSION := 1.6.58
 PNG_URL := $(SF)/libpng/libpng16/$(PNG_VERSION)/libpng-$(PNG_VERSION).tar.xz
 
 PKGS += png
@@ -20,14 +20,7 @@ png: libpng-$(PNG_VERSION).tar.xz .sum-png
 
 DEPS_png = zlib $(DEPS_zlib)
 
-PNG_CONF := -DPNG_SHARED=OFF -DPNG_TESTS=OFF -DPNG_EXECUTABLES=OFF
-
-ifdef HAVE_CLANG
-ifneq ($(filter arm aarch64, $(ARCH)),)
-# TODO this might be set globally and for all targets where intrinsincs are used
-PNG_CONF += -DCMAKE_ASM_FLAGS="$(CFLAGS)"
-endif
-endif
+PNG_CONF := -DPNG_SHARED=OFF -DPNG_TESTS=OFF -DPNG_TOOLS=OFF -DPNG_FRAMEWORK=OFF
 
 PNG_CONF += -DPNG_DEBUG_POSTFIX:STRING=
 
@@ -50,7 +43,7 @@ endif
 
 .png: png toolchain.cmake
 	$(CMAKECLEAN)
-	$(HOSTVARS_PIC) $(CMAKE) $(PNG_CONF)
+	$(HOSTVARS_CMAKE) $(CMAKE) $(PNG_CONF)
 	+$(CMAKEBUILD)
-	+$(CMAKEBUILD) --target install
+	$(CMAKEINSTALL)
 	touch $@

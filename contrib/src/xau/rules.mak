@@ -3,7 +3,7 @@ XAU_VERSION := 1.0.6
 XAU_URL := http://xorg.freedesktop.org/releases/individual/lib/libXau-$(XAU_VERSION).tar.bz2
 
 $(TARBALLS)/libXau-$(XAU_VERSION).tar.bz2:
-	$(call download,$(XAU_URL))
+	$(call download_pkg,$(XAU_URL),xau)
 
 ifeq ($(call need_pkg,"xau"),)
 PKGS_FOUND += xau
@@ -21,6 +21,8 @@ XAU_CONF := --enable-xthreads
 
 .xau: libxau
 	$(RECONF)
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) $(XAU_CONF)
-	$(MAKE) -C $< install
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE) $(XAU_CONF)
+	+$(MAKEBUILD)
+	+$(MAKEBUILD) install
 	touch $@

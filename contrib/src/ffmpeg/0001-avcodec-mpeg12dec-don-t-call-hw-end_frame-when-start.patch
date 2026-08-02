@@ -1,8 +1,8 @@
-From 1c727e8cbbd91391c5eb769c525a07ce5e058e20 Mon Sep 17 00:00:00 2001
+From de7c10a54b8beb95882273a1c4b391e82d00bc98 Mon Sep 17 00:00:00 2001
 From: Steve Lhomme <robux4@ycbcr.xyz>
 Date: Fri, 12 Feb 2021 08:20:56 +0100
-Subject: [PATCH 1/2] avcodec/mpeg12dec: don't call hw->end_frame when starting
- second field decoding
+Subject: [PATCH 06/10] avcodec/mpeg12dec: don't call hw->end_frame when
+ starting second field decoding
 
 This call is unbalanced with a hwaccel->start_frame. It fixes some crashes
 because this call ends up using uninitialized memory. Decoding works as
@@ -12,24 +12,24 @@ expected after this patch.
  1 file changed, 8 deletions(-)
 
 diff --git a/libavcodec/mpeg12dec.c b/libavcodec/mpeg12dec.c
-index 94221da2c1..335c3713c2 100644
+index 3ea8d02e1b..f22396f66e 100644
 --- a/libavcodec/mpeg12dec.c
 +++ b/libavcodec/mpeg12dec.c
-@@ -1667,14 +1667,6 @@ static int mpeg_field_start(MpegEncContext *s, const uint8_t *buf, int buf_size)
+@@ -1308,14 +1308,6 @@ static int mpeg_field_start(Mpeg1Context *s1, const uint8_t *buf, int buf_size)
+             av_log(s->avctx, AV_LOG_ERROR, "first field missing\n");
              return AVERROR_INVALIDDATA;
          }
- 
+-
 -        if (s->avctx->hwaccel) {
--            if ((ret = s->avctx->hwaccel->end_frame(s->avctx)) < 0) {
+-            if ((ret = FF_HW_SIMPLE_CALL(s->avctx, end_frame)) < 0) {
 -                av_log(avctx, AV_LOG_ERROR,
 -                       "hardware accelerator failed to decode first field\n");
 -                return ret;
 -            }
 -        }
--
-         for (i = 0; i < 4; i++) {
-             s->current_picture.f->data[i] = s->current_picture_ptr->f->data[i];
-             if (s->picture_structure == PICT_BOTTOM_FIELD)
+         ret = ff_mpv_alloc_dummy_frames(s);
+         if (ret < 0)
+             return ret;
 -- 
-2.27.0.windows.1
+2.45.1.windows.1
 

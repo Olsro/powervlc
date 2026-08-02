@@ -90,17 +90,17 @@ MediaInfoDialog::MediaInfoDialog( intf_thread_t *_p_intf,
     layout->addWidget( saveMetaButton, 2, 6 );
     layout->addWidget( closeButton, 2, 7 );
 
-    BUTTONACT( closeButton, close() );
+    BUTTONACT( closeButton, close );
 
     /* The tabs buttons are shown in the main dialog for space and cosmetics */
-    BUTTONACT( saveMetaButton, saveMeta() );
+    BUTTONACT( saveMetaButton, saveMeta );
 
     /* Let the MetaData Panel update the URI */
-    CONNECT( MP, uriSet( const QString& ), this, updateURI( const QString& ) );
-    CONNECT( MP, editing(), saveMetaButton, show() );
+    connect( MP, &MetaPanel::uriSet, this, &MediaInfoDialog::updateURI );
+    connect( MP, &MetaPanel::editing, saveMetaButton, &QPushButton::show );
 
     /* Display the buttonBar according to the Tab selected */
-    CONNECT( infoTabW, currentChanged( int ), this, updateButtons( int ) );
+    connect( infoTabW, &QTabWidget::currentChanged, this, &MediaInfoDialog::updateButtons );
 
     /* If using the General Mode */
     if( isMainInputInfo )
@@ -110,14 +110,14 @@ MediaInfoDialog::MediaInfoDialog( intf_thread_t *_p_intf,
          * Connects on the various signals of input_Manager
          * For the currently playing element
          **/
-        DCONNECT( THEMIM->getIM(), infoChanged( input_item_t* ),
-                  IP, update( input_item_t* ) );
-        DCONNECT( THEMIM->getIM(), currentMetaChanged( input_item_t* ),
-                  MP, update( input_item_t* ) );
-        DCONNECT( THEMIM->getIM(), currentMetaChanged( input_item_t* ),
-                  EMP, update( input_item_t* ) );
-        DCONNECT( THEMIM->getIM(), statisticsUpdated( input_item_t* ),
-                  ISP, update( input_item_t* ) );
+        connect( THEMIM->getIM(), &InputManager::infoChanged,
+                 IP, &InfoPanel::update, Qt::DirectConnection  );
+        connect( THEMIM->getIM(), &InputManager::currentMetaChanged,
+                 MP, &MetaPanel::update, Qt::DirectConnection  );
+        connect( THEMIM->getIM(), &InputManager::currentMetaChanged,
+                 EMP, &ExtraMetaPanel::update, Qt::DirectConnection );
+        connect( THEMIM->getIM(), &InputManager::statisticsUpdated,
+                 ISP, &InputStatsPanel::update, Qt::DirectConnection);
 
         if( THEMIM->getInput() )
             p_item = input_GetItem( THEMIM->getInput() );

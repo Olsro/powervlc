@@ -177,7 +177,35 @@ static input_item_t *vlclua_sd_create_item( services_discovery_t *p_sd,
        ? luaL_checkstring( L, -1 )
        : psz_path;
 
-    input_item_t *p_input = input_item_New( psz_path, psz_title );
+    /* Optional "type" field: lets a script mark an item as a browsable
+     * directory (or other explicit type) instead of relying on the type
+     * guessed from the URI scheme. */
+    int i_type = ITEM_TYPE_UNKNOWN;
+    lua_getfield( L, -3, "type" );
+    if( lua_isstring( L, -1 ) )
+    {
+        const char *psz_type = lua_tostring( L, -1 );
+        if( !strcmp( psz_type, "file" ) )
+            i_type = ITEM_TYPE_FILE;
+        else if( !strcmp( psz_type, "directory" ) )
+            i_type = ITEM_TYPE_DIRECTORY;
+        else if( !strcmp( psz_type, "disc" ) )
+            i_type = ITEM_TYPE_DISC;
+        else if( !strcmp( psz_type, "card" ) )
+            i_type = ITEM_TYPE_CARD;
+        else if( !strcmp( psz_type, "stream" ) )
+            i_type = ITEM_TYPE_STREAM;
+        else if( !strcmp( psz_type, "playlist" ) )
+            i_type = ITEM_TYPE_PLAYLIST;
+        else if( !strcmp( psz_type, "node" ) )
+            i_type = ITEM_TYPE_NODE;
+        else
+            msg_Warn( p_sd, "Unknown item type \"%s\"", psz_type );
+    }
+    lua_pop( L, 1 );
+
+    input_item_t *p_input = input_item_NewExt( psz_path, psz_title,
+                                               -1, i_type, ITEM_NET_UNKNOWN );
     lua_pop( L, 2 );
 
     if( unlikely(p_input == NULL) )

@@ -1,0 +1,230 @@
+From 661de0d712ccea9e43c99c1224824045ea70e3dc Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 17 Jul 2026 16:16:13 +0000
+Subject: [PATCH 4/4] PPC: Enable the loop-filter kernels on plain AltiVec
+ (G4/G5)
+
+The loop-filter kernels in src/ppc/loopfilter_tmpl.c were built only for the
+ppc64le "pwr9" sub-target and gated to ARCH_PPC64LE, so big-endian
+AltiVec-only targets (G4/G5, incl. 32-bit Darwin) fell back to scalar C.
+Enabling them on plain AltiVec needed the usual build-gating changes plus a
+real big-endian correctness fix and two AltiVec fallbacks.
+
+Build gating: widen the loopfilter_tmpl.c guard to accept DAV1D_ALTIVEC, add
+a DAV1D_ALTIVEC case to the LPF() symbol-naming macro (reusing the "_pwr9"
+names, which are just labels), gate src/ppc/loopfilter.h on ARCH_PPC
+(accepting the ALTIVEC cpu flag), and add loopfilter_tmpl.c to the meson
+altivec sub-target. Replace the two doubleword-lane merges in store_h_8 with
+the MERGEL64 fallback added for the itx port.
+
+Big-endian bug (all four sb functions): Av1FilterLUT.sharp is uint64_t
+sharp[2], and the code reads the low byte of each field by loading the
+struct as bytes and splatting lanes 0 and 8. Those are the low bytes of the
+two uint64_t values only on little-endian; on big-endian the low bytes are
+at lanes 7 and 15 (lanes 0/8 are the always-zero high bytes). Reading zero
+gave a wrong inner/outer limit and hence a wrong filter on/off decision, so
+whole 4-pixel edges were filtered differently than the C reference. Add
+endian-conditional SHARP0_LANE/SHARP1_LANE (7/15 big-endian, 0/8 otherwise).
+
+AltiVec fallbacks in dav1d_types.h: GCC's <altivec.h> UNCONDITIONALLY defines
+vec_absd and vec_cmple as VSX/POWER9 builtins, so the existing "#ifndef
+vec_absd" fallback never took effect and both builtins fail to compile under
+-maltivec. #undef them (inside the existing !ARCH_PPC64LE block) before the
+fallbacks: the vec_absd _Generic wrapper (max-min) now actually fires, and a
+new vec_cmple is provided as !(a > b) using the base-VMX vec_cmpgt.
+
+Verified under qemu-ppc (-cpu 7400, real 32-bit big-endian AltiVec) against
+dav1d's scalar C reference: all four sb functions (h/v x y/uv) are bit-exact
+over 32.7M pixels total (0 mismatches, max|diff| 0), across all filter types
+and level distributions. Before the sharp fix, ~1.5% of luma / ~1.2% of
+chroma pixels diverged. Re-ran the cdef, itx and mc cross-checks after the
+dav1d_types.h changes -- all remain bit-exact, so the added #undef/fallbacks
+do not regress the other AltiVec paths.
+
+This completes the AltiVec inverse-DSP coverage on G4/G5: cdef, loop
+restoration, inverse transform, motion-comp blend, and loop filter now all
+run on plain AltiVec. This change is additive -- dispatch selects the
+AltiVec loop filter in place of the C fallback.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+---
+ src/meson.build           |  1 +
+ src/ppc/dav1d_types.h     | 12 ++++++++++--
+ src/ppc/loopfilter.h      | 14 ++++++++------
+ src/ppc/loopfilter_tmpl.c | 39 +++++++++++++++++++++++++++------------
+ 4 files changed, 46 insertions(+), 20 deletions(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index 1d14968a..2b092c43 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -294,6 +294,7 @@ if is_asm_enabled
+             libdav1d_arch_tmpl_sources += {'altivec': files(
+                 'ppc/cdef_tmpl.c',
+                 'ppc/itx_tmpl.c',
++                'ppc/loopfilter_tmpl.c',
+                 'ppc/looprestoration_tmpl.c',
+                 'ppc/mc_tmpl.c',
+             )}
+diff --git a/src/ppc/dav1d_types.h b/src/ppc/dav1d_types.h
+index 6402e4eb..24b49ee3 100644
+--- a/src/ppc/dav1d_types.h
++++ b/src/ppc/dav1d_types.h
+@@ -237,12 +237,20 @@ static inline u16x8 vec_absd_u16(u16x8 a, u16x8 b) {
+     return vec_max(a, b) - vec_min(a, b);
+ }
+ 
+-#ifndef vec_absd
++/* GCC's <altivec.h> UNCONDITIONALLY defines vec_absd/vec_cmple as VSX/POWER9
++ * builtins (__builtin_vec_vadu / __builtin_vec_cmpge), which fail to compile
++ * under -maltivec alone. A plain `#ifndef` guard therefore never fires — the
++ * macro already exists — so we must #undef them first, then supply the base-VMX
++ * fallbacks. (max-min for absolute difference; a<=b == !(a>b) for cmple, using
++ * the base vcmpgtub/vcmpgtuh compares.) */
++#undef vec_absd
+ #define vec_absd(a, b) _Generic((a), \
+     u8x16: vec_absd_u8, \
+     u16x8: vec_absd_u16 \
+ )(a, b)
+-#endif
++
++#undef vec_cmple
++#define vec_cmple(a, b) vec_nor(vec_cmpgt((a), (b)), vec_cmpgt((a), (b)))
+ 
+ static inline u8x16 vec_splats_u8(unsigned char val) {
+     u8x16 v = {val, val, val, val, val, val, val, val,
+diff --git a/src/ppc/loopfilter.h b/src/ppc/loopfilter.h
+index 6b857a8c..35e31c93 100644
+--- a/src/ppc/loopfilter.h
++++ b/src/ppc/loopfilter.h
+@@ -29,9 +29,11 @@
+ #include "src/ppc/cpu.h"
+ #include "src/loopfilter.h"
+ 
+-/* The POWER9 loop filter is only built for little-endian POWER (ppc64le);
+- * on big-endian/AltiVec-only targets (e.g. G4/G5) its symbols do not exist. */
+-#if ARCH_PPC64LE
++/* These loop-filter kernels carry a "_pwr9" symbol suffix regardless of the
++ * flags used to build them; they run correctly on plain AltiVec (G4/G5) too,
++ * so they are built on the whole PPC family (ARCH_PPC). The meson split assigns
++ * loopfilter_tmpl.c to exactly one sub-target per arch, so no name collision. */
++#if ARCH_PPC
+ decl_loopfilter_sb_fn(BF(dav1d_lpf_h_sb_y, pwr9));
+ decl_loopfilter_sb_fn(BF(dav1d_lpf_v_sb_y, pwr9));
+ decl_loopfilter_sb_fn(BF(dav1d_lpf_h_sb_uv, pwr9));
+@@ -39,10 +41,10 @@ decl_loopfilter_sb_fn(BF(dav1d_lpf_v_sb_uv, pwr9));
+ #endif
+ 
+ static ALWAYS_INLINE void loop_filter_dsp_init_ppc(Dav1dLoopFilterDSPContext *const c) {
+-#if ARCH_PPC64LE
++#if ARCH_PPC
+     const unsigned flags = dav1d_get_cpu_flags();
+ 
+-    if (!(flags & DAV1D_PPC_CPU_FLAG_PWR9)) return;
++    if (!(flags & (DAV1D_PPC_CPU_FLAG_PWR9 | DAV1D_PPC_CPU_FLAG_ALTIVEC))) return;
+ 
+ #if BITDEPTH == 8
+     c->loop_filter_sb[0][0] = BF(dav1d_lpf_h_sb_y, pwr9);
+@@ -52,5 +54,5 @@ static ALWAYS_INLINE void loop_filter_dsp_init_ppc(Dav1dLoopFilterDSPContext *co
+ #endif
+ #else
+     (void)c;
+-#endif /* ARCH_PPC64LE */
++#endif /* ARCH_PPC */
+ }
+diff --git a/src/ppc/loopfilter_tmpl.c b/src/ppc/loopfilter_tmpl.c
+index ac21cf9a..a7f83328 100644
+--- a/src/ppc/loopfilter_tmpl.c
++++ b/src/ppc/loopfilter_tmpl.c
+@@ -28,7 +28,7 @@
+ 
+ #include "config.h"
+ 
+-#if defined(__VSX__) || defined(__POWER9_VECTOR__)
++#if defined(__VSX__) || defined(__POWER9_VECTOR__) || defined(DAV1D_ALTIVEC)
+ 
+ #undef NDEBUG
+ #include <assert.h>
+@@ -284,8 +284,8 @@ static inline void store_h_4(u8x16 out, uint8_t *dst, int stridea)
+ 
+ static inline void store_h_8(u8x16 outa, u8x16 outb, uint8_t *dst, int stridea)
+ {
+-    u8x16 out1 = (u8x16)vec_mergel((u64x2)outa, (u64x2)outa);
+-    u8x16 out3 = (u8x16)vec_mergel((u64x2)outb, (u64x2)outb);
++    u8x16 out1 = (u8x16)MERGEL64(outa, outa);
++    u8x16 out3 = (u8x16)MERGEL64(outb, outb);
+     vec_xst_len(outa, dst, 6);
+     dst += stridea;
+     vec_xst_len(out1, dst, 6);
+@@ -1360,6 +1360,21 @@ loop_filter_v_16_all(uint8_t *dst, u8x16 E, u8x16 I, u8x16 H,
+ #define LPF(fn) BF(dav1d_lpf_##fn, vsx)
+ #elif defined(DAV1D_PWR9)
+ #define LPF(fn) BF(dav1d_lpf_##fn, pwr9)
++#elif defined(DAV1D_ALTIVEC)
++/* Reuse the "_pwr9" exported names on the AltiVec path (they are just labels);
++ * src/ppc/loopfilter.h registers those names under the ALTIVEC cpu flag too. */
++#define LPF(fn) BF(dav1d_lpf_##fn, pwr9)
++#endif
++
++/* lut->sharp is uint64_t sharp[2]; the code reads the low byte of each field by
++ * byte-splatting the (uint8_t*)-loaded vector. The low byte of a uint64_t sits
++ * at byte offset 0/8 on little-endian but 7/15 on big-endian. */
++#if ENDIANNESS_BIG
++#define SHARP0_LANE 7
++#define SHARP1_LANE 15
++#else
++#define SHARP0_LANE 0
++#define SHARP1_LANE 8
+ #endif
+ 
+ void LPF(h_sb_y)(pixel *dst, const ptrdiff_t stride,
+@@ -1375,8 +1390,8 @@ void LPF(h_sb_y)(pixel *dst, const ptrdiff_t stride,
+     u32x4 mm = (u32x4){1, 2, 4, 8};
+ 
+     const u8x16 sharp = vec_xl(0, (uint8_t *)lut->sharp);
+-    const u8x16 s0 = vec_splat(sharp, 0);
+-    const u8x16 s1 = vec_splat(sharp, 8);
++    const u8x16 s0 = vec_splat(sharp, SHARP0_LANE);
++    const u8x16 s1 = vec_splat(sharp, SHARP1_LANE);
+     const u32x4 v4u32 = vec_splat_u32(4);
+     const u32x4 zero = vec_splat_u32(0);
+     const u8x16 v1u8 = vec_splat_u8(1);
+@@ -1461,8 +1476,8 @@ void LPF(v_sb_y)(pixel *dst, const ptrdiff_t stride,
+     u32x4 vm2 = vec_splats(vmask[2]);
+ 
+     u8x16 sharp = vec_xl(0, (uint8_t *)lut->sharp);
+-    u8x16 s0 = vec_splat(sharp, 0);
+-    u8x16 s1 = vec_splat(sharp, 8);
++    u8x16 s0 = vec_splat(sharp, SHARP0_LANE);
++    u8x16 s1 = vec_splat(sharp, SHARP1_LANE);
+     u32x4 mm = (u32x4){1, 2, 4, 8};
+     u32x4 v4u32 = vec_splat_u32(4);
+     u32x4 zero = vec_splat_u32(0);
+@@ -1541,8 +1556,8 @@ void LPF(h_sb_uv)(pixel *dst, const ptrdiff_t stride,
+     u32x4 mm = (u32x4){1, 2, 4, 8};
+ 
+     const u8x16 sharp = vec_xl(0, (uint8_t *)lut->sharp);
+-    const u8x16 s0 = vec_splat(sharp, 0);
+-    const u8x16 s1 = vec_splat(sharp, 8);
++    const u8x16 s0 = vec_splat(sharp, SHARP0_LANE);
++    const u8x16 s1 = vec_splat(sharp, SHARP1_LANE);
+     const u32x4 v4u32 = vec_splat_u32(4);
+     const u32x4 zero = vec_splat_u32(0);
+     const u8x16 v1u8 = vec_splat_u8(1);
+@@ -1625,8 +1640,8 @@ void LPF(v_sb_uv)(pixel *dst, const ptrdiff_t stride,
+     u32x4 vm1 = vec_splats(vmask[1]);
+ 
+     u8x16 sharp = vec_xl(0, (uint8_t *)lut->sharp);
+-    u8x16 s0 = vec_splat(sharp, 0);
+-    u8x16 s1 = vec_splat(sharp, 8);
++    u8x16 s0 = vec_splat(sharp, SHARP0_LANE);
++    u8x16 s1 = vec_splat(sharp, SHARP1_LANE);
+     u32x4 mm = (u32x4){1, 2, 4, 8};
+     u32x4 v4u32 = vec_splat_u32(4);
+     u32x4 zero = vec_splat_u32(0);
+@@ -1691,4 +1706,4 @@ void LPF(v_sb_uv)(pixel *dst, const ptrdiff_t stride,
+ 
+ #endif // BITDEPTH
+ 
+-#endif // __VSX__ || __POWER9_VECTOR__
++#endif // __VSX__ || __POWER9_VECTOR__ || DAV1D_ALTIVEC

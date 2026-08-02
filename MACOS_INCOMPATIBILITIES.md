@@ -22,14 +22,14 @@ Each target produces a distinct Mach-O slice. The **universal** binary merges up
 
 | Build | Arch / subtype | macOS min | SDK | Compiler | SIMD | Endian / word | Interface(s) |
 |---|---|---|---|---|---|---|---|
-| `buildg3` | ppc (ppc750) | 10.4 | 10.4u | FSF GCC 13 (Tiger) | — (`--disable-altivec`) | BE / 32-bit | legacy |
-| `buildg4` | ppc (ppc7400) | 10.4 | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
-| `buildg4e` | ppc (ppc7450) | 10.4 | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
-| `buildg5` | ppc (ppc970) | 10.4 | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
+| `buildg3` | ppc (ppc750) | **10.2** | 10.4u | FSF GCC 13 (Tiger) | — (`--disable-altivec`) | BE / 32-bit | legacy |
+| `buildg4` | ppc (ppc7400) | **10.2** | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
+| `buildg4e` | ppc (ppc7450) | **10.2** | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
+| `buildg5` | ppc (ppc970) | **10.2** | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
 | `buildx86` | i386 | 10.4 (10.4.4) | 10.4u | FSF GCC 13 (Tiger) | — (`--disable-mmx --disable-sse`) | LE / 32-bit | legacy |
 | `buildx64` | x86_64 | 10.5 *(see 1.2)* | modern Xcode | Apple clang | SSE2 | LE / 64-bit | modern + legacy |
 | `buildarm64` | arm64 | 11.0 | modern Xcode | Apple clang | NEON | LE / 64-bit | modern + legacy |
-| `builduniversal` | fat (the 7 above) | 10.4 (per arch) | — | — (`lipo` merge) | — | — | both worlds |
+| `builduniversal` | fat (the 7 above) | **10.2** (per arch) | — | — (`lipo` merge) | — | — | both worlds |
 
 - **G4 / G4e / G5 share one set of contribs** built for the lowest common ISA (`-mcpu=7400 -maltivec`); only VLC itself is tuned per variant. The PowerPC slice embedded in the universal is in practice `ppc750`, which loads on **any G3/G4/G5** by subtype grading.
 - **G3 has no AltiVec** (`ppc750`, `-mcpu=750`); it uses separate contribs.
@@ -40,6 +40,7 @@ Each target produces a distinct Mach-O slice. The **universal** binary merges up
 
 | Mac / OS | Slice loaded | Interface | Notes |
 |---|---|---|---|
+| PowerPC G3/G4/G5 — **Jaguar 10.2 / Panther 10.3** | `ppc750` … `ppc970` | **legacy** | See §1.3. Shipped in the universal bundle, **launch validated on a real 10.2 iBook** |
 | PowerPC G3 — Tiger 10.4 / Leopard 10.5 | `ppc750` | **legacy** | GPU often lacks GLSL → GL1 vout (§9) |
 | PowerPC G4 / G5 — Tiger 10.4 / Leopard 10.5 | `ppc` (tuned) | **legacy** | AltiVec active |
 | Intel 32-bit only — 10.4.4 → 10.6 | `i386` | **legacy** | Core Solo/Duo of the first Intel Macs |
@@ -48,7 +49,45 @@ Each target produces a distinct Mach-O slice. The **universal** binary merges up
 | Intel 64-bit — **10.7+** (Lion →) | `x86_64` | **modern** (+ legacy, switchable) | |
 | Apple Silicon — 11.0+ | `arm64` | **modern** (+ legacy) | x86_64 also runs under Rosetta |
 
-> **Why the `x86_64` slice is gated to 10.6 and not 10.5.8** (`make-universal.sh:118-131`): the Mach-O produced by the modern clang carries the `LC_DYLD_INFO_ONLY` load command, which Leopard 10.5's `dyld` does not understand. Result: on an Intel 10.5.8 machine, **all** native interface plugins (modern **and** legacy) would fail to load and VLC would fall back to the Lua CLI interface (a "lua error" dialog). By declaring `LSMinimumSystemVersionByArchitecture:x86_64 = 10.6.0`, LaunchServices on 10.5.8 picks the **i386** slice (legacy toolchain, loads cleanly, legacy interface): the app "just works" with no manual 32-bit toggle. ✅ (validated on a 2007 white MacBook, round 89)
+### 1.3 The 10.2 Jaguar floor (every PowerPC slice)
+
+**All four PowerPC slices** (`ppc750`, `ppc7400`, `ppc7450`, `ppc970`) target **10.2**,
+and the universal bundle ships them: `LSMinimumSystemVersion = 10.2`,
+`…ByArchitecture:ppc = 10.2.0`. Launch and DVD playback validated on a real
+iBook G3 (PowerBook4,3, Radeon 7500): interface, playlist, audio, **video**, DVD
+playback and even the **ATI hardware MPEG-2 decoder** all run. It is built with the same
+FSF GCC 13 / 10.4u SDK, only `-mmacosx-version-min=10.2` changes — plus the
+compatibility work below.
+
+What Jaguar lacks and how it is worked around:
+
+| Missing on 10.2 | Consequence | Workaround |
+|---|---|---|
+| `dlopen`/`dlsym`/`dlclose` (10.3+) | 329 of 332 Mach-Os reference them — nothing loads | `jaguar-compat/dlcompat.c` over `NSCreateObjectFileImageFromFile`/`NSLinkModule`. ⚠️ `NSLookupSymbolInModule()` does **not** search the sub-frameworks an umbrella re-exports, so a fallback to `NSIsSymbolNameDefined`/`NSLookupAndBindSymbol` is required — without it every `dlsym` on an umbrella framework silently returns NULL |
+| Dylib exports found **only** through the table of contents | Every symbol of a shipped dylib reads as undefined | `add-dylib-toc.py`, run **last** (after `install_name_tool`) on `Contents/MacOS/lib/*.dylib` |
+| ObjC 1.0 runtime | A `.m` defining **no class** leaves `module->symtab` NULL and `_objcInit()` dereferences it → the process dies at `dlopen`, silently | `check-objc-modules.sh` guards the bundle at build time |
+| `@try/@catch` does not catch Foundation exceptions | Diagnosis impossible from inside the app | stderr of a Finder-launched app goes to `/var/tmp/console.log` |
+| `sysconf(_SC_PAGESIZE)` returns **-1** | `block_mmap_Alloc` gets `p_start=NULL`; plug-in cache unusable (25 s startup) | `block_PageSize()` falls back to `getpagesize()` |
+| `snprintf(NULL, 0, …)` returns **-1** | `vlc_http_msg_format()` returns NULL → **no HTTP/1.1 request can be built** (HTTP/2 worked, hence the clue) | one-byte probe buffer in `messages.c`, `memstream.c`, `vasprintf.c`. ⚠️ Do **not** redefine `snprintf` in a compat library: it collides with `libSystemStubs.a` (`duplicate symbol _snprintf$LDBLStub`) |
+| UTIs (`LSItemContentTypes`, 10.4+) | VLC declares the common formats by UTI only → invisible in "Open With" | 29 `CFBundleTypeExtensions` blocks (127 extensions) in `share/Info.plist.in` |
+| `CGSMainConnectionID` (10.3+) | The private CGS path used by the hardware decoder has no connection | `GetCGSConnectionID()`, exported by **QD** — reachable only thanks to the `dlsym` fallback above |
+| AppKit APIs added in 10.3/10.4 | `-setHidden:`, NSMenu delegates, alternating table rows, `sizeLastColumnToFit`… | compatibility layer in `legacy_macosx/misc.m`; a menu carrying a **submenu is never validated**, so dynamic submenus rebuild from an `-[NSMenu update]` subclass |
+| AUHAL never sets `kAudioTimeStampHostTimeValid` | `ca_TimeGet()` returns -1 permanently: no audio clock feedback | tolerated; ⚠️ see §13 |
+
+> **Two silent traps closed while lowering the floor.** ① Neither a contrib prefix nor a
+> build directory recorded the deployment target it was made for, and **neither is
+> rebuilt or reconfigured in place** — lowering the floor would have linked 10.4 objects
+> into a "10.2" bundle with no error at all, the failure showing up only as a dyld error
+> on the old machine. Both now carry a `.powervlc-osx-min` stamp, checked at start-up.
+> ② `make-universal.sh` compiles its own **architecture trampoline** (`vlctrampoline.c`)
+> and did so **without `-mmacosx-version-min`**: the Tiger cross-GCC defaulted to 10.4,
+> and the whole bundle died on Jaguar with `undefined reference to _snprintf$LDBL128`
+> even though every real slice was correct. That stub now builds with
+> `-mmacosx-version-min=10.2` **and `-lSystemStubs`** (below 10.4 the SDK redirects the
+> printf family to `_<fn>$LDBLStub`, which lives only in that static library — without
+> it the stub does not even link).
+
+> > **Why the `x86_64` slice is gated to 10.6 and not 10.5.8** (`make-universal.sh:118-131`): the Mach-O produced by the modern clang carries the `LC_DYLD_INFO_ONLY` load command, which Leopard 10.5's `dyld` does not understand. Result: on an Intel 10.5.8 machine, **all** native interface plugins (modern **and** legacy) would fail to load and VLC would fall back to the Lua CLI interface (a "lua error" dialog). By declaring `LSMinimumSystemVersionByArchitecture:x86_64 = 10.6.0`, LaunchServices on 10.5.8 picks the **i386** slice (legacy toolchain, loads cleanly, legacy interface): the app "just works" with no manual 32-bit toggle. ✅ (validated on a 2007 white MacBook, round 89)
 
 ### 1.3 macOS version reference
 
@@ -108,7 +147,7 @@ Columns: **G3** (ppc750) · **G4/G5** (ppc AltiVec) · **i386** (Intel 32) · **
 7. `⚠️⁷`: TTS works everywhere, but **automatic language detection** requires 10.5+ → on Tiger 10.4, the default system voice is used.
 8. `⁸`: the two hardware decoders cover **disjoint** OS ranges. `videotoolbox` is built `-mmacosx-version-min=10.8`, so on **Snow Leopard 10.6 `dyld` refuses it** — hardware decoding there is **VDA**, which needs 10.6.3+ and one of that era's GPUs (9400M/320M/GT 330M, Intel HD). On **10.7** VDA is still the only one; from **10.8** VideoToolbox loads and outranks it (capability 800 vs 100), so VDA stops being used. VDA is H.264 **only**; every other codec is software below 10.8. See §7.1bis.
 
-9. `⚠️⁹`: BD-J menus need a **JRE installed on the user's machine** — macOS has not shipped one since 10.6, and libbluray loads it at runtime. Two things had to be fixed for the old Macs. **(a) Bytecode:** the BD-J jars we bundle are compiled to **Java 5** (class file v49), which is the floor on **10.4 and 10.5 PowerPC** — those top out at Apple's Java 1.5.0_19, Java 6 on Mac having been Intel-only. That needs a **JDK 8** to build (javac 9+ dropped `-source 1.5`). Lowering the bytecode version is not sufficient on its own: the BD-J layer replaces JDK internals, and `java.io.FileSystem`, `java.awt.peer.ComponentPeer` and `FramePeer` changed shape between Java 5 and Java 6, while `java.awt.Container.{get,set}ComponentZOrder` are **final** in Java 5 (overriding them makes `HScene` fail verification the moment it loads). Contrib patch `0004-bdj-run-on-java-5` adds the four missing Java 5 methods and turns the two `HScene` overrides into private helpers, keeping a **single jar valid on both** Java 5 and modern JREs. Compilation still uses the Java 6 boot class path (`contrib/java6-bootclasspath/`) because the compatibility methods must see the Java 6 shapes; `check-bdj-java6.py` fails the build if anything added after Java 6 is referenced, and `check-bdj-java5.py` additionally verifies the jars against a real Java 5 class library when `contrib/java5-bootclasspath/` has been populated (Apple's is not redistributable, so it ships empty). Verified against Apple Java 1.5.0_19 from a 10.4.11 PPC install: the only post-Java-5 references left are inside methods a Java 5 VM never dispatches to. **(b) Finding the VM:** stock libbluray **cannot find Apple's Java 6 at all** — measured on 10.6.8 with 1.6.0_65. It has no `libjli.dylib`, `/usr/libexec/java_home` points at a JDK with no `lib/server`, and the VM libraries in `Contents/Libraries` export only `JNI_CreateJavaVM_Impl`. Contrib patch `0003-macos-load-Apple-Java-6-through-the-JavaVM-framework` loads the `JavaVM` umbrella framework instead, which exports `JNI_CreateJavaVM` and dispatches to the VM matching the process architecture (`libjvm.dylib` is i386-only, `libserver.dylib` is universal). That mechanism is **verified on hardware in both i386 and x86_64**; the full BD-J path on a real disc is **not yet tested**. Targeting Java 5 removes the dependency on the community **Java 6 PowerPC** port, which reportedly runs interpreted (no JIT); menus may still be too slow on G3/G4. Without a JRE, a BD-J disc still plays its main title, without menus.
+9. `⚠️⁹`: BD-J menus need a **JRE installed on the user's machine** — macOS has not shipped one since 10.6, and libbluray loads it at runtime. Two things had to be fixed for the old Macs. **(a) Bytecode:** the BD-J jars we bundle stay at or below **Java 5** (class file v49), which is the floor on **10.4 and 10.5 PowerPC** — those top out at Apple's Java 1.5.0_19, Java 6 on Mac having been Intel-only. That needs a **JDK 8** to build (javac 9+ dropped `-source 1.5`). Since libbluray 1.5.0 an old javac makes upstream target **Java 1.4** (v48) for the BD-J classes and Java 5 (v49) for the bundled asm ones, so the jars now sit a notch below that floor rather than exactly on it. Lowering the bytecode version is not sufficient on its own: the BD-J layer replaces JDK internals, and `java.io.FileSystem`, `java.awt.peer.ComponentPeer` and `FramePeer` changed shape between Java 5 and Java 6, while `java.awt.Container.{get,set}ComponentZOrder` are **final** in Java 5 (overriding them makes `HScene` fail verification the moment it loads). Contrib patch `0004-bdj-run-on-java-5` adds the four missing Java 5 methods and turns the two `HScene` overrides into private helpers, keeping a **single jar valid on both** Java 5 and modern JREs. Compilation still uses the Java 6 boot class path (`contrib/java6-bootclasspath/`) because the compatibility methods must see the Java 6 shapes; `check-bdj-java6.py` fails the build if anything added after Java 6 is referenced, and `check-bdj-java5.py` additionally verifies the jars against a real Java 5 class library when `contrib/java5-bootclasspath/` has been populated (Apple's is not redistributable, so it ships empty). Verified against Apple Java 1.5.0_19 from a 10.4.11 PPC install: the only post-Java-5 references left are inside methods a Java 5 VM never dispatches to. **(b) Finding the VM:** stock libbluray **cannot find Apple's Java 6 at all** — measured on 10.6.8 with 1.6.0_65. It has no `libjli.dylib`, `/usr/libexec/java_home` points at a JDK with no `lib/server`, and the VM libraries in `Contents/Libraries` export only `JNI_CreateJavaVM_Impl`. Contrib patch `0003-macos-load-Apple-Java-6-through-the-JavaVM-framework` loads the `JavaVM` umbrella framework instead, which exports `JNI_CreateJavaVM` and dispatches to the VM matching the process architecture (`libjvm.dylib` is i386-only, `libserver.dylib` is universal). That mechanism is **verified on hardware in both i386 and x86_64**; the full BD-J path on a real disc is **not yet tested**. Targeting Java 5 removes the dependency on the community **Java 6 PowerPC** port, which reportedly runs interpreted (no JIT); menus may still be too slow on G3/G4. Without a JRE, a BD-J disc still plays its main title, without menus.
 
 Detailed causes are in the sections below.
 
@@ -349,11 +388,14 @@ Four `vout display` modules, chosen by priority and GPU capabilities:
 - **Blu-ray**: the `IOBDMedia.h` header only exists from SDK 10.5 (gated on the legacy side).
 - **AACS (retail Blu-ray decryption)**: `libaacs` is built as a **shared** library by `contrib/src/aacs` and bundled in `Contents/MacOS/lib/libaacs.dylib` on **every** slice — there is no version or architecture gate, since libbluray only `dlopen()`s it (no SDK involved). `bluray.c` exports `LIBAACS_PATH` pointing at the bundled copy, because a `.app` is on no library search path. **Verified so far on arm64 only** (built, loaded, all symbols libbluray needs resolved); the PowerPC/Intel-32 slices are built the same way but have not been exercised on hardware yet.
 - **Importing a key database**: opening a `keydb.cfg` file offers to copy it to `~/Library/Preferences/aacs/KEYDB.cfg`, where libaacs reads it (`modules/demux/keydb.c`). The popups come from the core dialog API, so they work in **both** interfaces — the legacy provider used to silently reject every question dialog and now shows a modal alert (`VLCLegacyMain.m`). No keys are shipped with the player.
+- **BD+ (the second protection layer)**: `libbdplus` is built shared by `contrib/src/bdplus` and bundled next to libaacs in `Contents/MacOS/lib/libbdplus.dylib`, on every slice and with no version or architecture gate — libbluray only `dlopen()`s it too. Unlike libaacs, a missing copy is a packaging **warning**, not an error: BD+ concerns a minority of discs. One patch is needed for the old SDKs (`libbdplus-powervlc-darwin-feature-macros.patch`): upstream asks for strict POSIX visibility, which hides `fsync()` from `<unistd.h>` on Darwin, and the 10.4u SDK has no `_DARWIN_C_SOURCE` escape hatch — libaacs and libbluray already carry the same fix. **Built for PowerPC (10.2 deployment target) and arm64; not yet exercised on a BD+ disc.**
+- **Opening the helper folders**: neither library decrypts anything until the user drops their own files in `~/Library/Preferences/{aacs,bdplus}/`, so the Help menu of both interfaces offers *"Open the libaacs folder"* and *"Open the libbdplus folder"*, creating the folder on the way. The path comes from `config_GetDiscLibDir()` in the core, which the key database importer uses too. The legacy interface hides both items below **10.4** (`VLCLegacyOSVersionAtLeast(10, 4, 0)`) since Blu-ray disc access needs Tiger, and both interfaces hide them when this build has no `bluray` plugin. The Qt interface (Windows/Linux) shows them unconditionally.
 
 ---
 
 ## 11. Summary by macOS version
 
+- **10.2 Jaguar / 10.3 Panther** (PPC): **legacy** interface via the dedicated `buildg3-jaguar` slice (§1.3). Everything the 10.4 floor offers minus what Jaguar itself lacks; **DVD playback and the ATI hardware decoder work**. ⚠️ Not merged into the universal bundle today — `make-universal.sh` still declares `ppc = 10.4.0`.
 - **10.4 Tiger** (PPC & Intel 32): **legacy** interface; notifications **via Growl**; **no media keys** (legacy requires 10.5); TTS without language detection; no CoreText (default face only); no Chromecast/Bonjour/Keychain/VideoToolbox/AVFoundation/Sparkle; fixed GL1 or QuickTime vout.
 - **10.5 Leopard** (PPC & Intel): same, but **legacy media keys OK** (10.5+, with accessibility), Blu-ray header available. On Intel 64-bit, the **i386** slice is chosen (x86_64 gated to 10.6).
 - **10.6 Snow Leopard** (Intel): **x86_64** slice; interface **still legacy** (modern = 10.7); notifications **via Growl**; VideoToolbox/Keychain/AVFoundation/Chromecast **available**; `caopengllayer` **not** (compiled arm64 only).
@@ -384,6 +426,21 @@ Four `vout display` modules, chosen by priority and GPU capabilities:
 | 4 | **Keyboard media keys & Apple Remote** validated on real hardware (Intel 10.4/10.5); media keys need 10.5+ (none on 10.4 by design, see ⚠️⁶) | all (legacy) | ✅ Validated |
 | 5 | **Chromecast** compiles but **no real cast tested**; unavailable on 10.4–10.6 | x86_64/arm64 | To validate for real |
 | 6 | **Windowed GL1 planar** does not render correctly | ATI/PPC GPUs | Worked around (default = packed; planar fullscreen only) |
+
+---
+- ⚠️ **10.2 — DVD playback stutters with the ATI hardware decoder.** The path works
+  (2.5× the software decoder: ~23.5 vs ~9 frames/s at 720×576) but never reaches the
+  25 fps of the source, and the residual irregularity is visible. Apple's own DVD
+  Player is perfectly smooth on the same machine, same GPU, same driver. Eliminated by
+  measurement: the surface pool, the vout's retention policy, the clock, input
+  starvation, the entropy decoder, the WindowServer (4.5 % CPU), the frame-drop policy,
+  the display-composition calls, the audio clock and the resampler, and VSync (the
+  panel exposes no configurable refresh — 9 modes, all fixed-timing). With audio
+  disabled the presentation cadence becomes near perfect (93.5 % of intervals on the
+  40 ms grid) **and the stutter is still visible**, so the defect is in *what* is shown,
+  not *when*. Investigation suspended; see the project memory for the full list of
+  closed leads.
+- ⚠️ **10.2 — untested:** subtitles, window resize during playback, long files.
 
 ---
 

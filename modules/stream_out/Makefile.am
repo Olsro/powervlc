@@ -70,19 +70,22 @@ sout_LTLIBRARIES += $(LTLIBstream_out_chromaprint)
 # Chromecast plugin
 SUFFIXES += .proto .pb.cc
 
-%.pb.h %.pb.cc: %.proto
-	$(PROTOC) --cpp_out=. -I$(srcdir) $<
+stream_out/chromecast/@PROTOBUF_VERSION@/cast_channel.pb.cc: stream_out/chromecast/cast_channel.proto
+	mkdir -p stream_out/chromecast/@PROTOBUF_VERSION@
+	$(PROTOC) --cpp_out=stream_out/chromecast/@PROTOBUF_VERSION@ -I$(srcdir)/stream_out/chromecast $<
+
+stream_out/chromecast/@PROTOBUF_VERSION@/cast_channel.pb.h: stream_out/chromecast/@PROTOBUF_VERSION@/cast_channel.pb.cc
 
 libdemux_chromecast_plugin_la_SOURCES = stream_out/chromecast/chromecast_demux.cpp stream_out/chromecast/chromecast.h \
                                         stream_out/chromecast/chromecast_common.h
-libdemux_chromecast_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) -Istream_out/chromecast
+libdemux_chromecast_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) -Istream_out/chromecast/@PROTOBUF_VERSION@
 
 libstream_out_chromecast_plugin_la_SOURCES = stream_out/chromecast/cast.cpp stream_out/chromecast/chromecast.h \
                                              stream_out/chromecast/cast_channel.proto \
                                              stream_out/chromecast/chromecast_common.h stream_out/chromecast/chromecast_ctrl.cpp \
                                              misc/webservices/json.h misc/webservices/json.c stream_out/chromecast/chromecast_communication.cpp
-nodist_libstream_out_chromecast_plugin_la_SOURCES = stream_out/chromecast/cast_channel.pb.cc
-libstream_out_chromecast_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) -Istream_out/chromecast $(CHROMECAST_CFLAGS)
+nodist_libstream_out_chromecast_plugin_la_SOURCES = stream_out/chromecast/@PROTOBUF_VERSION@/cast_channel.pb.cc
+libstream_out_chromecast_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) -Istream_out/chromecast/@PROTOBUF_VERSION@ $(CHROMECAST_CFLAGS)
 libstream_out_chromecast_plugin_la_LIBADD = $(CHROMECAST_LIBS) $(SOCKET_LIBS)
 if HAVE_DARWIN
 # protobuf uses __thread, which macOS supports from 10.7 only: raise the
@@ -95,7 +98,8 @@ CLEANFILES += $(nodist_libstream_out_chromecast_plugin_la_SOURCES)
 
 if ENABLE_SOUT
 if BUILD_CHROMECAST
-BUILT_SOURCES += stream_out/chromecast/cast_channel.pb.h
+BUILT_SOURCES += stream_out/chromecast/@PROTOBUF_VERSION@/cast_channel.pb.cc \
+                 stream_out/chromecast/@PROTOBUF_VERSION@/cast_channel.pb.h
 sout_LTLIBRARIES += libstream_out_chromecast_plugin.la
 demux_LTLIBRARIES += libdemux_chromecast_plugin.la
 endif

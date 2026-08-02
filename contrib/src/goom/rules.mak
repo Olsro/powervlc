@@ -13,10 +13,10 @@ $(TARBALLS)/goom-$(GOOM_VERSION)-src.tar.gz:
 
 .sum-goom: goom-$(GOOM_VERSION)-src.tar.gz
 
+# goom2k4-0-src unpacks into a dir named goom2k4-0
+goom: UNPACK_DIR=goom2k4-0
 goom: goom-$(GOOM_VERSION)-src.tar.gz .sum-goom
 	$(UNPACK)
-	mv goom2k4-0 goom-2k4-0-src
-	$(UPDATE_AUTOCONFIG)
 	$(APPLY) $(SRC)/goom/goom2k4-0-memleaks.patch
 	$(APPLY) $(SRC)/goom/goom2k4-autotools.patch
 	$(APPLY) $(SRC)/goom/goom2k4-noxmmx.patch
@@ -31,7 +31,9 @@ endif
 	$(MOVE)
 
 .goom: goom
-	$(RECONF)
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) --disable-glibtest --disable-gtktest
-	$(MAKE) -C $< install
+	$(RECONF) -I m4
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE)
+	+$(MAKEBUILD)
+	+$(MAKEBUILD) install
 	touch $@

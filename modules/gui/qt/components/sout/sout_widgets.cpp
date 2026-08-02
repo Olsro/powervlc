@@ -101,8 +101,8 @@ void SoutInputBox::setMRL( const QString& mrl )
     }
 }
 
-#define CT( x ) connect( x, SIGNAL(textChanged(QString)), this, SIGNAL(mrlUpdated()) );
-#define CS( x ) connect( x, SIGNAL(valueChanged(int)), this, SIGNAL(mrlUpdated()) );
+#define CT( x ) connect( x, &QLineEdit::textChanged, this, &std::remove_pointer<decltype(this)>::type::mrlUpdated );
+#define CS( x ) connect( x, QOverload<int>::of(&QSpinBox::valueChanged), this, &std::remove_pointer<decltype(this)>::type::mrlUpdated );
 
 VirtualDestBox::VirtualDestBox( QWidget *_parent ) : QWidget( _parent )
 {
@@ -139,7 +139,7 @@ FileDestBox::FileDestBox( QWidget *_parent, intf_thread_t * _p_intf ) : VirtualD
 
     layout->addWidget(fileSelectButton, 1, 5, 1, 1);
     CT( fileEdit );
-    BUTTONACT( fileSelectButton, fileBrowse() );
+    BUTTONACT( fileSelectButton, fileBrowse );
 }
 
 QString FileDestBox::getMRL( const QString& mux )
@@ -178,7 +178,59 @@ void FileDestBox::fileBrowse()
     emit mrlUpdated();
 }
 
+RISTDestBox::RISTDestBox( QWidget *_parent, const char * )
+    : VirtualDestBox( _parent )
+{
+    label->setText( qtr( "This module outputs the stream using the RIST protocol (TR06).") );
 
+    QLabel *RISTAddressLabel = new QLabel( qtr("Destination Address"), this );
+    RISTAddress = new QLineEdit(this);
+    layout->addWidget(RISTAddressLabel, 1, 0, 1, 1);
+    layout->addWidget(RISTAddress, 1, 1, 1, 1);
+
+    QLabel *RISTPortLabel = new QLabel( qtr("Destination Port"), this );
+    RISTPort = new QSpinBox(this);
+    RISTPort->setMaximumSize(QSize(90, 16777215));
+    RISTPort->setAlignment(Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter);
+    RISTPort->setMinimum(1);
+    RISTPort->setMaximum(65535);
+    RISTPort->setValue(1968);
+    layout->addWidget(RISTPortLabel, 2, 0, 1, 1);
+    layout->addWidget(RISTPort, 2, 1, 1, 1);
+
+    QLabel *RISTNameLabel = new QLabel( qtr("Stream Name"), this );
+    RISTName = new QLineEdit(this);
+    layout->addWidget(RISTNameLabel, 3, 0, 1, 1);
+    layout->addWidget(RISTName, 3, 1, 1, 1);
+
+    CT( RISTAddress );
+    CS( RISTPort );
+    CT( RISTName );
+}
+
+QString RISTDestBox::getMRL( const QString& )
+{
+    QString addr = RISTAddress->text();
+    QString name = RISTName->text();
+
+    if( addr.isEmpty() ) return qfu("");
+    QString destination = addr + ":" + QString::number(RISTPort->value());
+    SoutMrl m;
+    m.begin( "std" );
+    if( !name.isEmpty() )
+    {
+        m.option( "access", "rist{cname=" + name + "}" );
+    }
+    else
+    {
+        m.option( "access", "rist" );
+    }
+    m.option( "mux", "ts" );
+    m.option( "dst", destination );
+    m.end();
+
+    return m.getMrl();
+}
 
 HTTPDestBox::HTTPDestBox( QWidget *_parent ) : VirtualDestBox( _parent )
 {

@@ -215,8 +215,8 @@ typedef struct
 static vod_media_t *MediaNew( vod_t *, const char *, input_item_t * );
 static void         MediaDel( vod_t *, vod_media_t * );
 static void         MediaAskDel ( vod_t *, vod_media_t * );
-static int          MediaAddES( vod_t *, vod_media_t *, es_format_t * );
-static void         MediaDelES( vod_t *, vod_media_t *, es_format_t * );
+static int          MediaAddES( vod_t *, vod_media_t *, const es_format_t * );
+static void         MediaDelES( vod_t *, vod_media_t *, const es_format_t * );
 
 static void* CommandThread( void * );
 static void  CommandPush( vod_t *, rtsp_cmd_type_t, vod_media_t *,
@@ -234,7 +234,7 @@ static int RtspCallbackES( httpd_callback_sys_t *, httpd_client_t *,
 
 static char *SDPGenerate( const vod_media_t *, httpd_client_t *cl );
 
-static void sprintf_hexa( char *s, uint8_t *p_data, int i_data )
+static void sprintf_hexa( char *s, const uint8_t *p_data, int i_data )
 {
     static const char hex[16] = "0123456789abcdef";
 
@@ -468,7 +468,7 @@ static void MediaDel( vod_t *p_vod, vod_media_t *p_media )
     free( p_media );
 }
 
-static int MediaAddES( vod_t *p_vod, vod_media_t *p_media, es_format_t *p_fmt )
+static int MediaAddES( vod_t *p_vod, vod_media_t *p_media, const es_format_t *p_fmt )
 {
     char *psz_urlc;
 
@@ -565,7 +565,7 @@ static int MediaAddES( vod_t *p_vod, vod_media_t *p_media, es_format_t *p_fmt )
                     const int i_nal_type = p_buffer[0]&0x1f;
 
                     i_size = i_buffer;
-                    for( i_offset = 0; i_offset+2 < i_buffer ; i_offset++)
+                    for( i_offset = 1; i_offset+2 < i_buffer ; i_offset++)
                     {
                         if( !memcmp(p_buffer + i_offset, "\x00\x00\x01", 3 ) )
                         {
@@ -624,6 +624,8 @@ static int MediaAddES( vod_t *p_vod, vod_media_t *p_media, es_format_t *p_fmt )
             if( p_fmt->i_extra > 0 )
             {
                 char *p_hexa = malloc( 2 * p_fmt->i_extra + 1 );
+                if( !p_hexa )
+                    break;
                 sprintf_hexa( p_hexa, p_fmt->p_extra, p_fmt->i_extra );
                 if( asprintf( &p_es->psz_fmtp,
                               "profile-level-id=3; config=%s;", p_hexa ) == -1 )
@@ -637,6 +639,8 @@ static int MediaAddES( vod_t *p_vod, vod_media_t *p_media, es_format_t *p_fmt )
             if( p_fmt->i_extra > 0 )
             {
                 char *p_hexa = malloc( 2 * p_fmt->i_extra + 1 );
+                if( !p_hexa )
+                    break;
                 sprintf_hexa( p_hexa, p_fmt->p_extra, p_fmt->i_extra );
                 if( asprintf( &p_es->psz_fmtp,
                               "streamtype=5; profile-level-id=15; mode=AAC-hbr; "
@@ -710,7 +714,7 @@ static int MediaAddES( vod_t *p_vod, vod_media_t *p_media, es_format_t *p_fmt )
     return VLC_SUCCESS;
 }
 
-static void MediaDelES( vod_t *p_vod, vod_media_t *p_media, es_format_t *p_fmt)
+static void MediaDelES( vod_t *p_vod, vod_media_t *p_media, const es_format_t *p_fmt)
 {
     media_es_t *p_es = NULL;
 
@@ -937,7 +941,7 @@ static int RtspCallback( httpd_callback_sys_t *p_args, httpd_client_t *cl,
     const char *psz_playnow = NULL; /* support option: x-playNow */
     const char *psz_session = NULL;
     const char *psz_cseq = NULL;
-    rtsp_client_t *p_rtsp;
+    rtsp_client_t *p_rtsp = NULL;
     int i_cseq = 0;
 
     if( answer == NULL || query == NULL ) return VLC_SUCCESS;
@@ -966,7 +970,6 @@ static int RtspCallback( httpd_callback_sys_t *p_args, httpd_client_t *cl,
             if( strstr( psz_transport, "unicast" ) &&
                 strstr( psz_transport, "client_port=" ) )
             {
-                rtsp_client_t *p_rtsp = NULL;
                 char ip[NI_MAXNUMERICHOST];
                 int i_port = atoi( strstr( psz_transport, "client_port=" ) +
                                    strlen("client_port=") );
@@ -1298,7 +1301,6 @@ static int RtspCallbackES( httpd_callback_sys_t *p_args, httpd_client_t *cl,
             if( strstr( psz_transport, "unicast" ) &&
                 strstr( psz_transport, "client_port=" ) )
             {
-                rtsp_client_t *p_rtsp = NULL;
                 rtsp_client_es_t *p_rtsp_es = NULL;
                 char ip[NI_MAXNUMERICHOST];
                 int i_port = atoi( strstr( psz_transport, "client_port=" ) +

@@ -1,20 +1,23 @@
 # libvorbis
 
-VORBIS_VERSION := 1.3.6
+VORBIS_VERSION := 1.3.7
 VORBIS_URL := $(XIPH)/vorbis/libvorbis-$(VORBIS_VERSION).tar.xz
 
 ifdef HAVE_FPU
 PKGS += vorbis
 endif
+ifdef BUILD_ENCODERS
+PKGS += vorbis
+endif
+
 ifeq ($(call need_pkg,"vorbis >= 1.1"),)
+ifdef BUILD_ENCODERS
+ifeq ($(call need_pkg,"vorbisenc >= 1.1"),)
 PKGS_FOUND += vorbis
 endif
-PKGS_ALL += vorbisenc
-ifdef BUILD_ENCODERS
-PKGS += vorbisenc
+else
+PKGS_FOUND += vorbis
 endif
-ifeq ($(call need_pkg,"vorbisenc >= 1.1"),)
-PKGS_FOUND += vorbisenc
 endif
 
 $(TARBALLS)/libvorbis-$(VORBIS_VERSION).tar.xz:
@@ -24,28 +27,18 @@ $(TARBALLS)/libvorbis-$(VORBIS_VERSION).tar.xz:
 
 libvorbis: libvorbis-$(VORBIS_VERSION).tar.xz .sum-vorbis
 	$(UNPACK)
-ifdef HAVE_CLANG
-	$(APPLY) $(SRC)/vorbis/clang.patch
-endif
-	$(UPDATE_AUTOCONFIG)
-	$(APPLY) $(SRC)/vorbis/vorbis-bitcode.patch
+	$(APPLY) $(SRC)/vorbis/0001-Fix-pkgconfig-creation-with-cmake.patch
+	$(APPLY) $(SRC)/vorbis/0002-sharedbook-fix-undefined-shift.patch
 	$(call pkg_static,"vorbis.pc.in")
+	$(call pkg_static,"vorbisenc.pc.in")
+	$(call pkg_static,"vorbisfile.pc.in")
 	$(MOVE)
 
 DEPS_vorbis = ogg $(DEPS_ogg)
 
-VORBIS_CONF := --disable-docs --disable-examples --disable-oggtest
-
-.vorbis: libvorbis
-	$(RECONF) -Im4
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) $(VORBIS_CONF)
-	$(MAKE) -C $< install
-	touch $@
-
-.sum-vorbisenc: .sum-vorbis
-	touch $@
-
-DEPS_vorbisenc = vorbis $(DEPS_vorbis)
-
-.vorbisenc:
+.vorbis: libvorbis toolchain.cmake
+	$(CMAKECLEAN)
+	$(HOSTVARS_CMAKE) $(CMAKE) -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+	+$(CMAKEBUILD)
+	$(CMAKEINSTALL)
 	touch $@

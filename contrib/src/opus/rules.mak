@@ -1,8 +1,8 @@
 # opus
 
-OPUS_VERSION := 1.3
+OPUS_VERSION := 1.6.1
 
-OPUS_URL := https://archive.mozilla.org/pub/opus/opus-$(OPUS_VERSION).tar.gz
+OPUS_URL := $(XIPH)/opus/opus-$(OPUS_VERSION).tar.gz
 
 PKGS += opus
 ifeq ($(call need_pkg,"opus >= 0.9.14"),)
@@ -16,7 +16,6 @@ $(TARBALLS)/opus-$(OPUS_VERSION).tar.gz:
 
 opus: opus-$(OPUS_VERSION).tar.gz .sum-opus
 	$(UNPACK)
-	$(UPDATE_AUTOCONFIG)
 	$(MOVE)
 
 OPUS_CONF= --disable-extra-programs --disable-doc
@@ -30,7 +29,18 @@ OPUS_CONF += --disable-stack-protector
 endif
 endif
 
+# disable rtcd on aarch64-windows
+ifeq ($(ARCH)-$(HAVE_WIN32),aarch64-1)
+OPUS_CONF += --disable-rtcd
+endif
+# disable asm and rtcd on armv7-windows
+ifeq ($(ARCH)-$(HAVE_WIN32),arm-1)
+OPUS_CONF += --disable-rtcd --disable-asm
+endif
+
 .opus: opus
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) $(OPUS_CONF)
-	$(MAKE) -C $< install
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE) $(OPUS_CONF)
+	+$(MAKEBUILD)
+	+$(MAKEBUILD) install
 	touch $@

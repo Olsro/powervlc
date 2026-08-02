@@ -91,9 +91,16 @@ libi422_yuy2_mmx_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) \
 
 if HAVE_MMX
 chroma_LTLIBRARIES += \
-	libi420_rgb_mmx_plugin.la \
 	libi420_yuy2_mmx_plugin.la \
 	libi422_yuy2_mmx_plugin.la
+endif
+# Separate from HAVE_MMX: this converter's asm needs more operands at once than
+# 32-bit x86 can give it on a modern compiler. See the HAVE_MMX_I420_RGB probe
+# in configure.ac. The SSE2 build of the same source is unaffected and covers
+# any x86 that matters.
+if HAVE_MMX_I420_RGB
+chroma_LTLIBRARIES += \
+	libi420_rgb_mmx_plugin.la
 endif
 
 # SSE2

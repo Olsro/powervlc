@@ -77,6 +77,10 @@
 - (void)stopListeningWithAppleRemote;
 
 - (void)menuFocusActivate;
+/* Blu-ray pop-up menu, drawn over the running movie (not the disc root menu).
+ * -hasDiscPopupMenu tells whether the disc offers one at this very moment. */
+- (BOOL)hasDiscPopupMenu;
+- (void)showDiscPopupMenu;
 - (void)moveMenuFocusLeft;
 - (void)moveMenuFocusRight;
 - (void)moveMenuFocusUp;

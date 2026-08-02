@@ -1,6 +1,6 @@
 # SMB2
-SMB2_VERSION := 4.0.0
-SMB2_URL := $(GITHUB)/sahlberg/libsmb2/archive/v$(SMB2_VERSION).tar.gz
+SMB2_VERSION := 6.1
+SMB2_URL := $(GITHUB)/sahlberg/libsmb2/archive/refs/tags/libsmb2-$(SMB2_VERSION).tar.gz
 
 ifeq ($(call need_pkg,"smb2"),)
 PKGS_FOUND += smb2
@@ -11,15 +11,18 @@ $(TARBALLS)/libsmb2-$(SMB2_VERSION).tar.gz:
 
 .sum-smb2: libsmb2-$(SMB2_VERSION).tar.gz
 
+smb2: UNPACK_DIR=libsmb2-libsmb2-$(SMB2_VERSION)
 smb2: libsmb2-$(SMB2_VERSION).tar.gz .sum-smb2
 	$(UNPACK)
-	$(UPDATE_AUTOCONFIG)
+	$(APPLY) $(SRC)/smb2/0001-cmake-add-ENABLE_LIBKRB5-and-ENABLE_GSSAPI-options.patch
+	$(APPLY) $(SRC)/smb2/0001-fix-Fixed-undeclared-identifier-ENXIO-in-android.patch
 	$(MOVE)
 
-SMB2_CONF := --disable-examples --disable-werror --without-libkrb5
+SMB2_CONF := -DENABLE_LIBKRB5=OFF
 
 .smb2: smb2
-	cd $< && ./bootstrap
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) $(SMB2_CONF)
-	$(MAKE) -C $< install
+	$(CMAKECLEAN)
+	$(HOSTVARS_CMAKE) $(CMAKE) $(SMB2_CONF)
+	+$(CMAKEBUILD)
+	$(CMAKEINSTALL)
 	touch $@

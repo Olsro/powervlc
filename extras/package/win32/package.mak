@@ -57,14 +57,15 @@ package-win-common: package-win-install package-win-sdk
 # used to fix up "vlc.exe" were kept only while the automake target was still
 # named "vlc".
 
-# Text files, clean them from mail addresses
-	sed 's/@/_AT_/' < "$(srcdir)/AUTHORS" > "$(win32_destdir)/AUTHORS.txt"
-	sed 's/@/_AT_/' < "$(srcdir)/THANKS_VLC" > "$(win32_destdir)/THANKS.txt"
-	cp "$(srcdir)/NEWS_VLC" "$(win32_destdir)/NEWS.txt"
+# Only the licence is shipped at the install root. AUTHORS, THANKS and NEWS
+# are compiled into the binary -- src/Makefile.am generates vlc_about.h from
+# COPYING, AUTHORS and THANKS_VLC, and that is what the About window shows --
+# so the copies here were read by nobody and no interface opens them.
+# COPYING stays: it is the licence the NSIS page displays, and shipping it is
+# a condition of the GPL.
 	cp "$(srcdir)/COPYING" "$(win32_destdir)/COPYING.txt"
-	cp "$(srcdir)/README_VLC" "$(win32_destdir)/README.txt"
 
-	cp $(srcdir)/share/icons/vlc.ico $(win32_destdir)
+	cp $(srcdir)/share/icons/powervlc.ico $(win32_destdir)
 	for plugindir in $(prefix)/lib/vlc/plugins/*/; do \
 		plugin_destdir="$(win32_destdir)/plugins/`basename $$plugindir`"; \
 		mkdir -p "$$plugin_destdir"; \
@@ -91,6 +92,24 @@ package-win-common: package-win-install package-win-sdk
 			echo "ERROR: the Blu-ray plugin is packaged but $(CONTRIB_DIR)/bin/libaacs-*.dll is missing." ; \
 			echo "       Build it with: make -C contrib/contrib-<host> .aacs" ; \
 			exit 1 ; \
+		fi ; \
+	fi
+
+# libbdplus: BD+ descrambling, the second protection layer some retail Blu-rays
+# carry on top of AACS. Same loading story as libaacs -- libbluray dlopen()s
+# "libbdplus.dll", LoadLibrary resolves it from the directory of powervlc.exe,
+# and libtool builds it as libbdplus-0.dll. Missing it is only a warning: BD+
+# concerns a minority of discs, and libbdplus does nothing anyway until the
+# user drops a VM into %APPDATA%\bdplus\vm0\ (the Help menu opens that folder).
+	@if test -d "$(win32_destdir)/plugins/access" && \
+	    ls "$(win32_destdir)/plugins/access/"*bluray* >/dev/null 2>&1; then \
+		bdplus=`ls $(CONTRIB_DIR)/bin/libbdplus*.dll 2>/dev/null | head -1` ; \
+		if test -n "$$bdplus"; then \
+			cp "$$bdplus" "$(win32_destdir)/libbdplus.dll" ; \
+			echo "  PACKAGE  libbdplus.dll" ; \
+		else \
+			echo "  NOTE     no libbdplus: BD+ protected discs will not play" ; \
+			echo "           Build it with: make -C contrib/contrib-<host> .bdplus" ; \
 		fi ; \
 	fi
 

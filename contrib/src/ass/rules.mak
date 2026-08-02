@@ -1,6 +1,6 @@
 # ASS
-ASS_VERSION := 0.17.3
-ASS_URL := $(GITHUB)/libass/libass/releases/download/$(ASS_VERSION)/libass-$(ASS_VERSION).tar.gz
+ASS_VERSION := 0.17.5
+ASS_URL := $(GITHUB)/libass/libass/releases/download/$(ASS_VERSION)/libass-$(ASS_VERSION).tar.xz
 
 PKGS += ass
 ifeq ($(call need_pkg,"libass"),)
@@ -8,17 +8,23 @@ PKGS_FOUND += ass
 endif
 
 ifdef HAVE_ANDROID
-WITH_FONTCONFIG = 0
-ifeq ($(ANDROID_ABI), x86)
-WITH_ASS_ASM = 0
-endif
+WITH_FONTCONFIG = 1
 else
 ifdef HAVE_TIZEN
 WITH_FONTCONFIG = 0
 WITH_HARFBUZZ = 0
 else
 ifdef HAVE_DARWIN_OS
-WITH_FONTCONFIG = 0
+# Was 0 while the contrib was stuck on fontconfig 2.12.3, which aborts on a
+# current macOS (see contrib/src/fontconfig). With 2.16.0 libass can use the
+# system fonts here like it does everywhere else, instead of falling back to
+# whatever the subtitle track happens to embed.
+WITH_FONTCONFIG = 1
+# CoreText only exists since Mac OS X 10.5 (and libass' provider uses
+# 10.6-era APIs); the legacy 10.4-and-earlier slices must not compile it.
+ifeq ($(call darwin_min_os_at_least, 10.6), true)
+WITH_CORETEXT = 1
+endif
 else
 ifdef HAVE_WINSTORE
 WITH_FONTCONFIG = 0
@@ -30,29 +36,32 @@ endif
 endif
 endif
 
-$(TARBALLS)/libass-$(ASS_VERSION).tar.gz:
+$(TARBALLS)/libass-$(ASS_VERSION).tar.xz:
 	$(call download_pkg,$(ASS_URL),ass)
 
-.sum-ass: libass-$(ASS_VERSION).tar.gz
+.sum-ass: libass-$(ASS_VERSION).tar.xz
 
-libass: libass-$(ASS_VERSION).tar.gz .sum-ass
+libass: libass-$(ASS_VERSION).tar.xz .sum-ass
 	$(UNPACK)
 	$(UPDATE_AUTOCONFIG)
-	$(APPLY) $(SRC)/ass/0001-aarch64-Set-the-right-intended-alignment-for-constan.patch
+ifdef HAVE_MACOSX
+	# ass_compat.h defines strndup to its fallback BEFORE <string.h> is
+	# seen, which textually renames the SDK declaration too -- and its
+	# 10.7 availability attribute then lands on the fallback's name.
+	# Pull <string.h> in first so the SDK keeps its own symbol.
+	perl -pi -e 's/^#ifndef HAVE_STRNDUP$$/#include <string.h>\n#ifndef HAVE_STRNDUP/' \
+	    $(UNPACK_DIR)/libass/ass_compat.h
+endif
+	$(call pkg_static,"libass.pc.in")
 	$(MOVE)
 
 DEPS_ass = freetype2 $(DEPS_freetype2) fribidi $(DEPS_fribidi) iconv $(DEPS_iconv) harfbuzz $(DEPS_harfbuzz)
 
 ASS_CONF = --disable-test
-
 ifdef HAVE_MACOSX
-# strndup() is only available since macOS 10.7; force the built-in fallback
-# and demote the availability diagnostic (the fallback rename inherits the
-# SDK declaration's 10.7 availability attribute, but the implementation
-# linked is libass' own)
 ifneq ($(call darwin_min_os_at_least, 10.7), true)
-ASS_CONF += ac_cv_func_strndup=no \
-	CFLAGS="$(CFLAGS) $(WNO_PARTIAL_AVAILABILITY)"
+# strndup() is 10.7+; libass carries its own fallback behind this check
+ASS_CONF += ac_cv_func_strndup=no
 endif
 endif
 ifneq ($(WITH_FONTCONFIG), 0)
@@ -65,13 +74,17 @@ ifeq ($(WITH_DWRITE), 1)
 ASS_CONF += --enable-directwrite
 endif
 
+ifeq ($(WITH_CORETEXT), 1)
+ASS_CONF += --enable-coretext
+endif
+
 ifeq ($(WITH_ASS_ASM), 0)
 ASS_CONF += --disable-asm
 endif
 
 .ass: libass
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) $(ASS_CONF)
-	$(MAKE) -C $<
-	$(call pkg_static,"libass.pc")
-	$(MAKE) -C $< install
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE) $(ASS_CONF)
+	+$(MAKEBUILD)
+	+$(MAKEBUILD) install
 	touch $@

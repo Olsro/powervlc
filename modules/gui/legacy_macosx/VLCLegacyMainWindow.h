@@ -100,12 +100,16 @@ typedef float CGFloat;
     NSScrollView *playlistScroll;
     NSView *dropzoneView;
     NSTextField *viewTitleLabel;
-    NSSearchField *searchField;
+    NSTextField *searchField;   /* an NSSearchField except on 10.2 */
     NSString *searchString;
     NSMutableArray *visibleColumns; /* playlist column identifiers */
 
     /* embedded video */
     VLCLegacyVideoView *videoView;
+    /* L'utilisateur a demandé la LISTE DE LECTURE pendant la lecture : à
+     * respecter à chaque (re)démarrage de vout, sinon la vidéo reprend le
+     * dessus toute seule (transitions de menus, engagement matériel…). */
+    BOOL playlistViewWanted;
     NSWindow *fsVideoWindow;
     BOOL videoActive;
     /* Chantier F — fenêtre ENFANT hébergeant la vidéo intégrée (option
@@ -118,6 +122,12 @@ typedef float CGFloat;
     NSWindow *videoHostWindow;
     BOOL videoHostFullscreen;
     NSRect videoHostWindowedFrame;
+    /* Cadre RÉEL de la vue vidéo juste avant le passage en plein écran, pour le
+     * restituer tel quel au retour. Le cadre du splitView, utilisé jusqu'ici,
+     * avait entre-temps rétréci (mesuré : 1024x576 au démarrage de la vidéo,
+     * 690x404 à la sortie du plein écran) : la vidéo revenait tassée dans un
+     * coin, le reste du cadre en blanc. */
+    NSRect preFullscreenVideoFrame;
 
     /* Snapshot of the core playlist (tree of dictionaries with keys
      * "id" (NSNumber), "title", "duration", "arturl" and, for nodes,
@@ -140,8 +150,12 @@ typedef float CGFloat;
     int refreshTicks;       /* safety-net counter for snapshot rebuilds */
     int lastSeenChangeCount;/* playlist change burst detection */
     int burstTicks;         /* ticks since the current burst started */
-    NSMutableSet *browseRequestedIds;  /* directories already sent to the
-                                        * preparser (expand-to-browse) */
+    NSMutableDictionary *browseRequestedIds; /* id -> NSDate of the last
+                                        * expand-to-browse preparse; lets a
+                                        * failed directory be retried once
+                                        * the request is surely over */
+    BOOL searchFlagsWereSet;           /* core-side search flags are up, so
+                                        * an emptied search must clean them */
     NSMutableDictionary *dirCheckCache;/* path -> NSNumber(isDirectory) */
 
     NSMutableDictionary *fileSizeCache;  /* path -> formatted size */
@@ -191,6 +205,8 @@ typedef float CGFloat;
  * when the window already hosts a video; the caller then falls back to a
  * standalone vout window. */
 - (NSView *)acquireVideoView;
+/* Vue vidéo si elle est réellement affichée, sinon nil (masquage du curseur). */
+- (NSView *)videoViewIfVisible;
 - (void)releaseVideoView;
 - (void)setVideoViewSizeFromValue:(NSValue *)size;
 - (void)setVideoFullscreenFromNumber:(NSNumber *)fullscreen;

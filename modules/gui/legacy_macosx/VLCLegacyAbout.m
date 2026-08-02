@@ -55,7 +55,7 @@
     [label setDrawsBackground:NO];
     [label setSelectable:YES];
     [[label cell] setFont:font];
-    [[label cell] setLineBreakMode:NSLineBreakByTruncatingTail];
+    VLCLegacySetCellLineBreakMode([label cell], NSLineBreakByTruncatingTail);
     [label setStringValue:text];
     [parent addSubview:label];
     return label;
@@ -134,7 +134,10 @@
         initWithFrame:NSMakeRect(26, 264, 128, 128)] autorelease];
     [iconView setImage:icon];
     [iconView setEditable:NO];
-    [iconView unregisterDraggedTypes];
+    /* -unregisterDraggedTypes is 10.3; below it, a view that never
+     * registered a type has nothing to unregister anyway */
+    if ([iconView respondsToSelector:@selector(unregisterDraggedTypes)])
+        [iconView unregisterDraggedTypes];
     [content addSubview:iconView];
 
     [self staticText:@"PowerVLC"
@@ -197,8 +200,27 @@
     [joinusField setSelectable:YES];
     [joinusField setDrawsBackground:NO];
     [joinusField setDelegate:(id)self];
-    if (joinusRendered)
-        [[joinusField textStorage] setAttributedString:joinusRendered];
+    /* A view does not clip its drawing to its own frame, so a blurb that
+     * lays out taller than 130 points paints its last line over whatever
+     * sits below -- which is what "Help and join us!" did to the trademark
+     * line on 10.2, whose HTML importer picks a larger default font than
+     * 10.4's. Two guards: pin the body font so the height is the same
+     * everywhere, and bound the text container so nothing is ever laid out
+     * past the frame. Link colours and underlines come from the HTML and
+     * are left alone. */
+    if (joinusRendered) {
+        NSMutableAttributedString *blurb =
+            [[joinusRendered mutableCopy] autorelease];
+
+        [blurb addAttribute:NSFontAttributeName
+                      value:[NSFont systemFontOfSize:11]
+                      range:NSMakeRange(0, [blurb length])];
+        [[joinusField textStorage] setAttributedString:blurb];
+    }
+    [joinusField setVerticallyResizable:NO];
+    [joinusField setHorizontallyResizable:NO];
+    [[joinusField textContainer] setContainerSize:NSMakeSize(522, 130)];
+    [[joinusField textContainer] setWidthTracksTextView:YES];
     [content addSubview:joinusField];
 
     trademarksField = [self staticText:
@@ -241,7 +263,8 @@
         initWithFrame:NSMakeRect(170, 54, 534, 264)] autorelease];
     [creditsScroll setDrawsBackground:NO];
     [creditsScroll setHasVerticalScroller:YES];
-    [creditsScroll setAutohidesScrollers:YES];
+    if ([creditsScroll respondsToSelector:@selector(setAutohidesScrollers:)])
+        [creditsScroll setAutohidesScrollers:YES];
     [creditsScroll setBorderType:NSBezelBorder];
     creditsView = [[[NSTextView alloc]
         initWithFrame:NSMakeRect(0, 0, 519, 264)] autorelease];
@@ -251,8 +274,8 @@
     [creditsView setVerticallyResizable:YES];
     [creditsView setHorizontallyResizable:NO];
     [creditsScroll setDocumentView:creditsView];
-    [creditsScroll setHidden:YES];
     [content addSubview:creditsScroll];
+    VLCLegacySetViewHidden(creditsScroll, YES);
 
     authorsText = [[self processedAuthors] retain];
 
@@ -265,11 +288,11 @@
         [self buildWindow];
 
     /* front page state, like -[VLAboutBox showAbout] */
-    [creditsScroll setHidden:YES];
-    [joinusField setHidden:NO];
-    [copyrightField setHidden:NO];
-    [attributionField setHidden:NO];
-    [trademarksField setHidden:NO];
+    VLCLegacySetViewHidden(creditsScroll, YES);
+    VLCLegacySetViewHidden(joinusField, NO);
+    VLCLegacySetViewHidden(copyrightField, NO);
+    VLCLegacySetViewHidden(attributionField, NO);
+    VLCLegacySetViewHidden(trademarksField, NO);
     [creditsView scrollPoint:NSMakePoint(0, 0)];
     [window makeKeyAndOrderFront:nil];
 }
@@ -282,11 +305,11 @@
 {
     /* the title, version and compile lines stay visible: the text zone
      * only replaces the blurb below them */
-    [creditsScroll setHidden:NO];
-    [joinusField setHidden:YES];
-    [copyrightField setHidden:YES];
-    [attributionField setHidden:YES];
-    [trademarksField setHidden:YES];
+    VLCLegacySetViewHidden(creditsScroll, NO);
+    VLCLegacySetViewHidden(joinusField, YES);
+    VLCLegacySetViewHidden(copyrightField, YES);
+    VLCLegacySetViewHidden(attributionField, YES);
+    VLCLegacySetViewHidden(trademarksField, YES);
 
     NSString *title = [(NSButton *)sender title];
     if ([title isEqualToString:_NS("Authors")])

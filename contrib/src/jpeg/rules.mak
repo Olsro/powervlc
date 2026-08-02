@@ -1,6 +1,6 @@
 # jpeg
 
-JPEG_VERSION := 9b
+JPEG_VERSION := 10
 JPEG_URL := http://www.ijg.org/files/jpegsrc.v$(JPEG_VERSION).tar.gz
 
 $(TARBALLS)/jpegsrc.v$(JPEG_VERSION).tar.gz:
@@ -8,16 +8,17 @@ $(TARBALLS)/jpegsrc.v$(JPEG_VERSION).tar.gz:
 
 .sum-jpeg: jpegsrc.v$(JPEG_VERSION).tar.gz
 
+jpeg: UNPACK_DIR=jpeg-$(JPEG_VERSION)
 jpeg: jpegsrc.v$(JPEG_VERSION).tar.gz .sum-jpeg
 	$(UNPACK)
-	mv jpeg-$(JPEG_VERSION) jpegsrc.v$(JPEG_VERSION)
-	$(APPLY) $(SRC)/jpeg/no_executables.patch
 	$(UPDATE_AUTOCONFIG)
 	$(MOVE)
 
 .jpeg: jpeg
 	$(RECONF)
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF)
-	$(MAKE) -C $< install
-	cd $< && if test -e $(PREFIX)/lib/libjpeg.a; then $(RANLIB) $(PREFIX)/lib/libjpeg.a; fi
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE)
+	+$(MAKEBUILD) bin_PROGRAMS=
+	+$(MAKEBUILD) bin_PROGRAMS= install
+	if test -e $(PREFIX)/lib/libjpeg.a; then $(RANLIB) $(PREFIX)/lib/libjpeg.a; fi
 	touch $@

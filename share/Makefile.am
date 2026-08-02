@@ -5,16 +5,17 @@ EXTRA_DIST =
 desktopdir = $(datadir)/applications
 if !HAVE_WIN32
 if !HAVE_DARWIN
-desktop_DATA = vlc.desktop
+desktop_DATA = vlc.desktop vlc-openbd.desktop vlc-opendvd.desktop vlc-openvcd.desktop vlc-opencda.desktop
 appdatadir = $(datarootdir)/metainfo
 appdata_DATA = com.github.PowerVLC.metainfo.xml
 endif
 endif
 
 EXTRA_DIST += vlc.desktop.in vlc.desktop.mimetypes
+EXTRA_DIST += vlc-openbd.desktop.in vlc-opendvd.desktop.in vlc-openvcd.desktop.in vlc-opencda.desktop.in
 CLEANFILES += $(desktop_DATA) $(appdata_DATA)
 
-vlc.desktop: vlc.desktop.in $(top_builddir)/config.status
+%.desktop: %.desktop.in $(top_builddir)/config.status
 	$(AM_V_GEN)mimetypes="$$(sed 's/\s*#.*$$//g' $(srcdir)/vlc.desktop.mimetypes | $(EGREP) -v '^$$' | tr "\n" ';')"; \
 	sed \
 		-e 's,\@bindir\@,$(bindir),g' \
@@ -33,14 +34,14 @@ icons128dir = $(iconsdatadir)/128x128/apps
 icons256dir = $(iconsdatadir)/256x256/apps
 
 if !HAVE_WIN32
-dist_vlcdata_DATA = icons/vlc.ico
-dist_icons16_DATA = icons/16x16/vlc.png icons/16x16/vlc.xpm
-dist_icons32_DATA = icons/32x32/vlc.png icons/32x32/vlc.xpm \
-			icons/32x32/vlc-xmas.xpm
-dist_icons48_DATA = icons/48x48/vlc.png icons/48x48/vlc-xmas.png
-dist_icons128_DATA = icons/128x128/vlc.png icons/128x128/vlc-xmas.png \
-                     icons/128x128/vlc-kb.png
-dist_icons256_DATA = icons/256x256/vlc.png
+dist_vlcdata_DATA = icons/powervlc.ico
+dist_icons16_DATA = icons/16x16/powervlc.png icons/16x16/powervlc.xpm
+dist_icons32_DATA = icons/32x32/powervlc.png icons/32x32/powervlc.xpm \
+			icons/32x32/powervlc-xmas.xpm
+dist_icons48_DATA = icons/48x48/powervlc.png icons/48x48/powervlc-xmas.png
+dist_icons128_DATA = icons/128x128/powervlc.png icons/128x128/powervlc-xmas.png \
+                     icons/128x128/powervlc-kb.png
+dist_icons256_DATA = icons/256x256/powervlc.png
 
 nobase_dist_vlcdata_SCRIPTS = \
 	utils/gnome-vlc-default.sh \
@@ -153,10 +154,11 @@ nobase_vlclib_DATA += \
 	lua/playlist/soundcloud.luac \
 	lua/playlist/vimeo.luac \
 	lua/playlist/vocaroo.luac \
-	lua/playlist/youtube.luac \
 	lua/playlist/twitch.luac \
+	lua/playlist/radiobrowser.luac \
 	lua/sd/icecast.luac \
 	lua/sd/jamendo.luac \
+	lua/sd/radiobrowser.luac \
 	$(NULL)
 
 nobase_doc_DATA = \
@@ -173,7 +175,6 @@ nobase_doc_DATA = \
 	lua/meta/reader/filename.lua \
 	lua/playlist/README.txt \
 	lua/playlist/liveleak.lua \
-	lua/playlist/youtube.lua \
 	lua/sd/README.txt \
 	lua/sd/icecast.lua \
 	lua/sd/icast.lua \
@@ -291,14 +292,15 @@ EXTRA_DIST += \
 	lua/playlist/soundcloud.lua \
 	lua/playlist/vimeo.lua \
 	lua/playlist/vocaroo.lua \
-	lua/playlist/youtube.lua \
 	lua/playlist/twitch.lua \
+	lua/playlist/radiobrowser.lua \
 	lua/playlist/zapiks.lua \
 	lua/sd/README.txt \
 	lua/sd/fmc.lua \
 	lua/sd/icecast.lua \
 	lua/sd/icast.lua \
-	lua/sd/jamendo.lua
+	lua/sd/jamendo.lua \
+	lua/sd/radiobrowser.lua
 DIST_solid = \
 	solid/vlc-openbd.desktop \
 	solid/vlc-opencda.desktop \
@@ -307,3 +309,6 @@ DIST_solid = \
 
 EXTRA_DIST += \
         hrtfs/dodeca_and_7channel_3DSL_HRTF.sofa
+
+EXTRA_DIST += \
+        fontconfig/fonts.conf

@@ -218,6 +218,7 @@ endif
 libmacosx_plugin_la_RES = \
 	gui/macosx/Resources/App-Icons/VLC-Xmas.icns \
 	gui/macosx/Resources/App-Icons/VLC.icns \
+	gui/macosx/Resources/App-Icons/Assets.car \
 	gui/macosx/Resources/File-Icons/aiff.icns \
 	gui/macosx/Resources/File-Icons/audio.icns \
 	gui/macosx/Resources/File-Icons/avi.icns \
@@ -743,9 +744,11 @@ libmacosx_plugin_la_RES = \
 	gui/macosx/Resources/Button-Icons/VLCClearLogTemplate.pdf \
 	gui/macosx/Resources/Button-Icons/VLCSaveTemplate.pdf
 
+# Resources/README is a note to would-be translators about the .lproj
+# directories, addressed to vlc-devel and read by no code: it does not belong
+# in a shipped bundle.
 libmacosx_plugin_la_RES += \
 	gui/macosx/Resources/dsa_pub.pem \
-	gui/macosx/Resources/README \
 	gui/macosx/Resources/vlc.scriptSuite \
 	gui/macosx/Resources/vlc.scriptTerminology
 

@@ -76,28 +76,28 @@ EpgDialog::EpgDialog( intf_thread_t *_p_intf ): QVLCFrame( _p_intf )
     layout->addWidget( epg, 10 );
     layout->addWidget( descBox );
 
-    CONNECT( epg, itemSelectionChanged( EPGItem *), this, displayEvent( EPGItem *) );
-    CONNECT( epg, programActivated(int), THEMIM->getIM(), changeProgram(int) );
-    CONNECT( THEMIM->getIM(), epgChanged(), this, scheduleUpdate() );
-    CONNECT( THEMIM, inputChanged( bool ), this, inputChanged() );
+    connect( epg, &EPGWidget::itemSelectionChanged, this, &EpgDialog::displayEvent );
+    connect( epg, &EPGWidget::programActivated, THEMIM->getIM(), &InputManager::changeProgram );
+    connect( THEMIM->getIM(), &InputManager::epgChanged, this, &EpgDialog::scheduleUpdate );
+    connect( THEMIM, &MainInputManager::inputChanged, this, &EpgDialog::inputChanged );
 
     QDialogButtonBox *buttonsBox = new QDialogButtonBox( this );
 
 #if 0
     QPushButton *update = new QPushButton( qtr( "Update" ) ); // Temporary to test
     buttonsBox->addButton( update, QDialogButtonBox::ActionRole );
-    BUTTONACT( update, updateInfos() );
+    BUTTONACT( update, updateInfos );
 #endif
 
     buttonsBox->addButton( new QPushButton( qtr( "&Close" ) ),
                            QDialogButtonBox::RejectRole );
     boxLayout->addWidget( buttonsBox );
-    CONNECT( buttonsBox, rejected(), this, close() );
+    connect( buttonsBox, &QDialogButtonBox::rejected, this, &EpgDialog::close );
 
     timer = new QTimer( this );
     timer->setSingleShot( true );
     timer->setInterval( 5000 );
-    CONNECT( timer, timeout(), this, timeout() );
+    connect( timer, &QTimer::timeout, this, &EpgDialog::timeout );
 
     updateInfos();
     restoreWidgetPosition( "EPGDialog", QSize( 650, 450 ) );

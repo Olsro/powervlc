@@ -186,6 +186,7 @@
 #define VLC_CODEC_CINEFORM        VLC_FOURCC('C','F','H','D')
 #define VLC_CODEC_SPEEDHQ         VLC_FOURCC('S','H','Q','2')
 #define VLC_CODEC_PIXLET          VLC_FOURCC('p','x','l','t')
+#define VLC_CODEC_APV             VLC_FOURCC('a','p','v','1')
 
 /***********
  * Chromas
@@ -229,6 +230,9 @@
 /* Planar YUV 4:2:2 Y:U:V 12-bit stored on 16 bits */
 #define VLC_CODEC_I422_12L        VLC_FOURCC('I','2','C','L')
 #define VLC_CODEC_I422_12B        VLC_FOURCC('I','2','C','B')
+/* Planar YUV 4:2:2 Y:U:V 16-bit stored on 16 bits */
+#define VLC_CODEC_I422_16L        VLC_FOURCC('I','2','F','L')
+#define VLC_CODEC_I422_16B        VLC_FOURCC('I','2','F','B')
 
 /* Planar YUV 4:4:0 Y:U:V */
 #define VLC_CODEC_I440            VLC_FOURCC('I','4','4','0')
@@ -483,6 +487,9 @@
 #define VLC_CODEC_ATRAC1                     VLC_FOURCC('a','t','r','1')
 #define VLC_CODEC_ATRAC3                     VLC_FOURCC('a','t','r','c')
 #define VLC_CODEC_ATRAC3P                    VLC_FOURCC('a','t','r','p')
+#define VLC_CODEC_ATRAC3AL                   VLC_FOURCC('a','t','r','l')
+#define VLC_CODEC_ATRAC3PAL                  VLC_FOURCC('a','t','p','l')
+#define VLC_CODEC_ATRAC9                     VLC_FOURCC('a','t','r','9')
 #define VLC_CODEC_IMC                        VLC_FOURCC(0x1,0x4,0x0,0x0)
 #define VLC_CODEC_TRUESPEECH                 VLC_FOURCC(0x22,0x0,0x0,0x0)
 #define VLC_CODEC_NELLYMOSER                 VLC_FOURCC('N','E','L','L')

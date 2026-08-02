@@ -235,7 +235,7 @@ static int ItemChange( vlc_object_t *p_this, const char *psz_var,
             GError *p_error = NULL;
             char *psz_pixbuf;
             char *psz_data = config_GetDataDir();
-            if( asprintf( &psz_pixbuf, "%s/icons/48x48/vlc.png", psz_data ) >= 0 )
+            if( asprintf( &psz_pixbuf, "%s/icons/48x48/powervlc.png", psz_data ) >= 0 )
             {
                 pix = gdk_pixbuf_new_from_file( psz_pixbuf, &p_error );
                 free( psz_pixbuf );

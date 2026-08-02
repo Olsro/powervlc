@@ -1,0 +1,38 @@
+From f5de11f1ab4ff6b1d2c856e87c0049c4d7a00e02 Mon Sep 17 00:00:00 2001
+From: Steve Lhomme <robux4@ycbcr.xyz>
+Date: Fri, 10 Apr 2026 14:17:08 +0200
+Subject: [PATCH 2/2] Only link with ZLib library if it's found
+
+---
+ src/CMakeLists.txt | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 9c8b8ac..ba45468 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -74,7 +74,9 @@ add_library(mysofa-static STATIC ${libsrc})
+ if(MATH)
+     target_link_libraries(mysofa-static LINK_PRIVATE ${MATH})
+ endif()
+-target_link_libraries(mysofa-static LINK_PRIVATE ${ZLIB_LIBRARIES})
++if(ZLIB_LIBRARIES)
++    target_link_libraries(mysofa-static LINK_PRIVATE ${ZLIB_LIBRARIES})
++endif()
+ set_target_properties(
+   mysofa-static
+   PROPERTIES OUTPUT_NAME mysofa CLEAN_DIRECT_OUTPUT 1 POSITION_INDEPENDENT_CODE
+@@ -99,7 +101,9 @@ if(BUILD_SHARED_LIBS)
+   if(MATH)
+     target_link_libraries(mysofa-shared PRIVATE ${MATH})
+   endif()
+-  target_link_libraries(mysofa-shared PRIVATE ${ZLIB_LIBRARIES})
++  if(ZLIB_LIBRARIES)
++    target_link_libraries(mysofa-shared PRIVATE ${ZLIB_LIBRARIES})
++  endif()
+   set_target_properties(mysofa-shared
+                         PROPERTIES OUTPUT_NAME mysofa CLEAN_DIRECT_OUTPUT 1)
+   set_property(
+-- 
+2.43.0
+

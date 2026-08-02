@@ -19,10 +19,11 @@ VPATH := $(TARBALLS)
 
 # Common download locations
 GNU ?= http://ftpmirror.gnu.org/gnu
-SF := https://netcologne.dl.sourceforge.net/
+SF := https://downloads.sourceforge.net/project
 VIDEOLAN := http://downloads.videolan.org/pub/videolan
 CONTRIB_VIDEOLAN := http://downloads.videolan.org/pub/contrib
-GITHUB := https://github.com/
+VIDEOLAN_GIT := https://code.videolan.org
+GITHUB := https://github.com
 GNUGPG := https://www.gnupg.org/ftp/gcrypt
 XIPH := https://ftp.osuosl.org/pub/xiph/releases
 
@@ -169,21 +170,13 @@ endif
 
 CCAS=$(CC) -c
 
-ifdef HAVE_IOS
-ifdef HAVE_NEON
-AS=perl $(abspath $(VLC_TOOLS)/bin/gas-preprocessor.pl) $(CC)
-CCAS=gas-preprocessor.pl $(CC) -c
-endif
-endif
-
 LN_S = ln -s
 ifdef HAVE_WIN32
 MINGW_W64_VERSION := $(shell echo "__MINGW64_VERSION_MAJOR" | $(CC) $(CFLAGS) -E -include _mingw.h - | tail -n 1)
 ifneq ($(MINGW_W64_VERSION),)
 HAVE_MINGW_W64 := 1
-mingw_at_least = $(shell [ $(MINGW_W64_VERSION) -gt $(1) ] && echo true)
+mingw_at_least = $(shell [ $(MINGW_W64_VERSION) -ge $(1) ] && echo true)
 endif
-HAVE_WINPTHREAD := $(shell $(CC) $(CFLAGS) -E -dM -include pthread.h - < /dev/null >/dev/null 2>&1 || echo FAIL)
 ifndef HAVE_CROSS_COMPILE
 LN_S = cp -R
 endif
@@ -204,15 +197,29 @@ EXTRA_CFLAGS += -DWINSTORECOMPAT
 EXTRA_LDFLAGS += -lwinstorecompat
 endif
 
-ifneq ($(findstring clang, $(shell $(CC) --version)),)
+clang_at_least = $(shell echo false)
+clang_at_most  = $(shell echo false)
+clang_major_is = $(shell echo false)
+gcc_at_least = $(shell echo false)
+gcc_at_most  = $(shell echo false)
+gcc_major_is = $(shell echo false)
+ifneq ($(findstring clang, $(shell $(CC) --version 2>/dev/null | grep -qi clang && echo "clang")),)
 HAVE_CLANG := 1
 # clang-only diagnostic override some darwin contribs need; empty for GCC,
 # which errors out on -Wno-error=<unknown warning>.
 WNO_PARTIAL_AVAILABILITY := -Wno-error=partial-availability
 CLANG_VERSION := $(shell $(CC) --version | head -1 | grep -o '[0-9]\+\.' | head -1 | cut -d '.' -f 1)
 clang_at_least = $(shell [ $(CLANG_VERSION) -ge $(1) ] && echo true)
+clang_at_most  = $(shell [ $(CLANG_VERSION) -le $(1) ] && echo true)
+clang_major_is = $(shell [ $(CLANG_VERSION) -eq $(1) ] && echo true)
 else
-clang_at_least = $(shell echo false)
+ifneq ($(findstring Free Software Foundation, $(shell $(CC) --version 2>/dev/null | head -2 | tail -1)),)
+HAVE_GCC := 1
+GCC_VERSION := $(shell $(CC) --version | head -1 | grep -o '[0-9]\+\.' | head -1 | cut -d '.' -f 1)
+gcc_at_least = $(shell [ $(GCC_VERSION) -ge $(1) ] && echo true)
+gcc_at_most  = $(shell [ $(GCC_VERSION) -le $(1) ] && echo true)
+gcc_major_is = $(shell [ $(GCC_VERSION) -eq $(1) ] && echo true)
+endif
 endif
 
 cppcheck = $(shell $(CC) $(CFLAGS) -E -dM - < /dev/null | grep -E $(1))
@@ -366,10 +373,23 @@ PIC := -fPIC
 endif
 
 HOSTTOOLS := \
-	CC="$(CC)" CXX="$(CXX)" LD="$(LD)" \
+	CC="$(CC)" CXX="$(CXX)" OBJC="$(OBJC)" OBJCXX="$(OBJCXX)" LD="$(LD)" \
 	AR="$(AR)" CCAS="$(CCAS)" RANLIB="$(RANLIB)" STRIP="$(STRIP)" \
 	PATH="$(PREFIX)/bin:$(PATH)" \
 	PKG_CONFIG="$(PKG_CONFIG)"
+
+ifdef HAVE_BITCODE_ENABLED
+CFLAGS := $(CFLAGS) -fembed-bitcode
+CXXFLAGS := $(CXXFLAGS) -fembed-bitcode
+endif
+
+# Add these flags after CMake consumed the CFLAGS/CXXFLAGS
+# CMake handles the optimization level with CMAKE_BUILD_TYPE
+HOSTVARS_CMAKE := \
+	CPPFLAGS="$(CPPFLAGS)" \
+	CFLAGS="$(CFLAGS)" \
+	CXXFLAGS="$(CXXFLAGS)" \
+	LDFLAGS="$(LDFLAGS)"
 
 # Add these flags after Meson consumed the CFLAGS/CXXFLAGS
 # as when setting those for Meson, it would apply to tests
@@ -381,11 +401,6 @@ CXXFLAGS := $(CXXFLAGS) -g -O0
 else
 CFLAGS := $(CFLAGS) -g -O2
 CXXFLAGS := $(CXXFLAGS) -g -O2
-endif
-
-ifdef HAVE_BITCODE_ENABLED
-CFLAGS := $(CFLAGS) -fembed-bitcode
-CXXFLAGS := $(CXXFLAGS) -fembed-bitcode
 endif
 
 ifdef ENABLE_PDB
@@ -440,10 +455,11 @@ checksum = \
 	(cd $(TARBALLS) && $(1) /dev/stdin) < \
 		"$(SRC)/$(patsubst .sum-%,%,$@)/$(2)SUMS"
 CHECK_SHA512 = $(call checksum,$(SHA512SUM),SHA512)
-UNPACK = $(RM) -R $@ \
+UNPACK = $(RM) -R $@ $(UNPACK_DIR) \
 	$(foreach f,$(filter %.tar.gz %.tgz,$^), && tar $(TAR_VERBOSE)xzfo $(f)) \
 	$(foreach f,$(filter %.tar.bz2,$^), && tar $(TAR_VERBOSE)xjfo $(f)) \
 	$(foreach f,$(filter %.tar.xz,$^), && tar $(TAR_VERBOSE)xJfo $(f)) \
+	$(foreach f,$(filter %.tar.zst,$^), && tar $(TAR_VERBOSE)xfo $(f)) \
 	$(foreach f,$(filter %.zip,$^), && unzip $(ZIP_QUIET) $(f) $(UNZIP_PARAMS))
 UNPACK_DIR = $(patsubst %.tar,%,$(basename $(notdir $<)))
 APPLY = (cd $(UNPACK_DIR) && patch -fp1) <
@@ -466,16 +482,19 @@ endif
 RECONF = mkdir -p -- $(PREFIX)/share/aclocal && \
 	cd $< && $(AUTORECONF) -fiv $(ACLOCAL_AMFLAGS)
 
-BUILD_DIR = $</_build
+BUILD_DIR = $</vlc_build
 BUILD_SRC := ..
 # build directory relative to UNPACK_DIR
-BUILD_DIRUNPACK = _build
+BUILD_DIRUNPACK = vlc_build
 
 
 MAKEBUILDDIR = mkdir -p $(BUILD_DIR) && rm -f $(BUILD_DIR)/config.status
 MAKEBUILD = $(MAKE) -C $(BUILD_DIR)
 MAKECONFDIR = cd $(BUILD_DIR) && $(HOSTVARS) $(BUILD_SRC)
-MAKECONFIGURE = $(MAKECONFDIR)/configure $(HOSTCONF)
+# An interrupted maintainer-mode am--refresh can leave a stray config.status
+# in the SOURCE dir, and the next out-of-tree configure then refuses the
+# "already configured" source tree: always sweep it first.
+MAKECONFIGURE = rm -f $</config.status && $(MAKECONFDIR)/configure $(HOSTCONF)
 
 # Work around for https://lists.nongnu.org/archive/html/bug-gnulib/2020-05/msg00237.html
 # When using a single command, make might take a shortcut and fork/exec
@@ -498,6 +517,13 @@ CMAKE += -DCMAKE_BUILD_TYPE=RelWithDebInfo
 endif
 ifdef HAVE_WIN32
 CMAKE += -DCMAKE_DEBUG_POSTFIX:STRING=
+endif
+ifdef HAVE_DARWIN_OS
+# clang-only diagnostic: the FSF GCC of the legacy ppc/i386 cross builds
+# errors out on it, which silently fails EVERY CMake try_compile probe
+ifneq ($(findstring clang, $(shell $(CC) --version 2>/dev/null)),)
+CMAKE += -DCMAKE_REQUIRED_FLAGS="-Werror=partial-availability"
+endif
 endif
 ifdef HAVE_ANDROID
 CMAKE += -DANDROID:BOOL=ON
@@ -619,12 +645,12 @@ distclean: clean
 	$(RM) config.mak
 	unlink Makefile
 
-PREBUILT_URL=http://download.videolan.org/pub/videolan/contrib/$(HOST)/vlc-contrib-$(HOST)-latest.tar.bz2
+PREBUILT_URL=http://download.videolan.org/pub/videolan/contrib/$(HOST)/vlc-contrib-$(HOST)-latest.tar.zst
 
-vlc-contrib-$(HOST)-latest.tar.bz2:
+vlc-contrib-$(HOST)-latest.tar.zst:
 	$(call download,$(PREBUILT_URL))
 
-prebuilt: vlc-contrib-$(HOST)-latest.tar.bz2
+prebuilt: vlc-contrib-$(HOST)-latest.tar.zst
 	$(RM) -r $(PREFIX)
 	-$(UNPACK)
 	mv $(HOST) $(PREFIX)
@@ -647,7 +673,7 @@ package: install
 ifneq ($(notdir $(PREFIX)),$(HOST))
 	(cd tmp && mv $(notdir $(PREFIX)) $(HOST))
 endif
-	(cd tmp && tar c $(HOST)/) | bzip2 -c > ../vlc-contrib-$(HOST)-$(DATE).tar.bz2
+	tar -c -C tmp $(HOST)/ | zstd --quiet --force --threads=0 -12 -o ../vlc-contrib-$(HOST)-$(DATE).tar.zst
 
 list:
 	@echo All packages:
@@ -716,13 +742,39 @@ endif
 ifdef HAVE_DARWIN_OS
 	echo "set(CMAKE_C_FLAGS \"$(CFLAGS)\")" >> $@
 	echo "set(CMAKE_CXX_FLAGS \"$(CXXFLAGS)\")" >> $@
+	# .S files go through the ASM language whose flags are NOT seeded from
+	# CFLAGS: without -arch/-isysroot the host-arch assembler chokes on
+	# cross-compiled assembly (mpg123 x86_64 .S assembled as arm64)
+	echo "set(CMAKE_ASM_FLAGS \"$(CFLAGS)\")" >> $@
 	echo "set(CMAKE_LD_FLAGS \"$(LDFLAGS)\")" >> $@
 	echo "set(CMAKE_AR ar CACHE FILEPATH \"Archiver\")" >> $@
+ifeq ($(ARCH),aarch64)
+	echo "set(CMAKE_OSX_ARCHITECTURES \"arm64\" CACHE STRING \"\")" >> $@
+else
+ifeq ($(ARCH),arm)
+	echo "set(CMAKE_OSX_ARCHITECTURES \"armv7\" CACHE STRING \"\")" >> $@
+else
+	echo "set(CMAKE_OSX_ARCHITECTURES \"$(ARCH)\" CACHE STRING \"\")" >> $@
+endif
+endif
+ifdef VLC_DEPLOYMENT_TARGET
+	echo "set(CMAKE_OSX_DEPLOYMENT_TARGET \"$(VLC_DEPLOYMENT_TARGET)\" CACHE STRING \"\")" >> $@
+endif
 # The Xcode install_name_tool refuses the Mach-O layout produced by the
 # legacy (xtools) linker; make CMake use the matching xtools binary.
 	if test -n "$(INSTALL_NAME_TOOL)"; then \
 		echo "set(CMAKE_INSTALL_NAME_TOOL $(INSTALL_NAME_TOOL) CACHE FILEPATH \"install_name_tool\")" >> $@; \
 	fi;
+ifeq ($(ARCH),ppc)
+	# cmake >= 4.1 segfaults parsing the big-endian ppc Mach-O produced by
+	# its ABI-detection try_compile (cmMachO::GetArchitectures ->
+	# _platform_strlen): pre-seed the results so the probe never runs.
+	echo "set(CMAKE_C_COMPILER_WORKS TRUE)" >> $@
+	echo "set(CMAKE_CXX_COMPILER_WORKS TRUE)" >> $@
+	echo "set(CMAKE_C_ABI_COMPILED TRUE)" >> $@
+	echo "set(CMAKE_CXX_ABI_COMPILED TRUE)" >> $@
+	echo "set(CMAKE_SIZEOF_VOID_P 4)" >> $@
+endif
 ifdef HAVE_IOS
 	echo "set(CMAKE_OSX_SYSROOT $(IOS_SDK))" >> $@
 else
@@ -731,6 +783,7 @@ endif
 else
 	echo "set(CMAKE_AR $(AR) CACHE FILEPATH \"Archiver\")" >> $@
 endif
+	echo "set(CMAKE_LINKER $(LD))" >> $@
 ifdef HAVE_CROSS_COMPILE
 	echo "set(_CMAKE_TOOLCHAIN_PREFIX $(HOST)-)" >> $@
 ifdef HAVE_ANDROID
@@ -746,6 +799,7 @@ endif
 endif
 	echo "set(CMAKE_C_COMPILER $(CC))" >> $@
 	echo "set(CMAKE_CXX_COMPILER $(CXX))" >> $@
+	echo "set(PKG_CONFIG_EXECUTABLE $(PKG_CONFIG))" >> $@
 ifeq ($(findstring msys,$(BUILD)),msys)
 	echo "set(CMAKE_FIND_ROOT_PATH `cygpath -m $(PREFIX)`)" >> $@
 else
@@ -755,7 +809,9 @@ endif
 ifdef HAVE_CROSS_COMPILE
 	echo "set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)" >> $@
 	echo "set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)" >> $@
+	echo "set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)" >> $@
 endif
+	cat $@
 
 MESON_SYSTEM_NAME =
 ifdef HAVE_WIN32
@@ -786,6 +842,9 @@ crossfile.meson: $(SRC)/gen-meson-crossfile.py
 	HOST_ARCH="$(subst i386,x86,$(ARCH))" \
 	HOST="$(HOST)" \
 	$(SRC)/gen-meson-crossfile.py $@
+	# harfbuzz's meson demands an objcpp compiler on Darwin; the legacy
+	# cross environments leave OBJCXX empty, fall back to the C++ driver
+	sed -i.orig -e "s|^objcpp = ''|objcpp = '$(CXX)'|" $@
 	cat $@
 
 # Default pattern rules

@@ -65,7 +65,7 @@ public slots:
 class AtoB_Button : public QToolButton
 {
     Q_OBJECT
-private slots:
+public slots:
     void updateButtonIcons( bool, bool );
 };
 
@@ -75,10 +75,10 @@ class AspectRatioComboBox : public QComboBox
 public:
     AspectRatioComboBox( intf_thread_t* _p_intf ) : p_intf( _p_intf )
     {
-        CONNECT( THEMIM->getIM(), voutChanged( bool ),
-                 this, updateRatios() );
-        CONNECT( this, currentIndexChanged( int ),
-                 this, updateAspectRatio( int ) );
+        connect( THEMIM->getIM(), &InputManager::voutChanged,
+                 this, &AspectRatioComboBox::updateRatios );
+        connect( this, QOverload<int>::of(&AspectRatioComboBox::currentIndexChanged),
+                 this, &AspectRatioComboBox::updateAspectRatio );
         updateRatios();
     }
 

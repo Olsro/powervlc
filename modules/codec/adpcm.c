@@ -224,16 +224,26 @@ static int OpenDecoder( vlc_object_t *p_this )
     switch( p_sys->codec )
     {
     case ADPCM_IMA_QT:
-        p_sys->i_samplesperblock = 64;
+        if( p_sys->i_block >= 34 * i_channels )
+            p_sys->i_samplesperblock = (p_sys->i_block / (34 * i_channels) ) * 64;
         break;
     case ADPCM_IMA_WAV:
-        if( p_sys->i_block >= 4 * i_channels )
+        /* 4 bytes block/channel preamble */
+        /* samples: 4 bytes aligned nibble per channel. 2 samples per byte */
+        if( i_channels == 2 && p_sys->i_block >= ((4+4) * 2) )
         {
-            p_sys->i_samplesperblock = 2 * ( p_sys->i_block - 4 * i_channels )
+            size_t padding = p_sys->i_block % 8;
+            p_sys->i_samplesperblock = 2 * ( p_sys->i_block - 4 * i_channels - padding )
+                                     / i_channels;
+        }
+        else if( i_channels == 1 && p_sys->i_block > 4 )
+        {
+            p_sys->i_samplesperblock = 2 * ( p_sys->i_block - 4 )
                                      / i_channels;
         }
         break;
     case ADPCM_MS:
+        /* 7 bytes block/channel preamble outputs 2 samples */
         if( p_sys->i_block >= 7 * i_channels )
         {
             p_sys->i_samplesperblock =
@@ -241,6 +251,7 @@ static int OpenDecoder( vlc_object_t *p_this )
         }
         break;
     case ADPCM_DK4:
+        /* 4 bytes block/channel preamble outputs 1 sample */
         if( p_sys->i_block >= 4 * i_channels )
         {
             p_sys->i_samplesperblock =
@@ -248,12 +259,19 @@ static int OpenDecoder( vlc_object_t *p_this )
         }
         break;
     case ADPCM_DK3:
+        /* 16 bytes block (2 channels) preamble outputs 1 sample */
+        /* 3 ADPCM nibbles decodes to 4 16-bit PCM samples. Only stereo */
         i_channels = 2;
-        if( p_sys->i_block >= 16 )
-            p_sys->i_samplesperblock = ( 4 * ( p_sys->i_block - 16 ) + 2 )/ 3;
+        if( p_sys->i_block > 16 )
+        {
+            size_t i_payload = p_sys->i_block - 16;
+            p_sys->i_samplesperblock = 4 * ( i_payload / 3 );
+            if( i_payload % 3 == 2 )
+                p_sys->i_samplesperblock += 2;
+        }
         break;
     case ADPCM_EA:
-        if( p_sys->i_block >= i_channels )
+        if( p_sys->i_block > i_channels )
         {
             p_sys->i_samplesperblock =
                 2 * (p_sys->i_block - i_channels) / i_channels;
@@ -585,7 +603,7 @@ static void DecodeAdpcmImaWav( decoder_t *p_dec, int16_t *p_sample,
     if( b_stereo )
     {
         for( i_nibbles = 2 * (p_sys->i_block - 8);
-             i_nibbles > 0;
+             i_nibbles > 15;
              i_nibbles -= 16 )
         {
             int i;
@@ -631,35 +649,38 @@ static void DecodeAdpcmImaWav( decoder_t *p_dec, int16_t *p_sample,
 static void DecodeAdpcmImaQT( decoder_t *p_dec, int16_t *p_sample,
                               uint8_t *p_buffer )
 {
+    decoder_sys_t *p_sys  = p_dec->p_sys;
     adpcm_ima_wav_channel_t channel[2];
     int                     i_nibbles;
     int                     i_ch;
-    int                     i_step;
+    int                     i_chans = p_dec->fmt_out.audio.i_channels;
 
-    i_step = p_dec->fmt_out.audio.i_channels;
-
-    for( i_ch = 0; i_ch < p_dec->fmt_out.audio.i_channels; i_ch++ )
+    for( unsigned i=0; i<p_sys->i_block/(34 * i_chans); i++)
     {
-        /* load preamble */
-        channel[i_ch].i_predictor  = (int16_t)((( ( p_buffer[0] << 1 )|(  p_buffer[1] >> 7 ) ))<<7);
-        channel[i_ch].i_step_index = p_buffer[1]&0x7f;
-
-        CLAMP( channel[i_ch].i_step_index, 0, 88 );
-        p_buffer += 2;
-
-        for( i_nibbles = 0; i_nibbles < 64; i_nibbles +=2 )
+        for( i_ch = 0; i_ch < p_dec->fmt_out.audio.i_channels; i_ch++ )
         {
-            *p_sample = AdpcmImaWavExpandNibble( &channel[i_ch], (*p_buffer)&0x0f);
-            p_sample += i_step;
+            int16_t *p_out = &p_sample[i_ch];
 
-            *p_sample = AdpcmImaWavExpandNibble( &channel[i_ch], (*p_buffer >> 4)&0x0f);
-            p_sample += i_step;
+            /* load preamble */
+            channel[i_ch].i_predictor  = (int16_t)((( ( p_buffer[0] << 1 )|(  p_buffer[1] >> 7 ) ))<<7);
+            channel[i_ch].i_step_index = p_buffer[1]&0x7f;
 
-            p_buffer++;
+            CLAMP( channel[i_ch].i_step_index, 0, 88 );
+            p_buffer += 2;
+
+            for( i_nibbles = 0; i_nibbles < 64; i_nibbles +=2 )
+            {
+                *p_out = AdpcmImaWavExpandNibble( &channel[i_ch], (*p_buffer)&0x0f);
+                p_out += i_chans;
+
+                *p_out = AdpcmImaWavExpandNibble( &channel[i_ch], (*p_buffer >> 4)&0x0f);
+                p_out += i_chans;
+
+                p_buffer++;
+            }
         }
 
-        /* Next channel */
-        p_sample += 1 - 64 * i_step;
+        p_sample += 64 * i_chans;
     }
 }
 
@@ -728,9 +749,12 @@ static void DecodeAdpcmDk3( decoder_t *p_dec, int16_t *p_sample,
     GetByte( sum.i_step_index );
     GetByte( diff.i_step_index );
 
+    CLAMP( sum.i_step_index, 0, 88 );
+    CLAMP( diff.i_step_index, 0, 88 );
+
     i_diff_value = diff.i_predictor;
     /* we process 6 nibbles at once */
-    while( p_buffer + 1 <= p_end )
+    while( p_buffer + 1 < p_end )
     {
         /* first 3 nibbles */
         AdpcmImaWavExpandNibble( &sum,
@@ -808,7 +832,7 @@ static void DecodeAdpcmEA( decoder_t *p_dec, int16_t *p_sample,
         d[c] = (input & 0xf) + 8;
     }
 
-    for (p_buffer += chans; p_buffer < p_end; p_buffer += chans)
+    for (p_buffer += chans; p_buffer + chans <= p_end; p_buffer += chans)
     {
         union { uint32_t u; int32_t i; } spl;
 

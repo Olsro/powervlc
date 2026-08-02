@@ -184,9 +184,14 @@ int vlc_memstream_vprintf(struct vlc_memstream *ms, const char *fmt,
     char *ptr;
     int len;
     size_t newlen;
+    char probe[1];
 
+    /* ⚠ NOT vsnprintf(NULL, 0, ...): asking for the length that way is C99, and
+     * Mac OS X 10.2 answers -1 (measured on 10.2.1, where the same call with a
+     * one-byte buffer already returns the right length). A one-byte buffer is
+     * just as portable and costs a single stack byte. */
     va_copy(ap, args);
-    len = vsnprintf(NULL, 0, fmt, ap);
+    len = vsnprintf(probe, sizeof (probe), fmt, ap);
     va_end(ap);
 
     if (len < 0

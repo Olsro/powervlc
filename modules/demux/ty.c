@@ -324,7 +324,7 @@ static int Open(vlc_object_t *p_this)
     /* at this point, we assume we have a valid TY stream */
     msg_Dbg( p_demux, "valid TY stream detected" );
 
-    p_sys = malloc(sizeof(demux_sys_t));
+    p_sys = calloc(1, sizeof(demux_sys_t));
     if( unlikely(p_sys == NULL) )
         return VLC_ENOMEM;
 
@@ -334,7 +334,6 @@ static int Open(vlc_object_t *p_this)
 
     /* create our structure that will hold all data */
     p_demux->p_sys = p_sys;
-    memset(p_sys, 0, sizeof(demux_sys_t));
 
     /* set up our struct (most were zero'd out with the memset above) */
     p_sys->b_first_chunk = true;
@@ -369,11 +368,13 @@ static int Open(vlc_object_t *p_this)
         es_format_Init( &fmt, AUDIO_ES, VLC_CODEC_A52 );
     }
     fmt.i_group = TY_ES_GROUP;
+    fmt.b_packetized = false;
     p_sys->p_audio = es_out_Add( p_demux->out, &fmt );
 
     /* register the video stream */
     es_format_Init( &fmt, VIDEO_ES, VLC_CODEC_MPGV );
     fmt.i_group = TY_ES_GROUP;
+    fmt.b_packetized = false;
     p_sys->p_video = es_out_Add( p_demux->out, &fmt );
 
     /* */
@@ -817,7 +818,10 @@ static int DemuxRecVideo( demux_t *p_demux, ty_rec_hdr_t *rec_hdr, block_t *p_bl
 
     //msg_Dbg(p_demux, "sending rec %d as video type 0x%02x",
             //p_sys->i_cur_rec, subrec_type);
-    es_out_Send(p_demux->out, p_sys->p_video, p_block_in);
+    if( likely(p_sys->p_video) )
+        es_out_Send(p_demux->out, p_sys->p_video, p_block_in);
+    else
+        block_Release( p_block_in );
     return 0;
 }
 static int DemuxRecAudio( demux_t *p_demux, ty_rec_hdr_t *rec_hdr, block_t *p_block_in )
@@ -1018,7 +1022,10 @@ static int DemuxRecAudio( demux_t *p_demux, ty_rec_hdr_t *rec_hdr, block_t *p_bl
         es_out_Control( p_demux->out, ES_OUT_SET_PCR,
                         p_block_in->i_pts );
     /* Send data */
-    es_out_Send( p_demux->out, p_sys->p_audio, p_block_in );
+    if( likely(p_sys->p_audio) )
+        es_out_Send( p_demux->out, p_sys->p_audio, p_block_in );
+    else
+        block_Release( p_block_in );
     return 0;
 }
 
@@ -1485,7 +1492,7 @@ static int ty_stream_seek_time(demux_t *p_demux, uint64_t l_seek_time)
     unsigned i_seq_entry = 0;
     unsigned i;
     int i_skip_cnt;
-    int64_t l_cur_pos = vlc_stream_Tell(p_demux->s);
+    uint64_t l_cur_pos = vlc_stream_Tell(p_demux->s);
     unsigned i_cur_part = l_cur_pos / TIVO_PART_LENGTH;
     uint64_t l_seek_secs = l_seek_time / 1000000000;
     uint64_t l_fwd_stamp = 1;
@@ -1636,7 +1643,7 @@ static int parse_master(demux_t *p_demux)
 {
     demux_sys_t *p_sys = p_demux->p_sys;
     uint8_t mst_buf[32];
-    int64_t i_save_pos = vlc_stream_Tell(p_demux->s);
+    uint64_t i_save_pos = vlc_stream_Tell(p_demux->s);
     int64_t i_pts_secs;
 
     /* Note that the entries in the SEQ table in the stream may have
@@ -1647,6 +1654,7 @@ static int parse_master(demux_t *p_demux)
 
     /* clear the SEQ table */
     free(p_sys->seq_table);
+    p_sys->seq_table = NULL;
 
     /* parse header info */
     if( vlc_stream_Read(p_demux->s, mst_buf, 32) != 32 )
@@ -1655,14 +1663,17 @@ static int parse_master(demux_t *p_demux)
     uint32_t i_map_size = U32_AT(&mst_buf[20]);  /* size of bitmask, in bytes */
     uint32_t i = U32_AT(&mst_buf[28]);   /* size of SEQ table, in bytes */
 
-    p_sys->i_bits_per_seq_entry = i_map_size * 8;
+    if( i_save_pos + 32 + i > p_sys->i_stream_size )
+        return VLC_EGENERIC;
+
+    if(i_map_size > UINT32_MAX / 8)
+        return VLC_EGENERIC;
+
+    p_sys->i_bits_per_seq_entry = i_map_size * 8U;
     p_sys->i_seq_table_size = i / (8 + i_map_size);
 
     if(p_sys->i_seq_table_size == 0)
-    {
-        p_sys->seq_table = NULL;
         return VLC_SUCCESS;
-    }
 
 #if (UINT32_MAX > SSIZE_MAX)
     if (i_map_size > SSIZE_MAX)

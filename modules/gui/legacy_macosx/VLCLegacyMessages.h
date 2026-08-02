@@ -61,7 +61,12 @@ typedef float CGFloat;
 {
     intf_thread_t *p_intf;
     NSWindow *window;
-    NSTableView *table;
+    /* A text view rather than a table: an error line is a sentence, often a
+     * long one, and a table row is one line high with no way to see the
+     * rest of it -- there is no variable row height before 10.4, and the
+     * column did not even follow the window. Wrapped, selectable text
+     * shows the whole message and can be copied out. */
+    NSTextView *errorView;
     NSMutableArray *errors;   /* array of "title: text" strings */
 }
 

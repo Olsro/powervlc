@@ -29,6 +29,8 @@ TIGER_CONF := --disable-doc
 
 .tiger: libtiger
 	$(RECONF)
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) $(TIGER_CONF)
-	$(MAKE) -C $< install
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE) $(TIGER_CONF)
+	+$(MAKEBUILD)
+	+$(MAKEBUILD) install
 	touch $@

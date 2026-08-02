@@ -529,14 +529,16 @@ static void GetPixels( uint8_t *pp_pixel[4], int pi_pitch[4],
 }
 
 static void ExtractA( picture_t *p_dst, const picture_t *restrict p_src,
-                      unsigned offset )
+                      unsigned x_offset, unsigned y_offset, unsigned offset )
 {
     plane_t *d = &p_dst->p[0];
     const plane_t *s = &p_src->p[0];
+    const uint8_t *src = s->p_pixels + y_offset * s->i_pitch
+                       + x_offset * s->i_pixel_pitch + offset;
 
     for( unsigned y = 0; y < p_dst->format.i_height; y++ )
         for( unsigned x = 0; x < p_dst->format.i_width; x++ )
-            d->p_pixels[y*d->i_pitch+x] = s->p_pixels[y*s->i_pitch+4*x+offset];
+            d->p_pixels[y*d->i_pitch+x] = src[y*s->i_pitch+x*s->i_pixel_pitch];
 }
 
 static void InjectA( picture_t *p_dst, const picture_t *restrict p_src,
@@ -556,6 +558,20 @@ static void FillA( plane_t *d, unsigned i_offset )
         for( int x = 0; x < d->i_visible_pitch; x += d->i_pixel_pitch )
             d->p_pixels[y*d->i_pitch+x+i_offset] = 0xff;
 }
+
+static void ConvertA( struct SwsContext *ctx, plane_t *dst_plane,
+                      const plane_t *src_plane, int i_height )
+{
+    /* src/dst are GREY planes that already hold the cropped,
+     * de-offset alpha. Feed swscale their raw pixels. */
+    const uint8_t *src[4] = { src_plane->p_pixels, NULL, NULL, NULL };
+    uint8_t *dst[4] = { dst_plane->p_pixels, NULL, NULL, NULL };
+    const int src_stride[4] = { src_plane->i_pitch, 0, 0, 0 };
+    const int dst_stride[4] = { dst_plane->i_pitch, 0, 0, 0 };
+
+    sws_scale( ctx, src, src_stride, 0, i_height, dst, dst_stride );
+}
+
 
 static void CopyPad( picture_t *p_dst, const picture_t *p_src )
 {
@@ -673,14 +689,21 @@ static picture_t *Filter( filter_t *p_filter, picture_t *p_pic )
     {
         /* We extract the A plane to rescale it, and then we reinject it. */
         if( p_fmti->i_chroma == VLC_CODEC_RGBA || p_fmti->i_chroma == VLC_CODEC_BGRA )
-            ExtractA( p_sys->p_src_a, p_src, OFFSET_A );
+            ExtractA( p_sys->p_src_a, p_src, p_fmti->i_x_offset, p_fmti->i_y_offset, OFFSET_A );
         else if( p_fmti->i_chroma == VLC_CODEC_ARGB )
-            ExtractA( p_sys->p_src_a, p_src, 0 );
+            ExtractA( p_sys->p_src_a, p_src, p_fmti->i_x_offset, p_fmti->i_y_offset, 0 );
         else
-            plane_CopyPixels( p_sys->p_src_a->p, p_src->p+A_PLANE );
+        {
+            plane_t a = p_src->p[A_PLANE];
+            a.p_pixels += p_fmti->i_y_offset * a.i_pitch
+                        + p_fmti->i_x_offset * a.i_pixel_pitch;
+            /* p_pixels was advanced to the cropped origin, so the padding
+             * lines are past the source: copy only the visible lines. */
+            plane_CopyVisiblePixels( p_sys->p_src_a->p, &a );
+        }
 
-        Convert( p_filter, p_sys->ctxA, p_sys->p_dst_a, p_sys->p_src_a,
-                 p_fmti->i_visible_height, 1, false, false );
+        ConvertA( p_sys->ctxA, &p_sys->p_dst_a->p[0], &p_sys->p_src_a->p[0],
+                  p_fmti->i_visible_height );
         if( p_fmto->i_chroma == VLC_CODEC_RGBA || p_fmto->i_chroma == VLC_CODEC_BGRA )
             InjectA( p_dst, p_sys->p_dst_a, OFFSET_A );
         else if( p_fmto->i_chroma == VLC_CODEC_ARGB )

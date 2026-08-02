@@ -70,8 +70,8 @@ HelpDialog::HelpDialog( intf_thread_t *_p_intf ) : QVLCFrame( _p_intf )
     layout->addWidget( helpBrowser );
     layout->addWidget( closeButtonBox );
 
-    CONNECT( closeButtonBox, rejected(), this, close() );
-    CONNECT( helpBrowser, anchorClicked(const QUrl&), this, onExternalLink(const QUrl&) );
+    connect( closeButtonBox, &QDialogButtonBox::rejected, this, &HelpDialog::close );
+    connect( helpBrowser, &QTextBrowser::anchorClicked, this, &HelpDialog::onExternalLink );
     restoreWidgetPosition( "Help", QSize( 500, 450 ) );
 }
 
@@ -117,7 +117,7 @@ AboutDialog::AboutDialog( intf_thread_t *_p_intf)
     QString attributionString = qtr( "PowerVLC Copyright © 2026 Olsro. PowerVLC is an unofficial fork of VLC, not affiliated with VideoLAN. PowerVLC could not have existed without all the contributors who have worked on VLC since its very beginning. A heartfelt thank you to each and every one of them." );
     ui.MainBlabla->setText("<html><head/><body>" + translatedString + "</p><p>" + attributionString + "</p></body> </html>");
     ui.MainBlabla->setOpenExternalLinks(false);
-    CONNECT( ui.MainBlabla, linkActivated(const QString &), this, onExternalLink(const QString &) );
+    connect( ui.MainBlabla, &QLabel::linkActivated, this, &AboutDialog::onExternalLink );
 
 #if 0
     if( QDate::currentDate().dayOfYear() >= QT_XMAS_JOKE_DAY && var_InheritBool( p_intf, "qt-icon-change" ) )
@@ -254,11 +254,11 @@ UpdateDialog::UpdateDialog( intf_thread_t *_p_intf ) : QVLCFrame( _p_intf )
     setWindowTitle( qtr( "VLC media player updates" ) );
     setWindowRole( "vlc-update" );
 
-    BUTTONACT( recheckButton, UpdateOrDownload() );
-    CONNECT( ui.updateDialogButtonBox, rejected(), this, close() );
+    BUTTONACT( recheckButton, UpdateOrDownload );
+    connect( ui.updateDialogButtonBox, &QDialogButtonBox::rejected, this, &UpdateDialog::close );
 
-    CONNECT( ui.updateNotifyButtonBox, accepted(), this, UpdateOrDownload() );
-    CONNECT( ui.updateNotifyButtonBox, rejected(), this, close() );
+    connect( ui.updateNotifyButtonBox, &QDialogButtonBox::accepted, this, &UpdateDialog::UpdateOrDownload );
+    connect( ui.updateNotifyButtonBox, &QDialogButtonBox::rejected, this, &UpdateDialog::close );
 
     /* Create the update structure */
     p_update = update_New( p_intf );

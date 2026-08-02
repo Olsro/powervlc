@@ -1,12 +1,12 @@
 <RCC>
     <qresource prefix="/logo">
-        <file alias="vlc256.png">../../../share/icons/256x256/vlc.png</file>
-        <file alias="vlc128.png">../../../share/icons/128x128/vlc.png</file>
-        <file alias="vlc16.png">../../../share/icons/16x16/vlc.png</file>
-        <file alias="vlc48.png">../../../share/icons/48x48/vlc.png</file>
-        <file alias="vlc128-xmas.png">../../../share/icons/128x128/vlc-xmas.png</file>
-        <file alias="vlc48-xmas.png">../../../share/icons/48x48/vlc-xmas.png</file>
-        <file alias="vlc128-kb.png">../../../share/icons/128x128/vlc-kb.png</file>
+        <file alias="vlc256.png">../../../share/icons/256x256/powervlc.png</file>
+        <file alias="vlc128.png">../../../share/icons/128x128/powervlc.png</file>
+        <file alias="vlc16.png">../../../share/icons/16x16/powervlc.png</file>
+        <file alias="vlc48.png">../../../share/icons/48x48/powervlc.png</file>
+        <file alias="vlc128-xmas.png">../../../share/icons/128x128/powervlc-xmas.png</file>
+        <file alias="vlc48-xmas.png">../../../share/icons/48x48/powervlc-xmas.png</file>
+        <file alias="vlc128-kb.png">../../../share/icons/128x128/powervlc-kb.png</file>
     </qresource>
     <qresource prefix="/menu">
         <file alias="help.svg">pixmaps/menus/help_16px.svg</file>

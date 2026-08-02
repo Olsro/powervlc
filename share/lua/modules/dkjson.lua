@@ -490,7 +490,10 @@ end
 
 local function scanwhite (str, pos)
   while true do
-    pos = strfind (str, "%S", pos)
+    -- PowerVLC: explicit set instead of %S — the complemented pattern
+    -- classes (%S, %A, ...) are broken in the PowerPC contrib Lua 5.1
+    -- (ctype miscompilation), and JSON whitespace is exactly this set
+    pos = strfind (str, "[^ \t\r\n]", pos)
     if not pos then return nil end
     if strsub (str, pos, pos + 2) == "\239\187\191" then
       -- UTF-8 Byte Order Mark

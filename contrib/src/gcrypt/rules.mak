@@ -1,5 +1,5 @@
 # GCRYPT
-GCRYPT_VERSION := 1.10.1
+GCRYPT_VERSION := 1.12.2
 GCRYPT_URL := $(GNUGPG)/libgcrypt/libgcrypt-$(GCRYPT_VERSION).tar.bz2
 
 PKGS += gcrypt
@@ -14,27 +14,38 @@ $(TARBALLS)/libgcrypt-$(GCRYPT_VERSION).tar.bz2:
 
 gcrypt: libgcrypt-$(GCRYPT_VERSION).tar.bz2 .sum-gcrypt
 	$(UNPACK)
-	$(UPDATE_AUTOCONFIG) && cd $(UNPACK_DIR) && mv config.guess config.sub build-aux
+	$(call pkg_static,"src/libgcrypt.pc.in")
 	$(APPLY) $(SRC)/gcrypt/disable-tests-compilation.patch
-	$(APPLY) $(SRC)/gcrypt/fix-pthread-detection.patch
-	$(APPLY) $(SRC)/gcrypt/0001-compat-provide-a-getpid-replacement-that-works-on-Wi.patch
+ifdef HAVE_MACOSX
+ifneq ($(call darwin_min_os_at_least, 10.7), true)
+	# __thread needs Mac OS X 10.7; VLC never enables FIPS mode, so a
+	# process-wide context is an acceptable stand-in for the per-thread
+	# FIPS service indicator on the legacy targets
+	sed -i.orig -e 's/^#ifdef HAVE_GCC_STORAGE_CLASS__THREAD$$/#if 1/' \
+	    -e 's/^static __thread struct gcry_thread_context/static struct gcry_thread_context/' \
+	    $(UNPACK_DIR)/src/fips.c
+endif
+endif
 	$(APPLY) $(SRC)/gcrypt/0007-random-don-t-use-API-s-that-are-forbidden-in-UWP-app.patch
 	$(APPLY) $(SRC)/gcrypt/0008-random-only-use-wincrypt-in-UWP-builds-if-WINSTORECO.patch
+	$(APPLY) $(SRC)/gcrypt/0001-hwfeatures-call-SHGetFolderPathA-directly.patch
 
 	# don't use getpid in UWP as it's not actually available
 	$(APPLY) $(SRC)/gcrypt/gcrypt-uwp-getpid.patch
-ifdef HAVE_CROSS_COMPILE
-	# disable cross-compiled command line tools that can't be run
-	sed -i.orig -e 's,^bin_PROGRAMS ,bin_PROGRAMS_disabled ,g' $(UNPACK_DIR)/src/Makefile.am
+
+ifdef HAVE_ANDROID
+	# disable ARM code that doesn't compile on Android
+	sed -i.orig -e 's, sha1-armv7-neon.lo,,' -e 's, sha1-armv8-aarch32-ce.lo,,' $(UNPACK_DIR)/configure.ac
+	sed -i.orig -e 's,#ifdef USE_NEON,#if 0 //def USE_NEON,g' $(UNPACK_DIR)/cipher/sha1.c
 endif
 
 	$(MOVE)
 
-DEPS_gcrypt = gpg-error
+DEPS_gcrypt = gpg-error $(DEPS_gpg-error)
 
 GCRYPT_CONF = \
 	--enable-ciphers=aes,des,rfc2268,arcfour,chacha20 \
-	--enable-digests=sha1,md5,rmd160,sha256,sha512,blake2 \
+	--enable-digests=sha1,md5,rmd160,sha256,sha512,blake2,sha3 \
 	--enable-pubkey-ciphers=dsa,rsa,ecc \
 	--disable-docs
 
@@ -47,16 +58,8 @@ ifeq ($(ARCH),x86_64)
 GCRYPT_CONF += --disable-asm --disable-padlock-support
 endif
 endif
-ifdef HAVE_IOS
-GCRYPT_EXTRA_CFLAGS = -fheinous-gnu-extensions
-else
-GCRYPT_EXTRA_CFLAGS =
-endif
-ifdef HAVE_MACOSX
-GCRYPT_CONF += --disable-aesni-support
-ifeq ($(ARCH),aarch64)
-GCRYPT_CONF += --disable-asm --disable-arm-crypto-support
-endif
+ifdef HAVE_DARWIN_OS
+GCRYPT_CONF += ac_cv_sys_symbol_underscore=yes
 ifeq ($(ARCH),i386)
 # The i386 mpi assembler modules (mpih-*.S) do not build with the legacy
 # cctools as / Mach-O PIC combo targeting Tiger, leaving unresolved
@@ -64,7 +67,6 @@ ifeq ($(ARCH),i386)
 GCRYPT_CONF += --disable-asm
 endif
 ifeq ($(ARCH), x86_64)
-GCRYPT_CONF += ac_cv_sys_symbol_underscore=yes
 # getentropy() only exists since macOS 10.12; the weak-linked symbol is NULL
 # on older releases and crashes the RNG initialization. Fall back to
 # /dev/urandom.
@@ -84,7 +86,7 @@ endif
 ifeq ($(ANDROID_ABI), x86_64)
 GCRYPT_CONF += ac_cv_sys_symbol_underscore=no
 endif
-ifeq ($(ARCH),aarch64)
+ifeq ($(ARCH),$(filter $(ARCH), arm aarch64))
 GCRYPT_CONF += --disable-arm-crypto-support
 endif
 endif
@@ -96,6 +98,8 @@ endif
 
 .gcrypt: gcrypt
 	$(RECONF)
-	cd $< && $(HOSTVARS) ./configure $(HOSTCONF) CFLAGS="$(CFLAGS) $(GCRYPT_EXTRA_CFLAGS)" $(GCRYPT_CONF)
-	$(MAKE) -C $< install
+	$(MAKEBUILDDIR)
+	$(MAKECONFIGURE) $(GCRYPT_CONF)
+	+$(MAKEBUILD) bin_PROGRAMS=
+	+$(MAKEBUILD) bin_PROGRAMS= install
 	touch $@

@@ -1,0 +1,76 @@
+macOS: do not let the java_home probe depend on reaping its own child
+
+_java_home_macos() forks /usr/libexec/java_home, reads the path off a pipe,
+then waitpid()s for it and rejects the answer unless the exit status is zero:
+
+    int fd[2], exitcode;
+    ...
+    waitpid(java_home_pid, &exitcode, 0);
+
+    if (result[0] == '\0' || exitcode) {
+
+exitcode is never initialised, and waitpid() only writes it when it succeeds.
+An application that reaps its own children -- anything with a SIGCHLD handler
+or a signal thread doing waitpid(-1, ...) -- collects this child first, so
+libbluray's waitpid() returns -1/ECHILD and the test reads uninitialised stack.
+Whatever that garbage happens to be decides whether BD-J works.
+
+VLC is exactly such an application: on macOS it blocks SIGCHLD in every thread
+and dequeues it on a dedicated thread that loops on waitpid(-1, &status,
+WNOHANG) (bin/darwinvlc.m). Measured against a BD-J disc: the player reported
+
+    Unable to read path from /usr/libexec/java_home
+    BD-J check: Failed to load JVM library
+    BD-J menus not supported. Playing without menus. BD-J support: 1, JVM found: 0
+
+while libbluray's own bd_info, run on the same disc with the same library and
+the same JDK a second earlier, printed "Java VM found: yes". The only
+difference is the reaper thread. It is a race, so it is intermittent -- which
+is worse than a clean failure, because it also occasionally works.
+
+The exit status is not needed to tell success from failure: java_home prints a
+path on stdout and nothing at all when it has no JDK to offer, and the empty
+check above already covers that. So default exitcode to 0 and treat a failed
+waitpid() as "someone else already collected it", keeping the status check for
+the case where the child really was ours and really did fail.
+
+Also terminate the execl() argument list. execl() takes a NULL-terminated
+varargs list and this call passes none, so the callee reads past the end of the
+arguments -- undefined behaviour that happens to work only as long as the stack
+slot after argv[0] is zero.
+
+--- a/src/libbluray/bdj/bdj.c
++++ b/src/libbluray/bdj/bdj.c
+@@ -249,7 +249,7 @@
+         return result;
+
+     pid_t java_home_pid;
+-    int fd[2], exitcode;
++    int fd[2], exitcode = 0;
+
+     if (pipe(fd)) {
+         BD_DEBUG(DBG_BDJ | DBG_CRIT, "unable to set up pipes\n");
+@@ -270,7 +270,7 @@
+             close(fd[1]);
+             close(fd[0]);
+
+-            execl(MACOS_JAVA_HOME, MACOS_JAVA_HOME);
++            execl(MACOS_JAVA_HOME, MACOS_JAVA_HOME, (char *)NULL);
+
+             _exit(-1);
+
+@@ -285,7 +285,13 @@
+                 result[len-1] = '\0';
+             }
+
+-            waitpid(java_home_pid, &exitcode, 0);
++            if (waitpid(java_home_pid, &exitcode, 0) < 0) {
++                /* The host application reaps its own children (a SIGCHLD
++                 * handler, or a signal thread calling waitpid(-1, ...)) and
++                 * got there first. The status is gone; the path we just read
++                 * off the pipe is what matters, and it is checked below. */
++                exitcode = 0;
++            }
+     }
+
+     if (result[0] == '\0' || exitcode) {

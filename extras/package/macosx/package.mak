@@ -78,6 +78,11 @@ if BUILD_LUA
 endif
 	## HRTFs
 	cp -r $(srcdir)/share/hrtfs $@/Contents/MacOS/share/
+	## fontconfig configuration: the contrib library's compiled-in default
+	## points at the build prefix, absent on target machines. The core sets
+	## FONTCONFIG_FILE to this bundled file (see src/darwin/specific.c).
+	mkdir -p $@/Contents/MacOS/share/fontconfig
+	cp $(srcdir)/share/fontconfig/fonts.conf $@/Contents/MacOS/share/fontconfig/
 	## Root CA bundle: gnutls cannot read a system trust store on Mac OS X
 	## before 10.6, so the gnutls module falls back to this file in the
 	## data dir (see modules/misc/gnutls.c) for HTTPS/TLS streams.
@@ -125,6 +130,23 @@ endif
 			echo "ERROR: the Blu-ray plugin is bundled but $(CONTRIB_DIR)/lib/libaacs.dylib is missing." ; \
 			echo "       Build it with: make -C contrib/contrib-<host> .aacs" ; \
 			exit 1 ; \
+		fi ; \
+	fi
+	## libbdplus: BD+ descrambling, the second protection layer some retail
+	## Blu-rays carry on top of AACS. Loaded exactly like libaacs -- libbluray
+	## dlopen()s "libbdplus.dylib" from @executable_path/lib/ -- so it is
+	## bundled the same way. Unlike libaacs its absence is only a warning: BD+
+	## concerns a minority of discs, and libbdplus is useless anyway until the
+	## user drops a VM into ~/Library/Preferences/bdplus/vm0/ (the Help menu
+	## opens that folder).
+	@if ls $@/Contents/MacOS/plugins/*bluray_plugin.dylib >/dev/null 2>&1; then \
+		if test -f "$(CONTRIB_DIR)/lib/libbdplus.dylib"; then \
+			cp -L "$(CONTRIB_DIR)/lib/libbdplus.dylib" \
+				$@/Contents/MacOS/lib/libbdplus.dylib ; \
+			echo "  BUNDLE   libbdplus.dylib" ; \
+		else \
+			echo "  NOTE     no libbdplus for this target: BD+ protected discs will not play" ; \
+			echo "           Build it with: make -C contrib/contrib-<host> .bdplus" ; \
 		fi ; \
 	fi
 	## Copy libbluray jar

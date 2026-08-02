@@ -51,7 +51,7 @@ EbmlParser::~EbmlParser( void )
         return;
     }
 
-    for( int i = 1; i <= mi_level; i++ )
+    for( size_t i = 1; i <= mi_level; i++ )
     {
         if( !mb_keep )
         {
@@ -75,6 +75,7 @@ void EbmlParser::Up( void )
         msg_Warn( p_demux, "MKV/Ebml Parser: Up cannot escape itself" );
     }
 
+    assert(mi_user_level != 0);
     mi_user_level--;
 }
 
@@ -122,11 +123,13 @@ static const EbmlSemanticContext & GetEbmlNoGlobal_Context()
 }
 
 // the Segment Context should not allow Void or CRC32 elements to avoid lookup false alarm
-const EbmlSemanticContext Context_KaxSegmentVLC = EbmlSemanticContext(KaxSegment_Context.GetSize(),
-                                                                      KaxSegment_Context.MyTable,
-                                                                      KaxSegment_Context.Parent(),
-                                                                      GetEbmlNoGlobal_Context,
-                                                                      KaxSegment_Context.GetMaster());
+DEFINE_START_SEMANTIC(KaxSegmentVLC)
+DEFINE_SEMANTIC_ITEM(true, true, EbmlHead)
+DEFINE_SEMANTIC_ITEM(false, false, KaxSegment)
+DEFINE_END_SEMANTIC(KaxSegmentVLC)
+
+DEFINE_xxx_CONTEXT(KaxSegmentVLC,GetEbmlNoGlobal_Context)
+
 
 EbmlElement *EbmlParser::Get( bool allow_overshoot )
 {
@@ -144,12 +147,32 @@ EbmlElement *EbmlParser::Get( bool allow_overshoot )
         EbmlElement *ret = m_got;
         m_got = NULL;
 
+        if( mi_level > 0 && m_el[mi_level-1]->IsFiniteSize() )
+        {
+            if( ret->IsFiniteSize() &&
+                ret->GetEndPosition() > m_el[mi_level-1]->GetEndPosition() )
+            {
+                msg_Err( p_demux, "EBML element at %" PRIu64 " extends beyond parent boundary (%" PRIu64 " beyond %" PRIu64 ")",
+                         ret->GetElementPosition(), ret->GetEndPosition(), m_el[mi_level-1]->GetEndPosition() );
+                delete ret;
+                m_el[mi_level] = NULL;
+                return NULL;
+            }
+            if( !ret->IsFiniteSize() )
+            {
+                msg_Err( p_demux, "Infinite EBML element %s at %" PRIu64 " inside finite parent",
+                         EBML_NAME(ret), ret->GetElementPosition() );
+                delete ret;
+                m_el[mi_level] = NULL;
+                return NULL;
+            }
+        }
         return ret;
     }
 
 next:
     p_prev = m_el[mi_level];
-    if( p_prev )
+    if( p_prev && p_prev->IsFiniteSize() )
         p_prev->SkipData( *m_es, EBML_CONTEXT(p_prev) );
 
     uint64_t i_max_read;
@@ -163,7 +186,7 @@ next:
         if (i_max_read == 0)
         {
             /* check if the parent still has data to read */
-            if ( mi_level > 1 &&
+            if ( mi_level > 1 && m_el[mi_level-2]->IsFiniteSize() &&
                  m_el[mi_level-1]->GetEndPosition() < m_el[mi_level-2]->GetEndPosition() )
             {
                 uint64 top = m_el[mi_level-2]->GetEndPosition();
@@ -197,7 +220,7 @@ next:
         // If the parent is a segment, use the segment context when creating children
         // (to prolong their lifetime), otherwise just continue as normal
         EbmlSemanticContext e_context =
-                EBML_CTX_MASTER( EBML_CONTEXT(m_el[mi_level - 1]) ) == EBML_CTX_MASTER( Context_KaxSegmentVLC )
+                (mi_level == 0 || EBML_CTX_MASTER( EBML_CONTEXT(m_el[mi_level - 1]) ) == EBML_CTX_MASTER( Context_KaxSegmentVLC ))
                 ? Context_KaxSegmentVLC
                 : EBML_CONTEXT(m_el[mi_level - 1]);
 
@@ -223,8 +246,6 @@ next:
         {
             if( !mb_keep )
             {
-                if( MKV_IS_ID( p_prev, KaxBlockVirtual ) )
-                    static_cast<KaxBlockVirtualWorkaround*>(p_prev)->Fix(); // !! WARNING : TODO !! this is undefined-behavior
                 delete p_prev;
                 p_prev = NULL;
             }
@@ -247,11 +268,11 @@ next:
         }
         return NULL;
     }
-    else if( m_el[mi_level] == NULL )
+    if( m_el[mi_level] == NULL )
     {
         msg_Dbg( p_demux,"MKV/Ebml Parser: m_el[mi_level] == NULL" );
         /* go back to the end of the parent */
-        if( p_prev )
+        if( p_prev && p_prev->IsFiniteSize() )
             p_prev->SkipData( *m_es, EBML_CONTEXT(p_prev) );
     }
     else if( m_el[mi_level]->IsDummy() && !mb_dummy )
@@ -269,7 +290,8 @@ next:
             p_prev && p_prev->IsFiniteSize() &&
             p_prev->GetEndPosition() != m_el[mi_level]->GetElementPosition() )
         {
-            msg_Err( p_demux, "Dummy Element at unexpected position... corrupted file?" );
+            msg_Err( p_demux, "Dummy Element at unexpected position (%" PRIu64 " instead of %" PRIu64 ")... corrupted file?",
+                        m_el[mi_level]->GetElementPosition(), p_prev->GetEndPosition() );
             b_bad_position = true;
         }
 
@@ -284,8 +306,6 @@ next:
             {
                 if( !mb_keep )
                 {
-                    if( MKV_IS_ID( p_prev, KaxBlockVirtual ) )
-                        static_cast<KaxBlockVirtualWorkaround*>(p_prev)->Fix(); // !! WARNING : TODO !! this is undefined-behavior
                     delete p_prev;
                     p_prev = NULL;
                 }
@@ -302,6 +322,7 @@ next:
                      m_el[mi_level]->GetElementPosition() );
 
             if( mi_level >= 1 &&
+                m_el[mi_level]->IsFiniteSize() && m_el[mi_level-1]->IsFiniteSize() &&
                 m_el[mi_level]->GetElementPosition() >= m_el[mi_level-1]->GetEndPosition() )
             {
                 msg_Err(p_demux, "This element is outside its known parent... upping level");
@@ -317,8 +338,6 @@ next:
             {
                 if( !mb_keep )
                 {
-                    if( MKV_IS_ID( p_prev, KaxBlockVirtual ) )
-                        static_cast<KaxBlockVirtualWorkaround*>(p_prev)->Fix(); // !! WARNING : TODO !! this is undefined-behavior
                     delete p_prev;
                     p_prev = NULL;
                 }
@@ -332,8 +351,6 @@ next:
     {
         if( !mb_keep )
         {
-            if( MKV_IS_ID( p_prev, KaxBlockVirtual ) )
-                static_cast<KaxBlockVirtualWorkaround*>(p_prev)->Fix();
             delete p_prev;
         }
         mb_keep = false;
@@ -343,7 +360,7 @@ next:
 
 bool EbmlParser::IsTopPresent( EbmlElement *el ) const
 {
-    for( int i = 0; i < mi_level; i++ )
+    for( size_t i = 0; i < mi_level; i++ )
     {
         if( m_el[i] && m_el[i] == el )
             return true;

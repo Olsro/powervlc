@@ -50,25 +50,19 @@ static void od_debug( vlc_object_t *p_object, const char *format, ... )
  *****************************************************************************/
 static unsigned ODDescriptorLength( unsigned *pi_data, const uint8_t **pp_data )
 {
-    unsigned int i_b;
+    unsigned int i_b = 0x80;
     unsigned int i_len = 0;
 
-    if(*pi_data == 0)
-        return 0;
-
-    do
+    unsigned bytes = __MIN(*pi_data, 4);
+    for(unsigned i=0; i<bytes && (i_b&0x80); i++)
     {
         i_b = **pp_data;
         (*pp_data)++;
         (*pi_data)--;
         i_len = ( i_len << 7 ) + ( i_b&0x7f );
+    }
 
-    } while( i_b&0x80 && *pi_data > 0 );
-
-    if (i_len > *pi_data)
-        i_len = *pi_data;
-
-    return i_len;
+    return __MIN(i_len, *pi_data);
 }
 
 static unsigned ODGetBytes( unsigned *pi_data, const uint8_t **pp_data, size_t bytes )
@@ -133,13 +127,25 @@ static bool OD_SLDesc_Read( vlc_object_t *p_object, unsigned i_data, const uint8
         sl_descr->i_timestamp_resolution = ODGetBytes( &i_data, &p_data, 4 );
         sl_descr->i_OCR_resolution = ODGetBytes( &i_data, &p_data, 4 );
         sl_descr->i_timestamp_length = ODGetBytes( &i_data, &p_data, 1 );
+        if( sl_descr->i_timestamp_length > 64 )
+            return false;
         sl_descr->i_OCR_length = ODGetBytes( &i_data, &p_data, 1 );
+        if( sl_descr->i_OCR_length > 32 )
+            return false;
         sl_descr->i_AU_length = ODGetBytes( &i_data, &p_data, 1 );
+        if( sl_descr->i_AU_length > 32 )
+            return false;
         sl_descr->i_instant_bitrate_length = ODGetBytes( &i_data, &p_data, 1 );
+        if( sl_descr->i_instant_bitrate_length > 64 )
+            return false;
         uint16_t i16 = ODGetBytes( &i_data, &p_data, 2 );
         sl_descr->i_degradation_priority_length = i16 >> 12;
         sl_descr->i_AU_seqnum_length = (i16 >> 7) & 0x1f;
+        if( sl_descr->i_AU_seqnum_length > 16 )
+            return false;
         sl_descr->i_packet_seqnum_length = (i16 >> 2) & 0x1f;
+        if( sl_descr->i_packet_seqnum_length > 16 )
+            return false;
         break;
     case SL_Predefined_NULL:
         memset( sl_descr, 0, sizeof(*sl_descr) );
@@ -188,6 +194,7 @@ static bool OD_DecSpecificDesc_Read( vlc_object_t *p_object, unsigned i_data, co
         p_dec_config->i_extra = i_data;
         memcpy( p_dec_config->p_extra, p_data, p_dec_config->i_extra );
     }
+    else p_dec_config->i_extra = 0;
 
     return !!p_dec_config->i_extra;
 }
@@ -490,10 +497,7 @@ od_descriptor_t *IODNew( vlc_object_t *p_object, unsigned i_data, const uint8_t 
     od_descriptor_t * ods[1];
     uint8_t i_count = ODInit( p_object, i_data, p_data, ODTag_InitialObjectDescr, 1, 1, ods );
     if( !i_count )
-    {
-        ODFree( ods[0] );
         return NULL;
-    }
     return ods[0];
 }
 
@@ -506,7 +510,7 @@ void ODFree( od_descriptor_t *p_iod )
         return;
     }
 
-    for( int i = 0; i < 255; i++ )
+    for( size_t i = 0; i < ES_DESCRIPTOR_COUNT; i++ )
     {
 #define es_descr p_iod->es_descr[i]
         if( es_descr.b_ok )

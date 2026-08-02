@@ -536,7 +536,7 @@ static int Open( vlc_object_t * p_this )
                 if( p_wf->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
                     p_wf->cbSize >= sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX) )
                 {
-                    WAVEFORMATEXTENSIBLE *p_wfe = (WAVEFORMATEXTENSIBLE *)p_wf;
+                    WAVEFORMATEXTENSIBLE *p_wfe = container_of(p_wf, WAVEFORMATEXTENSIBLE, Format);
                     tk->fmt.i_codec = AVI_FourccGetCodec( AUDIO_ES, p_wfe->SubFormat.Data1 );
                 }
                 else
@@ -738,6 +738,16 @@ static int Open( vlc_object_t * p_this )
                     tk->fmt.b_packetized = false;
                 }
 
+                if( tk->fmt.i_codec == VLC_CODEC_H264 && tk->fmt.i_extra )
+                {
+                    tk->fmt.i_original_fourcc = VLC_FOURCC('a','v','c','1');
+                }
+
+                /* Store original fourcc for SpeedHQ variants so decoder can distinguish between them */
+                if( tk->fmt.i_codec == VLC_CODEC_SPEEDHQ && tk->fmt.i_original_fourcc == 0 )
+                {
+                    tk->fmt.i_original_fourcc = p_bih->biCompression;
+                }
                 tk->i_samplesize = 0;
 
                 tk->fmt.video.i_visible_width =
@@ -3100,6 +3110,7 @@ static void AVI_ExtractSubtitle( demux_t *p_demux,
 
     p_indx = AVI_ChunkFind( p_strl, AVIFOURCC_indx, 0, false );
     avi_chunk_t ck;
+    AVI_ChunkInit( &ck );
     int64_t  i_position;
     unsigned i_size;
     if( p_indx )
@@ -3111,6 +3122,7 @@ static void AVI_ExtractSubtitle( demux_t *p_demux,
                 AVI_ChunkRead( p_demux->s, &ck, NULL  ) ||
                 ck.common.i_chunk_fourcc != AVIFOURCC_indx )
                 goto exit;
+
             p_indx = &ck.indx;
         }
 
@@ -3213,8 +3225,7 @@ exit:
     else
         msg_Warn( p_demux, "Failed to load an embedded subtitle" );
 
-    if( p_indx == &ck.indx )
-        AVI_ChunkClean( p_demux->s, &ck );
+    AVI_ChunkClean( p_demux->s, &ck );
 }
 /*****************************************************************************
  * Stream management
