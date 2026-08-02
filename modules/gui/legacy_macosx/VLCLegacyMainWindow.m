@@ -592,6 +592,64 @@ static BOOL VLCLegacyKeyBelongsToFocusedList(NSWindow *window, NSEvent *event)
     [super keyDown:event];
 }
 
+/* ★ Relais des « souris déplacée » vers la fenêtre vidéo enfant.
+ *
+ * AppKit ne distribue les événements NSMouseMoved qu'à la fenêtre CLÉ — le
+ * -setAcceptsMouseMovedEvents:YES d'une fenêtre non clé ne sert à rien. En
+ * FENÊTRÉ la vidéo vit dans VLCLegacyVideoHostWindow, une fenêtre enfant qui
+ * refuse délibérément ce statut (keyable = NO, sans quoi la fenêtre principale
+ * perdrait le routage clavier) : la vue du vout n'y voit donc jamais passer le
+ * pointeur. Les clics, eux, sont routés par test de survol et arrivent bien,
+ * d'où des menus DVD/Blu-ray qui « réagissent mal » (aucun surlignage ne suit
+ * la souris, le clic valide le bouton resté sélectionné) plutôt que pas du
+ * tout. En PLEIN ÉCRAN la fenêtre hôte est clé : rien à relayer, ce qui
+ * explique que le défaut ne se voie qu'en fenêtré.
+ *
+ * On resynthétise l'événement dans le repère de l'enfant : réacheminer
+ * l'original enverrait des coordonnées de la fenêtre PRINCIPALE, que le
+ * -[NSView convertPoint:fromView:nil] du vout interpréterait dans celles de
+ * l'enfant (le vout convertit toujours depuis SA fenêtre, pas celle de
+ * l'événement). */
+- (void)relayMouseMovedToVideoChild:(NSEvent *)event
+{
+    NSEnumerator *children = [[self childWindows] objectEnumerator];
+    NSWindow *child;
+
+    while ((child = [children nextObject]) != nil) {
+        if (![child isKindOfClass:[VLCLegacyVideoHostWindow class]]
+            || [child isKeyWindow])
+            continue;
+
+        NSPoint screen = [self convertBaseToScreen:[event locationInWindow]];
+        NSPoint local = [child convertScreenToBase:screen];
+        /* hitTest: attend le point dans le repère du SUPERVIEW du receveur ;
+         * pour une contentView c'est le repère de base de la fenêtre. */
+        NSView *hit = [[child contentView] hitTest:local];
+        if (hit == nil)
+            return;
+
+        NSEvent *relayed = [NSEvent mouseEventWithType:NSMouseMoved
+                                              location:local
+                                         modifierFlags:[event modifierFlags]
+                                             timestamp:[event timestamp]
+                                          windowNumber:[child windowNumber]
+                                               context:nil
+                                           eventNumber:0
+                                            clickCount:0
+                                              pressure:0.0];
+        if (relayed != nil)
+            [hit mouseMoved:relayed];
+        return;
+    }
+}
+
+- (void)sendEvent:(NSEvent *)event
+{
+    if ([event type] == NSMouseMoved)
+        [self relayMouseMovedToVideoChild:event];
+    [super sendEvent:event];
+}
+
 @end
 
 /* default main window title ("Lecteur multimédia PowerVLC" in French) */

@@ -2202,10 +2202,38 @@ static BOOL haveConfig(const char *name)
         int index = (int)[languagePopup indexOfSelectedItem];
         if (index >= 0
          && (unsigned)index < sizeof(language_map) / sizeof(language_map[0]))
-            [[NSUserDefaults standardUserDefaults]
-                setObject:[NSString stringWithUTF8String:
-                    language_map[index].iso]
-                   forKey:@"language"];
+        {
+            NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+            [defaults setObject:[NSString stringWithUTF8String:
+                                    language_map[index].iso]
+                         forKey:@"language"];
+
+            /* Sens d'écriture, comme le fait +[VLCSimplePrefsController
+             * updateRightToLeftSettings] côté moderne : sans ça, choisir
+             * l'arabe, l'hébreu ou le persan traduisait bien l'interface mais
+             * la laissait disposée de gauche à droite. En « Auto » on RETIRE
+             * les clés au lieu de les poser à NO, pour rendre la main à la
+             * détection du système. */
+            if (!strcmp(language_map[index].iso, "auto")) {
+                [defaults removeObjectForKey:@"NSForceRightToLeftWritingDirection"];
+                [defaults removeObjectForKey:@"AppleTextDirection"];
+            } else {
+                BOOL rtl = language_map[index].isRightToLeft;
+                [defaults setBool:rtl
+                           forKey:@"NSForceRightToLeftWritingDirection"];
+                [defaults setBool:rtl forKey:@"AppleTextDirection"];
+            }
+
+            /* ⚠ INDISPENSABLE : contrairement au reste du panneau, la langue
+             * ne passe pas par config_PutPsz()/config_SaveConfigFile() mais par
+             * NSUserDefaults, et sur les vieux systèmes (pas de cfprefsd) rien
+             * ne vide le cache sur disque à la sortie de l'application. Sans ce
+             * -synchronize le réglage était perdu au redémarrage, et le
+             * CFPreferencesCopyAppValue(CFSTR("language")) de bin/darwinvlc.m
+             * ne le voyait donc jamais. Le contrôleur moderne
+             * (VLCSimplePrefsController.m) le fait déjà. */
+            [defaults synchronize];
+        }
     }
 
     /* interface style */

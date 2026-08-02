@@ -1013,6 +1013,19 @@ static void OpenglSwap (vlc_gl_t *gl)
     return YES;
 }
 
+/* AppKit routes mouse-moved events to the first responder, not to the view
+ * under the cursor: claim it whenever we enter a window, otherwise DVD/BD
+ * menu highlighting never sees the pointer. Same contract as the other two
+ * Mac outputs (macosx_gl1.m, macosx_qt.m). Key presses are unaffected: we
+ * implement no key handling, so they keep climbing the responder chain to
+ * the hosting interface. */
+- (void)viewDidMoveToWindow
+{
+    if ([self window])
+        [[self window] makeFirstResponder:self];
+    [super viewDidMoveToWindow];
+}
+
 - (BOOL)mouseDownCanMoveWindow
 {
     return YES;
