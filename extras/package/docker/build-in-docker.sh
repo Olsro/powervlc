@@ -81,10 +81,18 @@ WORK_VOL=""
 # Docker Desktop's virtual disk is a hard ceiling (Settings > Resources), and
 # it is easy to hit: the three Windows targets SHARE one volume, where the
 # contribs alone are ~23 GB and each target's build directory adds 2-5 GB more.
-# Running out mid-build is not a clean failure -- it surfaces as an unrelated
+# Running out mid-build is not a clean failure. Sometimes it is an unrelated
 # "install: error writing ...: No space left on device" deep inside make, hours
-# in. Reclaim below this many GiB free. Override with PVLC_MIN_FREE_GB=<n>.
-PVLC_MIN_FREE_GB="${PVLC_MIN_FREE_GB:-10}"
+# in. Worse, it can be SILENT CORRUPTION: the compiler writes a zero-length
+# object, and the error you finally see is a link failure with a wall of
+# undefined references (or "strip: input file ... has no sections"). If you
+# ever see either, check free space before you debug the code.
+#
+# 20 and not 10: a from-scratch Windows contrib build (Qt above all) eats well
+# over 10 GB, so a run starting at 14 GB free cleared a 10 GB bar and then hit
+# the wall anyway. The reclaim only runs once, at startup, so the bar has to
+# cover the whole build. Override with PVLC_MIN_FREE_GB=<n>.
+PVLC_MIN_FREE_GB="${PVLC_MIN_FREE_GB:-20}"
 
 docker_run() { # docker_run <platform> <image> <shell-command>
   docker run --rm --platform "$1" \

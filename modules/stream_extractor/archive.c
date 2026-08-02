@@ -390,7 +390,15 @@ static int archive_seek_subentry( private_sys_t* p_sys, char const* psz_subentry
     {
         int i_format = archive_format( p_sys->p_archive );
 
-        if( i_format == ARCHIVE_FORMAT_RAR || i_format == ARCHIVE_FORMAT_RAR_V5 )
+        /* ARCHIVE_FORMAT_RAR_V5 only exists since libarchive 3.4.0; the
+         * AppImage builders still run on distributions older than that
+         * (Ubuntu 18.04 ships 3.2.2). Nothing is lost when it is missing:
+         * such a libarchive does not report RAR v5 as a format of its own. */
+        if( i_format == ARCHIVE_FORMAT_RAR
+#if ARCHIVE_VERSION_NUMBER >= 3004000
+         || i_format == ARCHIVE_FORMAT_RAR_V5
+#endif
+          )
         {
             if( archive_seek_data( p_sys->p_archive, 0, SEEK_CUR ) >= 0 )
                 p_sys->b_seekable_archive = true;

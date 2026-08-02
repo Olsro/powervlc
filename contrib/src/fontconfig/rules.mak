@@ -52,6 +52,20 @@ ifdef HAVE_CROSS_COMPILE
 FONTCONFIG_CONF += --with-arch=$(ARCH)
 endif
 
+ifdef HAVE_WIN32
+# configure turns NLS on as soon as it finds the libintl contrib, and every
+# fontconfig source then pulls in <libintl.h>, which redefines fprintf and
+# printf to libintl_fprintf / __printf__. fontconfig.pc carries no -lintl, so
+# every static consumer -- libass, and VLC through it -- fails to link with a
+# wall of undefined references to those two symbols. Nothing in VLC ever shows
+# fontconfig's own messages, so the translations are pure liability here.
+#
+# Windows only on purpose: the macOS prefixes link fine as they are, and
+# changing this globally would force a fontconfig rebuild in all seven of them
+# for no gain.
+FONTCONFIG_CONF += --disable-nls
+endif
+
 ifdef HAVE_MACOSX
 # These are absolute paths that exist on every Mac from 10.2 on, and they are
 # what makes lookups work without a fonts.conf being shipped in the bundle:
