@@ -134,18 +134,24 @@ class adaptive::http::LibVLCHTTPSource : public adaptive::AbstractSource
         {
             vlc_http_msg_add_header(req, "Accept-Encoding", "deflate, gzip");
             vlc_http_msg_add_header(req, "Cache-Control", "no-cache");
+            /* NOTE: 64-bit conversions and explicit casts, not the intmax_t
+             * ones: getStartByte()/getEndByte() return size_t, which is 32-bit
+             * on our PowerPC and 32-bit x86 targets (so %ju read 8 bytes off a
+             * 4-byte vararg), and the C99 'j' modifier is missing altogether
+             * from the Mac OS X 10.2 libc. Same reason below. */
             if(range.isValid())
             {
                 if(range.getEndByte() > 0)
                 {
-                    if (vlc_http_msg_add_header(req, "Range", "bytes=%" PRIuMAX "-%" PRIuMAX,
-                                                range.getStartByte(), range.getEndByte()))
+                    if (vlc_http_msg_add_header(req, "Range", "bytes=%" PRIu64 "-%" PRIu64,
+                                                (uint64_t)range.getStartByte(),
+                                                (uint64_t)range.getEndByte()))
                         return -1;
                 }
                 else
                 {
-                    if (vlc_http_msg_add_header(req, "Range", "bytes=%" PRIuMAX "-",
-                                                range.getStartByte()))
+                    if (vlc_http_msg_add_header(req, "Range", "bytes=%" PRIu64 "-",
+                                                (uint64_t)range.getStartByte()))
                         return -1;
                 }
             }
@@ -162,8 +168,8 @@ class adaptive::http::LibVLCHTTPSource : public adaptive::AbstractSource
                      * and we do not support it. */
                     return -1;
 
-                uintmax_t start, end;
-                if (sscanf(str, "bytes %" SCNuMAX "-%" SCNuMAX, &start, &end) != 2
+                uint64_t start, end;
+                if (sscanf(str, "bytes %" SCNu64 "-%" SCNu64, &start, &end) != 2
                  || start != range.getStartByte() || start > end ||
                  (range.getEndByte() > range.getStartByte() && range.getEndByte() != end) )
                     /* A single range response is what we asked for, but not at that

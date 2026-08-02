@@ -399,12 +399,24 @@ void input_item_SetURI( input_item_t *p_i, const char *psz_uri )
     else
     if( p_i->i_type == ITEM_TYPE_FILE || p_i->i_type == ITEM_TYPE_DIRECTORY )
     {
-        const char *psz_filename = strrchr( p_i->psz_uri, '/' );
+        /* Take the last NON-EMPTY path component: a directory URI often
+         * carries a trailing slash (that is what NSOpenPanel hands back for
+         * a chosen folder), and skipping straight past the last '/' then
+         * yields an empty component, leaving the item with no name at all.
+         * The result was a nameless row in the playlist / media library --
+         * blank label, but still expandable and playable. */
+        size_t i_end = strlen( p_i->psz_uri );
 
-        if( psz_filename && *psz_filename == '/' )
-            psz_filename++;
-        if( psz_filename && *psz_filename )
-            p_i->psz_name = strdup( psz_filename );
+        while( i_end > 0 && p_i->psz_uri[i_end - 1] == '/' )
+            i_end--;
+
+        size_t i_start = i_end;
+
+        while( i_start > 0 && p_i->psz_uri[i_start - 1] != '/' )
+            i_start--;
+
+        if( i_end > i_start )
+            p_i->psz_name = strndup( p_i->psz_uri + i_start, i_end - i_start );
 
         /* Make the name more readable */
         if( p_i->psz_name )

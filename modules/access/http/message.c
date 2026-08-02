@@ -876,9 +876,11 @@ uintmax_t vlc_http_msg_get_size(const struct vlc_http_msg *m)
         return -1; /* Response of unknown size (e.g. chunked) */
     }
 
-    uintmax_t length;
+    /* 64-bit conversion: the 'j' modifier is unusable on Mac OS X 10.2,
+     * see the note in file.c. Without this, Content-Length never parses. */
+    uint64_t length;
 
-    if (sscanf(str, "%" SCNuMAX, &length) == 1)
+    if (sscanf(str, "%" SCNu64, &length) == 1)
         return length;
 
     errno = EINVAL;

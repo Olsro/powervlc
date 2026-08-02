@@ -5166,9 +5166,16 @@ static void MP4_BoxDumpStructure_Internal( stream_t *s, const MP4_Box_t *p_box,
         }
 
         snprintf( &str[i_level * 4], sizeof(str) - 4*i_level,
-                  "+ %4.4s size %"PRIu64" offset %" PRIuMAX "%s",
+                  /* NOT PRIuMAX: the Mac OS X 10.2 libc does not know the C99
+                   * 'j' modifier, prints it literally AND does not consume the
+                   * vararg — so the trailing %s below would read the high half
+                   * of i_pos as a pointer. Below 4 GiB that half is 0 and BSD
+                   * printf prints "(null)"; above it, this crashed on open.
+                   * MP4_BoxDumpStructure() runs for every MP4/MOV regardless of
+                   * verbosity (mp4.c), so it is not a debug-only path. */
+                  "+ %4.4s size %"PRIu64" offset %" PRIu64 "%s",
                     (char*)&i_displayedtype, p_box->i_size,
-                  (uintmax_t)p_box->i_pos,
+                  (uint64_t)p_box->i_pos,
                 p_box->e_flags & BOX_FLAG_INCOMPLETE ? " (\?\?\?\?)" : "" );
         msg_Dbg( s, "%s", str );
     }

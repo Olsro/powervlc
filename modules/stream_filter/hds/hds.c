@@ -279,8 +279,9 @@ static uint8_t* parse_asrt( vlc_object_t* p_this,
     if( asrt_len > data_end - data ||
         data_end - data <  14 )
     {
-        msg_Err( p_this, "Not enough asrt data (%"PRIu32", %tu)", asrt_len,
-                 data_end - data );
+        /* %td/%tu is unusable on Mac OS X 10.2, see the note in libmp4.c */
+        msg_Err( p_this, "Not enough asrt data (%"PRIu32", %"PRId64")",
+                 asrt_len, (int64_t)(data_end - data) );
         return NULL;
     }
 
@@ -384,8 +385,8 @@ static uint8_t* parse_afrt( vlc_object_t* p_this,
     if( afrt_len > data_end - data ||
         data_end - data <  9 )
     {
-        msg_Err( p_this, "Not enough afrt data %u, %td", afrt_len,
-                 data_end - data );
+        msg_Err( p_this, "Not enough afrt data %u, %"PRId64, afrt_len,
+                 (int64_t)(data_end - data) );
         return NULL;
     }
     data_p += sizeof(afrt_len);

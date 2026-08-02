@@ -308,7 +308,11 @@ static int demux_process_stream(const struct vlc_run_args *args, stream_t *s)
     demux_Delete(demux);
     es_out_Delete(out);
 
-    debug("Completed with %ju iteration(s).\n", i);
+    /* %llu, not %ju: the C99 'j' modifier is absent from the Mac OS X 10.2
+     * libc, which prints it literally without consuming the argument. Nothing
+     * follows it here, so this is cosmetic — but see the note in
+     * modules/demux/mp4/libmp4.c for the shape that is not. */
+    debug("Completed with %llu iteration(s).\n", (unsigned long long)i);
 
     return val == VLC_DEMUXER_EOF ? 0 : -1;
 }

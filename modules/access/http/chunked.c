@@ -82,10 +82,16 @@ static block_t *vlc_chunked_read(struct vlc_http_stream *stream)
         }
 
         int end;
+        /* 64-bit conversion: the 'j' modifier is unusable on Mac OS X 10.2,
+         * see the note in file.c. Without this, no chunk size ever parses and
+         * every chunked response dies with EPROTO. */
+        uint64_t length;
 
-        if (sscanf(line, "%" SCNxMAX "%n", &s->chunk_length, &end) < 1
+        if (sscanf(line, "%" SCNx64 "%n", &length, &end) < 1
          || (line[end] != '\0' && line[end] != ';' /* ignore extension(s) */))
             s->chunk_length = UINTMAX_MAX;
+        else
+            s->chunk_length = length;
 
         free(line);
 

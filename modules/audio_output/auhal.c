@@ -1496,14 +1496,6 @@ Stop(audio_output_t *p_aout)
         au_Uninitialize(p_aout, p_sys->au_unit);
         au_DisposeOutputInstance(p_sys->au_unit);
     }
-
-    if (p_sys->f_revert_rate != 0)
-    {
-        AO_SETPROP(p_sys->i_selected_dev, sizeof(p_sys->f_revert_rate),
-                   &p_sys->f_revert_rate, kAudioDevicePropertyNominalSampleRate,
-                   kAudioObjectPropertyScopeGlobal);
-        p_sys->f_revert_rate = 0;
-    }
     else
     {
         assert(p_sys->b_digital);
@@ -1568,6 +1560,20 @@ Stop(audio_output_t *p_aout)
         }
 
         p_sys->b_digital = false;
+    }
+
+    /* Restore the device rate we changed in StartAnalog(), if any. This must
+     * stay OUTSIDE the analog/digital branching above: SetDeviceRate() returns
+     * 0 whenever the device already ran at the wanted rate, so making the
+     * S/PDIF teardown the "else" of this test used to run it on every analog
+     * stop — calling AudioDeviceStop(dev, NULL), which stops the device
+     * itself, once per track. */
+    if (p_sys->f_revert_rate != 0)
+    {
+        AO_SETPROP(p_sys->i_selected_dev, sizeof(p_sys->f_revert_rate),
+                   &p_sys->f_revert_rate, kAudioDevicePropertyNominalSampleRate,
+                   kAudioObjectPropertyScopeGlobal);
+        p_sys->f_revert_rate = 0;
     }
 
     /* remove audio device alive callback */
