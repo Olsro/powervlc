@@ -1526,6 +1526,14 @@
 	<string>PowerVLC</string>
 	<key>CFBundleIconFile</key>
 	<string>VLC.icns</string>
+	<!-- PowerVLC fork: app icon from the Assets.car catalog, compiled from
+	     modules/gui/macosx/Resources/App-Icons/AppIcon.icon. macOS 26 and
+	     later render it with the liquid glass material, macOS 11 to 15 use
+	     the flattened renditions baked into the same catalog. Systems older
+	     than 11.0 ignore this key and fall back to CFBundleIconFile above.
+	     Regenerate with extras/package/macosx/make-app-icon.sh. -->
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<!-- PowerVLC fork: distinct identifier so config_GetUserDir() and
 	     NSUserDefaults never collide with the official VLC.app
 	     (~/Library/Preferences|Caches|Application Support/<identifier>) -->

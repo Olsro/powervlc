@@ -215,6 +215,15 @@ BUILT_SOURCES += $(nodist_libmacosx_plugin_la_SOURCES)
 endif
 
 
+# PowerVLC: Assets.car is the app icon catalog compiled from AppIcon.icon by
+# extras/package/macosx/make-app-icon.sh; macOS 26 renders it with the liquid
+# glass material, macOS 11 to 15 use its flattened renditions, older systems
+# ignore it and keep VLC.icns. It is picked up through CFBundleIconName, which
+# share/Info.plist.in sets to AppIcon.
+# The asset MUST stay named AppIcon: CoreUI gives the catalog priority over
+# loose files, so naming it VLC (as upstream does) makes [NSImage
+# imageNamed:@"VLC"] return the app icon instead of our VLC.icns in the About
+# panel, the resume dialog and the status bar menu.
 libmacosx_plugin_la_RES = \
 	gui/macosx/Resources/App-Icons/VLC-Xmas.icns \
 	gui/macosx/Resources/App-Icons/VLC.icns \
@@ -751,6 +760,12 @@ libmacosx_plugin_la_RES += \
 	gui/macosx/Resources/dsa_pub.pem \
 	gui/macosx/Resources/vlc.scriptSuite \
 	gui/macosx/Resources/vlc.scriptTerminology
+
+# Icon Composer source of the app icon: it is not a bundle resource, only the
+# Assets.car compiled from it is. Ship it so the icon stays regenerable with
+# extras/package/macosx/make-app-icon.sh.
+EXTRA_DIST += \
+	gui/macosx/Resources/App-Icons/AppIcon.icon
 
 EXTRA_DIST += \
 	gui/macosx/Resources/English.lproj/InfoPlist.strings \
