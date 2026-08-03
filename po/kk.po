@@ -1560,13 +1560,21 @@ msgstr ""
 msgid "Mouse Gestures"
 msgstr "Тышқанның қимыл-шертулері"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc әдепкі интерфейспен іске қосылуда. powervlc-ті интерфейссіз "
 "пайдалану үшін «cpowervlc» пәрменін қолданыңыз."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc әдепкі интерфейспен іске қосылуда. powervlc-ті интерфейссіз "
+"пайдалану үшін «-I dummy» пәрменін қолданыңыз."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
 #: src/libvlc.c:174

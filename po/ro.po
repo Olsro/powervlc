@@ -1614,12 +1614,20 @@ msgstr "Web"
 msgid "Mouse Gestures"
 msgstr "Gesturi de maus"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Se rulează powervlc cu interfața implicită. Folosiți «cpowervlc» pentru a "
+"rula powervlc fără interfață."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"Se rulează powervlc cu interfața implicită. Folosiți «-I dummy» pentru a "
 "rula powervlc fără interfață."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -31721,27 +31729,6 @@ msgid ""
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "Versiune VLC %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "Rularea vlc fără interfața implicită. Folosiți „cvlc” pentru a utiliza "
-#~ "vlc fără interfață."
-
-#~ msgid ""
-#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
-#~ "not have it."
-#~ msgstr ""
-#~ "Acest disc Blu-ray necesită o bibliotecă pentru decodarea AACS, iar "
-#~ "sistemul dvs. nu o are."
-
-#~ msgid "Missing AACS configuration file!"
-#~ msgstr "Lipseşte fişierul de configurare AACS"
-
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
 msgstr ""
@@ -31769,3 +31756,24 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "Versiune VLC %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "Rularea vlc fără interfața implicită. Folosiți „cvlc” pentru a utiliza "
+#~ "vlc fără interfață."
+
+#~ msgid ""
+#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
+#~ "not have it."
+#~ msgstr ""
+#~ "Acest disc Blu-ray necesită o bibliotecă pentru decodarea AACS, iar "
+#~ "sistemul dvs. nu o are."
+
+#~ msgid "Missing AACS configuration file!"
+#~ msgstr "Lipseşte fişierul de configurare AACS"

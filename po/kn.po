@@ -1604,13 +1604,21 @@ msgstr "ಅಂತರ್ಜಾಲ"
 msgid "Mouse Gestures"
 msgstr "ಮೌಸನ ಸನ್ನೆಗಳು"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc ಪೂರ್ವನಿಯೋಜಿತ ಸಂಪರ್ಕಸಾಧನದೊಂದಿಗೆ ಚಾಲನೆಯಲ್ಲಿದೆ. ಸಂಪರ್ಕಸಾಧನವಿಲ್ಲದೆ powervlc "
 "ಬಳಸಲು «cpowervlc» ಬಳಸಿ."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc ಪೂರ್ವನಿಯೋಜಿತ ಸಂಪರ್ಕಸಾಧನದೊಂದಿಗೆ ಚಾಲನೆಯಲ್ಲಿದೆ. ಸಂಪರ್ಕಸಾಧನವಿಲ್ಲದೆ powervlc "
+"ಬಳಸಲು «-I dummy» ಬಳಸಿ."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
 #: src/libvlc.c:174

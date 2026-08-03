@@ -34,6 +34,11 @@
 #import <WebKit/WebKit.h>
 #import <stdlib.h>
 
+/* How long typing must pause before the extension hears about it, in
+ * seconds. Long enough that a burst of keys is one event, short enough
+ * to feel immediate. */
+#define VLC_EXTENSION_TEXT_DEBOUNCE 0.3
+
 /*****************************************************************************
  * VLCExtensionsDialogProvider implementation
  *****************************************************************************/
@@ -63,6 +68,10 @@ static NSView *createControlFromWidget(extension_widget_t *widget, id self)
                 [field setSelectable:YES];
                 [field setFont:[NSFont systemFontOfSize:0]];
                 [[field cell] setControlSize:NSRegularControlSize];
+                /* a label whose text carries newlines is a paragraph: draw
+                 * every line of it, at the font's own leading rather than
+                 * a grid row apart */
+                [[field cell] setWraps:YES];
                 [field setAutoresizingMask:NSViewNotSizable];
                 return field;
             }
@@ -74,6 +83,9 @@ static NSView *createControlFromWidget(extension_widget_t *widget, id self)
                 [field setFont:[NSFont systemFontOfSize:0]];
                 [[field cell] setControlSize:NSRegularControlSize];
                 [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(syncTextField:)  name:NSControlTextDidChangeNotification object:field];
+                /* Enter validates the field, like any search box */
+                [field setTarget:self];
+                [field setAction:@selector(textFieldActivated:)];
                 return field;
             }
             case EXTENSION_WIDGET_PASSWORD:
@@ -84,6 +96,8 @@ static NSView *createControlFromWidget(extension_widget_t *widget, id self)
                 [field setFont:[NSFont systemFontOfSize:0]];
                 [[field cell] setControlSize:NSRegularControlSize];
                 [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(syncTextField:)  name:NSControlTextDidChangeNotification object:field];
+                [field setTarget:self];
+                [field setAction:@selector(textFieldActivated:)];
                 return field;
             }
 
@@ -131,10 +145,16 @@ static NSView *createControlFromWidget(extension_widget_t *widget, id self)
                 [scrollView setAutoresizingMask:NSViewHeightSizable | NSViewWidthSizable];
 
                 NSTableColumn *column = [[NSTableColumn alloc] init];
+                /* editable cells swallow double-clicks (they start editing
+                 * instead of sending the double action) */
+                [column setEditable:NO];
                 [list addTableColumn:column];
                 [list setDataSource:list];
                 [list setDelegate:self];
                 [list setWidget:widget];
+                [list setSortColumn:-1];
+                [list setTarget:self];
+                [list setDoubleAction:@selector(listDoubleClicked:)];
                 return scrollView;
             }
             case EXTENSION_WIDGET_IMAGE:
@@ -186,9 +206,32 @@ static void updateControlFromWidget(NSView *control, extension_widget_t *widget,
                     break;
                 assert([control isKindOfClass:[NSControl class]]);
                 NSControl *field = (NSControl *)control;
-                NSString *string = [defaultStyleCSS stringByAppendingString:toNSStr(widget->psz_text)];
-                NSAttributedString *attrString = [[NSAttributedString alloc] initWithHTML:[string dataUsingEncoding: NSISOLatin1StringEncoding] documentAttributes:NULL];
-                [field setAttributedStringValue:attrString];
+                NSString *text = toNSStr(widget->psz_text);
+
+                /* Only markup goes through the HTML parser: it is a WebKit
+                 * round-trip per widget, and its Latin-1 input encoding
+                 * dropped every character outside that set -- an em dash or
+                 * a curly quote in a label emptied the whole label.
+                 */
+                if ([text rangeOfString:@"<"].location == NSNotFound) {
+                    [field setStringValue:text];
+                    break;
+                }
+
+                NSString *string = [defaultStyleCSS stringByAppendingString:text];
+                NSDictionary *options =
+                    [NSDictionary dictionaryWithObject:
+                        [NSNumber numberWithUnsignedInteger:NSUTF8StringEncoding]
+                                                forKey:NSCharacterEncodingDocumentOption];
+                NSAttributedString *attrString =
+                    [[NSAttributedString alloc]
+                        initWithHTML:[string dataUsingEncoding:NSUTF8StringEncoding]
+                             options:options
+                  documentAttributes:NULL];
+                if (attrString)
+                    [field setAttributedStringValue:attrString];
+                else
+                    [field setStringValue:text];
                 break;
             }
             case EXTENSION_WIDGET_CHECK_BOX:
@@ -203,15 +246,26 @@ static void updateControlFromWidget(NSView *control, extension_widget_t *widget,
             }
             case EXTENSION_WIDGET_DROPDOWN:
             {
-                assert([control isKindOfClass:[NSPopUpButton class]]);
-                NSPopUpButton *popup = (NSPopUpButton *)control;
+                assert([control isKindOfClass:[VLCDialogPopUpButton class]]);
+                VLCDialogPopUpButton *popup = (VLCDialogPopUpButton *)control;
+                [popup setProgrammaticSelection:YES];
                 [popup removeAllItems];
                 struct extension_widget_value_t *value;
-                for (value = widget->p_values; value != NULL; value = value->p_next)
+                NSInteger selected = -1, index = 0;
+                for (value = widget->p_values; value != NULL;
+                     value = value->p_next, index++) {
                     [[popup menu] addItemWithTitle:toNSStr(value->psz_text) action:nil keyEquivalent:@""];
+                    /* the script may have chosen an entry other than the
+                     * first one, see set_value */
+                    if (value->b_selected)
+                        selected = index;
+                }
 
+                if (selected >= 0)
+                    [popup selectItemAtIndex:selected];
                 [popup synchronizeTitleAndSelectedItem];
                 [self popUpSelectionChanged:popup];
+                [popup setProgrammaticSelection:NO];
                 break;
             }
             case EXTENSION_WIDGET_LIST:
@@ -221,18 +275,50 @@ static void updateControlFromWidget(NSView *control, extension_widget_t *widget,
                 assert([[scrollView documentView] isKindOfClass:[VLCDialogList class]]);
                 VLCDialogList *list = (VLCDialogList *)[scrollView documentView];
 
+                /* The widget's own text carries tab-separated column headers;
+                 * without one the list stays a plain headerless column. */
+                NSArray *headers = nil;
+                if (widget->psz_text && strchr(widget->psz_text, '\t'))
+                    headers = [toNSStr(widget->psz_text) componentsSeparatedByString:@"\t"];
+                [list setColumnHeaders:headers];
+
                 NSMutableArray *contentArray = [NSMutableArray array];
                 struct extension_widget_value_t *value;
                 for (value = widget->p_values; value != NULL; value = value->p_next)
                 {
+                    NSString *text = toNSStr(value->psz_text);
+                    NSMutableArray *cells = [NSMutableArray array];
+                    NSMutableArray *sortKeys = [NSMutableArray array];
+                    for (NSString *cell in [text componentsSeparatedByString:@"\t"]) {
+                        NSRange sep = [cell rangeOfString:@VLC_DIALOG_SORTKEY_SEP];
+                        if (sep.location == NSNotFound) {
+                            [cells addObject:cell];
+                            [sortKeys addObject:@""];
+                        } else {
+                            [cells addObject:[cell substringToIndex:sep.location]];
+                            [sortKeys addObject:[cell substringFromIndex:NSMaxRange(sep)]];
+                        }
+                    }
                     NSDictionary *entry = [NSDictionary dictionaryWithObjectsAndKeys:
                                            [NSNumber numberWithInt:value->i_id], @"id",
-                                           toNSStr(value->psz_text), @"text",
+                                           text, @"text",
+                                           cells, @"cells",
+                                           sortKeys, @"sortKeys",
                                            nil];
                     [contentArray addObject:entry];
                 }
                 list.contentArray = contentArray;
+                /* fresh content comes in the extension's order */
+                [list setSortColumn:-1];
+                [list setProgrammaticSelection:YES];
                 [list reloadData];
+                [list fitColumnsToContent];
+                /* and is read from its first row: keeping the scroll of
+                 * the list that was there before leaves the user looking
+                 * at the middle of something else */
+                if ([contentArray count] > 0)
+                    [list showTopOfList];
+                [list setProgrammaticSelection:NO];
                 break;
             }
             case EXTENSION_WIDGET_IMAGE:
@@ -315,11 +401,17 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
     VLCDialogButton *button = sender;
     extension_widget_t *widget = [button widget];
 
-    vlc_mutex_lock(&widget->p_dialog->lock);
-    if (widget->type == EXTENSION_WIDGET_BUTTON)
+    /* The notification is deliberately sent with the dialog unlocked: it
+     * wakes the extension thread, which may answer with a dialog update
+     * the main thread has to run -- holding the lock here would make the
+     * two wait on each other. */
+    if (widget->type == EXTENSION_WIDGET_BUTTON) {
         extension_WidgetClicked(widget->p_dialog, widget);
-    else
-        widget->b_checked = [button state] == NSOnState;
+        return;
+    }
+
+    vlc_mutex_lock(&widget->p_dialog->lock);
+    widget->b_checked = [button state] == NSOnState;
     vlc_mutex_unlock(&widget->p_dialog->lock);
 }
 
@@ -342,6 +434,30 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
     free(widget->psz_text);
     widget->psz_text = strdup([[field stringValue] UTF8String]);
     vlc_mutex_unlock(&widget->p_dialog->lock);
+
+    /* Tell the extension once the typing stops, not once per key: a
+     * search box that refills a list of a thousand rows would crawl on
+     * the machines this build exists for. */
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(notifyTextChanged:)
+                                               object:field];
+    [self performSelector:@selector(notifyTextChanged:)
+               withObject:field
+               afterDelay:VLC_EXTENSION_TEXT_DEBOUNCE];
+}
+
+- (void)notifyTextChanged:(id)sender
+{
+    extension_widget_t *widget = nil;
+    if ([sender isKindOfClass:[VLCDialogTextField class]])
+        widget = [(VLCDialogTextField *)sender widget];
+    else if ([sender isKindOfClass:[VLCDialogSecureTextField class]])
+        widget = [(VLCDialogSecureTextField *)sender widget];
+    if (!widget)
+        return;
+
+    /* unlocked, see -triggerClick: */
+    extension_WidgetSelectionChanged(widget->p_dialog, widget);
 }
 
 - (void)tableViewSelectionDidChange:(NSNotification *)notifcation
@@ -350,22 +466,94 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
     assert(sender && [sender isKindOfClass:[VLCDialogList class]]);
     VLCDialogList *list = sender;
 
-    struct extension_widget_value_t *value;
-    unsigned i = 0;
+    /* Map by value id, not by row index: a header-click sort reorders the
+     * rows on screen while p_values keeps the extension's order. */
+    NSMutableSet *selectedIds = [NSMutableSet set];
     NSIndexSet *selectedIndexes = [list selectedRowIndexes];
-    for (value = [list widget]->p_values; value != NULL; value = value->p_next, i++)
-        value->b_selected = (YES == [selectedIndexes containsIndex:i]);
+    for (NSUInteger i = [selectedIndexes firstIndex]; i != NSNotFound;
+         i = [selectedIndexes indexGreaterThanIndex:i]) {
+        if (i < [list.contentArray count])
+            [selectedIds addObject:[[list.contentArray objectAtIndex:i] objectForKey:@"id"]];
+    }
+
+    extension_widget_t *widget = [list widget];
+    struct extension_widget_value_t *value;
+    for (value = widget->p_values; value != NULL; value = value->p_next)
+        value->b_selected = [selectedIds containsObject:[NSNumber numberWithInt:value->i_id]];
+
+    /* Only a selection the user made is an event: repopulating the list
+     * changes the selection too, and that must not reach the extension. */
+    if (![list programmaticSelection])
+        extension_WidgetSelectionChanged(widget->p_dialog, widget);
+}
+
+- (void)tableView:(NSTableView *)tableView didClickTableColumn:(NSTableColumn *)tableColumn
+{
+    if (![tableView isKindOfClass:[VLCDialogList class]])
+        return;
+    VLCDialogList *list = (VLCDialogList *)tableView;
+    if (![list headerView])
+        return;
+
+    NSInteger columnIndex = [[tableColumn identifier] integerValue];
+    BOOL ascending = (list.sortColumn == columnIndex) ? !list.sortAscending : YES;
+    [list setProgrammaticSelection:YES];
+    [list deselectAll:nil];
+    [list sortByColumn:columnIndex ascending:ascending];
+    [list setProgrammaticSelection:NO];
+}
+
+- (void)textFieldActivated:(id)sender
+{
+    extension_widget_t *widget = nil;
+    if ([sender isKindOfClass:[VLCDialogTextField class]])
+        widget = [(VLCDialogTextField *)sender widget];
+    else if ([sender isKindOfClass:[VLCDialogSecureTextField class]])
+        widget = [(VLCDialogSecureTextField *)sender widget];
+    if (!widget)
+        return;
+
+    /* the extension reads the value back with get_text(): make sure the
+     * core carries what is on screen before the callback runs */
+    vlc_mutex_lock(&widget->p_dialog->lock);
+    free(widget->psz_text);
+    widget->psz_text = strdup([[(NSTextField *)sender stringValue] UTF8String]);
+    vlc_mutex_unlock(&widget->p_dialog->lock);
+
+    /* unlocked, see -triggerClick: */
+    extension_WidgetClicked(widget->p_dialog, widget);
+}
+
+- (void)listDoubleClicked:(id)sender
+{
+    if (![sender isKindOfClass:[VLCDialogList class]])
+        return;
+    VLCDialogList *list = sender;
+    extension_widget_t *widget = [list widget];
+    if (!widget || [list clickedRow] < 0)
+        return;
+
+    /* unlocked, see -triggerClick: -- and a double-click runs inside the
+     * table's own event tracking, the worst possible moment to hold a
+     * lock the main thread needs again */
+    extension_WidgetClicked(widget->p_dialog, widget);
 }
 
 - (void)popUpSelectionChanged:(id)sender
 {
     assert([sender isKindOfClass:[VLCDialogPopUpButton class]]);
     VLCDialogPopUpButton *popup = sender;
+    extension_widget_t *widget = [popup widget];
     struct extension_widget_value_t *value;
     unsigned i = 0;
-    for (value = [popup widget]->p_values; value != NULL; value = value->p_next, i++)
+    for (value = widget->p_values; value != NULL; value = value->p_next, i++)
         value->b_selected = (i == [popup indexOfSelectedItem]);
 
+    /* Tell the extension, so a script can react to the choice right away
+     * -- but only for a choice the user made: refilling the menu lands
+     * here as well. */
+    if (![popup programmaticSelection])
+        extension_WidgetSelectionChanged(widget->p_dialog, widget);
 }
 
 - (NSSize)windowWillResize:(NSWindow *)sender toSize:(NSSize)frameSize
@@ -388,13 +576,15 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
     VLCDialogWindow *window = sender;
     extension_dialog_t *dialog = [window dialog];
     extension_DialogClosed(dialog);
-    dialog->p_sys_intf = NULL;
 
+    /* Clearing p_sys_intf before taking the lock skipped the release
+     * below, leaking the window and its whole widget tree. */
     vlc_mutex_lock(&dialog->lock);
     if (dialog->p_sys_intf) {
         CFRelease(dialog->p_sys_intf);
         dialog->p_sys_intf = NULL;
     }
+    vlc_cond_signal(&dialog->cond);
     vlc_mutex_unlock(&dialog->lock);
 
     return YES;
@@ -514,6 +704,10 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
         return VLC_EGENERIC;
     }
 
+    /* a debounced text change must not fire at a widget that is going
+     * away with this window */
+    [NSObject cancelPreviousPerformRequestsWithTarget:self];
+
     [dialogWindow setDelegate:nil];
     [dialogWindow close];
     dialogWindow = nil;
@@ -545,41 +739,53 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
     }
 
     vlc_mutex_lock(&p_dialog->lock);
-    if (!p_dialog->b_kill && !dialogWindow) {
-        dialogWindow = [self createExtensionDialog:p_dialog];
+    /* Whatever happens below, this lock must be given back: an AppKit call
+     * that raises unwinds straight past the unlock, and the extension
+     * thread then waits on this dialog for good -- a frozen application,
+     * as the lock is taken again on the next update. */
+    @try {
+        if (!p_dialog->b_kill && !dialogWindow) {
+            dialogWindow = [self createExtensionDialog:p_dialog];
 
-        BOOL visible = !p_dialog->b_hide;
-        if (visible) {
-            [dialogWindow center];
-            [dialogWindow makeKeyAndOrderFront:self];
-        } else
-            [dialogWindow orderOut:nil];
+            BOOL visible = !p_dialog->b_hide;
+            if (visible) {
+                [dialogWindow center];
+                [dialogWindow makeKeyAndOrderFront:self];
+            } else
+                [dialogWindow orderOut:nil];
 
-        [dialogWindow setHas_lock:NO];
-    }
-    else if (!p_dialog->b_kill && dialogWindow) {
-        [dialogWindow setHas_lock:YES];
-        [self updateWidgets:p_dialog];
-        if (strcmp([[dialogWindow title] UTF8String],
-                    p_dialog->psz_title) != 0) {
-            NSString *titleString = toNSStr(p_dialog->psz_title);
-
-            [dialogWindow setTitle:titleString];
+            [dialogWindow setHas_lock:NO];
         }
+        else if (!p_dialog->b_kill && dialogWindow) {
+            [dialogWindow setHas_lock:YES];
+            [self updateWidgets:p_dialog];
+            if (strcmp([[dialogWindow title] UTF8String],
+                        p_dialog->psz_title) != 0) {
+                NSString *titleString = toNSStr(p_dialog->psz_title);
 
-        [dialogWindow setHas_lock:NO];
+                [dialogWindow setTitle:titleString];
+            }
 
-        BOOL visible = !p_dialog->b_hide;
-        if (visible)
-            [dialogWindow makeKeyAndOrderFront:self];
-        else
-            [dialogWindow orderOut:nil];
+            [dialogWindow setHas_lock:NO];
+
+            BOOL visible = !p_dialog->b_hide;
+            if (visible)
+                [dialogWindow makeKeyAndOrderFront:self];
+            else
+                [dialogWindow orderOut:nil];
+        }
+        else if (p_dialog->b_kill) {
+            [self destroyExtensionDialog:p_dialog];
+        }
     }
-    else if (p_dialog->b_kill) {
-        [self destroyExtensionDialog:p_dialog];
+    @catch (NSException *exception) {
+        msg_Err(getIntf(), "Exception while updating extension dialog: %s (%s)",
+                [[exception name] UTF8String], [[exception reason] UTF8String]);
     }
-    vlc_cond_signal(&p_dialog->cond);
-    vlc_mutex_unlock(&p_dialog->lock);
+    @finally {
+        vlc_cond_signal(&p_dialog->cond);
+        vlc_mutex_unlock(&p_dialog->lock);
+    }
     return dialogWindow;
 }
 

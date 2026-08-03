@@ -413,6 +413,18 @@ int wctob(wint_t wc)
     return (wc < 0x80) ? (int) wc : EOF;
 }
 
+/* ⚠ The 10.4 SDK declares these as functions and then hides them behind
+ * `#define towlower(wc) __tolower(wc)`. Defining them without undoing the
+ * macro first compiled the bodies below under the names __tolower and
+ * __toupper: the archive exported those, `towlower' and `towupper' were
+ * nowhere, and every C++ plugin that reaches libstdc++'s locale code --
+ * adaptive (so every HLS and DASH stream), mkv, dcp, sid, spatialaudio,
+ * taglib -- was refused by dyld on 10.2 with nothing but a warning in the
+ * log. Keep both names: callers compiled against the SDK ask for the
+ * mangled one. */
+#undef towlower
+#undef towupper
+
 wint_t towlower(wint_t wc)
 {
     return (wc < 0x80) ? (wint_t) tolower((int) wc) : wc;
@@ -421,6 +433,26 @@ wint_t towlower(wint_t wc)
 wint_t towupper(wint_t wc)
 {
     return (wc < 0x80) ? (wint_t) toupper((int) wc) : wc;
+}
+
+wint_t __tolower(wint_t wc)
+{
+    return towlower(wc);
+}
+
+wint_t __toupper(wint_t wc)
+{
+    return towupper(wc);
+}
+
+/* 10.3 and later keep the program name for err(3) and for libraries that
+ * name themselves in their messages (libass does). */
+const char *getprogname(void)
+{
+    extern char **_NSGetProgname(void);
+    char **name = _NSGetProgname();
+
+    return (name != NULL && *name != NULL) ? *name : "PowerVLC";
 }
 
 size_t wcslen(const wchar_t *s)

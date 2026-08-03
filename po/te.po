@@ -1514,12 +1514,19 @@ msgstr "జాలం"
 msgid "Mouse Gestures"
 msgstr ""
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc అప్రమేయ ఇంటర్‌ఫేస్‌తో నడుస్తోంది. ఇంటర్‌ఫేస్ లేకుండా powervlc వాడటానికి «cpowervlc» వాడండి."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc అప్రమేయ ఇంటర్‌ఫేస్‌తో నడుస్తోంది. ఇంటర్‌ఫేస్ లేకుండా powervlc వాడటానికి «-I dummy» వాడండి."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
 #: src/libvlc.c:174
@@ -29528,10 +29535,6 @@ msgid ""
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "VLC రూపాంతరం %s (%s)\n"
-
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
 msgstr ""
@@ -29559,3 +29562,7 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "VLC రూపాంతరం %s (%s)\n"

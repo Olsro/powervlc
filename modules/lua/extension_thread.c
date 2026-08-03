@@ -70,23 +70,46 @@ int Activate( extensions_manager_t *p_mgr, extension_t *p_ext )
             vlc_cond_signal( &p_sys->wait );
         }
     }
+    bool b_running = p_sys->b_thread_running;
     vlc_mutex_unlock( &p_sys->command_lock );
 
-    if (p_sys->b_thread_running == true)
+    if (b_running == true)
         return VLC_SUCCESS;
 
     msg_Dbg( p_mgr, "Activating extension '%s'", p_ext->psz_title );
+
+    /* A previous run may have ended on its own -- that is what killing a
+     * stuck extension does. Reap it, or this extension could never be
+     * started again without restarting the whole application. */
+    if( p_sys->b_thread_joinable )
+    {
+        vlc_join( p_sys->thread, NULL );
+        p_sys->b_thread_joinable = false;
+    }
+
+    /* Start from a fresh interruption context: killing an extension marks
+     * the old one dead for good, and every I/O of the new run would fail
+     * immediately if it were reused. */
+    if( p_sys->p_interrupt != NULL )
+        vlc_interrupt_destroy( p_sys->p_interrupt );
+    p_sys->p_interrupt = vlc_interrupt_create();
+
     /* Start thread */
+    vlc_mutex_lock( &p_sys->command_lock );
     p_sys->b_exiting = false;
     p_sys->b_thread_running = true;
+    vlc_mutex_unlock( &p_sys->command_lock );
 
     if( vlc_clone( &p_sys->thread, Run, p_ext, VLC_THREAD_PRIORITY_LOW )
         != VLC_SUCCESS )
     {
+        vlc_mutex_lock( &p_sys->command_lock );
         p_sys->b_exiting = true;
         p_sys->b_thread_running = false;
+        vlc_mutex_unlock( &p_sys->command_lock );
         return VLC_ENOMEM;
     }
+    p_sys->b_thread_joinable = true;
 
     return VLC_SUCCESS;
 }
@@ -100,6 +123,7 @@ static void FreeCommands( struct command_t *command )
             case CMD_ACTIVATE:
             case CMD_DEACTIVATE:
             case CMD_CLICK:
+            case CMD_SELECT:
                 /* No extra memory to free */
                 break;
             case CMD_TRIGGERMENU:
@@ -166,6 +190,9 @@ int Deactivate( extensions_manager_t *p_mgr, extension_t *p_ext )
 void KillExtension( extensions_manager_t *p_mgr, extension_t *p_ext )
 {
     msg_Dbg( p_mgr, "Killing extension now" );
+    /* abort blocking network I/O too (vlc.stream), not just vlc.net fds */
+    if( p_ext->p_sys->p_interrupt != NULL )
+        vlc_interrupt_kill( p_ext->p_sys->p_interrupt );
     vlclua_fd_interrupt( &p_ext->p_sys->dtable );
     p_ext->p_sys->b_activated = false;
     p_ext->p_sys->b_exiting = true;
@@ -184,6 +211,7 @@ int PushCommand__( extension_t *p_ext,  bool b_unique, command_type_e i_command,
     switch( i_command )
     {
         case CMD_CLICK:
+        case CMD_SELECT:
             cmd->data[0] = va_arg( args, void* );
             break;
         case CMD_TRIGGERMENU:
@@ -266,6 +294,11 @@ static void* Run( void *data )
     extension_t *p_ext = data;
     extensions_manager_t *p_mgr = p_ext->p_sys->p_mgr;
 
+    /* Make every interruptible I/O of this thread abortable from the
+     * shutdown and KillExtension paths */
+    if( p_ext->p_sys->p_interrupt != NULL )
+        vlc_interrupt_set( p_ext->p_sys->p_interrupt );
+
     vlc_mutex_lock( &p_ext->p_sys->command_lock );
 
     while( !p_ext->p_sys->b_exiting )
@@ -337,6 +370,17 @@ static void* Run( void *data )
                 break;
             }
 
+            case CMD_SELECT:
+            {
+                extension_widget_t *p_widget = cmd->data[0];
+                assert( p_widget );
+                if( lua_ExtensionWidgetSelect( p_mgr, p_ext, p_widget ) < 0 )
+                {
+                    msg_Warn( p_mgr, "Could not translate selection" );
+                }
+                break;
+            }
+
             case CMD_TRIGGERMENU:
             {
                 int *pi_id = cmd->data[0];
@@ -387,7 +431,27 @@ static void* Run( void *data )
         vlc_timer_schedule( p_ext->p_sys->timer, false, 0, 0 );
     }
 
+    /* Let Activate() know this thread is gone, or the extension could
+     * never be started again (a kill ends the loop without deactivating).
+     * b_activated matters just as much: a killed extension finishes the
+     * command it was stuck in, which sets that flag back to true, and
+     * Activate() would then queue nothing at all for the new thread. */
+    p_ext->p_sys->b_thread_running = false;
+    p_ext->p_sys->b_activated = false;
     vlc_mutex_unlock( &p_ext->p_sys->command_lock );
+
+    if( p_ext->p_sys->p_interrupt != NULL )
+        vlc_interrupt_set( NULL );
+
+    /* A killed extension never ran its "deactivate": drop the Lua state
+     * here, so that starting it again runs the script from scratch rather
+     * than resuming one whose dialog has been torn down. */
+    if( p_ext->p_sys->L != NULL )
+    {
+        lua_close( p_ext->p_sys->L );
+        p_ext->p_sys->L = NULL;
+    }
+
     msg_Dbg( p_mgr, "Extension thread end: '%s'", p_ext->psz_title );
 
     // Note: At this point, the extension should be deactivated

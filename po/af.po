@@ -1520,12 +1520,20 @@ msgstr "Web"
 msgid "Mouse Gestures"
 msgstr "Muisgebare"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc word met die verstekkoppelvlak uitgevoer. Gebruik «cpowervlc» om "
+"powervlc sonder koppelvlak te gebruik."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc word met die verstekkoppelvlak uitgevoer. Gebruik «-I dummy» om "
 "powervlc sonder koppelvlak te gebruik."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...

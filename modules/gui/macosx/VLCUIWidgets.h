@@ -33,6 +33,9 @@
 
 @interface VLCDialogPopUpButton : NSPopUpButton
 @property (readwrite) extension_widget_t *widget;
+/* set while the menu is being repopulated: the selection changes then
+ * too, and that is not something the user did */
+@property (readwrite) BOOL programmaticSelection;
 @end
 
 @interface VLCDialogLabel : NSTextField
@@ -52,9 +55,31 @@
 @end
 
 
+/// Cells are tab-separated; a cell may carry "display\037sortkey" so that a
+/// column sorts on a real value (a timestamp) rather than on its label.
+#define VLC_DIALOG_SORTKEY_SEP "\037"
+
 @interface VLCDialogList : NSTableView <NSTableViewDataSource>
 @property (readwrite) extension_widget_t *widget;
 @property (readwrite, retain) NSMutableArray *contentArray;
+@property (readwrite) NSInteger sortColumn;      ///< -1 when unsorted
+@property (readwrite) BOOL sortAscending;
+/// Set while the interface itself changes the selection, so that
+/// repopulating a list is not reported to the extension as a user action.
+@property (readwrite) BOOL programmaticSelection;
+
+/// Rebuild the table columns: nil headers = single headerless column,
+/// otherwise one titled column per string.
+- (void)setColumnHeaders:(NSArray *)headers;
+/// Measure the content and share the available width between the columns,
+/// so that long values (URLs, video titles) are readable without the user
+/// dragging a divider on every search.
+- (void)fitColumnsToContent;
+/// Sort contentArray on a column (string compare, numeric-aware).
+- (void)sortByColumn:(NSInteger)index ascending:(BOOL)ascending;
+/// Show the first row, now and once more on the next turn of the run
+/// loop. Call after filling the list.
+- (void)showTopOfList;
 @end
 
 @interface VLCDialogGridView : NSView

@@ -99,6 +99,11 @@ private:
     QSignalMapper *clickMapper;
     QSignalMapper *inputMapper;
     QSignalMapper *selectMapper;
+    /* Typing is reported once the keys stop, not once per key: a search
+     * box that refills a long list would crawl otherwise. Only one field
+     * can be typed into at a time, so one timer is enough. */
+    QTimer *inputDebounce;
+    extension_widget_t *p_debounced_widget;
 
     QWidget *CreateWidget( extension_widget_t *p_widget );
     QWidget *UpdateWidget( extension_widget_t *p_widget );
@@ -112,6 +117,7 @@ private slots:
     int TriggerClick( QObject *object );
     void SyncInput( QObject *object );
     void SyncSelection( QObject *object );
+    void NotifyTextChanged();
     void parentDestroyed();
 
 signals:

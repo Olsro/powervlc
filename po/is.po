@@ -1557,12 +1557,20 @@ msgstr "Vefur"
 msgid "Mouse Gestures"
 msgstr "Músarbendingar"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Keyri powervlc með sjálfgefna viðmótinu. Notaðu «cpowervlc» til að keyra "
+"powervlc án viðmóts."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"Keyri powervlc með sjálfgefna viðmótinu. Notaðu «-I dummy» til að keyra "
 "powervlc án viðmóts."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...

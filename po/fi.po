@@ -1614,12 +1614,20 @@ msgstr "Web"
 msgid "Mouse Gestures"
 msgstr "Hiirieleet"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Käynnistetään powervlc oletuskäyttöliittymällä. Käytä komentoa «cpowervlc» "
+"käynnistääksesi powervlc:n ilman käyttöliittymää."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"Käynnistetään powervlc oletuskäyttöliittymällä. Käytä komentoa «-I dummy» "
 "käynnistääksesi powervlc:n ilman käyttöliittymää."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...

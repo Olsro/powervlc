@@ -1542,12 +1542,20 @@ msgstr "ვებსივრცე"
 msgid "Mouse Gestures"
 msgstr "თაგვის ჟესტები"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc ეშვება ნაგულისხმევი ინტერფეისით. გამოიყენეთ «cpowervlc» powervlc-ის "
+"ინტერფეისის გარეშე გასაშვებად."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc ეშვება ნაგულისხმევი ინტერფეისით. გამოიყენეთ «-I dummy» powervlc-ის "
 "ინტერფეისის გარეშე გასაშვებად."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...

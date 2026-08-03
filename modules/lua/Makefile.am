@@ -30,13 +30,25 @@ liblua_plugin_la_SOURCES = \
 	lua/libs/volume.c \
 	lua/libs/xml.c \
 	lua/libs/io.c \
-	lua/libs/errno.c
+	lua/libs/errno.c \
+	lua/libs/clipboard.c \
+	lua/libs/http.c \
+	lua/libs/keystore.c
 
 if HAVE_WIN32
 liblua_plugin_la_SOURCES += lua/libs/win.c
 endif
 liblua_plugin_la_CFLAGS = $(AM_CFLAGS) $(LUA_CFLAGS) -I$(srcdir)/lua
 liblua_plugin_la_LIBADD = $(LUA_LIBS) $(SOCKET_LIBS) $(LIBDL) $(LIBM) $(LIBPTHREAD)
+if HAVE_DARWIN
+# lua/libs/clipboard.c reaches NSPasteboard through the Objective-C runtime
+liblua_plugin_la_LIBADD += -lobjc
+liblua_plugin_la_LDFLAGS = $(AM_LDFLAGS) -Wl,-framework,CoreFoundation
+endif
+if HAVE_WIN32
+# lua/libs/clipboard.c uses the Win32 clipboard
+liblua_plugin_la_LIBADD += -luser32
+endif
 if BUILD_LUA
 lua_LTLIBRARIES = liblua_plugin.la
 endif

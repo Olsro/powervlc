@@ -1581,12 +1581,20 @@ msgstr "વેબ"
 msgid "Mouse Gestures"
 msgstr "માઉસ હાવભાવ"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc મૂળભૂત ઇન્ટરફેસ સાથે ચાલી રહ્યું છે. ઇન્ટરફેસ વગર powervlc વાપરવા «cpowervlc» "
+"વાપરો."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc મૂળભૂત ઇન્ટરફેસ સાથે ચાલી રહ્યું છે. ઇન્ટરફેસ વગર powervlc વાપરવા «-I dummy» "
 "વાપરો."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...

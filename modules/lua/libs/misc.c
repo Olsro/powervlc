@@ -98,6 +98,20 @@ static int vlclua_version( lua_State *L )
 }
 
 /*****************************************************************************
+ * Get the PowerVLC product version
+ *
+ * vlc.misc.version() answers what VLC release this is derived from, which
+ * is not what a script should give its name as: extensions that identify
+ * themselves to a server (Jellyfin registers a device, Last.fm a client)
+ * used to repeat "1.1.0" in their own source and drift from the tree.
+ *****************************************************************************/
+static int vlclua_product_version( lua_State *L )
+{
+    lua_pushliteral( L, POWERVLC_VERSION );
+    return 1;
+}
+
+/*****************************************************************************
  * Get the VLC copyright
  *****************************************************************************/
 static int vlclua_copyright( lua_State *L )
@@ -160,6 +174,7 @@ static int vlclua_action_id( lua_State *L )
  *****************************************************************************/
 static const luaL_Reg vlclua_misc_reg[] = {
     { "version", vlclua_version },
+    { "product_version", vlclua_product_version },
     { "copyright", vlclua_copyright },
     { "license", vlclua_license },
 
@@ -177,5 +192,25 @@ void luaopen_misc( lua_State *L )
 {
     lua_newtable( L );
     luaL_register( L, NULL, vlclua_misc_reg );
+    lua_setfield( L, -2, "misc" );
+}
+
+/* What an extension gets: the same table without the entries that act on
+ * the player. A script has no business quitting PowerVLC or sleeping the
+ * thread that drives its dialog, but it does need to say which build it
+ * belongs to when it introduces itself to a server. */
+static const luaL_Reg vlclua_misc_info_reg[] = {
+    { "version", vlclua_version },
+    { "product_version", vlclua_product_version },
+    { "copyright", vlclua_copyright },
+    { "license", vlclua_license },
+
+    { NULL, NULL }
+};
+
+void luaopen_misc_info( lua_State *L )
+{
+    lua_newtable( L );
+    luaL_register( L, NULL, vlclua_misc_info_reg );
     lua_setfield( L, -2, "misc" );
 }

@@ -29124,6 +29124,12 @@ msgid ""
 "without interface."
 msgstr ""
 
+#: src/interface/interface.c
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+
 #: src/config/help.c
 msgid "PowerVLC version %s\n"
 msgstr ""

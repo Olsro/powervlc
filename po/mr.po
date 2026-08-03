@@ -1589,12 +1589,20 @@ msgstr "वेब"
 msgid "Mouse Gestures"
 msgstr "माउस हावभाव"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc मूलभूत इंटरफेससह चालू आहे. इंटरफेसशिवाय powervlc वापरण्यासाठी «cpowervlc» "
+"वापरा."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc मूलभूत इंटरफेससह चालू आहे. इंटरफेसशिवाय powervlc वापरण्यासाठी «-I dummy» "
 "वापरा."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -30889,27 +30897,6 @@ msgid ""
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "व्हीएलसी आवृत्ती %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "पूर्वनिर्धारित आंतरपृष्ठासह व्हीएलसी चालवणे. आंतरपृष्ठाशिवाय व्हीएलसी वापरण्यासाठी "
-#~ "'सीव्हीएलसी' वापरा."
-
-#~ msgid ""
-#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
-#~ "not have it."
-#~ msgstr ""
-#~ "या ब्ल्यू-रे डिस्कला एएसीएस विसंकेतनासाठी वाचनालयाची आवश्यकता आहे, व तुमच्या यंत्रणेकडे "
-#~ "ते नाही."
-
-#~ msgid "Missing AACS configuration file!"
-#~ msgstr "हरवलेली एएसीएस मांडणी धारिका!"
-
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
 msgstr ""
@@ -30937,3 +30924,24 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "व्हीएलसी आवृत्ती %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "पूर्वनिर्धारित आंतरपृष्ठासह व्हीएलसी चालवणे. आंतरपृष्ठाशिवाय व्हीएलसी वापरण्यासाठी "
+#~ "'सीव्हीएलसी' वापरा."
+
+#~ msgid ""
+#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
+#~ "not have it."
+#~ msgstr ""
+#~ "या ब्ल्यू-रे डिस्कला एएसीएस विसंकेतनासाठी वाचनालयाची आवश्यकता आहे, व तुमच्या यंत्रणेकडे "
+#~ "ते नाही."
+
+#~ msgid "Missing AACS configuration file!"
+#~ msgstr "हरवलेली एएसीएस मांडणी धारिका!"

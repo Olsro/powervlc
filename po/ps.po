@@ -1483,13 +1483,21 @@ msgstr ""
 msgid "Mouse Gestures"
 msgstr ""
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc په تلواله بڼه پیل کېږي. د powervlc پرته له بڼې کارولو لپاره "
 "«cpowervlc» وکاروئ."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc په تلواله بڼه پیل کېږي. د powervlc پرته له بڼې کارولو لپاره "
+"«-I dummy» وکاروئ."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
 #: src/libvlc.c:174

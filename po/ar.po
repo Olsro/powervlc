@@ -1606,12 +1606,20 @@ msgstr "الوِب"
 msgid "Mouse Gestures"
 msgstr "إيماءات الفأرة"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "يجري تشغيل powervlc بالواجهة الافتراضية. استخدم «cpowervlc» لتشغيل powervlc "
+"بدون واجهة."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"يجري تشغيل powervlc بالواجهة الافتراضية. استخدم «-I dummy» لتشغيل powervlc "
 "بدون واجهة."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...

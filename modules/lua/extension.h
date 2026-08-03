@@ -27,6 +27,7 @@
 #include <vlc_extensions.h>
 #include <vlc_arrays.h>
 #include <vlc_dialog.h>
+#include <vlc_interrupt.h>
 
 #define WATCH_TIMER_PERIOD    (10 * CLOCK_FREQ) ///< 10s period for the timer
 
@@ -37,6 +38,7 @@ typedef enum
     CMD_DEACTIVATE,
     CMD_TRIGGERMENU,    /* Arg1 = int*, pointing to id to trigger. free */
     CMD_CLICK,          /* Arg1 = extension_widget_t* */
+    CMD_SELECT,         /* Arg1 = extension_widget_t* (list selection) */
     CMD_CLOSE,
     CMD_SET_INPUT,      /* No arg. Just signal current input changed */
     CMD_UPDATE_META,    /* No arg. Just signal current input item meta changed */
@@ -84,9 +86,15 @@ struct extension_sys_t
     vlc_dialog_id *p_progress_id;
     vlc_timer_t timer; ///< This timer makes sure Lua never gets stuck >5s
 
+    /* Interruption context of the extension thread: lets shutdown and
+     * KillExtension abort blocking network I/O (vlc.stream on a dead
+     * host) instead of hanging the quit path on vlc_join */
+    vlc_interrupt_t *p_interrupt;
+
     bool b_exiting;
 
-    bool b_thread_running; //< Only accessed out of the extension thread.
+    bool b_thread_running; //< Protected by command_lock: true while Run() runs
+    bool b_thread_joinable; //< A thread was started and still needs joining
     bool b_activated; ///< Protected by the command lock
 };
 
@@ -122,6 +130,9 @@ int lua_ExecuteFunctionVa( extensions_manager_t *p_mgr, extension_t *p_ext,
                             const char *psz_function, va_list args );
 int lua_ExecuteFunction( extensions_manager_t *p_mgr, extension_t *p_ext,
                          const char *psz_function, ... );
+int lua_ExtensionWidgetSelect( extensions_manager_t *p_mgr,
+                               extension_t *p_ext,
+                               extension_widget_t *p_widget );
 int lua_ExtensionWidgetClick( extensions_manager_t *p_mgr,
                               extension_t *p_ext,
                               extension_widget_t *p_widget );

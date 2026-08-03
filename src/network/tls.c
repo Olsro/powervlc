@@ -342,6 +342,11 @@ typedef struct vlc_tls_socket
 {
     struct vlc_tls tls;
     int fd;
+    /* Bound on a deferred connect() wait, in microseconds (0 = none).
+     * Set from "ipv4-timeout" by vlc_tls_SocketOpenTCP(): without it a
+     * dead host only fails after the kernel TCP timeout (75 s on Darwin),
+     * freezing whoever is waiting on the connection. */
+    vlc_tick_t connect_timeout;
     socklen_t peerlen;
     struct sockaddr peer[];
 } vlc_tls_socket_t;
@@ -406,6 +411,7 @@ static vlc_tls_t *vlc_tls_SocketAlloc(int fd,
     tls->p = NULL;
 
     sock->fd = fd;
+    sock->connect_timeout = 0;
     sock->peerlen = peerlen;
     if (peerlen > 0)
         memcpy(sock->peer, peer, peerlen);
@@ -469,12 +475,16 @@ static vlc_tls_t *vlc_tls_SocketAddrInfo(const struct addrinfo *restrict info)
  */
 static int vlc_tls_WaitConnect(vlc_tls_t *tls)
 {
+    const vlc_tls_socket_t *sock = (vlc_tls_socket_t *)tls;
     const int fd = vlc_tls_GetFD(tls);
     struct pollfd ufd;
+    vlc_tick_t deadline = (sock->connect_timeout > 0)
+        ? mdate() + sock->connect_timeout : 0;
 
     ufd.fd = fd;
     ufd.events = POLLOUT;
 
+    int ret;
     do
     {
         if (vlc_killed())
@@ -482,8 +492,21 @@ static int vlc_tls_WaitConnect(vlc_tls_t *tls)
             errno = EINTR;
             return -1;
         }
+
+        int wait_ms = -1;
+        if (deadline != 0)
+        {
+            vlc_tick_t remaining = deadline - mdate();
+            if (remaining <= 0)
+            {
+                errno = ETIMEDOUT;
+                return -1;
+            }
+            wait_ms = remaining / 1000 + 1;
+        }
+        ret = vlc_poll_i11e(&ufd, 1, wait_ms);
     }
-    while (vlc_poll_i11e(&ufd, 1, -1) <= 0);
+    while (ret <= 0);
 
     int val;
     socklen_t len = sizeof (val);
@@ -642,6 +665,12 @@ static vlc_tls_t *vlc_tls_SocketRace(vlc_object_t *obj,
     size_t count = 0, next = 0;
     int saved_errno = ENETUNREACH;
 
+    /* Overall bound: without it, once every address is in flight the race
+     * waits on the kernel TCP timeout (75 s on Darwin) when the host
+     * silently drops SYNs. Same knob as every other connect path. */
+    vlc_tick_t timeout = var_InheritInteger(obj, "ipv4-timeout") * 1000;
+    vlc_tick_t deadline = (timeout > 0) ? mdate() + timeout : 0;
+
     while (count > 0 || next < n)
     {
         /* Start attempts until one is actually pending: an address that
@@ -692,16 +721,29 @@ static vlc_tls_t *vlc_tls_SocketRace(vlc_object_t *obj,
             ufd[i].revents = 0;
         }
 
-        /* Only wait forever once the last address is in flight. */
-        int ret = vlc_poll_i11e(ufd, count,
-                                (next < n) ? VLC_HE_ATTEMPT_DELAY : -1);
+        /* Only wait forever once the last address is in flight -- and
+         * never past the overall deadline. */
+        int wait_ms = (next < n) ? VLC_HE_ATTEMPT_DELAY : -1;
+        if (deadline != 0)
+        {
+            vlc_tick_t remaining = deadline - mdate();
+            if (remaining <= 0)
+            {
+                saved_errno = ETIMEDOUT;
+                goto fail;
+            }
+            int remaining_ms = remaining / 1000 + 1;
+            if (wait_ms < 0 || remaining_ms < wait_ms)
+                wait_ms = remaining_ms;
+        }
+        int ret = vlc_poll_i11e(ufd, count, wait_ms);
         if (ret < 0)
         {
             saved_errno = errno;
             goto fail;
         }
         if (ret == 0)
-            continue; /* delay expired: bring the next address in */
+            continue; /* delay expired: next address, or deadline check */
 
         for (size_t i = 0; i < count; )
         {
@@ -838,6 +880,9 @@ vlc_tls_t *vlc_tls_SocketOpenTLS(vlc_tls_creds_t *creds, const char *name,
                 msg_Err(creds, "socket error: %s", vlc_strerror_c(errno));
                 break;
             }
+            /* bound the deferred connect wait like the raced path */
+            ((vlc_tls_socket_t *)tcp)->connect_timeout =
+                var_InheritInteger(creds, "ipv4-timeout") * 1000;
         }
         else
         {

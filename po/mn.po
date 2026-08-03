@@ -1521,13 +1521,21 @@ msgstr "Вэб"
 msgid "Mouse Gestures"
 msgstr "Хулганы хөдлөл"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc-г үндсэн интерфэйстэй ажиллуулж байна. Интерфэйсгүйгээр powervlc "
 "ашиглахын тулд «cpowervlc»-г хэрэглэнэ үү."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc-г үндсэн интерфэйстэй ажиллуулж байна. Интерфэйсгүйгээр powervlc "
+"ашиглахын тулд «-I dummy»-г хэрэглэнэ үү."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
 #: src/libvlc.c:174

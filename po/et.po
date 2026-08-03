@@ -1599,12 +1599,20 @@ msgstr "Veeb"
 msgid "Mouse Gestures"
 msgstr "Hiirežestid"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc käivitatakse vaikimisi liidesega. Kasuta «cpowervlc», et käivitada "
+"powervlc ilma liideseta."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc käivitatakse vaikimisi liidesega. Kasuta «-I dummy», et käivitada "
 "powervlc ilma liideseta."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...

@@ -1590,12 +1590,20 @@ msgstr "Web"
 msgid "Mouse Gestures"
 msgstr "Xestos del mur"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Executando powervlc cola interfaz predeterminada. Usa «cpowervlc» pa usar "
+"powervlc ensin interfaz."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"Executando powervlc cola interfaz predeterminada. Usa «-I dummy» pa usar "
 "powervlc ensin interfaz."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...

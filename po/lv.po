@@ -1613,12 +1613,20 @@ msgstr "Tīmeklis"
 msgid "Mouse Gestures"
 msgstr "Peles žesti"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc tiek palaists ar noklusējuma saskarni. Izmantojiet «cpowervlc», lai "
+"palaistu powervlc bez saskarnes."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc tiek palaists ar noklusējuma saskarni. Izmantojiet «-I dummy», lai "
 "palaistu powervlc bez saskarnes."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -31467,27 +31475,6 @@ msgid ""
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "VLC versija %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "Palaiž VLC ar noklusējuma saskarni. Lietojiet 'cvlc', lai lietotu VLC bez "
-#~ "saskarnes."
-
-#~ msgid ""
-#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
-#~ "not have it."
-#~ msgstr ""
-#~ "Šim Blu-ray diskam vajadzīga bibliotēka AACS atkodēšanai, un jūsu "
-#~ "sistēmai tās nav."
-
-#~ msgid "Missing AACS configuration file!"
-#~ msgstr "Trūkstoša AACS konfigurācijas datne!"
-
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
 msgstr ""
@@ -31515,3 +31502,24 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "VLC versija %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "Palaiž VLC ar noklusējuma saskarni. Lietojiet 'cvlc', lai lietotu VLC bez "
+#~ "saskarnes."
+
+#~ msgid ""
+#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
+#~ "not have it."
+#~ msgstr ""
+#~ "Šim Blu-ray diskam vajadzīga bibliotēka AACS atkodēšanai, un jūsu "
+#~ "sistēmai tās nav."
+
+#~ msgid "Missing AACS configuration file!"
+#~ msgstr "Trūkstoša AACS konfigurācijas datne!"

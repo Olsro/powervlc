@@ -1582,12 +1582,20 @@ msgstr "เว็บ"
 msgid "Mouse Gestures"
 msgstr "ท่าขยับเมาส์"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "กำลังเรียกใช้ powervlc ด้วยส่วนติดต่อปริยาย ใช้ «cpowervlc» เพื่อใช้ powervlc "
+"โดยไม่มีส่วนติดต่อ"
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"กำลังเรียกใช้ powervlc ด้วยส่วนติดต่อปริยาย ใช้ «-I dummy» เพื่อใช้ powervlc "
 "โดยไม่มีส่วนติดต่อ"
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -29906,25 +29914,6 @@ msgid ""
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "VLC รุ่น %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "จะเรียกทำงาน vlc โดยใช้ส่วนติดต่อปริยาย, หากต้องการใช้งานแบบไร้ส่วนติดต่อ ให้ใช้คำสั่ง "
-#~ "'cvlc'"
-
-#~ msgid ""
-#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
-#~ "not have it."
-#~ msgstr "แผ่นบลูเรย์จำเป็นต้องใช้ไลบรารี AACS ในการอ่านรหัส แต่ว่าคุณยังไม่ได้ติดตั้งมัน"
-
-#~ msgid "Missing AACS configuration file!"
-#~ msgstr "ไฟล์การกำหนดค่า AACS ตกหล่น!"
-
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
 msgstr ""
@@ -29952,3 +29941,22 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "VLC รุ่น %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "จะเรียกทำงาน vlc โดยใช้ส่วนติดต่อปริยาย, หากต้องการใช้งานแบบไร้ส่วนติดต่อ ให้ใช้คำสั่ง "
+#~ "'cvlc'"
+
+#~ msgid ""
+#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
+#~ "not have it."
+#~ msgstr "แผ่นบลูเรย์จำเป็นต้องใช้ไลบรารี AACS ในการอ่านรหัส แต่ว่าคุณยังไม่ได้ติดตั้งมัน"
+
+#~ msgid "Missing AACS configuration file!"
+#~ msgstr "ไฟล์การกำหนดค่า AACS ตกหล่น!"

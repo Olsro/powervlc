@@ -1601,12 +1601,20 @@ msgstr "Web"
 msgid "Mouse Gestures"
 msgstr "Movimentos do mouse"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Executando o powervlc com a interface padrão. Use «cpowervlc» para usar o "
+"powervlc sem interface."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"Executando o powervlc com a interface padrão. Use «-I dummy» para usar o "
 "powervlc sem interface."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -31618,6 +31626,34 @@ msgstr ""
 "exibir apenas as legendas forçadas, como faz um reprodutor de Blu-ray de "
 "mesa."
 
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Installing %@..."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Uninstalling %@..."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ installed."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ uninstalled."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not install this addon"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "Could not remove this addon"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyAddons.m
+msgid "%@ could not be processed. The Messages window records what went wrong."
+msgstr ""
+
 #, c-format
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "Versão %s (%s) do VLC\n"
@@ -31809,31 +31845,3 @@ msgstr ""
 #~ "Nome da janela a ser aberta ao iniciar, como a variável de ambiente "
 #~ "VLC_LEGACY_SHOW: prefs, prefsadv, mediainfo, errors, about, bookmarks, "
 #~ "messages, tracksync, effects, videoeffects, convert, fspanel, open0..3."
-
-#: modules/gui/legacy_macosx/VLCLegacyAddons.m
-msgid "Installing %@..."
-msgstr ""
-
-#: modules/gui/legacy_macosx/VLCLegacyAddons.m
-msgid "Uninstalling %@..."
-msgstr ""
-
-#: modules/gui/legacy_macosx/VLCLegacyAddons.m
-msgid "%@ installed."
-msgstr ""
-
-#: modules/gui/legacy_macosx/VLCLegacyAddons.m
-msgid "%@ uninstalled."
-msgstr ""
-
-#: modules/gui/legacy_macosx/VLCLegacyAddons.m
-msgid "Could not install this addon"
-msgstr ""
-
-#: modules/gui/legacy_macosx/VLCLegacyAddons.m
-msgid "Could not remove this addon"
-msgstr ""
-
-#: modules/gui/legacy_macosx/VLCLegacyAddons.m
-msgid "%@ could not be processed. The Messages window records what went wrong."
-msgstr ""

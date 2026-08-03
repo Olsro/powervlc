@@ -655,7 +655,19 @@ scanvalue = function (str, pos, nullval, objectmeta, arraymeta)
   else
     local pstart, pend = strfind (str, "^%-?[%d%.]+[eE]?[%+%-]?%d*", pos)
     if pstart then
-      local number = tonumber (strsub (str, pstart, pend))
+      local numstr = strsub (str, pstart, pend)
+      local number = tonumber (numstr)
+      if not number then
+        -- tonumber() follows LC_NUMERIC: under a locale with a different
+        -- decimal separator (e.g. fr_FR) it rejects "0.5". Retry with the
+        -- locale's separator substituted in (same workaround as dkjson 2.6).
+        -- 1/2, not a 0.5 literal: the Lua lexer itself follows LC_NUMERIC
+        -- and would refuse to load this file under such a locale.
+        local decpoint = strsub (tostring (1/2), 2, 2)
+        if decpoint ~= "." then
+          number = tonumber ((numstr:gsub ("%.", decpoint)))
+        end
+      end
       if number then
         return number, pend + 1
       end

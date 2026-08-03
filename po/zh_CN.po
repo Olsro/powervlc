@@ -15,7 +15,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: vlc 3.0.22-rc1\n"
 "Report-Msgid-Bugs-To: vlc-devel@videolan.org\n"
-"POT-Creation-Date: 2026-07-25 11:39+0200\n"
+"POT-Creation-Date: 2026-07-25 12:36+0200\n"
 "PO-Revision-Date: 2017-12-10 22:48+0000\n"
 "Last-Translator: Dian Li (xslidian) <xslidian@gmail.com>, 2025\n"
 "Language-Team: Chinese (China) (https://app.transifex.com/yaron/teams/16553/"
@@ -86,12 +86,12 @@ msgstr "热键设置"
 #: modules/access/imem.c:64
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:672
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:359
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:603
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:590
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1356
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:284
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1295
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:171
-#: modules/gui/macosx/VLCMainMenu.m:431 modules/gui/macosx/VLCOutput.m:92
+#: modules/gui/macosx/VLCMainMenu.m:430 modules/gui/macosx/VLCOutput.m:92
 #: modules/gui/macosx/VLCPlaylistInfo.m:91
 #: modules/gui/macosx/VLCSimplePrefsController.m:368
 #: modules/gui/qt/components/info_panels.cpp:572
@@ -125,8 +125,8 @@ msgid "Audio resampler"
 msgstr "音频重采样器"
 
 #: include/vlc_config_cat.h:63 src/audio_output/output.c:260
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:623
-#: modules/gui/macosx/VLCMainMenu.m:441 modules/gui/macosx/VLCMainMenu.m:442
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:610
+#: modules/gui/macosx/VLCMainMenu.m:440 modules/gui/macosx/VLCMainMenu.m:441
 msgid "Visualizations"
 msgstr "可视化"
 
@@ -158,13 +158,13 @@ msgstr "其他音频设置及模块。"
 #: src/libvlc-module.c:1601 modules/access/imem.c:64
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:623
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:343
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:635
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:622
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1348
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:257
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:895
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1296
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:160
-#: modules/gui/macosx/VLCMainMenu.m:444 modules/gui/macosx/VLCOutput.m:82
+#: modules/gui/macosx/VLCMainMenu.m:443 modules/gui/macosx/VLCOutput.m:82
 #: modules/gui/macosx/VLCPlaylistInfo.m:86
 #: modules/gui/macosx/VLCSimplePrefsController.m:370
 #: modules/gui/macosx/VLCSimplePrefsController.m:513
@@ -368,9 +368,9 @@ msgstr "VLC 的视频点播（VoD）实现"
 #: include/vlc_config_cat.h:173 src/libvlc-module.c:2138
 #: src/playlist/engine.c:243 modules/demux/playlist/playlist.c:64
 #: modules/demux/playlist/playlist.c:65 modules/demux/playlist/wpl.c:99
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1131
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2530
-#: modules/gui/macosx/VLCMainWindow.m:984
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1124
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2523
+#: modules/gui/macosx/VLCMainWindow.m:981
 #: modules/gui/macosx/VLCSidebarDataSource.m:68
 #: modules/gui/qt/components/controller.hpp:109
 #: modules/gui/qt/components/playlist/playlist.cpp:165
@@ -472,17 +472,17 @@ msgid "&About"
 msgstr "关于(&A)"
 
 #: include/vlc_intf_strings.h:65 modules/control/oldrc.c:70
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:896
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1190
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:519
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:826
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1593
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:889
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1183
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:506
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:813
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1580
 #: modules/gui/macosx/VLCControlsBarCommon.m:81
 #: modules/gui/macosx/VLCControlsBarCommon.m:432
 #: modules/gui/macosx/VLCFSPanelController.m:245
-#: modules/gui/macosx/VLCMainMenu.m:402 modules/gui/macosx/VLCMainMenu.m:514
-#: modules/gui/macosx/VLCMainMenu.m:521 modules/gui/macosx/VLCMainMenu.m:1383
-#: modules/gui/macosx/VLCMainMenu.m:1384 modules/gui/macosx/VLCMainMenu.m:1385
+#: modules/gui/macosx/VLCMainMenu.m:401 modules/gui/macosx/VLCMainMenu.m:513
+#: modules/gui/macosx/VLCMainMenu.m:520 modules/gui/macosx/VLCMainMenu.m:1382
+#: modules/gui/macosx/VLCMainMenu.m:1383 modules/gui/macosx/VLCMainMenu.m:1384
 #: modules/gui/macosx/VLCPlaylist.m:223
 #: modules/gui/qt/components/controller.hpp:107
 #: modules/gui/qt/dialogs/vlm.cpp:532 modules/gui/qt/ui/open.h:256
@@ -529,21 +529,21 @@ msgstr "串流..."
 msgid "Save..."
 msgstr "保存..."
 
-#: include/vlc_intf_strings.h:79 modules/gui/legacy_macosx/VLCLegacyMenu.m:581
+#: include/vlc_intf_strings.h:79 modules/gui/legacy_macosx/VLCLegacyMenu.m:568
 #: modules/gui/macosx/VLCCoreInteraction.m:515
-#: modules/gui/macosx/VLCMainMenu.m:416
+#: modules/gui/macosx/VLCMainMenu.m:415
 msgid "Repeat All"
 msgstr "全部循环"
 
-#: include/vlc_intf_strings.h:80 modules/gui/legacy_macosx/VLCLegacyMenu.m:579
+#: include/vlc_intf_strings.h:80 modules/gui/legacy_macosx/VLCLegacyMenu.m:566
 #: modules/gui/macosx/VLCCoreInteraction.m:535
-#: modules/gui/macosx/VLCMainMenu.m:415
+#: modules/gui/macosx/VLCMainMenu.m:414
 msgid "Repeat One"
 msgstr "单曲循环"
 
 #: include/vlc_intf_strings.h:81 src/libvlc-module.c:1476
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:577
-#: modules/gui/macosx/VLCMainMenu.m:414
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:564
+#: modules/gui/macosx/VLCMainMenu.m:413
 #: modules/gui/qt/components/controller.hpp:111
 #: modules/gui/qt/components/controller.hpp:124
 msgid "Random"
@@ -558,7 +558,7 @@ msgid "Add to Playlist"
 msgstr "添加到播放列表"
 
 #: include/vlc_intf_strings.h:85
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1227
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1220
 #: modules/gui/macosx/VLCPlaylist.m:230
 msgid "Add File..."
 msgstr "添加文件..."
@@ -575,7 +575,7 @@ msgstr "添加文件夹..."
 msgid "Save Playlist to &File..."
 msgstr "将播放列表保存为文件(&F)..."
 
-#: include/vlc_intf_strings.h:91 modules/gui/macosx/VLCMainWindow.m:296
+#: include/vlc_intf_strings.h:91 modules/gui/macosx/VLCMainWindow.m:293
 #: modules/gui/qt/components/preferences_widgets.cpp:1133
 msgid "Search"
 msgstr "搜索"
@@ -678,8 +678,8 @@ msgstr "音频滤镜"
 msgid "Replay gain"
 msgstr "回放增益"
 
-#: src/audio_output/output.c:345 modules/gui/legacy_macosx/VLCLegacyMenu.m:620
-#: modules/gui/macosx/VLCMainMenu.m:437 modules/gui/macosx/VLCMainMenu.m:438
+#: src/audio_output/output.c:345 modules/gui/legacy_macosx/VLCLegacyMenu.m:607
+#: modules/gui/macosx/VLCMainMenu.m:436 modules/gui/macosx/VLCMainMenu.m:437
 msgid "Stereo audio mode"
 msgstr "立体音频模式"
 
@@ -990,8 +990,8 @@ msgstr "%s [%s %d]"
 
 #: src/input/es_out.c:2078 src/input/es_out.c:2083 src/input/es_out.c:2098
 #: src/input/var.c:160 src/libvlc-module.c:611
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:598
-#: modules/gui/macosx/VLCMainMenu.m:424 modules/gui/macosx/VLCMainMenu.m:425
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:585
+#: modules/gui/macosx/VLCMainMenu.m:423 modules/gui/macosx/VLCMainMenu.m:424
 msgid "Program"
 msgstr "节目"
 
@@ -1005,10 +1005,10 @@ msgid "Scrambled"
 msgstr "已混淆"
 
 #: src/input/es_out.c:2361 modules/demux/keydb.c:315
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2916
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1289
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2909
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1276
 #: modules/gui/legacy_macosx/misc.m:501 modules/gui/macosx/VLCMain.m:271
-#: modules/gui/macosx/VLCMainMenu.m:1279 modules/keystore/keychain.m:41
+#: modules/gui/macosx/VLCMainMenu.m:1278 modules/keystore/keychain.m:41
 #: modules/lua/extension.c:1199
 msgid "Yes"
 msgstr "是"
@@ -1038,9 +1038,9 @@ msgid "Codec"
 msgstr "编解码器"
 
 #: src/input/es_out.c:4153 src/input/meta.c:66 modules/access/imem.c:71
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1633
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1626
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:104
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:501
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:488
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:678
 #: modules/gui/macosx/VLCPlaylist.m:98
 #: modules/gui/macosx/VLCSimplePrefsController.m:450
@@ -1049,9 +1049,9 @@ msgid "Language"
 msgstr "语言"
 
 #: src/input/es_out.c:4156 src/input/meta.c:61
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1631
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1624
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:100
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:499
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:486
 #: modules/gui/macosx/VLCBookmarksWindowController.m:80
 #: modules/gui/macosx/VLCPlaylist.m:96 modules/gui/qt/dialogs/bookmarks.cpp:75
 #: modules/gui/qt/dialogs/epg.cpp:55
@@ -1352,12 +1352,12 @@ msgid "VLC is unable to open the MRL '%s'. Check the log for details."
 msgstr "VLC 无法打开 MRL「%s」。详情请检查日志。"
 
 #: src/input/meta.c:55 src/input/var.c:170
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1626
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1619
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:94
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:494
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:599
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:481
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:586
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:781
-#: modules/gui/macosx/VLCMainMenu.m:426 modules/gui/macosx/VLCMainMenu.m:427
+#: modules/gui/macosx/VLCMainMenu.m:425 modules/gui/macosx/VLCMainMenu.m:426
 #: modules/gui/macosx/VLCOpenWindowController.m:178
 #: modules/gui/macosx/VLCOpenWindowController.m:180
 #: modules/gui/macosx/VLCPlaylist.m:91 modules/gui/macosx/VLCPlaylistInfo.m:59
@@ -1374,9 +1374,9 @@ msgid "Artist"
 msgstr "艺术家"
 
 #: src/input/meta.c:57 modules/demux/mp4/meta.c:87
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1629
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1622
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:98
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:497
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:484
 #: modules/gui/macosx/VLCPlaylist.m:94 modules/mux/avi.c:51
 msgid "Genre"
 msgstr "流派"
@@ -1387,9 +1387,9 @@ msgid "Copyright"
 msgstr "版权"
 
 #: src/input/meta.c:59 src/libvlc-module.c:248
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1630
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1623
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:96
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:498
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:485
 #: modules/gui/macosx/VLCPlaylist.m:95
 msgid "Album"
 msgstr "专辑"
@@ -1402,9 +1402,9 @@ msgstr "轨道编号"
 msgid "Rating"
 msgstr "分级"
 
-#: src/input/meta.c:63 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1632
+#: src/input/meta.c:63 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1625
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:97
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:500
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:487
 #: modules/gui/macosx/VLCPlaylist.m:97 modules/mux/avi.c:50
 msgid "Date"
 msgstr "日期"
@@ -1482,24 +1482,24 @@ msgstr "书签"
 msgid "Programs"
 msgstr "节目列表"
 
-#: src/input/var.c:175 modules/gui/legacy_macosx/VLCLegacyMenu.m:600
+#: src/input/var.c:175 modules/gui/legacy_macosx/VLCLegacyMenu.m:587
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:790
-#: modules/gui/macosx/VLCMainMenu.m:428 modules/gui/macosx/VLCMainMenu.m:429
+#: modules/gui/macosx/VLCMainMenu.m:427 modules/gui/macosx/VLCMainMenu.m:428
 #: modules/gui/macosx/VLCOpenWindowController.m:179
 #: modules/gui/macosx/VLCOpenWindowController.m:181
 #: modules/gui/qt/ui/open_disk.h:307
 msgid "Chapter"
 msgstr "章节"
 
-#: src/input/var.c:188 modules/gui/legacy_macosx/VLCLegacyMenu.m:658
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:838
-#: modules/gui/macosx/VLCMainMenu.m:452 modules/gui/macosx/VLCMainMenu.m:453
+#: src/input/var.c:188 modules/gui/legacy_macosx/VLCLegacyMenu.m:645
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:825
+#: modules/gui/macosx/VLCMainMenu.m:451 modules/gui/macosx/VLCMainMenu.m:452
 msgid "Video Track"
 msgstr "视频轨道"
 
-#: src/input/var.c:194 modules/gui/legacy_macosx/VLCLegacyMenu.m:618
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:836
-#: modules/gui/macosx/VLCMainMenu.m:435 modules/gui/macosx/VLCMainMenu.m:436
+#: src/input/var.c:194 modules/gui/legacy_macosx/VLCLegacyMenu.m:605
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:823
+#: modules/gui/macosx/VLCMainMenu.m:434 modules/gui/macosx/VLCMainMenu.m:435
 msgid "Audio Track"
 msgstr "音频轨道"
 
@@ -1546,9 +1546,9 @@ msgstr "上一个章节"
 msgid "Media: %s"
 msgstr "媒体: %s"
 
-#: src/interface/interface.c:82 modules/gui/legacy_macosx/VLCLegacyMenu.m:396
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:399
-#: modules/gui/macosx/VLCMainMenu.m:363 modules/gui/macosx/VLCMainMenu.m:364
+#: src/interface/interface.c:82 modules/gui/legacy_macosx/VLCLegacyMenu.m:383
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:386
+#: modules/gui/macosx/VLCMainMenu.m:362 modules/gui/macosx/VLCMainMenu.m:363
 msgid "Add Interface"
 msgstr "添加界面"
 
@@ -1568,12 +1568,19 @@ msgstr "Web"
 msgid "Mouse Gestures"
 msgstr "鼠标手势"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "正在以默认界面运行 powervlc。使用“cpowervlc”可在无界面模式下使用 powervlc。"
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"正在以默认界面运行 powervlc。使用“-I dummy”可在无界面模式下使用 powervlc。"
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
 #: src/libvlc.c:174
@@ -1582,8 +1589,8 @@ msgstr "zh_CN"
 
 #: src/libvlc.h:166 src/libvlc-module.c:1479 src/libvlc-module.c:1480
 #: src/video_output/vout_intf.c:176
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:766
-#: modules/gui/macosx/VLCMainMenu.m:492
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:753
+#: modules/gui/macosx/VLCMainMenu.m:491
 msgid "Zoom"
 msgstr "缩放"
 
@@ -2210,8 +2217,8 @@ msgid "Hide mouse cursor and fullscreen controller after n milliseconds."
 msgstr "在 n 毫秒后隐藏鼠标指针和全屏控制器。"
 
 #: src/libvlc-module.c:351 src/libvlc-module.c:353
-#: src/video_output/interlacing.c:112 modules/gui/macosx/VLCMainMenu.m:460
-#: modules/gui/macosx/VLCMainMenu.m:461
+#: src/video_output/interlacing.c:112 modules/gui/macosx/VLCMainMenu.m:459
+#: modules/gui/macosx/VLCMainMenu.m:460
 #: modules/gui/macosx/VLCSimplePrefsController.m:511
 #: modules/gui/qt/dialogs/convert.cpp:123 modules/hw/vdpau/chroma.c:896
 #: modules/video_filter/deinterlace/deinterlace.c:300
@@ -2221,7 +2228,7 @@ msgstr "反交错"
 
 #: src/libvlc-module.c:361 src/video_output/interlacing.c:128
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:927
-#: modules/gui/macosx/VLCMainMenu.m:462 modules/gui/macosx/VLCMainMenu.m:463
+#: modules/gui/macosx/VLCMainMenu.m:461 modules/gui/macosx/VLCMainMenu.m:462
 #: modules/gui/macosx/VLCSimplePrefsController.m:512
 #: modules/video_filter/deinterlace/deinterlace.c:256
 msgid "Deinterlace mode"
@@ -2644,7 +2651,7 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:1499
 #: modules/gui/macosx/VLCAudioEffectsWindowController.m:79
 #: modules/gui/macosx/VLCAudioEffectsWindowController.m:322
-#: modules/gui/macosx/VLCMainMenu.m:619
+#: modules/gui/macosx/VLCMainMenu.m:618
 #: modules/gui/macosx/VLCSimplePrefsController.m:794
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:54
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:388
@@ -3965,12 +3972,12 @@ msgid ""
 msgstr "鼠标滚轮横轴 (左/右) 可控制音量、位置或忽略。"
 
 #: src/libvlc-module.c:1273 src/video_output/vout_intf.c:268
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1016
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:648
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:842
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1009
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:635
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:829
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:868
 #: modules/gui/macosx/VLCControlsBarCommon.m:98
-#: modules/gui/macosx/VLCMainMenu.m:449 modules/gui/macosx/VLCMainMenu.m:528
+#: modules/gui/macosx/VLCMainMenu.m:448 modules/gui/macosx/VLCMainMenu.m:527
 #: modules/gui/qt/components/controller.hpp:108
 #: modules/gui/qt/ui/sprefs_video.h:385
 msgid "Fullscreen"
@@ -4013,7 +4020,7 @@ msgstr "仅播放"
 msgid "Select the hotkey to use to play."
 msgstr "选择用于播放的热键。"
 
-#: src/libvlc-module.c:1283 modules/gui/macosx/VLCMainMenu.m:410
+#: src/libvlc-module.c:1283 modules/gui/macosx/VLCMainMenu.m:409
 #: modules/gui/qt/components/controller.hpp:108
 #: modules/gui/qt/components/controller.hpp:118
 msgid "Faster"
@@ -4023,7 +4030,7 @@ msgstr "较快"
 msgid "Select the hotkey to use for fast forward playback."
 msgstr "选择由于加快播放的热键。"
 
-#: src/libvlc-module.c:1285 modules/gui/macosx/VLCMainMenu.m:408
+#: src/libvlc-module.c:1285 modules/gui/macosx/VLCMainMenu.m:407
 #: modules/gui/qt/components/controller.hpp:108
 #: modules/gui/qt/components/controller.hpp:118
 msgid "Slower"
@@ -4051,14 +4058,14 @@ msgstr "较慢 (微调)"
 
 #: src/libvlc-module.c:1293 modules/control/hotkeys.c:410
 #: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:258
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:907
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:573
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:832
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:900
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:560
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:819
 #: modules/gui/macosx/VLCControlsBarCommon.m:196
 #: modules/gui/macosx/VLCFSPanelController.m:125
 #: modules/gui/macosx/VLCHelpWindowController.m:48
-#: modules/gui/macosx/VLCMainMenu.m:413 modules/gui/macosx/VLCMainMenu.m:516
-#: modules/gui/macosx/VLCMainMenu.m:524
+#: modules/gui/macosx/VLCMainMenu.m:412 modules/gui/macosx/VLCMainMenu.m:515
+#: modules/gui/macosx/VLCMainMenu.m:523
 #: modules/gui/qt/components/controller.hpp:112
 #: modules/gui/qt/dialogs/sout.cpp:91 modules/notify/notify.c:335
 #: modules/gui/qt/ui/streampanel.h:179
@@ -4071,14 +4078,14 @@ msgstr "选择用于跳到下一个播放列表项目的热键。"
 
 #: src/libvlc-module.c:1295 modules/control/hotkeys.c:414
 #: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:246
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:883
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:569
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:830
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:876
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:556
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:817
 #: modules/gui/macosx/VLCControlsBarCommon.m:193
 #: modules/gui/macosx/VLCFSPanelController.m:128
 #: modules/gui/macosx/VLCHelpWindowController.m:49
-#: modules/gui/macosx/VLCMainMenu.m:412 modules/gui/macosx/VLCMainMenu.m:517
-#: modules/gui/macosx/VLCMainMenu.m:523
+#: modules/gui/macosx/VLCMainMenu.m:411 modules/gui/macosx/VLCMainMenu.m:516
+#: modules/gui/macosx/VLCMainMenu.m:522
 #: modules/gui/qt/components/controller.hpp:112 modules/notify/notify.c:333
 msgid "Previous"
 msgstr "上一个"
@@ -4087,11 +4094,11 @@ msgstr "上一个"
 msgid "Select the hotkey to use to skip to the previous item in the playlist."
 msgstr "选择用于跳到上一个播放列表项目的热键。"
 
-#: src/libvlc-module.c:1297 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:912
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:522
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:828
-#: modules/gui/macosx/VLCMainMenu.m:403 modules/gui/macosx/VLCMainMenu.m:515
-#: modules/gui/macosx/VLCMainMenu.m:522
+#: src/libvlc-module.c:1297 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:905
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:509
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:815
+#: modules/gui/macosx/VLCMainMenu.m:402 modules/gui/macosx/VLCMainMenu.m:514
+#: modules/gui/macosx/VLCMainMenu.m:521
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:65
 #: modules/gui/qt/components/controller.hpp:107
 #: modules/gui/qt/dialogs/vlm.cpp:538 modules/gui/qt/ui/streampanel.h:178
@@ -4103,7 +4110,7 @@ msgid "Select the hotkey to stop playback."
 msgstr "选择用于停止播放的热键。"
 
 #: src/libvlc-module.c:1299 modules/gui/legacy_macosx/VLCLegacyFSPanel.m:211
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:940
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:933
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:549
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:564
 #: modules/gui/macosx/VLCControlsBarCommon.m:92
@@ -4342,10 +4349,10 @@ msgstr "选择用于减小音量的按键。"
 
 #: src/libvlc-module.c:1366 modules/access/v4l2/v4l2.c:181
 #: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:223
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:971
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:612
-#: modules/gui/macosx/VLCMainMenu.m:434 modules/gui/macosx/VLCMainMenu.m:518
-#: modules/gui/macosx/VLCMainMenu.m:527
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:964
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:599
+#: modules/gui/macosx/VLCMainMenu.m:433 modules/gui/macosx/VLCMainMenu.m:517
+#: modules/gui/macosx/VLCMainMenu.m:526
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:82
 msgid "Mute"
 msgstr "静音"
@@ -4715,8 +4722,8 @@ msgstr "视频截图"
 msgid "Takes a video snapshot and writes it to disk."
 msgstr "获取一张视频截图并将其写入到磁盘。"
 
-#: src/libvlc-module.c:1470 modules/gui/legacy_macosx/VLCLegacyMenu.m:524
-#: modules/gui/macosx/VLCMainMenu.m:404
+#: src/libvlc-module.c:1470 modules/gui/legacy_macosx/VLCLegacyMenu.m:511
+#: modules/gui/macosx/VLCMainMenu.m:403
 #: modules/gui/qt/components/controller.hpp:110
 #: modules/gui/qt/components/controller.hpp:121 modules/gui/qt/menus.cpp:863
 #: modules/stream_out/record.c:60
@@ -4808,9 +4815,9 @@ msgid "Cycle through available audio devices"
 msgstr "在可用的音频设备之间循环切换"
 
 #: src/libvlc-module.c:1657 src/video_output/vout_intf.c:274
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:653
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:846
-#: modules/gui/macosx/VLCMainMenu.m:451 modules/gui/macosx/VLCMainMenu.m:529
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:640
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:833
+#: modules/gui/macosx/VLCMainMenu.m:450 modules/gui/macosx/VLCMainMenu.m:528
 #: modules/gui/qt/components/controller.hpp:109
 msgid "Snapshot"
 msgstr "截图"
@@ -4828,10 +4835,10 @@ msgstr "子画面"
 #: modules/demux/xiph_metadata.h:62
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:704
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:736
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:674
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:661
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:158
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:178
-#: modules/gui/macosx/VLCMainMenu.m:467
+#: modules/gui/macosx/VLCMainMenu.m:466
 #: share/lua/http/dialogs/create_stream.html:153
 #: modules/gui/qt/ui/profiles.h:716 modules/gui/qt/ui/profiles.h:760
 #: modules/gui/qt/ui/profiles.h:763
@@ -5005,9 +5012,9 @@ msgstr "浏览器搜索"
 msgid "Browser Stop"
 msgstr "浏览器停止"
 
-#: src/misc/actions.c:62 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1194
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:467
-#: modules/gui/macosx/VLCMainMenu.m:387 modules/gui/macosx/VLCPlaylist.m:224
+#: src/misc/actions.c:62 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1187
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:454
+#: modules/gui/macosx/VLCMainMenu.m:386 modules/gui/macosx/VLCPlaylist.m:224
 #: modules/gui/qt/dialogs/bookmarks.cpp:50
 #: modules/gui/qt/ui/podcast_configuration.h:102
 #: modules/gui/qt/ui/streampanel.h:170
@@ -5187,11 +5194,11 @@ msgid "Page Up"
 msgstr "向上翻页"
 
 #: src/misc/actions.c:107 modules/control/oldrc.c:71
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1593
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1580
 #: modules/gui/macosx/VLCControlsBarCommon.m:423
 #: modules/gui/macosx/VLCFSPanelController.m:251
-#: modules/gui/macosx/VLCMainMenu.m:1390 modules/gui/macosx/VLCMainMenu.m:1391
-#: modules/gui/macosx/VLCMainMenu.m:1392
+#: modules/gui/macosx/VLCMainMenu.m:1389 modules/gui/macosx/VLCMainMenu.m:1390
+#: modules/gui/macosx/VLCMainMenu.m:1391
 #: modules/gui/qt/components/playlist/standardpanel.cpp:197
 #: modules/gui/qt/menus.cpp:837
 msgid "Pause"
@@ -5213,7 +5220,7 @@ msgstr "Tab"
 msgid "Up"
 msgstr "上"
 
-#: src/misc/actions.c:114 modules/gui/macosx/VLCMainMenu.m:526
+#: src/misc/actions.c:114 modules/gui/macosx/VLCMainMenu.m:525
 msgid "Volume Down"
 msgstr "音量减小"
 
@@ -5221,7 +5228,7 @@ msgstr "音量减小"
 msgid "Volume Mute"
 msgstr "静音"
 
-#: src/misc/actions.c:116 modules/gui/macosx/VLCMainMenu.m:525
+#: src/misc/actions.c:116 modules/gui/macosx/VLCMainMenu.m:524
 msgid "Volume Up"
 msgstr "音量增大"
 
@@ -5295,7 +5302,7 @@ msgstr "无法以写入模式打开「%s」"
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:757
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:984
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:1085
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1827
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1820
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1225
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1301
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1614
@@ -5315,8 +5322,8 @@ msgstr "无法以写入模式打开「%s」"
 #: modules/gui/macosx/VLCCoreDialogProvider.m:193
 #: modules/gui/macosx/VLCCoreDialogProvider.m:197
 #: modules/gui/macosx/VLCCoreDialogProvider.m:307
-#: modules/gui/macosx/VLCMainWindow.m:329
-#: modules/gui/macosx/VLCMainWindow.m:335
+#: modules/gui/macosx/VLCMainWindow.m:326
+#: modules/gui/macosx/VLCMainWindow.m:332
 #: modules/gui/macosx/VLCOpenWindowController.m:134
 #: modules/gui/macosx/VLCOpenWindowController.m:192
 #: modules/gui/macosx/VLCSimplePrefsController.m:419
@@ -5403,8 +5410,8 @@ msgid "Update VLC media player"
 msgstr "更新 VLC media player"
 
 #: src/playlist/engine.c:247 src/playlist/loadsave.c:159 lib/media_list.c:237
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2539
-#: modules/gui/macosx/VLCMainWindow.m:986
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2532
+#: modules/gui/macosx/VLCMainWindow.m:983
 #: modules/gui/macosx/VLCSidebarDataSource.m:70
 #: modules/gui/qt/components/playlist/selector.cpp:236
 msgid "Media Library"
@@ -6075,10 +6082,10 @@ msgid "Autoscale video"
 msgstr "自动缩放视频"
 
 #: src/video_output/vout_intf.c:203
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:660
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:851
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:647
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:838
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:587
-#: modules/gui/macosx/VLCMainMenu.m:456 modules/gui/macosx/VLCMainMenu.m:457
+#: modules/gui/macosx/VLCMainMenu.m:455 modules/gui/macosx/VLCMainMenu.m:456
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:193
 #: modules/video_filter/croppadd.c:87 modules/gui/qt/ui/video_effects.h:1275
 msgid "Crop"
@@ -6087,10 +6094,10 @@ msgstr "裁剪"
 #: src/video_output/vout_intf.c:230 modules/access/decklink.cpp:97
 #: modules/access/linsys/linsys_hdsdi.c:78
 #: modules/access/linsys/linsys_sdi.c:74 modules/demux/rawvid.c:58
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:659
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:850
-#: modules/gui/macosx/VLCMainMenu.m:454 modules/gui/macosx/VLCMainMenu.m:455
-#: modules/gui/macosx/VLCMainMenu.m:1502
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:646
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:837
+#: modules/gui/macosx/VLCMainMenu.m:453 modules/gui/macosx/VLCMainMenu.m:454
+#: modules/gui/macosx/VLCMainMenu.m:1501
 msgid "Aspect ratio"
 msgstr "宽高比"
 
@@ -7410,7 +7417,7 @@ msgstr "文件输入"
 
 #: modules/access/fs.c:35 modules/access_output/file.c:388
 #: modules/audio_output/file.c:113
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:425
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:412
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1566
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:180
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:407
@@ -8383,7 +8390,7 @@ msgstr "屏幕输入"
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1438
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:1775
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:884
-#: modules/gui/macosx/VLCMainMenu.m:627
+#: modules/gui/macosx/VLCMainMenu.m:626
 #: modules/gui/macosx/VLCOpenWindowController.m:207
 #: modules/gui/macosx/VLCOpenWindowController.m:209
 #: modules/gui/macosx/VLCOpenWindowController.m:489
@@ -10709,7 +10716,7 @@ msgid ""
 msgstr "若 HDMI 接收设备的 HD 编解码器出现问题，请更改此值。"
 
 #: modules/audio_output/mmdevice.c:1481
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:265
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:252
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:904
 #: modules/gui/legacy_macosx/macosx.c:70
 msgid "Disabled"
@@ -11800,8 +11807,8 @@ msgstr "白色"
 msgid "Maroon"
 msgstr "红褐色"
 
-#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:748
-#: modules/gui/macosx/VLCMainMenu.m:485 modules/gui/macosx/VLCMainMenu.m:1120
+#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:735
+#: modules/gui/macosx/VLCMainMenu.m:484 modules/gui/macosx/VLCMainMenu.m:1119
 #: modules/spu/marq.c:62 modules/spu/rss.c:70
 #: modules/text_renderer/freetype/freetype.c:140
 #: modules/video_filter/ball.c:119 modules/video_filter/colorthres.c:65
@@ -11814,8 +11821,8 @@ msgstr "红色"
 msgid "Fuchsia"
 msgstr "紫红色"
 
-#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:749
-#: modules/gui/macosx/VLCMainMenu.m:487 modules/gui/macosx/VLCMainMenu.m:1124
+#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:736
+#: modules/gui/macosx/VLCMainMenu.m:486 modules/gui/macosx/VLCMainMenu.m:1123
 #: modules/spu/marq.c:63 modules/spu/rss.c:71
 #: modules/text_renderer/freetype/freetype.c:140
 #: modules/video_filter/colorthres.c:65
@@ -11827,8 +11834,8 @@ msgstr "黄色"
 msgid "Olive"
 msgstr "橄榄绿"
 
-#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:749
-#: modules/gui/macosx/VLCMainMenu.m:486 modules/gui/macosx/VLCMainMenu.m:1122
+#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:736
+#: modules/gui/macosx/VLCMainMenu.m:485 modules/gui/macosx/VLCMainMenu.m:1121
 #: modules/spu/marq.c:63 modules/spu/rss.c:71
 #: modules/text_renderer/freetype/freetype.c:140
 #: modules/video_filter/ball.c:119
@@ -11856,8 +11863,8 @@ msgstr "紫色"
 msgid "Navy"
 msgstr "藏青色"
 
-#: modules/codec/kate.c:209 modules/gui/legacy_macosx/VLCLegacyMenu.m:750
-#: modules/gui/macosx/VLCMainMenu.m:488 modules/gui/macosx/VLCMainMenu.m:1126
+#: modules/codec/kate.c:209 modules/gui/legacy_macosx/VLCLegacyMenu.m:737
+#: modules/gui/macosx/VLCMainMenu.m:487 modules/gui/macosx/VLCMainMenu.m:1125
 #: modules/spu/marq.c:64 modules/spu/rss.c:72
 #: modules/text_renderer/freetype/freetype.c:141
 #: modules/video_filter/ball.c:120 modules/video_filter/colorthres.c:65
@@ -12016,6 +12023,55 @@ msgid ""
 msgstr ""
 "正在重建字体缓存，请稍候。\n"
 "这应该能在一分钟内完成。"
+
+#: modules/codec/libmpeg2.c:242
+msgid "Utiliser l'accélération matérielle MPEG2 si disponible"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:244
+msgid ""
+"Décode les flux MPEG-2 sur le GPU (pipeline AppleVA du lecteur DVD d'Apple) "
+"quand un décodeur matériel est présent (ATI, Intel GMA950, nVidia), avec "
+"repli automatique sur le décodage logiciel libmpeg2. Réduit fortement la "
+"charge CPU sur les vieux Mac."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:248
+msgid "Mode field du décodage MPEG-2 matériel (avancé)"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:250
+msgid ""
+"Décodage matériel des macroblocs field-predicted (flux entrelacés, DVD). 0 = "
+"désactivé (l'entrelacé retombe sur le processeur) ; 4 = prédiction frame "
+"équivalente (défaut : le moteur par champ du GPU déchire en mouvement) ; "
+"1/2/3 = moteur par champ natif, réservés à la mise au point."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:254
+msgid "Sous-titres et OSD par-dessus la vidéo accélérée"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:256
+msgid ""
+"Compose les sous-titres (SPU du DVD) et l'affichage à l'écran par-dessus "
+"l'image décodée par le GPU. Sans cette option, la sortie matérielle recouvre "
+"tout et les sous-titres restent invisibles. Ne concerne que la vidéo "
+"affichée dans la fenêtre de VLC."
+msgstr ""
+
+#: modules/codec/libmpeg2.c:260
+msgid "Sous-titres DVD incrustés par le GPU"
+msgstr ""
+
+#: modules/codec/libmpeg2.c:262
+msgid ""
+"Confie les sous-titres du DVD au plan subpicture du décodeur matériel ATI : "
+"le GPU les compose lui-même sur l'image, sans aucun coût par image, là où "
+"l'incrustation par fenêtre coûte 15 à 50 ms sur ce matériel. Sans effet si "
+"le décodage matériel n'est pas actif — le rendu logiciel prend alors le "
+"relais."
+msgstr ""
 
 #: modules/codec/libmpeg2.c:272
 msgid "MPEG I/II video decoder (using libmpeg2)"
@@ -14174,10 +14230,10 @@ msgstr "tesa"
 msgid "Fast"
 msgstr "快"
 
-#: modules/codec/x264.c:429 modules/gui/legacy_macosx/VLCLegacyMenu.m:539
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:690
+#: modules/codec/x264.c:429 modules/gui/legacy_macosx/VLCLegacyMenu.m:526
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:677
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1143
-#: modules/gui/macosx/VLCMainMenu.m:306 modules/gui/macosx/VLCMainMenu.m:409
+#: modules/gui/macosx/VLCMainMenu.m:306 modules/gui/macosx/VLCMainMenu.m:408
 #: modules/gui/macosx/VLCSimplePrefsController.m:843
 #: modules/gui/qt/components/simple_preferences.cpp:723
 #: modules/misc/gnutls.c:798 modules/text_renderer/freetype/freetype.c:128
@@ -14310,12 +14366,20 @@ msgstr "DBus"
 msgid "D-Bus control interface"
 msgstr "D-Bus 控制接口"
 
-#: modules/control/dbus/dbus_root.c:81 modules/gui/macosx/VLCMainWindow.m:141
+#: modules/control/dbus/dbus_root.c:81 modules/gui/macosx/VLCMainWindow.m:140
 #: modules/gui/macosx/VLCStatusBarIcon.m:378 modules/gui/ncurses.c:1028
-#: modules/lua/libs/httpd.c:80 modules/video_output/wayland/shell.c:348
+#: modules/gui/qt/main_interface.cpp:1302
+#: modules/gui/qt/main_interface.cpp:1306
+#: modules/gui/qt/main_interface.cpp:1343
+#: modules/gui/qt/main_interface.cpp:1345
+#: modules/gui/qt/main_interface.cpp:1453
+#: modules/gui/qt/main_interface.cpp:1470
+#: modules/gui/qt/main_interface.cpp:1478
+#: modules/gui/qt/main_interface.cpp:1501 modules/lua/libs/httpd.c:80
+#: modules/notify/osx_notifications.m:317
+#: modules/video_output/wayland/shell.c:348
 #: modules/video_output/wayland/xdg-shell.c:291
 #: modules/video_output/xcb/window.c:464
-#: modules/notify/osx_notifications.m:317
 msgid "PowerVLC media player"
 msgstr "PowerVLC media player"
 
@@ -15377,7 +15441,7 @@ msgstr "AACS 密钥数据库导入器"
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:1173
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:1319
 #: modules/gui/legacy_macosx/VLCLegacyMain.m:267
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1818
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1811
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:683
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:345
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2377
@@ -15412,10 +15476,10 @@ msgid "A key database is already installed and will be replaced."
 msgstr "已安装密钥数据库，将会被替换。"
 
 #: modules/demux/keydb.c:315
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2916
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1289
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2909
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1276
 #: modules/gui/legacy_macosx/misc.m:502 modules/gui/macosx/VLCMain.m:272
-#: modules/gui/macosx/VLCMainMenu.m:1280 modules/keystore/keychain.m:41
+#: modules/gui/macosx/VLCMainMenu.m:1279 modules/keystore/keychain.m:41
 msgid "No"
 msgstr "否"
 
@@ -15948,9 +16012,9 @@ msgid "Spoken subtitles for the visually impaired"
 msgstr "供视觉障碍人士使用的播报式字幕"
 
 #: modules/demux/mpeg/ts_psi.c:607
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:738
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:742
-#: modules/gui/macosx/VLCMainMenu.m:482 modules/gui/qt/dialogs/toolbar.cpp:541
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:725
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:729
+#: modules/gui/macosx/VLCMainMenu.m:481 modules/gui/qt/dialogs/toolbar.cpp:541
 msgid "Teletext"
 msgstr "Teletext"
 
@@ -16402,7 +16466,7 @@ msgstr "贡献者名单"
 
 #: modules/gui/legacy_macosx/VLCLegacyAbout.m:235
 #: modules/gui/macosx/VLCAboutWindowController.m:123
-#: modules/gui/macosx/VLCMainMenu.m:507 modules/gui/qt/dialogs/help.cpp:145
+#: modules/gui/macosx/VLCMainMenu.m:506 modules/gui/qt/dialogs/help.cpp:145
 msgid "License"
 msgstr "许可"
 
@@ -16414,9 +16478,9 @@ msgid "Authors"
 msgstr "作者"
 
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m:137
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:392
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:379
 #: modules/gui/macosx/VLCAddonsWindowController.m:128
-#: modules/gui/macosx/VLCMainMenu.m:362 modules/gui/qt/dialogs/plugins.cpp:85
+#: modules/gui/macosx/VLCMainMenu.m:361 modules/gui/qt/dialogs/plugins.cpp:85
 msgid "Addons Manager"
 msgstr "插件管理器"
 
@@ -16456,11 +16520,11 @@ msgstr "封面与元数据装取器"
 
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m:154
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m:306
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:383
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:387
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:370
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:374
 #: modules/gui/macosx/VLCAddonsWindowController.m:113
 #: modules/gui/macosx/VLCAddonsWindowController.m:361
-#: modules/gui/macosx/VLCMainMenu.m:360 modules/gui/macosx/VLCMainMenu.m:361
+#: modules/gui/macosx/VLCMainMenu.m:359 modules/gui/macosx/VLCMainMenu.m:360
 #: modules/gui/qt/dialogs/plugins.cpp:402
 #: modules/gui/qt/managers/addons_manager.cpp:96
 msgid "Extensions"
@@ -16493,8 +16557,8 @@ msgid "Name"
 msgstr "名称"
 
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m:211
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1627
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:495
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1620
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:482
 #: modules/gui/macosx/VLCAddonsWindowController.m:132
 #: modules/gui/macosx/VLCPlaylist.m:92 modules/gui/qt/dialogs/plugins.cpp:1404
 #: modules/gui/qt/dialogs/plugins.cpp:1509 modules/mux/asf.c:58
@@ -16583,7 +16647,7 @@ msgid "Headphone virtualization"
 msgstr "耳机虚拟化"
 
 #: modules/gui/legacy_macosx/VLCLegacyAudioEffects.m:434
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1008
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1001
 #: modules/gui/macosx/VLCAudioEffectsWindowController.m:276
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:88
 #: modules/gui/macosx/VLCSimplePrefsController.m:405
@@ -16627,7 +16691,7 @@ msgstr "输入新预设的名称:"
 #: modules/gui/legacy_macosx/VLCLegacyAudioEffects.m:1135
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:391
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:984
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1471
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1458
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:629
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1364
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:1599
@@ -16635,7 +16699,7 @@ msgstr "输入新预设的名称:"
 #: modules/gui/macosx/VLCAudioEffectsWindowController.m:855
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:377
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:489
-#: modules/gui/macosx/VLCMainMenu.m:1181 modules/gui/macosx/VLCOutput.m:414
+#: modules/gui/macosx/VLCMainMenu.m:1180 modules/gui/macosx/VLCOutput.m:414
 #: modules/gui/macosx/VLCSimplePrefsController.m:445
 #: modules/gui/macosx/VLCSimplePrefsController.m:519
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:792
@@ -16754,16 +16818,16 @@ msgid "Convert & Stream"
 msgstr "转换 & 串流"
 
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:300
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1275
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1268
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:138
-#: modules/gui/macosx/VLCMainWindow.m:301
+#: modules/gui/macosx/VLCMainWindow.m:298
 msgid "Drop media here"
 msgstr "在此拖入媒体"
 
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:302
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1280
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1273
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:139
-#: modules/gui/macosx/VLCMainWindow.m:317
+#: modules/gui/macosx/VLCMainWindow.m:314
 msgid "Open media..."
 msgstr "打开媒体..."
 
@@ -16842,15 +16906,15 @@ msgid "Setup Streaming..."
 msgstr "配置串流传输..."
 
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:499
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1476
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1463
 #: modules/gui/macosx/VLCBookmarksWindowController.m:128
-#: modules/gui/macosx/VLCMainMenu.m:1171
+#: modules/gui/macosx/VLCMainMenu.m:1170
 msgid "Untitled"
 msgstr "无标题"
 
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:526
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:281
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:283
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:268
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:270
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:908
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1140
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2009
@@ -17098,13 +17162,13 @@ msgid "Volume"
 msgstr "音量"
 
 #: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:241
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:998
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:991
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:85
 msgid "Full Volume"
 msgstr "最大音量"
 
 #: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:249
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:890
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:883
 #: modules/gui/macosx/VLCControlsBarCommon.m:84
 #: modules/gui/macosx/VLCControlsBarCommon.m:182
 #: modules/gui/macosx/VLCFSPanelController.m:134
@@ -17112,7 +17176,7 @@ msgid "Backward"
 msgstr "快退"
 
 #: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:255
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:901
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:894
 #: modules/gui/macosx/VLCControlsBarCommon.m:88
 #: modules/gui/macosx/VLCControlsBarCommon.m:185
 #: modules/gui/macosx/VLCFSPanelController.m:131
@@ -17126,22 +17190,22 @@ msgid "Leave fullscreen"
 msgstr "退出全屏"
 
 #: modules/gui/legacy_macosx/VLCLegacyMain.m:334
-#: modules/gui/macosx/VLCMainWindow.m:359
+#: modules/gui/macosx/VLCMainWindow.m:356
 msgid "Check for album art and metadata?"
 msgstr "是否查找专辑封面及元数据?"
 
 #: modules/gui/legacy_macosx/VLCLegacyMain.m:336
-#: modules/gui/macosx/VLCMainWindow.m:359
+#: modules/gui/macosx/VLCMainWindow.m:356
 msgid "Enable Metadata Retrieval"
 msgstr "启用元数据检索"
 
 #: modules/gui/legacy_macosx/VLCLegacyMain.m:337
-#: modules/gui/macosx/VLCMainWindow.m:359
+#: modules/gui/macosx/VLCMainWindow.m:356
 msgid "No, Thanks"
 msgstr "不用了，谢谢"
 
 #: modules/gui/legacy_macosx/VLCLegacyMain.m:339
-#: modules/gui/macosx/VLCMainWindow.m:359
+#: modules/gui/macosx/VLCMainWindow.m:356
 msgid ""
 "VLC can check online for album art and metadata to enrich your playback "
 "experience, e.g. by providing track information when playing Audio CDs. To "
@@ -17152,24 +17216,24 @@ msgstr ""
 "音轨信息。要提供这样的功能，VLC 需要将关于您所播放的内容的信息以匿名化的形式"
 "发送给可信赖的服务提供商。"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:919
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:912
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:68
 msgid "Show/Hide Playlist"
 msgstr "显示/隐藏播放列表"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:929
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:922
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:71
 #: modules/gui/qt/dialogs/vlm.cpp:542 share/lua/http/index.html:259
 msgid "Repeat"
 msgstr "循环"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:934
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:927
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:75
 #: share/lua/http/index.html:257
 msgid "Shuffle"
 msgstr "随机"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:979
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:972
 #: modules/gui/macosx/VLCFSPanelController.m:325
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:78
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:503
@@ -17177,130 +17241,130 @@ msgstr "随机"
 msgid "Volume: %i %%"
 msgstr "音量: %i %%"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1199
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:472
-#: modules/gui/macosx/VLCMainMenu.m:388 modules/gui/macosx/VLCPlaylist.m:227
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1192
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:459
+#: modules/gui/macosx/VLCMainMenu.m:387 modules/gui/macosx/VLCPlaylist.m:227
 msgid "Select All"
 msgstr "全部选择"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1206
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1718
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1199
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1711
 #: modules/gui/macosx/VLCPlaylist.m:225
 msgid "Expand All"
 msgstr "全部展开"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1210
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1203
 #: modules/gui/macosx/VLCPlaylist.m:226
 msgid "Collapse All"
 msgstr "全部收缩"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1214
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:777
-#: modules/gui/macosx/VLCMainMenu.m:499 modules/gui/macosx/VLCPlaylist.m:228
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1207
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:764
+#: modules/gui/macosx/VLCMainMenu.m:498 modules/gui/macosx/VLCPlaylist.m:228
 msgid "Media Information..."
 msgstr "媒体信息..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1218
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:449
-#: modules/gui/macosx/VLCMainMenu.m:381 modules/gui/macosx/VLCPlaylist.m:229
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1211
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:436
+#: modules/gui/macosx/VLCMainMenu.m:380 modules/gui/macosx/VLCPlaylist.m:229
 msgid "Reveal in Finder"
 msgstr "在 Finder 中显示"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1223
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1216
 #: modules/gui/macosx/VLCPlaylist.m:231
 #: modules/gui/qt/components/playlist/standardpanel.cpp:274
 msgid "Shuffle playlist"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1625
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1618
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:99
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:493
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:480
 #: modules/gui/macosx/VLCPlaylist.m:90
 msgid "Track Number"
 msgstr "轨道编号"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1628
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:496
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1621
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:483
 #: modules/gui/macosx/VLCPlaylist.m:93
 #: modules/gui/qt/components/playlist/sorting.h:61
 msgid "Duration"
 msgstr "时长"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1634
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:502
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1627
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:489
 #: modules/gui/macosx/VLCPlaylist.m:99
 #: modules/gui/qt/components/playlist/sorting.h:67
 msgid "URI"
 msgstr "URI"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1635
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:503
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1628
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:490
 #: modules/gui/macosx/VLCPlaylist.m:100
 msgid "File Size"
 msgstr "文件尺寸"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1795
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1805
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:566
-#: modules/gui/macosx/VLCMainMenu.m:421
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1788
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1798
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:553
+#: modules/gui/macosx/VLCMainMenu.m:420
 #: modules/gui/macosx/VLCTimeSelectionPanelController.m:53
 msgid "Jump to Time"
 msgstr "转到时间"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2527
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2520
 #: modules/gui/macosx/VLCSidebarDataSource.m:67
 msgid "LIBRARY"
 msgstr "媒体库"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2548
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2541
 #: modules/gui/macosx/VLCSidebarDataSource.m:72
 msgid "MY COMPUTER"
 msgstr "我的电脑"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2549
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2542
 #: modules/gui/macosx/VLCSidebarDataSource.m:73
 msgid "DEVICES"
 msgstr "设备"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2550
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2543
 #: modules/gui/macosx/VLCSidebarDataSource.m:74
 msgid "LOCAL NETWORK"
 msgstr "本地网络"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2551
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2544
 #: modules/gui/macosx/VLCSidebarDataSource.m:75
 msgid "INTERNET"
 msgstr "Internet"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2914
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2907
 msgid "Enable this service?"
 msgstr "启用此服务？"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2917
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2910
 msgid ""
 "This service uses a Lua script. Loading it can be slow and may affect the "
 "performance of this machine. Do you want to continue?"
 msgstr "此服务使用 Lua 脚本。加载可能较慢，并可能影响本机性能。要继续吗？"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3859
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3852
 #: modules/gui/macosx/VLCResumeDialogController.m:48 modules/gui/qt/qt.cpp:198
 #: modules/gui/qt/ui/sprefs_interface.h:558
 msgid "Continue playback?"
 msgstr "继续播放?"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3861
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3854
 #: modules/gui/macosx/VLCResumeDialogController.m:69
 msgid "Playback of \"%@\" will continue at %@"
 msgstr "「%@」的回放将从 %@ 继续"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3863
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3856
 #: modules/gui/macosx/VLCResumeDialogController.m:49
 #: modules/gui/macosx/VLCSimplePrefsController.m:968
 #: modules/gui/qt/dialogs/firstrun.cpp:106
 msgid "Continue"
 msgstr "继续"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3863
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3856
 #: modules/gui/macosx/VLCResumeDialogController.m:62
 #: modules/gui/macosx/VLCResumeDialogController.m:94
 msgid "Restart playback"
@@ -17388,407 +17452,407 @@ msgstr "编码详细信息"
 msgid "Save Metadata"
 msgstr "保存元数据"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:255
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:260
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:242
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:247
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:917
 #: modules/gui/legacy_macosx/macosx.c:168 modules/gui/qt/ui/sprefs_video.h:394
 msgid "Deinterlacing"
 msgstr "反交错"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:266
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:253
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:905
 #: modules/gui/legacy_macosx/macosx.c:70
 msgid "Good quality"
 msgstr "良好质量"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:267
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:254
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:906
 #: modules/gui/legacy_macosx/macosx.c:71
 msgid "Optimal quality"
 msgstr "最佳质量"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:268
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:255
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:907
 #: modules/gui/legacy_macosx/macosx.c:71
 msgid "Best quality"
 msgstr "极佳质量"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:368
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:355
 #: modules/gui/macosx/VLCMainMenu.m:355
 msgid "About PowerVLC media player"
 msgstr "关于 PowerVLC media player"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:371
-#: modules/gui/macosx/VLCMainMenu.m:359
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:358
+#: modules/gui/macosx/VLCMainMenu.m:358
 msgid "Preferences..."
 msgstr "偏好设置..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:377
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:364
 msgid "Switch to the modern interface"
 msgstr "切换到现代界面"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:404
-#: modules/gui/macosx/VLCMainMenu.m:365
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:391
+#: modules/gui/macosx/VLCMainMenu.m:364
 msgid "Services"
 msgstr "服务"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:411
-#: modules/gui/macosx/VLCMainMenu.m:366
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:398
+#: modules/gui/macosx/VLCMainMenu.m:365
 msgid "Hide PowerVLC"
 msgstr "隐藏 PowerVLC"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:413
-#: modules/gui/macosx/VLCMainMenu.m:367
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:400
+#: modules/gui/macosx/VLCMainMenu.m:366
 msgid "Hide Others"
 msgstr "隐藏其它"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:417
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:404
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1354
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1925
-#: modules/gui/macosx/VLCMainMenu.m:368
+#: modules/gui/macosx/VLCMainMenu.m:367
 #: modules/gui/macosx/VLCSimplePrefsController.m:516
 msgid "Show All"
 msgstr "显示全部"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:421
-#: modules/gui/macosx/VLCMainMenu.m:369
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:408
+#: modules/gui/macosx/VLCMainMenu.m:368
 msgid "Quit PowerVLC"
 msgstr "退出 PowerVLC"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:426
-#: modules/gui/macosx/VLCMainMenu.m:373
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:413
+#: modules/gui/macosx/VLCMainMenu.m:372
 msgid "Open File..."
 msgstr "打开文件..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:428
-#: modules/gui/macosx/VLCMainMenu.m:372
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:415
+#: modules/gui/macosx/VLCMainMenu.m:371
 msgid "Advanced Open File..."
 msgstr "高级打开文件..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:431
-#: modules/gui/macosx/VLCMainMenu.m:374
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:418
+#: modules/gui/macosx/VLCMainMenu.m:373
 msgid "Open Disc..."
 msgstr "打开光盘..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:433
-#: modules/gui/macosx/VLCMainMenu.m:375
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:420
+#: modules/gui/macosx/VLCMainMenu.m:374
 msgid "Open Network..."
 msgstr "打开网络..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:435
-#: modules/gui/macosx/VLCMainMenu.m:376
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:422
+#: modules/gui/macosx/VLCMainMenu.m:375
 msgid "Open Capture Device..."
 msgstr "打开捕获设备..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:439
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:442
-#: modules/gui/macosx/VLCMainMenu.m:377
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:426
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:429
+#: modules/gui/macosx/VLCMainMenu.m:376
 msgid "Open Recent"
 msgstr "打开最近"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:447
-#: modules/gui/macosx/VLCMainMenu.m:378
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:434
+#: modules/gui/macosx/VLCMainMenu.m:377
 msgid "Close Window"
 msgstr "关闭窗口"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:452
-#: modules/gui/macosx/VLCMainMenu.m:379
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:439
+#: modules/gui/macosx/VLCMainMenu.m:378
 msgid "Convert / Stream..."
 msgstr "转换 / 串流..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:456
-#: modules/gui/macosx/VLCMainMenu.m:380
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:443
+#: modules/gui/macosx/VLCMainMenu.m:379
 msgid "Save Playlist..."
 msgstr "保存播放列表..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:460
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:447
 #: modules/gui/macosx/VLCBookmarksWindowController.m:77
-#: modules/gui/macosx/VLCMainMenu.m:383
+#: modules/gui/macosx/VLCMainMenu.m:382
 msgid "Edit"
 msgstr "编辑"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:461
-#: modules/gui/macosx/VLCMainMenu.m:384
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:448
+#: modules/gui/macosx/VLCMainMenu.m:383
 msgid "Cut"
 msgstr "剪切"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:463
-#: modules/gui/macosx/VLCMainMenu.m:385
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:450
+#: modules/gui/macosx/VLCMainMenu.m:384
 msgid "Copy"
 msgstr "复制"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:465
-#: modules/gui/macosx/VLCMainMenu.m:386
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:452
+#: modules/gui/macosx/VLCMainMenu.m:385
 msgid "Paste"
 msgstr "粘帖"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:476
-#: modules/gui/macosx/VLCMainMenu.m:391
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:463
+#: modules/gui/macosx/VLCMainMenu.m:390
 msgid "View"
 msgstr "查看"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:477
-#: modules/gui/legacy_macosx/macosx.c:91 modules/gui/macosx/VLCMainMenu.m:392
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:464
+#: modules/gui/legacy_macosx/macosx.c:91 modules/gui/macosx/VLCMainMenu.m:391
 #: modules/gui/macosx/macosx.m:116
 msgid "Show Previous & Next Buttons"
 msgstr "显示「向前」「向后」按钮"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:479
-#: modules/gui/legacy_macosx/macosx.c:95 modules/gui/macosx/VLCMainMenu.m:394
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:466
+#: modules/gui/legacy_macosx/macosx.c:95 modules/gui/macosx/VLCMainMenu.m:393
 #: modules/gui/macosx/macosx.m:119
 msgid "Show Shuffle & Repeat Buttons"
 msgstr "显示 ｢随机｣ ｢循环｣ 按钮"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:481
-#: modules/gui/legacy_macosx/macosx.c:99 modules/gui/macosx/VLCMainMenu.m:396
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:468
+#: modules/gui/legacy_macosx/macosx.c:99 modules/gui/macosx/VLCMainMenu.m:395
 #: modules/gui/macosx/macosx.m:122
 msgid "Show Audio Effects Button"
 msgstr "显示音频效果按钮"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:483
-#: modules/gui/macosx/VLCMainMenu.m:398
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:470
+#: modules/gui/macosx/VLCMainMenu.m:397
 msgid "Show Sidebar"
 msgstr "显示侧边栏"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:487
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:490
-#: modules/gui/macosx/VLCMainMenu.m:399
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:474
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:477
+#: modules/gui/macosx/VLCMainMenu.m:398
 msgid "Playlist Table Columns"
 msgstr "播放列表选择列"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:518
-#: modules/gui/macosx/VLCMainMenu.m:401
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:505
+#: modules/gui/macosx/VLCMainMenu.m:400
 msgid "Playback"
 msgstr "播放"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:531
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:536
-#: modules/gui/macosx/VLCMainMenu.m:407
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:518
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:523
+#: modules/gui/macosx/VLCMainMenu.m:406
 msgid "Playback Speed"
 msgstr "回放速度"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:556
-#: modules/gui/macosx/VLCMainMenu.m:419
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:543
+#: modules/gui/macosx/VLCMainMenu.m:418
 msgid "Step Forward"
 msgstr "向前步进"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:561
-#: modules/gui/macosx/VLCMainMenu.m:420
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:548
+#: modules/gui/macosx/VLCMainMenu.m:419
 msgid "Step Backward"
 msgstr "向后步进"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:583
-#: modules/gui/macosx/VLCMainMenu.m:417
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:570
+#: modules/gui/macosx/VLCMainMenu.m:416
 #: modules/gui/qt/components/controller.hpp:110
 msgid "A→B Loop"
 msgstr "A→B 循环"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:587
-#: modules/gui/macosx/VLCMainMenu.m:418
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:574
+#: modules/gui/macosx/VLCMainMenu.m:417
 msgid "Quit after Playback"
 msgstr "播放后退出"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:591
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:593
-#: modules/gui/macosx/VLCMainMenu.m:422
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:578
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:580
+#: modules/gui/macosx/VLCMainMenu.m:421
 msgid "Renderer"
 msgstr "渲染器"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:604
-#: modules/gui/macosx/VLCMainMenu.m:432
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:591
+#: modules/gui/macosx/VLCMainMenu.m:431
 msgid "Increase Volume"
 msgstr "增大音量"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:608
-#: modules/gui/macosx/VLCMainMenu.m:433
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:595
+#: modules/gui/macosx/VLCMainMenu.m:432
 msgid "Decrease Volume"
 msgstr "减小音量"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:626
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:628
-#: modules/gui/macosx/VLCMainMenu.m:439 modules/gui/macosx/VLCMainMenu.m:440
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:613
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:615
+#: modules/gui/macosx/VLCMainMenu.m:438 modules/gui/macosx/VLCMainMenu.m:439
 msgid "Audio Device"
 msgstr "音频设备"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:638
-#: modules/gui/macosx/VLCMainMenu.m:445
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:625
+#: modules/gui/macosx/VLCMainMenu.m:444
 msgid "Half Size"
 msgstr "一半尺寸"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:641
-#: modules/gui/macosx/VLCMainMenu.m:446
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:628
+#: modules/gui/macosx/VLCMainMenu.m:445
 msgid "Normal Size"
 msgstr "普通尺寸"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:644
-#: modules/gui/macosx/VLCMainMenu.m:447
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:631
+#: modules/gui/macosx/VLCMainMenu.m:446
 msgid "Double Size"
 msgstr "双倍尺寸"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:650
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:844
-#: modules/gui/macosx/VLCMainMenu.m:450
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:637
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:831
+#: modules/gui/macosx/VLCMainMenu.m:449
 #: modules/gui/macosx/VLCSimplePrefsController.m:496
 msgid "Float on Top"
 msgstr "悬浮在顶部"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:675
-#: modules/gui/macosx/VLCMainMenu.m:468
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:662
+#: modules/gui/macosx/VLCMainMenu.m:467
 msgid "Add Subtitle File..."
 msgstr "添加字幕文件..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:678
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:840
-#: modules/gui/macosx/VLCMainMenu.m:469 modules/gui/macosx/VLCMainMenu.m:470
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:665
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:827
+#: modules/gui/macosx/VLCMainMenu.m:468 modules/gui/macosx/VLCMainMenu.m:469
 msgid "Subtitles Track"
 msgstr "字幕轨道"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:683
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:687
-#: modules/gui/macosx/VLCMainMenu.m:471
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:670
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:674
+#: modules/gui/macosx/VLCMainMenu.m:470
 msgid "Text Size"
 msgstr "文字大小"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:690
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:677
 #: modules/gui/macosx/VLCMainMenu.m:304
 #: modules/text_renderer/freetype/freetype.c:128
 msgid "Smaller"
 msgstr "较小"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:690
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:677
 #: modules/gui/macosx/VLCMainMenu.m:305
 #: modules/text_renderer/freetype/freetype.c:128
 msgid "Small"
 msgstr "小"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:691
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:678
 #: modules/gui/macosx/VLCMainMenu.m:307
 #: modules/text_renderer/freetype/freetype.c:128
 msgid "Large"
 msgstr "大"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:691
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:678
 #: modules/gui/macosx/VLCMainMenu.m:308
 #: modules/text_renderer/freetype/freetype.c:128
 msgid "Larger"
 msgstr "较大"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:702
-#: modules/gui/macosx/VLCMainMenu.m:472
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:689
+#: modules/gui/macosx/VLCMainMenu.m:471
 msgid "Text Color"
 msgstr "文字颜色"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:705
-#: modules/gui/macosx/VLCMainMenu.m:473
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:692
+#: modules/gui/macosx/VLCMainMenu.m:472
 msgid "Outline Thickness"
 msgstr "轮廓宽度"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:714
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:719
-#: modules/gui/macosx/VLCMainMenu.m:479 modules/gui/macosx/VLCMainMenu.m:480
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:701
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:706
+#: modules/gui/macosx/VLCMainMenu.m:478 modules/gui/macosx/VLCMainMenu.m:479
 msgid "Background Opacity"
 msgstr "背景不透明度"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:732
-#: modules/gui/macosx/VLCMainMenu.m:481
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:719
+#: modules/gui/macosx/VLCMainMenu.m:480
 msgid "Background Color"
 msgstr "背景颜色"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:744
-#: modules/gui/macosx/VLCMainMenu.m:483
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:731
+#: modules/gui/macosx/VLCMainMenu.m:482
 msgid "Transparent"
 msgstr "透明度"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:748
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:735
 #: modules/gui/macosx/VLCHelpWindowController.m:50
-#: modules/gui/macosx/VLCMainMenu.m:484 modules/gui/macosx/VLCMainMenu.m:1118
+#: modules/gui/macosx/VLCMainMenu.m:483 modules/gui/macosx/VLCMainMenu.m:1117
 msgid "Index"
 msgstr "索引"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:762
-#: modules/gui/macosx/VLCMainMenu.m:490
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:749
+#: modules/gui/macosx/VLCMainMenu.m:489
 msgid "Window"
 msgstr "窗口"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:763
-#: modules/gui/macosx/VLCMainMenu.m:491
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:750
+#: modules/gui/macosx/VLCMainMenu.m:490
 msgid "Minimize"
 msgstr "最小化"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:771
-#: modules/gui/macosx/VLCMainMenu.m:494
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:758
+#: modules/gui/macosx/VLCMainMenu.m:493
 msgid "Main Window..."
 msgstr "主窗口..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:774
-#: modules/gui/macosx/VLCMainMenu.m:498
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:761
+#: modules/gui/macosx/VLCMainMenu.m:497
 msgid "Playlist..."
 msgstr "播放列表..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:780
-#: modules/gui/macosx/VLCMainMenu.m:496
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:767
+#: modules/gui/macosx/VLCMainMenu.m:495
 msgid "Video Effects..."
 msgstr "视频效果..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:782
-#: modules/gui/macosx/VLCMainMenu.m:495
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:769
+#: modules/gui/macosx/VLCMainMenu.m:494
 msgid "Audio Effects..."
 msgstr "音频效果..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:785
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:772
 #: modules/gui/legacy_macosx/VLCLegacyTrackSync.m:90
-#: modules/gui/macosx/VLCMainMenu.m:411
+#: modules/gui/macosx/VLCMainMenu.m:410
 #: modules/gui/macosx/VLCTrackSynchronizationWindowController.m:48
 msgid "Track Synchronization"
 msgstr "轨道同步"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:787
-#: modules/gui/macosx/VLCMainMenu.m:497
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:774
+#: modules/gui/macosx/VLCMainMenu.m:496
 msgid "Bookmarks..."
 msgstr "书签..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:790
-#: modules/gui/macosx/VLCMainMenu.m:501
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:777
+#: modules/gui/macosx/VLCMainMenu.m:500
 msgid "Errors and Warnings..."
 msgstr "错误和警告..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:793
-#: modules/gui/macosx/VLCMainMenu.m:500
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:780
+#: modules/gui/macosx/VLCMainMenu.m:499
 msgid "Messages..."
 msgstr "消息..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:797
-#: modules/gui/macosx/VLCMainMenu.m:503
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:784
+#: modules/gui/macosx/VLCMainMenu.m:502
 msgid "Bring All to Front"
 msgstr "显示所有窗口"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:802
-#: modules/gui/macosx/VLCMainMenu.m:505 modules/gui/qt/dialogs/help.cpp:54
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:789
+#: modules/gui/macosx/VLCMainMenu.m:504 modules/gui/qt/dialogs/help.cpp:54
 #: modules/gui/qt/menus.cpp:956 modules/gui/qt/menus.cpp:1143
 msgid "Help"
 msgstr "帮助"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:803
-#: modules/gui/macosx/VLCMainMenu.m:506
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:790
+#: modules/gui/macosx/VLCMainMenu.m:505
 msgid "PowerVLC media player Help..."
 msgstr "PowerVLC media player 帮助..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:806
-#: modules/gui/macosx/VLCMainMenu.m:509
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:793
+#: modules/gui/macosx/VLCMainMenu.m:508
 msgid "VideoLAN Website..."
 msgstr "VideoLAN 网站..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:808
-#: modules/gui/macosx/VLCMainMenu.m:510
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:795
+#: modules/gui/macosx/VLCMainMenu.m:509
 msgid "Make a donation..."
 msgstr "捐献..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:810
-#: modules/gui/macosx/VLCMainMenu.m:511
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:797
+#: modules/gui/macosx/VLCMainMenu.m:510
 msgid "Online Forum..."
 msgstr "在线论坛..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:968
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:955
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1229
 #: modules/gui/macosx/VLCBookmarksWindowController.m:76
 #: modules/gui/macosx/VLCSimplePrefsController.m:421
@@ -17796,49 +17860,49 @@ msgstr "在线论坛..."
 msgid "Clear"
 msgstr "清除"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1132
-#: modules/gui/macosx/VLCMainMenu.m:423
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1119
+#: modules/gui/macosx/VLCMainMenu.m:422
 msgid "No renderer"
 msgstr "无渲染器"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1211
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1198
 #: modules/gui/qt/extensions_manager.cpp:197
 msgid "Deactivate"
 msgstr "禁用"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1287
-#: modules/gui/macosx/VLCMainMenu.m:1276
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1274
+#: modules/gui/macosx/VLCMainMenu.m:1275
 msgid "Change the interface?"
 msgstr "更改界面？"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1290
-#: modules/gui/macosx/VLCMainMenu.m:1277
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1277
+#: modules/gui/macosx/VLCMainMenu.m:1276
 msgid "VLC needs to restart to switch interfaces. Do you want to continue?"
 msgstr "VLC 需要重新启动才能切换界面。要继续吗？"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1460
-#: modules/gui/macosx/VLCMainMenu.m:1175
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1447
+#: modules/gui/macosx/VLCMainMenu.m:1174
 msgid "File Format:"
 msgstr "文件格式:"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1464
-#: modules/gui/macosx/VLCMainMenu.m:1176
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1451
+#: modules/gui/macosx/VLCMainMenu.m:1175
 msgid "Extended M3U"
 msgstr "扩展 M3U"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1466
-#: modules/gui/macosx/VLCMainMenu.m:1177
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1453
+#: modules/gui/macosx/VLCMainMenu.m:1176
 msgid "XML Shareable Playlist Format (XSPF)"
 msgstr "XML 可分享播放列表格式 (XSPF)"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1467
-#: modules/gui/macosx/VLCMainMenu.m:1178
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1454
+#: modules/gui/macosx/VLCMainMenu.m:1177
 #: modules/gui/qt/dialogs_provider.cpp:659
 msgid "HTML playlist"
 msgstr "HTML 播放列表"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1470
-#: modules/gui/macosx/VLCMainMenu.m:1180
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1457
+#: modules/gui/macosx/VLCMainMenu.m:1179
 msgid "Save Playlist"
 msgstr "保存播放列表"
 
@@ -18330,7 +18394,7 @@ msgid "Black screens in fullscreen"
 msgstr "全屏时保持黑色背景"
 
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:889
-#: modules/gui/macosx/VLCMainMenu.m:458 modules/gui/macosx/VLCMainMenu.m:459
+#: modules/gui/macosx/VLCMainMenu.m:457 modules/gui/macosx/VLCMainMenu.m:458
 #: modules/gui/macosx/VLCSimplePrefsController.m:503
 #: modules/gui/qt/ui/sprefs_video.h:386
 msgid "Fullscreen Video Device"
@@ -19085,6 +19149,10 @@ msgid ""
 msgstr ""
 "「全屏」模式默认用于显示视频的屏幕编号。屏幕编号可在视频设备选择菜单中找到。"
 
+#: modules/gui/legacy_macosx/macosx.c:131
+msgid "Vidéo intégrée dans une fenêtre enfant"
+msgstr ""
+
 #: modules/gui/legacy_macosx/macosx.c:132
 msgid ""
 "Héberge la vidéo intégrée dans une fenêtre enfant sans bordure : le passage "
@@ -19318,78 +19386,78 @@ msgstr "切换到传统界面"
 msgid "Level %i"
 msgstr "级别 %i"
 
-#: modules/gui/macosx/VLCMainMenu.m:358
+#: modules/gui/macosx/VLCMainMenu.m:357
 msgid "Check for Update..."
 msgstr "检查更新..."
 
-#: modules/gui/macosx/VLCMainMenu.m:371
+#: modules/gui/macosx/VLCMainMenu.m:370
 msgid "1:File"
 msgstr "1:文件"
 
-#: modules/gui/macosx/VLCMainMenu.m:389
+#: modules/gui/macosx/VLCMainMenu.m:388
 msgid "Find"
 msgstr "查找"
 
-#: modules/gui/macosx/VLCMainMenu.m:448
+#: modules/gui/macosx/VLCMainMenu.m:447
 msgid "Fit to Screen"
 msgstr "适合屏幕"
 
-#: modules/gui/macosx/VLCMainMenu.m:464 modules/gui/macosx/VLCMainMenu.m:465
+#: modules/gui/macosx/VLCMainMenu.m:463 modules/gui/macosx/VLCMainMenu.m:464
 #: modules/video_filter/postproc.c:201
 msgid "Post processing"
 msgstr "后处理"
 
-#: modules/gui/macosx/VLCMainMenu.m:493
+#: modules/gui/macosx/VLCMainMenu.m:492
 msgid "Player..."
 msgstr "播放器..."
 
-#: modules/gui/macosx/VLCMainMenu.m:508
+#: modules/gui/macosx/VLCMainMenu.m:507
 msgid "Online Documentation..."
 msgstr "在线文档..."
 
-#: modules/gui/macosx/VLCMainMenu.m:1504 modules/gui/macosx/macosx.m:111
+#: modules/gui/macosx/VLCMainMenu.m:1503 modules/gui/macosx/macosx.m:111
 msgid "Lock Aspect Ratio"
 msgstr "锁定宽高比"
 
-#: modules/gui/macosx/VLCMainWindow.m:295
+#: modules/gui/macosx/VLCMainWindow.m:292
 msgid "Search in Playlist"
 msgstr "在播放列表中搜索"
 
-#: modules/gui/macosx/VLCMainWindow.m:297
+#: modules/gui/macosx/VLCMainWindow.m:294
 msgid "Search the playlist. Results will be selected in the table."
 msgstr "搜索播放列表。结果将在表格中选中。"
 
-#: modules/gui/macosx/VLCMainWindow.m:318
+#: modules/gui/macosx/VLCMainWindow.m:315
 msgid "Open a dialog to select the media to play"
 msgstr "打开对话框来选择要播放的媒体"
 
-#: modules/gui/macosx/VLCMainWindow.m:322
-#: modules/gui/macosx/VLCMainWindow.m:328
+#: modules/gui/macosx/VLCMainWindow.m:319
+#: modules/gui/macosx/VLCMainWindow.m:325
 #: modules/gui/qt/components/playlist/selector.cpp:593
 msgid "Subscribe"
 msgstr "订阅"
 
-#: modules/gui/macosx/VLCMainWindow.m:323
-#: modules/gui/macosx/VLCMainWindow.m:334
+#: modules/gui/macosx/VLCMainWindow.m:320
+#: modules/gui/macosx/VLCMainWindow.m:331
 #: modules/gui/qt/components/playlist/selector.cpp:610
 msgid "Unsubscribe"
 msgstr "取消订阅"
 
-#: modules/gui/macosx/VLCMainWindow.m:326
+#: modules/gui/macosx/VLCMainWindow.m:323
 #: modules/gui/qt/components/playlist/selector.cpp:279
 msgid "Subscribe to a podcast"
 msgstr "订阅播客"
 
-#: modules/gui/macosx/VLCMainWindow.m:327
+#: modules/gui/macosx/VLCMainWindow.m:324
 #: modules/gui/qt/components/playlist/selector.cpp:594
 msgid "Enter URL of the podcast to subscribe to:"
 msgstr "输入要订阅的播客 URL:"
 
-#: modules/gui/macosx/VLCMainWindow.m:332
+#: modules/gui/macosx/VLCMainWindow.m:329
 msgid "Unsubscribe from a podcast"
 msgstr "取消订阅播客"
 
-#: modules/gui/macosx/VLCMainWindow.m:333
+#: modules/gui/macosx/VLCMainWindow.m:330
 msgid "Select the podcast you would like to unsubscribe from:"
 msgstr "请选择希望取消订阅的播客:"
 
@@ -21210,6 +21278,29 @@ msgstr "储存密码"
 msgid "Privacy and Network Access Policy"
 msgstr "隐私与网络访问策略"
 
+#: modules/gui/qt/dialogs/firstrun.cpp:69
+msgid ""
+"<p>In order to protect your privacy, <i>PowerVLC media player</i> does "
+"<b>not</b> collect personal data or transmit them, not even in anonymized "
+"form, to anyone.</p>\n"
+"<p>Nevertheless, <i>PowerVLC</i> is able to automatically retrieve "
+"information about the media in your playlist from third party Internet-based "
+"services. This includes cover art, track names, artist names and other meta-"
+"data.</p>\n"
+"<p>Consequently, this may entail identifying some of your media files to "
+"third party entities. Therefore the <i>PowerVLC</i> developers require your "
+"express consent for the media player to access the Internet automatically.</"
+"p>\n"
+msgstr ""
+"<p>为保护您的隐私，<i>PowerVLC media player</i> <b>不会</b> 收集私人数据（即"
+"使以匿名形式），也不会将私人数据传输给任何人。</p>\n"
+"<p>不过，<i>PowerVLC</i> 提供元数据检索的功能，可自动从 Internet 上的第三方服"
+"务检索获取播放列表中媒体的相关信息。这些信息包括专辑封面、音轨名称、创作者等"
+"元数据。</p>\n"
+"<p>若开启该功能，您拥有某些媒体文件的情况会被透露给第三方机构。因此 "
+"<i>PowerVLC</i> 开发团队要求您亲自决定，是否明确允许媒体播放器自动访问互联"
+"网。</p>\n"
+
 #: modules/gui/qt/dialogs/firstrun.cpp:88
 msgid "Network Access Policy"
 msgstr "网络访问策略"
@@ -21574,6 +21665,10 @@ msgstr "无法保存配置"
 #: modules/gui/qt/dialogs/preferences.cpp:312
 msgid "Preferences file could not be saved"
 msgstr "偏好设置文件无法保存"
+
+#: modules/gui/qt/dialogs/preferences.cpp:337
+msgid "Are you sure you want to reset your PowerVLC media player preferences?"
+msgstr "是否确定要重置 PowerVLC media player 的偏好设置?"
 
 #: modules/gui/qt/dialogs/sout.cpp:43 modules/gui/qt/ui/sout.h:198
 msgid "Stream Output"
@@ -22151,6 +22246,14 @@ msgstr "退出全屏"
 #: modules/gui/qt/menus.cpp:1075
 msgid "&Playback"
 msgstr "播放(&P)"
+
+#: modules/gui/qt/menus.cpp:1180
+msgid "&Hide PowerVLC media player in taskbar"
+msgstr "从任务栏隐藏 PowerVLC media player (&H)"
+
+#: modules/gui/qt/menus.cpp:1186
+msgid "Sho&w PowerVLC media player"
+msgstr "显示 PowerVLC media player (&W)"
 
 #: modules/gui/qt/menus.cpp:1197
 msgid "&Open Media"
@@ -28478,7 +28581,7 @@ msgstr "XDG shell"
 msgid "XDG shell surface"
 msgstr "XDG shell 表面"
 
-#. xgettext: This is a plain ASCII spelling of "VLC media player"
+#. xgettext: This is a plain ASCII spelling of "PowerVLC media player"
 #. for the ICCCM window name. This must be pure ASCII.
 #. The limitation is partially with ICCCM and partially with VLC.
 #. For Latin script languages, you may need to strip accents.
@@ -30196,63 +30299,13 @@ msgstr "AAAA; "
 msgid "Media Manager List"
 msgstr "媒体管理器列表"
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "VLC 版本 %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr "正在以默认界面运行 vlc。使用“cvlc”可以无界面模式使用 vlc。"
-
-#~ msgid ""
-#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
-#~ "not have it."
-#~ msgstr "蓝光光碟需要一个库执行 AACS 解码，而您的系统中不存在。"
-
-#~ msgid "Missing AACS configuration file!"
-#~ msgstr "缺 AACS 配置文件!"
-
-msgid ""
-"<p>In order to protect your privacy, <i>PowerVLC media player</i> does "
-"<b>not</b> collect personal data or transmit them, not even in anonymized "
-"form, to anyone.</p>\n"
-"<p>Nevertheless, <i>PowerVLC</i> is able to automatically retrieve "
-"information about the media in your playlist from third party Internet-based "
-"services. This includes cover art, track names, artist names and other meta-"
-"data.</p>\n"
-"<p>Consequently, this may entail identifying some of your media files to "
-"third party entities. Therefore the <i>PowerVLC</i> developers require your "
-"express consent for the media player to access the Internet automatically.</"
-"p>\n"
-msgstr ""
-"<p>为保护您的隐私，<i>PowerVLC media player</i> <b>不会</b> 收集私人数据（即"
-"使以匿名形式），也不会将私人数据传输给任何人。</p>\n"
-"<p>不过，<i>PowerVLC</i> 提供元数据检索的功能，可自动从 Internet 上的第三方服"
-"务检索获取播放列表中媒体的相关信息。这些信息包括专辑封面、音轨名称、创作者等"
-"元数据。</p>\n"
-"<p>若开启该功能，您拥有某些媒体文件的情况会被透露给第三方机构。因此 "
-"<i>PowerVLC</i> 开发团队要求您亲自决定，是否明确允许媒体播放器自动访问互联"
-"网。</p>\n"
-
-msgid "Are you sure you want to reset your PowerVLC media player preferences?"
-msgstr "是否确定要重置 PowerVLC media player 的偏好设置?"
-
-msgid "&Hide PowerVLC media player in taskbar"
-msgstr "从任务栏隐藏 PowerVLC media player (&H)"
-
-msgid "Sho&w PowerVLC media player"
-msgstr "显示 PowerVLC media player (&W)"
-
 #: modules/gui/legacy_macosx/VLCLegacyMenu.m:806
-#: modules/gui/macosx/VLCMainMenu.m:143
-#: modules/gui/qt/menus.cpp:810
+#: modules/gui/macosx/VLCMainMenu.m:143 modules/gui/qt/menus.cpp:810
 msgid "Open the libaacs folder (Blu-ray)"
 msgstr "打开 libaacs 文件夹（蓝光）"
 
 #: modules/gui/legacy_macosx/VLCLegacyMenu.m:808
-#: modules/gui/macosx/VLCMainMenu.m:150
-#: modules/gui/qt/menus.cpp:815
+#: modules/gui/macosx/VLCMainMenu.m:150 modules/gui/qt/menus.cpp:815
 msgid "Open the libbdplus folder (Blu-ray)"
 msgstr "打开 libbdplus 文件夹（蓝光）"
 
@@ -30262,175 +30315,6 @@ msgstr "打开 libbdplus 文件夹（蓝光）"
 #, c-format
 msgid "The folder %s could not be opened."
 msgstr "无法打开文件夹 %s。"
-
-#: include/vlc_intf_strings.h:66
-msgid "Blu-ray Pop-Up Menu"
-msgstr "蓝光弹出菜单"
-
-#: src/libvlc-module.c:1358
-msgid "Show the Blu-ray pop-up menu"
-msgstr "显示蓝光弹出菜单"
-
-#: src/libvlc-module.c:1359
-msgid ""
-"Select the key that shows the pop-up menu a Blu-ray draws over the running "
-"movie (not the disc root menu)."
-msgstr "选择用于显示蓝光在正在播放的影片上绘制的弹出菜单的按键（而非光盘主菜单）。"
-
-#: modules/access/bluray.c:82
-msgid "Use the main playlist from the key database"
-msgstr "使用密钥数据库中的主播放列表"
-
-#: modules/access/bluray.c:83
-msgid ""
-"Some discs hide the feature among hundreds of decoy playlists of the same "
-"length, so the longest one is not the right one. When playing without menus, "
-"start on the playlist your KEYDB.cfg records for this disc, if it records "
-"one. Titles are named after their .mpls file either way, so another one can "
-"still be picked."
-msgstr ""
-"某些光盘会把正片藏在数百个长度相同的诱饵播放列表中，因此最长的那个并不是正确的。在无菜单播放时，如果您的 KEYDB.cfg "
-"为该光盘记录了播放列表，则从该播放列表开始播放。无论如何，标题都以其 .mpls 文件命名，因此仍可另选其他标题。"
-
-#: modules/access/bluray.c:2436
-#, c-format
-msgid "%05u.mpls (main playlist)"
-msgstr "%05u.mpls (主播放列表)"
-
-#: modules/access/bluray.c:3080
-msgid "Dynamic range"
-msgstr "动态范围"
-
-#: modules/access/bluray.c:3098
-msgid "Dolby Vision tracks"
-msgstr "Dolby Vision 轨道"
-
-#: modules/access/bluray.c:3102
-msgid "SDR conversion notice"
-msgstr "SDR 转换提示"
-
-#: modules/access/fs.c:43
-msgid "Bypass the system file cache"
-msgstr "绕过系统文件缓存"
-
-#: modules/access/fs.c:44
-msgid ""
-"Read local files without going through the operating system's file cache "
-"(F_NOCACHE). On a Mac with little RAM this stops a large film from evicting "
-"the player's own memory mid-playback. It also disables kernel read-ahead, so "
-"leave it off on slow or network volumes."
-msgstr ""
-"读取本地文件时不经过操作系统的文件缓存 (F_NOCACHE)。在内存较小的 Mac "
-"上，这可避免大体积影片在播放过程中挤占播放器自身的内存。此选项同时会禁用内核预读，因此在速度较慢的卷或网络卷上请保持关闭。"
-
-#: modules/codec/libmpeg2.c:297
-msgid "Use MPEG-2 hardware acceleration when available"
-msgstr "可用时使用 MPEG-2 硬件加速"
-
-#: modules/codec/libmpeg2.c:299
-msgid ""
-"Decode MPEG-2 streams on the GPU (the AppleVA pipeline of Apple's DVD "
-"Player) whenever a hardware decoder is present (ATI, Intel GMA950, nVidia), "
-"falling back to the libmpeg2 software decoder automatically. Cuts CPU load "
-"dramatically on old Macs."
-msgstr ""
-"在存在硬件解码器 (ATI、Intel GMA950、nVidia) 时于 GPU 上解码 MPEG-2 流 (苹果 DVD 播放器的 "
-"AppleVA 管线)，并在必要时自动回退到 libmpeg2 软件解码器。可大幅降低老款 Mac 的 CPU 占用。"
-
-#: modules/codec/libmpeg2.c:303
-msgid "Field mode of the MPEG-2 hardware decoder (advanced)"
-msgstr "MPEG-2 硬件解码器的场模式 (高级)"
-
-#: modules/codec/libmpeg2.c:305
-msgid ""
-"Hardware decoding of field-predicted macroblocks (interlaced streams, DVD). "
-"0 = off (interlaced content falls back to the processor); 4 = equivalent "
-"frame prediction (the default: the field engine of the GPU tears on motion); "
-"1/2/3 = native field engine, for debugging only."
-msgstr ""
-"对场预测宏块进行硬件解码 (隔行扫描流、DVD)。0 = 关闭 (隔行内容回退到处理器)；4 = 等效的帧预测 (默认值：GPU "
-"的场引擎在运动画面中会撕裂)；1/2/3 = 原生场引擎，仅供调试。"
-
-#: modules/codec/libmpeg2.c:309
-msgid "Subtitles and OSD over hardware-accelerated video"
-msgstr "在硬件加速的视频上显示字幕和 OSD"
-
-#: modules/codec/libmpeg2.c:311
-msgid ""
-"Compose the subtitles (DVD SPU) and the on-screen display over the picture "
-"decoded by the GPU. Without this option the hardware output covers "
-"everything and subtitles stay invisible. Only affects the video shown in the "
-"VLC window."
-msgstr ""
-"将字幕 (DVD SPU) 和屏幕显示叠加在 GPU 解码的画面之上。若不启用此选项，硬件输出会覆盖一切，字幕将不可见。仅影响 VLC "
-"窗口中显示的视频。"
-
-#: modules/codec/libmpeg2.c:315
-msgid "Asynchronous GPU submission (advanced)"
-msgstr "异步 GPU 提交 (高级)"
-
-#: modules/codec/libmpeg2.c:317
-msgid ""
-"Issue the DVDDriverDecode call on a dedicated thread, so that the VLD of the "
-"next picture runs while the GPU works. Measured on the iBook G3: Decode is "
-"time spent blocked in the driver, and overlapping it removes the shortfall "
-"in the 40 ms per picture budget."
-msgstr ""
-"在专用线程上执行 DVDDriverDecode 调用，使下一帧的 VLD 能在 GPU 工作期间进行。在 iBook G3 上实测：Decode "
-"是阻塞在驱动中的时间，将其重叠即可消除每帧 40 毫秒预算的缺口。"
-
-#: modules/codec/libmpeg2.c:321
-msgid "10.2 port changes on the hardware path (advanced)"
-msgstr "硬件路径上的 10.2 移植改动 (高级)"
-
-#: modules/codec/libmpeg2.c:323
-msgid ""
-"-1 = automatic (on under Mac OS X 10.2 and 10.3, off from 10.4 on, where "
-"they replaced behaviour validated on the machine itself), 0 = off, 1 = on."
-msgstr ""
-"-1 = 自动 (在 Mac OS X 10.2 和 10.3 上启用，自 10.4 起停用；在 10.4 "
-"上它们取代的是已在实机验证过的行为)，0 = 停用，1 = 启用。"
-
-#: modules/codec/libmpeg2.c:326
-msgid "DVD subtitles drawn by the GPU"
-msgstr "由 GPU 绘制的 DVD 字幕"
-
-#: modules/codec/libmpeg2.c:328
-msgid ""
-"Hand the DVD subtitles to the subpicture plane of the ATI hardware decoder: "
-"the GPU composes them onto the picture itself, at no per-picture cost, where "
-"drawing them through a window costs 15 to 50 ms on this hardware. No effect "
-"while hardware decoding is off, as software rendering then takes over."
-msgstr ""
-"将 DVD 字幕交给 ATI 硬件解码器的 subpicture 平面：GPU "
-"自行把字幕合成到画面上，不产生每帧开销；而通过窗口绘制在此硬件上需要 15 至 50 毫秒。硬件解码关闭时此选项无效，此时改由软件渲染处理。"
-
-#: modules/gui/legacy_macosx/macosx.c:131
-msgid "Embedded video in a child window"
-msgstr "在子窗口中嵌入视频"
-
-#: modules/gui/legacy_macosx/macosx.c:132
-msgid ""
-"Host the embedded video in a borderless child window: switching to "
-"fullscreen is instant and does not interrupt accelerated decoding. Turning "
-"this off restores the former behaviour (a separate fullscreen window). No "
-"effect under Mac OS X 10.4, where a child window displays nothing."
-msgstr ""
-"将嵌入的视频置于无边框子窗口中：切换全屏是瞬时的，且不会中断加速解码。关闭后将恢复原有行为 (独立的全屏窗口)。在 Mac OS X 10.4 "
-"上无效，该系统下子窗口不显示任何内容。"
-
-#: modules/gui/legacy_macosx/macosx.c:143
-msgid "Open a window at startup (debugging)"
-msgstr "启动时打开一个窗口 (调试)"
-
-#: modules/gui/legacy_macosx/macosx.c:144
-msgid ""
-"Name of the window to open at startup, like the VLC_LEGACY_SHOW environment "
-"variable: prefs, prefsadv, mediainfo, errors, about, bookmarks, messages, "
-"tracksync, effects, videoeffects, convert, fspanel, open0..3."
-msgstr ""
-"启动时要打开的窗口名称，与环境变量 VLC_LEGACY_SHOW "
-"相同：prefs、prefsadv、mediainfo、errors、about、bookmarks、messages、tracksync、effects、videoeffects、convert、fspanel、open0..3。"
 
 #: modules/access/dvd_description.h:30
 msgid "Audio for visually impaired"
@@ -30481,8 +30365,12 @@ msgid "Show forced subtitles"
 msgstr "显示强制字幕"
 
 #: modules/access/bluray.c:83
-msgid "When the disc hides the subtitle stream, keep decoding it and display only its forced captions, as a standalone Blu-ray player does."
-msgstr "当光盘隐藏字幕流时，继续解码并仅显示其中的强制字幕，与独立蓝光播放机的行为一致。"
+msgid ""
+"When the disc hides the subtitle stream, keep decoding it and display only "
+"its forced captions, as a standalone Blu-ray player does."
+msgstr ""
+"当光盘隐藏字幕流时，继续解码并仅显示其中的强制字幕，与独立蓝光播放机的行为一"
+"致。"
 
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
@@ -30511,3 +30399,175 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "VLC 版本 %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr "正在以默认界面运行 vlc。使用“cvlc”可以无界面模式使用 vlc。"
+
+#~ msgid ""
+#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
+#~ "not have it."
+#~ msgstr "蓝光光碟需要一个库执行 AACS 解码，而您的系统中不存在。"
+
+#~ msgid "Missing AACS configuration file!"
+#~ msgstr "缺 AACS 配置文件!"
+
+#~ msgid "Blu-ray Pop-Up Menu"
+#~ msgstr "蓝光弹出菜单"
+
+#~ msgid "Show the Blu-ray pop-up menu"
+#~ msgstr "显示蓝光弹出菜单"
+
+#~ msgid ""
+#~ "Select the key that shows the pop-up menu a Blu-ray draws over the "
+#~ "running movie (not the disc root menu)."
+#~ msgstr ""
+#~ "选择用于显示蓝光在正在播放的影片上绘制的弹出菜单的按键（而非光盘主菜单）。"
+
+#~ msgid "Use the main playlist from the key database"
+#~ msgstr "使用密钥数据库中的主播放列表"
+
+#~ msgid ""
+#~ "Some discs hide the feature among hundreds of decoy playlists of the same "
+#~ "length, so the longest one is not the right one. When playing without "
+#~ "menus, start on the playlist your KEYDB.cfg records for this disc, if it "
+#~ "records one. Titles are named after their .mpls file either way, so "
+#~ "another one can still be picked."
+#~ msgstr ""
+#~ "某些光盘会把正片藏在数百个长度相同的诱饵播放列表中，因此最长的那个并不是正"
+#~ "确的。在无菜单播放时，如果您的 KEYDB.cfg 为该光盘记录了播放列表，则从该播"
+#~ "放列表开始播放。无论如何，标题都以其 .mpls 文件命名，因此仍可另选其他标"
+#~ "题。"
+
+#, c-format
+#~ msgid "%05u.mpls (main playlist)"
+#~ msgstr "%05u.mpls (主播放列表)"
+
+#~ msgid "Dynamic range"
+#~ msgstr "动态范围"
+
+#~ msgid "Dolby Vision tracks"
+#~ msgstr "Dolby Vision 轨道"
+
+#~ msgid "SDR conversion notice"
+#~ msgstr "SDR 转换提示"
+
+#~ msgid "Bypass the system file cache"
+#~ msgstr "绕过系统文件缓存"
+
+#~ msgid ""
+#~ "Read local files without going through the operating system's file cache "
+#~ "(F_NOCACHE). On a Mac with little RAM this stops a large film from "
+#~ "evicting the player's own memory mid-playback. It also disables kernel "
+#~ "read-ahead, so leave it off on slow or network volumes."
+#~ msgstr ""
+#~ "读取本地文件时不经过操作系统的文件缓存 (F_NOCACHE)。在内存较小的 Mac 上，"
+#~ "这可避免大体积影片在播放过程中挤占播放器自身的内存。此选项同时会禁用内核预"
+#~ "读，因此在速度较慢的卷或网络卷上请保持关闭。"
+
+#~ msgid "Use MPEG-2 hardware acceleration when available"
+#~ msgstr "可用时使用 MPEG-2 硬件加速"
+
+#~ msgid ""
+#~ "Decode MPEG-2 streams on the GPU (the AppleVA pipeline of Apple's DVD "
+#~ "Player) whenever a hardware decoder is present (ATI, Intel GMA950, "
+#~ "nVidia), falling back to the libmpeg2 software decoder automatically. "
+#~ "Cuts CPU load dramatically on old Macs."
+#~ msgstr ""
+#~ "在存在硬件解码器 (ATI、Intel GMA950、nVidia) 时于 GPU 上解码 MPEG-2 流 (苹"
+#~ "果 DVD 播放器的 AppleVA 管线)，并在必要时自动回退到 libmpeg2 软件解码器。"
+#~ "可大幅降低老款 Mac 的 CPU 占用。"
+
+#~ msgid "Field mode of the MPEG-2 hardware decoder (advanced)"
+#~ msgstr "MPEG-2 硬件解码器的场模式 (高级)"
+
+#~ msgid ""
+#~ "Hardware decoding of field-predicted macroblocks (interlaced streams, "
+#~ "DVD). 0 = off (interlaced content falls back to the processor); 4 = "
+#~ "equivalent frame prediction (the default: the field engine of the GPU "
+#~ "tears on motion); 1/2/3 = native field engine, for debugging only."
+#~ msgstr ""
+#~ "对场预测宏块进行硬件解码 (隔行扫描流、DVD)。0 = 关闭 (隔行内容回退到处理"
+#~ "器)；4 = 等效的帧预测 (默认值：GPU 的场引擎在运动画面中会撕裂)；1/2/3 = 原"
+#~ "生场引擎，仅供调试。"
+
+#~ msgid "Subtitles and OSD over hardware-accelerated video"
+#~ msgstr "在硬件加速的视频上显示字幕和 OSD"
+
+#~ msgid ""
+#~ "Compose the subtitles (DVD SPU) and the on-screen display over the "
+#~ "picture decoded by the GPU. Without this option the hardware output "
+#~ "covers everything and subtitles stay invisible. Only affects the video "
+#~ "shown in the VLC window."
+#~ msgstr ""
+#~ "将字幕 (DVD SPU) 和屏幕显示叠加在 GPU 解码的画面之上。若不启用此选项，硬件"
+#~ "输出会覆盖一切，字幕将不可见。仅影响 VLC 窗口中显示的视频。"
+
+#~ msgid "Asynchronous GPU submission (advanced)"
+#~ msgstr "异步 GPU 提交 (高级)"
+
+#~ msgid ""
+#~ "Issue the DVDDriverDecode call on a dedicated thread, so that the VLD of "
+#~ "the next picture runs while the GPU works. Measured on the iBook G3: "
+#~ "Decode is time spent blocked in the driver, and overlapping it removes "
+#~ "the shortfall in the 40 ms per picture budget."
+#~ msgstr ""
+#~ "在专用线程上执行 DVDDriverDecode 调用，使下一帧的 VLD 能在 GPU 工作期间进"
+#~ "行。在 iBook G3 上实测：Decode 是阻塞在驱动中的时间，将其重叠即可消除每帧 "
+#~ "40 毫秒预算的缺口。"
+
+#~ msgid "10.2 port changes on the hardware path (advanced)"
+#~ msgstr "硬件路径上的 10.2 移植改动 (高级)"
+
+#~ msgid ""
+#~ "-1 = automatic (on under Mac OS X 10.2 and 10.3, off from 10.4 on, where "
+#~ "they replaced behaviour validated on the machine itself), 0 = off, 1 = on."
+#~ msgstr ""
+#~ "-1 = 自动 (在 Mac OS X 10.2 和 10.3 上启用，自 10.4 起停用；在 10.4 上它们"
+#~ "取代的是已在实机验证过的行为)，0 = 停用，1 = 启用。"
+
+#~ msgid "DVD subtitles drawn by the GPU"
+#~ msgstr "由 GPU 绘制的 DVD 字幕"
+
+#~ msgid ""
+#~ "Hand the DVD subtitles to the subpicture plane of the ATI hardware "
+#~ "decoder: the GPU composes them onto the picture itself, at no per-picture "
+#~ "cost, where drawing them through a window costs 15 to 50 ms on this "
+#~ "hardware. No effect while hardware decoding is off, as software rendering "
+#~ "then takes over."
+#~ msgstr ""
+#~ "将 DVD 字幕交给 ATI 硬件解码器的 subpicture 平面：GPU 自行把字幕合成到画面"
+#~ "上，不产生每帧开销；而通过窗口绘制在此硬件上需要 15 至 50 毫秒。硬件解码关"
+#~ "闭时此选项无效，此时改由软件渲染处理。"
+
+#~ msgid "Embedded video in a child window"
+#~ msgstr "在子窗口中嵌入视频"
+
+#~ msgid ""
+#~ "Host the embedded video in a borderless child window: switching to "
+#~ "fullscreen is instant and does not interrupt accelerated decoding. "
+#~ "Turning this off restores the former behaviour (a separate fullscreen "
+#~ "window). No effect under Mac OS X 10.4, where a child window displays "
+#~ "nothing."
+#~ msgstr ""
+#~ "将嵌入的视频置于无边框子窗口中：切换全屏是瞬时的，且不会中断加速解码。关闭"
+#~ "后将恢复原有行为 (独立的全屏窗口)。在 Mac OS X 10.4 上无效，该系统下子窗口"
+#~ "不显示任何内容。"
+
+#~ msgid "Open a window at startup (debugging)"
+#~ msgstr "启动时打开一个窗口 (调试)"
+
+#~ msgid ""
+#~ "Name of the window to open at startup, like the VLC_LEGACY_SHOW "
+#~ "environment variable: prefs, prefsadv, mediainfo, errors, about, "
+#~ "bookmarks, messages, tracksync, effects, videoeffects, convert, fspanel, "
+#~ "open0..3."
+#~ msgstr ""
+#~ "启动时要打开的窗口名称，与环境变量 VLC_LEGACY_SHOW 相同：prefs、prefsadv、"
+#~ "mediainfo、errors、about、bookmarks、messages、tracksync、effects、"
+#~ "videoeffects、convert、fspanel、open0..3。"

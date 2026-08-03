@@ -1539,12 +1539,20 @@ msgstr "Web"
 msgid "Mouse Gestures"
 msgstr "Gjestet me Mouse"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Po xhirohet powervlc me ndërfaqen parazgjedhje. Përdorni «cpowervlc» që të "
+"përdoret powervlc pa ndërfaqe."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"Po xhirohet powervlc me ndërfaqen parazgjedhje. Përdorni «-I dummy» që të "
 "përdoret powervlc pa ndërfaqe."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -29634,13 +29642,6 @@ msgid ""
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "VLC versioni %s (%s)\n"
-
-#~ msgid "Missing AACS configuration file!"
-#~ msgstr "Konfigurimi për AACS mungon!"
-
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
 msgstr ""
@@ -29668,3 +29669,10 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "VLC versioni %s (%s)\n"
+
+#~ msgid "Missing AACS configuration file!"
+#~ msgstr "Konfigurimi për AACS mungon!"

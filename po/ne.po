@@ -1596,13 +1596,21 @@ msgstr "वेब"
 msgid "Mouse Gestures"
 msgstr "माउस सङ्केत"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc पूर्वनिर्धारित इन्टरफेससँग चलिरहेको छ। इन्टरफेसविना powervlc चलाउन "
 "«cpowervlc» प्रयोग गर्नुहोस्।"
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc पूर्वनिर्धारित इन्टरफेससँग चलिरहेको छ। इन्टरफेसविना powervlc चलाउन "
+"«-I dummy» प्रयोग गर्नुहोस्।"
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
 #: src/libvlc.c:174
@@ -30145,20 +30153,6 @@ msgid ""
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "VLC संस्करण %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "पूर्वनिर्धारित इन्टरफेस प्रयोग गरेर vlc खोल्दै इन्टरफेस बिना vlc चलाउन 'cvlc' प्रयोग "
-#~ "गर्नुहोस्"
-
-#~ msgid "Missing AACS configuration file!"
-#~ msgstr "AACS कन्फिगरेसन फाइल छुटेको छ!"
-
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
 msgstr ""
@@ -30186,3 +30180,17 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "VLC संस्करण %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "पूर्वनिर्धारित इन्टरफेस प्रयोग गरेर vlc खोल्दै इन्टरफेस बिना vlc चलाउन 'cvlc' प्रयोग "
+#~ "गर्नुहोस्"
+
+#~ msgid "Missing AACS configuration file!"
+#~ msgstr "AACS कन्फिगरेसन फाइल छुटेको छ!"

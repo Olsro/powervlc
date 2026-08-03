@@ -1563,13 +1563,21 @@ msgstr "വെബ്"
 msgid "Mouse Gestures"
 msgstr "മൗസ് ഗെസ്റ്ററുകള്‍"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc സ്ഥിരസ്ഥിതി ഇന്റർഫേസോടെ പ്രവർത്തിക്കുന്നു. ഇന്റർഫേസില്ലാതെ powervlc ഉപയോഗിക്കാൻ "
 "«cpowervlc» ഉപയോഗിക്കുക."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc സ്ഥിരസ്ഥിതി ഇന്റർഫേസോടെ പ്രവർത്തിക്കുന്നു. ഇന്റർഫേസില്ലാതെ powervlc ഉപയോഗിക്കാൻ "
+"«-I dummy» ഉപയോഗിക്കുക."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
 #: src/libvlc.c:174

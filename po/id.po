@@ -1597,12 +1597,20 @@ msgstr "Web"
 msgid "Mouse Gestures"
 msgstr "Gestur Tetikus"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Menjalankan powervlc dengan antarmuka bawaan. Gunakan «cpowervlc» untuk "
+"menjalankan powervlc tanpa antarmuka."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"Menjalankan powervlc dengan antarmuka bawaan. Gunakan «-I dummy» untuk "
 "menjalankan powervlc tanpa antarmuka."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...

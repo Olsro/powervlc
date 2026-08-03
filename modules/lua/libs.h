@@ -30,6 +30,7 @@ void luaopen_httpd( lua_State * );
 void luaopen_input( lua_State * );
 void luaopen_msg( lua_State * );
 void luaopen_misc( lua_State * );
+void luaopen_misc_info( lua_State * );  /* extensions: read-only subset */
 void luaopen_object( lua_State * );
 void luaopen_osd( lua_State * );
 void luaopen_playlist( lua_State * );
@@ -47,6 +48,9 @@ void luaopen_xml( lua_State *L );
 void luaopen_equalizer( lua_State *L );
 void luaopen_vlcio( lua_State *L );
 void luaopen_errno( lua_State *L );
+void luaopen_clipboard( lua_State *L );
+void luaopen_http( lua_State *L );
+void luaopen_keystore( lua_State *L );
 #ifdef _WIN32
 void luaopen_win( lua_State *L );
 #endif

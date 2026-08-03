@@ -1609,12 +1609,20 @@ msgstr "Ret"
 msgid "Mouse Gestures"
 msgstr "Movements de la mirga"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Aviada de powervlc amb l'interfàcia per defaut. Utilizatz « cpowervlc » per "
+"aviar powervlc sens interfàcia."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"Aviada de powervlc amb l'interfàcia per defaut. Utilizatz « -I dummy » per "
 "aviar powervlc sens interfàcia."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -31302,29 +31310,6 @@ msgid ""
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr ""
-#~ "VLC version %s (%s)\n"
-#~ "Traduccions © 2008-2015 Cédric Valmary (totenoc.eu)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "Aviada de vlc amb l'interfàcia per defaut. Utilizatz « cvlc » per aviar "
-#~ "VLC sens interfàcia."
-
-#~ msgid ""
-#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
-#~ "not have it."
-#~ msgstr ""
-#~ "Aqueste disc Blu-ray a besonh d'una bibliotèca de desencodatge AACS, e "
-#~ "vòstre sistèma n'a pas."
-
-#~ msgid "Missing AACS configuration file!"
-#~ msgstr "Fichièr de configuracion AACS mancant !"
-
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
 msgstr ""
@@ -31352,3 +31337,26 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr ""
+#~ "VLC version %s (%s)\n"
+#~ "Traduccions © 2008-2015 Cédric Valmary (totenoc.eu)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "Aviada de vlc amb l'interfàcia per defaut. Utilizatz « cvlc » per aviar "
+#~ "VLC sens interfàcia."
+
+#~ msgid ""
+#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
+#~ "not have it."
+#~ msgstr ""
+#~ "Aqueste disc Blu-ray a besonh d'una bibliotèca de desencodatge AACS, e "
+#~ "vòstre sistèma n'a pas."
+
+#~ msgid "Missing AACS configuration file!"
+#~ msgstr "Fichièr de configuracion AACS mancant !"

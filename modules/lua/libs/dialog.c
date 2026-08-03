@@ -38,6 +38,7 @@
 
 #include "../vlc.h"
 #include "../libs.h"
+#include "../extension.h"
 
 #include "assert.h"
 
@@ -52,6 +53,7 @@ static int vlclua_dialog_show( lua_State *L );
 static int vlclua_dialog_hide( lua_State *L );
 static int vlclua_dialog_set_title( lua_State *L );
 static int vlclua_dialog_update( lua_State *L );
+static int vlclua_dialog_set_size( lua_State *L );
 static void lua_SetDialogUpdate( lua_State *L, int flag );
 static int lua_GetDialogUpdate( lua_State *L );
 int lua_DialogFlush( lua_State *L );
@@ -89,6 +91,7 @@ static int vlclua_widget_set_checked( lua_State *L );
 static int vlclua_widget_get_checked( lua_State *L );
 static int vlclua_widget_add_value( lua_State *L );
 static int vlclua_widget_get_value( lua_State *L );
+static int vlclua_widget_set_value( lua_State *L );
 static int vlclua_widget_clear( lua_State *L );
 static int vlclua_widget_get_selection( lua_State *L );
 static int vlclua_widget_animate( lua_State *L );
@@ -105,6 +108,7 @@ static const luaL_Reg vlclua_dialog_reg[] = {
     { "hide", vlclua_dialog_hide },
     { "delete", vlclua_dialog_delete },
     { "set_title", vlclua_dialog_set_title },
+    { "set_size", vlclua_dialog_set_size },
     { "update", vlclua_dialog_update },
 
     { "add_button", vlclua_dialog_add_button },
@@ -129,6 +133,7 @@ static const luaL_Reg vlclua_widget_reg[] = {
     { "get_checked", vlclua_widget_get_checked },
     { "add_value", vlclua_widget_add_value },
     { "get_value", vlclua_widget_get_value },
+    { "set_value", vlclua_widget_set_value },
     { "clear", vlclua_widget_clear },
     { "get_selection", vlclua_widget_get_selection },
     { "animate", vlclua_widget_animate },
@@ -233,8 +238,15 @@ static int vlclua_dialog_delete( lua_State *L )
     extension_dialog_t **pp_dlg =
             (extension_dialog_t**) luaL_checkudata( L, 1, "dialog" );
 
-    if( !pp_dlg || !*pp_dlg )
+    if( !pp_dlg )
         return luaL_error( L, "Can't get pointer to dialog" );
+
+    /* This is also the __gc metamethod: a script that deleted its dialog
+     * itself -- the sane way, rather than leaving a finalizer to block on
+     * the interface at some random allocation -- must not raise here when
+     * the garbage collector finally gets to the value. */
+    if( !*pp_dlg )
+        return 0;
 
     extension_dialog_t *p_dlg = *pp_dlg;
     *pp_dlg = NULL;
@@ -250,18 +262,59 @@ static int vlclua_dialog_delete( lua_State *L )
     msg_Dbg( p_mgr, "Deleting dialog '%s'", p_dlg->psz_title );
     p_dlg->b_kill = true;
     lua_SetDialogUpdate( L, 0 ); // Reset the update flag
+
+    /* On the way out, the interface is already waiting for this thread to
+     * end -- an interface that closes its windows on the main thread would
+     * have to answer us from a thread that is busy joining us. Leave the
+     * window to the interface's own teardown instead of asking. */
+    extension_t *p_ext = p_dlg->p_sys;
+    bool b_exiting = false;
+    if( p_ext != NULL && p_ext->p_sys != NULL )
+    {
+        vlc_mutex_lock( &p_ext->p_sys->command_lock );
+        b_exiting = p_ext->p_sys->b_exiting;
+        vlc_mutex_unlock( &p_ext->p_sys->command_lock );
+    }
+    if( b_exiting )
+    {
+        msg_Dbg( p_mgr, "extension is exiting: leaving dialog '%s' to the "
+                 "interface", p_dlg->psz_title );
+        return 1;
+    }
+
     vlc_ext_dialog_update( p_mgr, p_dlg );
 
     /* After vlc_ext_dialog_update, the UI thread must take the lock asap and
      * then signal us when it's done deleting the dialog.
+     *
+     * Bounded, because at shutdown the interface may already be waiting on
+     * this very thread to finish -- its main thread joins us while we ask
+     * it to close a window, and neither side can move. That deadlock used
+     * to leave an application that could not be quit at all. Waiting a
+     * couple of seconds and walking away costs one leaked descriptor in a
+     * process that is exiting anyway; freeing it would leave the interface
+     * holding a dangling pointer.
      */
     msg_Dbg( p_mgr, "Waiting for the dialog to be deleted..." );
+    mtime_t deadline = mdate() + 2 * CLOCK_FREQ;
+    bool b_destroyed = true;
     vlc_mutex_lock( &p_dlg->lock );
     while( p_dlg->p_sys_intf != NULL )
     {
-        vlc_cond_wait( &p_dlg->cond, &p_dlg->lock );
+        if( vlc_cond_timedwait( &p_dlg->cond, &p_dlg->lock, deadline ) != 0 )
+        {
+            b_destroyed = false;
+            break;
+        }
     }
     vlc_mutex_unlock( &p_dlg->lock );
+
+    if( !b_destroyed )
+    {
+        msg_Warn( p_mgr, "the interface never destroyed dialog '%s': "
+                  "leaving it behind rather than hanging", p_dlg->psz_title );
+        return 1;
+    }
 
     free( p_dlg->psz_title );
     p_dlg->psz_title = NULL;
@@ -350,6 +403,32 @@ static int vlclua_dialog_set_title( lua_State *L )
 }
 
 /** Update the dialog immediately */
+/**
+ * Ask for a minimum dialog size: set_size( width, height )
+ * Either value may be 0 to leave that axis to the interface. The size is a
+ * hint the interface may enlarge, never a fixed geometry.
+ **/
+static int vlclua_dialog_set_size( lua_State *L )
+{
+    extension_dialog_t **pp_dlg =
+            (extension_dialog_t**) luaL_checkudata( L, 1, "dialog" );
+    if( !pp_dlg || !*pp_dlg )
+        return luaL_error( L, "Can't get pointer to dialog" );
+    extension_dialog_t *p_dlg = *pp_dlg;
+
+    int i_width = luaL_checkint( L, 2 );
+    int i_height = luaL_optint( L, 3, 0 );
+
+    vlc_mutex_lock( &p_dlg->lock );
+    p_dlg->i_width = i_width > 0 ? i_width : 0;
+    p_dlg->i_height = i_height > 0 ? i_height : 0;
+    vlc_mutex_unlock( &p_dlg->lock );
+
+    lua_SetDialogUpdate( L, 1 );
+
+    return 1;
+}
+
 static int vlclua_dialog_update( lua_State *L )
 {
     vlc_object_t *p_mgr = vlclua_get_this( L );
@@ -452,7 +531,8 @@ static int vlclua_dialog_add_label( lua_State *L )
 
 /**
  * Create a text area: add_html, add_text_input, add_password
- * Arguments: text (may be nil)
+ * Arguments: text (may be nil), then the grid coordinates and an optional
+ * function called when the user validates the field (Enter)
  * Qt: QLineEdit (Text/Password) or QTextArea (HTML)
  **/
 static int vlclua_dialog_add_text_inner( lua_State *L, int i_type )
@@ -465,6 +545,35 @@ static int vlclua_dialog_add_text_inner( lua_State *L, int i_type )
     p_widget->type = i_type;
     if( !lua_isnil( L, 2 ) )
         p_widget->psz_text = strdup( luaL_checkstring( L, 2 ) );
+
+    /* add_text_input( text, col, row, hspan, vspan [, validate [, change]] ):
+     * with two interactions the registry entry becomes a table of named
+     * functions, the same shape a list uses. "change" fires as the user
+     * types, coalesced by the command queue -- a script can filter a list
+     * from a search box without a button, and a slow machine simply runs
+     * the callback fewer times. */
+    bool b_validate = lua_gettop( L ) >= 7 && lua_isfunction( L, 7 );
+    bool b_change = lua_gettop( L ) >= 8 && lua_isfunction( L, 8 );
+
+    if( b_change )
+    {
+        lua_pushlightuserdata( L, p_widget );
+        lua_newtable( L );
+        if( b_validate )
+        {
+            lua_pushvalue( L, 7 );
+            lua_setfield( L, -2, "click" );
+        }
+        lua_pushvalue( L, 8 );
+        lua_setfield( L, -2, "select" );
+        lua_settable( L, LUA_REGISTRYINDEX );
+    }
+    else if( b_validate )
+    {
+        lua_pushlightuserdata( L, p_widget );
+        lua_pushvalue( L, 7 );
+        lua_settable( L, LUA_REGISTRYINDEX );
+    }
 
     return vlclua_create_widget_inner( L, 1, p_widget );
 }
@@ -499,18 +608,52 @@ static int vlclua_dialog_add_dropdown( lua_State *L )
     extension_widget_t *p_widget = calloc( 1, sizeof( extension_widget_t ) );
     p_widget->type = EXTENSION_WIDGET_DROPDOWN;
 
+    /* add_dropdown( col, row, hspan, vspan [, on_change] ): stored under
+     * the same "select" name a list uses, so both go through the one
+     * selection-changed path. */
+    if( lua_gettop( L ) >= 6 && lua_isfunction( L, 6 ) )
+    {
+        lua_pushlightuserdata( L, p_widget );
+        lua_newtable( L );
+        lua_pushvalue( L, 6 );
+        lua_setfield( L, -2, "select" );
+        lua_settable( L, LUA_REGISTRYINDEX );
+    }
+
     return vlclua_create_widget_inner( L, 0, p_widget );
 }
 
 /**
  * Create a list panel (multiple selection)
- * Arguments: (none)
+ * Arguments: (none), or after the grid coordinates an optional function
+ * called when a row is activated (double-clicked)
  * Qt: QListWidget
  **/
 static int vlclua_dialog_add_list( lua_State *L )
 {
     extension_widget_t *p_widget = calloc( 1, sizeof( extension_widget_t ) );
     p_widget->type = EXTENSION_WIDGET_LIST;
+
+    /* add_list( col, row, hspan, vspan [, activate [, select]] ): a list has
+     * two interactions, so the registry entry is a table of named functions
+     * rather than the bare function a button stores. */
+    if( ( lua_gettop( L ) >= 6 && lua_isfunction( L, 6 ) )
+     || ( lua_gettop( L ) >= 7 && lua_isfunction( L, 7 ) ) )
+    {
+        lua_pushlightuserdata( L, p_widget );
+        lua_newtable( L );
+        if( lua_isfunction( L, 6 ) )
+        {
+            lua_pushvalue( L, 6 );
+            lua_setfield( L, -2, "click" );
+        }
+        if( lua_isfunction( L, 7 ) )
+        {
+            lua_pushvalue( L, 7 );
+            lua_setfield( L, -2, "select" );
+        }
+        lua_settable( L, LUA_REGISTRYINDEX );
+    }
 
     return vlclua_create_widget_inner( L, 0, p_widget );
 }
@@ -638,8 +781,9 @@ static int vlclua_widget_set_text( lua_State *L )
         case EXTENSION_WIDGET_PASSWORD:
         case EXTENSION_WIDGET_DROPDOWN:
         case EXTENSION_WIDGET_CHECK_BOX:
-            break;
         case EXTENSION_WIDGET_LIST:
+            /* on a list the text carries the tab-separated column headers */
+            break;
         case EXTENSION_WIDGET_IMAGE:
         default:
             return luaL_error( L, "method set_text not valid for this widget" );
@@ -797,6 +941,44 @@ static int vlclua_widget_get_value( lua_State *L )
     lua_pushinteger( L, -1 );
     lua_pushnil( L );
     return 2;
+}
+
+/**
+ * Choose which entry of a drop-down is shown, by the id given to
+ * add_value. Without it a script has to add its entries in the order it
+ * wants them read, since a drop-down opens on its first one -- which
+ * makes a list that should read low to high impossible to write.
+ */
+static int vlclua_widget_set_value( lua_State *L )
+{
+    /* Get widget */
+    extension_widget_t **pp_widget =
+            (extension_widget_t **) luaL_checkudata( L, 1, "widget" );
+    if( !pp_widget || !*pp_widget )
+        return luaL_error( L, "Can't get pointer to widget" );
+    extension_widget_t *p_widget = *pp_widget;
+
+    if( p_widget->type != EXTENSION_WIDGET_DROPDOWN )
+        return luaL_error( L, "method set_value not valid for this widget" );
+
+    int i_id = luaL_checkint( L, 2 );
+    bool b_found = false;
+
+    vlc_mutex_lock( &p_widget->p_dialog->lock );
+    for( struct extension_widget_value_t *p_value = p_widget->p_values;
+         p_value != NULL;
+         p_value = p_value->p_next )
+    {
+        p_value->b_selected = ( p_value->i_id == i_id );
+        if( p_value->b_selected )
+            b_found = true;
+    }
+    p_widget->b_update = true;
+    vlc_mutex_unlock( &p_widget->p_dialog->lock );
+
+    lua_SetDialogUpdate( L, 1 );
+    lua_pushboolean( L, b_found );
+    return 1;
 }
 
 static int vlclua_widget_clear( lua_State *L )

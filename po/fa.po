@@ -1566,13 +1566,21 @@ msgstr "وب"
 msgid "Mouse Gestures"
 msgstr "حرکت‌های ماوس"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc با رابط پیش‌فرض اجرا می‌شود. برای اجرای powervlc بدون رابط از "
 "«cpowervlc» استفاده کنید."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc با رابط پیش‌فرض اجرا می‌شود. برای اجرای powervlc بدون رابط از "
+"«-I dummy» استفاده کنید."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
 #: src/libvlc.c:174

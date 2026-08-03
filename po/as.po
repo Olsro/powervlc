@@ -1583,13 +1583,21 @@ msgstr "ৱেব"
 msgid "Mouse Gestures"
 msgstr "মাউছৰ চলাচল"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc অবিকল্পিত আন্তঃপৃষ্ঠৰ সৈতে চলি আছে। আন্তঃপৃষ্ঠবিহীনভাৱে powervlc চলাবলৈ "
 "«cpowervlc» ব্যৱহাৰ কৰক।"
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc অবিকল্পিত আন্তঃপৃষ্ঠৰ সৈতে চলি আছে। আন্তঃপৃষ্ঠবিহীনভাৱে powervlc চলাবলৈ "
+"«-I dummy» ব্যৱহাৰ কৰক।"
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
 #: src/libvlc.c:174

@@ -1531,13 +1531,21 @@ msgstr "வலை"
 msgid "Mouse Gestures"
 msgstr "எலி உடன் முகப்பை காட்டு "
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc இயல்புநிலை இடைமுகத்துடன் இயங்குகிறது. இடைமுகம் இல்லாமல் powervlc-ஐப் "
 "பயன்படுத்த «cpowervlc» ஐப் பயன்படுத்தவும்."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc இயல்புநிலை இடைமுகத்துடன் இயங்குகிறது. இடைமுகம் இல்லாமல் powervlc-ஐப் "
+"பயன்படுத்த «-I dummy» ஐப் பயன்படுத்தவும்."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
 #: src/libvlc.c:174
@@ -29557,17 +29565,6 @@ msgid ""
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "VLC பதிப்பு %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "இயல்புநிலை இடைமுகத்துடன் VLC இயக்குதல். இடைமுகம் இல்லாமல் VLC பயன்படுத்த 'cvlc' "
-#~ "பயன்படுத்தவும்."
-
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
 msgstr ""
@@ -29595,3 +29592,14 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "VLC பதிப்பு %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "இயல்புநிலை இடைமுகத்துடன் VLC இயக்குதல். இடைமுகம் இல்லாமல் VLC பயன்படுத்த 'cvlc' "
+#~ "பயன்படுத்தவும்."

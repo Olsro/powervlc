@@ -1592,12 +1592,20 @@ msgstr "Lìon"
 msgid "Mouse Gestures"
 msgstr "Gluasadan na luchaige"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "A' ruith powervlc leis an eadar-aghaidh bhunaiteach. Cleachd «cpowervlc» gus "
+"powervlc a ruith gun eadar-aghaidh."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"A' ruith powervlc leis an eadar-aghaidh bhunaiteach. Cleachd «-I dummy» gus "
 "powervlc a ruith gun eadar-aghaidh."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...

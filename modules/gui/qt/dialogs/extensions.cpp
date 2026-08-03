@@ -38,6 +38,8 @@
 #include <QComboBox>
 #include <QCloseEvent>
 #include <QKeyEvent>
+#include <QRegularExpression>
+#include <QTimer>
 #include "util/customwidgets.hpp"
 
 ExtensionsDialogProvider *ExtensionsDialogProvider::instance = NULL;
@@ -183,6 +185,15 @@ ExtensionDialog::ExtensionDialog( intf_thread_t *_p_intf,
     selectMapper = new QSignalMapper( this );
     connect( selectMapper, QSIGNALMAPPER_MAPPEDOBJ_SIGNAL, this, &ExtensionDialog::SyncSelection );
 
+    /* Typing is reported to the extension once the keys stop: a search
+     * box that refills a long list would crawl otherwise. */
+    p_debounced_widget = NULL;
+    inputDebounce = new QTimer( this );
+    inputDebounce->setSingleShot( true );
+    inputDebounce->setInterval( 300 );
+    connect( inputDebounce, &QTimer::timeout,
+             this, &ExtensionDialog::NotifyTextChanged );
+
     UpdateWidgets();
 }
 
@@ -228,7 +239,10 @@ QWidget* ExtensionDialog::CreateWidget( extension_widget_t *p_widget )
                 label->setMaximumWidth( p_widget->i_width );
             if( p_widget->i_height > 0 )
                 label->setMaximumHeight( p_widget->i_height );
-            label->setScaledContents( true );
+            /* Kept to its own size and hung from the top of the cells it
+             * covers: stretched to a block of several rows, a poster came
+             * out distorted and drifted away from the text it goes with. */
+            label->setAlignment( Qt::AlignTop | Qt::AlignHCenter );
             p_widget->p_sys_intf = label;
             return label;
 
@@ -248,6 +262,10 @@ QWidget* ExtensionDialog::CreateWidget( extension_widget_t *p_widget )
             /// @note: maybe it would be wiser to use textEdited here?
             connect( textInput, &QLineEdit::textChanged,
                      inputMapper, QOverload<>::of(&QSignalMapper::map) );
+            /* Enter validates the field, like any search box */
+            clickMapper->setMapping( textInput, new WidgetMapper( textInput, p_widget ) );
+            connect( textInput, &QLineEdit::returnPressed,
+                     clickMapper, QOverload<>::of(&QSignalMapper::map) );
             p_widget->p_sys_intf = textInput;
             return textInput;
 
@@ -260,6 +278,10 @@ QWidget* ExtensionDialog::CreateWidget( extension_widget_t *p_widget )
             /// @note: maybe it would be wiser to use textEdited here?
             connect( textInput, &QLineEdit::textChanged,
                      inputMapper, QOverload<>::of(&QSignalMapper::map) );
+            /* Enter validates the field, like any search box */
+            clickMapper->setMapping( textInput, new WidgetMapper( textInput, p_widget ) );
+            connect( textInput, &QLineEdit::returnPressed,
+                     clickMapper, QOverload<>::of(&QSignalMapper::map) );
             p_widget->p_sys_intf = textInput;
             return textInput;
 
@@ -300,14 +322,26 @@ QWidget* ExtensionDialog::CreateWidget( extension_widget_t *p_widget )
                  p_value != NULL;
                  p_value = p_value->p_next )
             {
-                QListWidgetItem *item =
-                    new QListWidgetItem( qfu( p_value->psz_text ) );
+                /* the macOS providers render tab-separated cells as native
+                 * columns; this widget renders them as plain spacing */
+                /* the macOS providers render tab-separated cells as native
+                 * columns and use "\037sortkey" suffixes; this widget shows
+                 * plain text, so drop the keys and space the columns out */
+                QString text = qfu( p_value->psz_text );
+                text.remove( QRegularExpression(
+                    QStringLiteral( "\037[^\t]*" ) ) );
+                text.replace( QLatin1Char( '\t' ), QStringLiteral( "    " ) );
+                QListWidgetItem *item = new QListWidgetItem( text );
                 item->setData( Qt::UserRole, p_value->i_id );
                 list->addItem( item );
             }
             selectMapper->setMapping( list, new WidgetMapper( list, p_widget ) );
             connect( list, &QListWidget::itemSelectionChanged,
                      selectMapper, QOverload<>::of(&QSignalMapper::map) );
+            /* double-click forwards to the optional Lua list callback */
+            clickMapper->setMapping( list, new WidgetMapper( list, p_widget ) );
+            connect( list, &QListWidget::itemDoubleClicked,
+                     clickMapper, QOverload<>::of(&QSignalMapper::map) );
             return list;
 
         case EXTENSION_WIDGET_SPIN_ICON:
@@ -346,6 +380,12 @@ int ExtensionDialog::TriggerClick( QObject *object )
     switch( p_widget->type )
     {
         case EXTENSION_WIDGET_BUTTON:
+        case EXTENSION_WIDGET_LIST:
+        case EXTENSION_WIDGET_TEXT_FIELD:
+        case EXTENSION_WIDGET_PASSWORD:
+            /* for a list this is a double-click, for an entry field the
+             * Enter key; the Lua side only acts when the script registered
+             * a callback for it */
             i_ret = extension_WidgetClicked( p_dialog, p_widget );
             break;
 
@@ -399,7 +439,25 @@ void ExtensionDialog::SyncInput( QObject *object )
     {
         vlc_mutex_unlock( &p_dialog->lock );
         has_lock = false;
+        /* lockedHere means the user typed this; refilling the field from
+         * the extension gets here too and must not bounce back at it. */
+        p_debounced_widget = p_widget;
+        inputDebounce->start();
     }
+}
+
+/**
+ * Typing stopped: hand the change to the extension.
+ **/
+void ExtensionDialog::NotifyTextChanged()
+{
+    if( p_debounced_widget == NULL )
+        return;
+    extension_widget_t *p_widget = p_debounced_widget;
+    p_debounced_widget = NULL;
+    /* unlocked on purpose: this wakes the extension thread, which may
+     * answer with an update this very thread has to run */
+    extension_WidgetSelectionChanged( p_dialog, p_widget );
 }
 
 /**
@@ -469,8 +527,14 @@ void ExtensionDialog::SyncSelection( QObject *object )
 
     if( lockedHere )
     {
+        /* lockedHere means the signal came from the user: repopulating a
+         * list or a drop-down emits it too, and that must not reach the
+         * extension */
         vlc_mutex_unlock( &p_dialog->lock );
         has_lock = false;
+        /* unlocked: the notification wakes the extension thread, which
+         * may answer with an update this thread has to run */
+        extension_WidgetSelectionChanged( p_dialog, p_widget );
     }
 }
 
@@ -539,6 +603,12 @@ void ExtensionDialog::UpdateWidgets()
         }
     }
     FOREACH_END()
+
+    /* The extension may ask for more room than its widgets need (a list of
+     * long URLs is unreadable at its natural width). Only ever grow. */
+    if( p_dialog->i_width > 0 || p_dialog->i_height > 0 )
+        this->resize( qMax( width(), p_dialog->i_width ),
+                      qMax( height(), p_dialog->i_height ) );
 }
 
 QWidget* ExtensionDialog::UpdateWidget( extension_widget_t *p_widget )
@@ -612,6 +682,14 @@ QWidget* ExtensionDialog::UpdateWidget( extension_widget_t *p_widget )
             {
                 if ( comboBox->findText( qfu( p_value->psz_text ) ) < 0 )
                     comboBox->addItem( qfu( p_value->psz_text ), p_value->i_id );
+                /* the script may have chosen an entry other than the
+                 * first one, see set_value */
+                if ( p_value->b_selected )
+                {
+                    int idx = comboBox->findData( p_value->i_id );
+                    if ( idx >= 0 && idx != comboBox->currentIndex() )
+                        comboBox->setCurrentIndex( idx );
+                }
             }
             return comboBox;
 
@@ -622,8 +700,14 @@ QWidget* ExtensionDialog::UpdateWidget( extension_widget_t *p_widget )
                  p_value != NULL;
                  p_value = p_value->p_next )
             {
-                QListWidgetItem *item =
-                        new QListWidgetItem( qfu( p_value->psz_text ) );
+                /* the macOS providers render tab-separated cells as native
+                 * columns and use "\037sortkey" suffixes; this widget shows
+                 * plain text, so drop the keys and space the columns out */
+                QString text = qfu( p_value->psz_text );
+                text.remove( QRegularExpression(
+                    QStringLiteral( "\037[^\t]*" ) ) );
+                text.replace( QLatin1Char( '\t' ), QStringLiteral( "    " ) );
+                QListWidgetItem *item = new QListWidgetItem( text );
                 item->setData( Qt::UserRole, p_value->i_id );
                 list->addItem( item );
             }
@@ -648,6 +732,12 @@ void ExtensionDialog::DestroyWidget( extension_widget_t *p_widget,
                                      bool b_cond )
 {
     assert( p_widget && p_widget->b_kill );
+    /* a debounced text change must not fire at a widget that is gone */
+    if( p_debounced_widget == p_widget )
+    {
+        inputDebounce->stop();
+        p_debounced_widget = NULL;
+    }
     QWidget *widget = static_cast< QWidget* >( p_widget->p_sys_intf );
     delete widget;
     p_widget->p_sys_intf = NULL;

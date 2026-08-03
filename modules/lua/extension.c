@@ -143,6 +143,11 @@ void Close_Extension( vlc_object_t *p_this )
             break;
 
         vlc_mutex_lock( &p_ext->p_sys->command_lock );
+        /* We are quitting: abort any network I/O the extension thread is
+         * blocked in (vlc.stream on a dead host), or vlc_join below never
+         * returns and the whole application hangs on exit. */
+        if( p_ext->p_sys->p_interrupt != NULL )
+            vlc_interrupt_kill( p_ext->p_sys->p_interrupt );
         if( p_ext->p_sys->b_activated == true && p_ext->p_sys->p_progress_id == NULL )
         {
             p_ext->p_sys->b_exiting = true;
@@ -159,8 +164,13 @@ void Close_Extension( vlc_object_t *p_this )
         }
         vlc_mutex_unlock( &p_ext->p_sys->command_lock );
 
-        if( p_ext->p_sys->b_thread_running == true )
+        /* joinable, not running: a thread that already returned still has
+         * to be reaped */
+        if( p_ext->p_sys->b_thread_joinable == true )
+        {
             vlc_join( p_ext->p_sys->thread, NULL );
+            p_ext->p_sys->b_thread_joinable = false;
+        }
 
         /* Clear Lua State */
         if( p_ext->p_sys->L )
@@ -178,6 +188,8 @@ void Close_Extension( vlc_object_t *p_this )
         free( p_ext->psz_version );
         free( p_ext->p_icondata );
 
+        if( p_ext->p_sys->p_interrupt != NULL )
+            vlc_interrupt_destroy( p_ext->p_sys->p_interrupt );
         vlc_mutex_destroy( &p_ext->p_sys->running_lock );
         vlc_mutex_destroy( &p_ext->p_sys->command_lock );
         vlc_cond_destroy( &p_ext->p_sys->wait );
@@ -335,6 +347,10 @@ int ScanLuaCallback( vlc_object_t *p_this, const char *psz_filename,
     vlc_mutex_init( &p_ext->p_sys->command_lock );
     vlc_mutex_init( &p_ext->p_sys->running_lock );
     vlc_cond_init( &p_ext->p_sys->wait );
+
+    /* Interruption context, so that shutdown can abort blocking I/O.
+     * NULL on failure is tolerated everywhere it is used. */
+    p_ext->p_sys->p_interrupt = vlc_interrupt_create();
 
     /* Prepare Lua state */
     lua_State *L = luaL_newstate();
@@ -688,6 +704,43 @@ int lua_ExtensionDeactivate( extensions_manager_t *p_mgr, extension_t *p_ext )
     return i_ret;
 }
 
+/**
+ * Runs the Lua function a widget registered for an interaction.
+ * A button stores its function directly under the widget pointer; widgets
+ * with several interactions (a list has both an activation and a selection
+ * callback) store a table of named functions instead. Doing nothing is a
+ * valid outcome: scripts only register what they care about.
+ */
+static int WidgetCallback( extensions_manager_t *p_mgr, extension_t *p_ext,
+                           extension_widget_t *p_widget, const char *psz_field )
+{
+    lua_State *L = GetLuaState( p_mgr, p_ext );
+    if( !L )
+        return VLC_SUCCESS;
+
+    lua_pushlightuserdata( L, p_widget );
+    lua_gettable( L, LUA_REGISTRYINDEX );
+
+    if( lua_istable( L, -1 ) )
+    {
+        lua_getfield( L, -1, psz_field );
+        lua_remove( L, -2 ); /* drop the table, keep the function */
+    }
+    else if( strcmp( psz_field, "click" ) != 0 )
+    {   /* a bare function is a click handler, nothing else */
+        lua_pop( L, 1 );
+        return VLC_SUCCESS;
+    }
+
+    if( !lua_isfunction( L, -1 ) )
+    {
+        lua_pop( L, 1 );
+        return VLC_SUCCESS;
+    }
+
+    return lua_ExecuteFunction( p_mgr, p_ext, NULL, LUA_END );
+}
+
 int lua_ExtensionWidgetClick( extensions_manager_t *p_mgr,
                               extension_t *p_ext,
                               extension_widget_t *p_widget )
@@ -695,10 +748,17 @@ int lua_ExtensionWidgetClick( extensions_manager_t *p_mgr,
     if( !p_ext->p_sys->L )
         return VLC_SUCCESS;
 
-    lua_State *L = GetLuaState( p_mgr, p_ext );
-    lua_pushlightuserdata( L, p_widget );
-    lua_gettable( L, LUA_REGISTRYINDEX );
-    return lua_ExecuteFunction( p_mgr, p_ext, NULL, LUA_END );
+    return WidgetCallback( p_mgr, p_ext, p_widget, "click" );
+}
+
+int lua_ExtensionWidgetSelect( extensions_manager_t *p_mgr,
+                               extension_t *p_ext,
+                               extension_widget_t *p_widget )
+{
+    if( !p_ext->p_sys->L )
+        return VLC_SUCCESS;
+
+    return WidgetCallback( p_mgr, p_ext, p_widget, "select" );
 }
 
 
@@ -835,6 +895,7 @@ static lua_State* GetLuaState( extensions_manager_t *p_mgr,
         luaopen_config( L );
         luaopen_dialog( L, p_ext );
         luaopen_input( L );
+        luaopen_misc_info( L );
         luaopen_msg( L );
         if( vlclua_fd_init( L, &p_ext->p_sys->dtable ) )
         {
@@ -851,6 +912,9 @@ static lua_State* GetLuaState( extensions_manager_t *p_mgr,
         luaopen_video( L );
         luaopen_vlm( L );
         luaopen_volume( L );
+        luaopen_clipboard( L );
+        luaopen_http( L );
+        luaopen_keystore( L );
         luaopen_xml( L );
         luaopen_vlcio( L );
         luaopen_errno( L );
@@ -1141,6 +1205,12 @@ static int vlclua_extension_dialog_callback( vlc_object_t *p_this,
         case EXTENSION_EVENT_CLICK:
             assert( p_widget != NULL );
             PushCommandUnique( p_ext, CMD_CLICK, p_widget );
+            break;
+        case EXTENSION_EVENT_SELECTION_CHANGED:
+            assert( p_widget != NULL );
+            /* Unique: dragging over a list must not queue one command per
+             * row the selection passed through. */
+            PushCommandUnique( p_ext, CMD_SELECT, p_widget );
             break;
         case EXTENSION_EVENT_CLOSE:
             PushCommandUnique( p_ext, CMD_CLOSE );

@@ -188,7 +188,7 @@ typedef enum
 {
     EXTENSION_EVENT_CLICK,       ///< Click on a widget: data = widget
     EXTENSION_EVENT_CLOSE,       ///< Close the dialog: no data
-    // EXTENSION_EVENT_SELECTION_CHANGED,
+    EXTENSION_EVENT_SELECTION_CHANGED, ///< List selection: data = widget
     // EXTENSION_EVENT_TEXT_CHANGED,
 } extension_dialog_event_e;
 
@@ -251,6 +251,15 @@ static inline int extension_DialogCommand( extension_dialog_t* p_dialog,
  **/
 #define extension_WidgetClicked( dlg, wdg ) \
         extension_DialogCommand( dlg, EXTENSION_EVENT_CLICK, wdg )
+
+/** Forward a change of selection in a list widget
+ * @param dlg The dialog
+ * @param wdg The list widget
+ * @note Only send this for a selection the user made: interfaces repopulate
+ * lists while updating widgets, and that must not reach the extension.
+ **/
+#define extension_WidgetSelectionChanged( dlg, wdg ) \
+        extension_DialogCommand( dlg, EXTENSION_EVENT_SELECTION_CHANGED, wdg )
 
 /// Widget types
 typedef enum

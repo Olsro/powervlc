@@ -1597,12 +1597,20 @@ msgstr "Saitynas"
 msgid "Mouse Gestures"
 msgstr "Pelės gestai"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc paleidžiamas su numatytąja sąsaja. Naudokite «cpowervlc», kad "
+"paleistumėte powervlc be sąsajos."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"powervlc paleidžiamas su numatytąja sąsaja. Naudokite «-I dummy», kad "
 "paleistumėte powervlc be sąsajos."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -30200,20 +30208,6 @@ msgid ""
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "VLC versija %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "VLC paleidžiama naudojant numatytąją sąsają. Norėdami naudoti leistuvę be "
-#~ "sąsajos, naudokite „cvlc“."
-
-#~ msgid "Missing AACS configuration file!"
-#~ msgstr "Trūksta AACS konfigūracijos failo!"
-
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
 msgstr ""
@@ -30241,3 +30235,17 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "VLC versija %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "VLC paleidžiama naudojant numatytąją sąsają. Norėdami naudoti leistuvę be "
+#~ "sąsajos, naudokite „cvlc“."
+
+#~ msgid "Missing AACS configuration file!"
+#~ msgstr "Trūksta AACS konfigūracijos failo!"

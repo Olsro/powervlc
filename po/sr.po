@@ -1555,12 +1555,20 @@ msgstr "Веб"
 msgid "Mouse Gestures"
 msgstr "Покрети мишем"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Покретање powervlc са подразумеваним сучељем. Користите «cpowervlc» за "
+"покретање powervlc без сучеља."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"Покретање powervlc са подразумеваним сучељем. Користите «-I dummy» за "
 "покретање powervlc без сучеља."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -30175,17 +30183,6 @@ msgid ""
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "VLC верзија %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "VLC је покренут са подразумеваним интерфејсом. Команда „cvlc“ отвара VLC "
-#~ "без интерфејса."
-
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
 msgstr ""
@@ -30213,3 +30210,14 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "VLC верзија %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "VLC је покренут са подразумеваним интерфејсом. Команда „cvlc“ отвара VLC "
+#~ "без интерфејса."

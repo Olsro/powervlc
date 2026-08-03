@@ -207,6 +207,10 @@ int main(int i_argc, const char *ppsz_argv[])
 #endif
 
     setlocale(LC_ALL, "");
+    /* Keep the C numeric locale: with LANG=fr_FR (e.g. launched from a
+     * localised terminal), strtod() stops reading "0.0" and every Lua
+     * script parsing JSON numbers fails with "no valid JSON". */
+    setlocale(LC_NUMERIC, "C");
 
     if (isatty(STDERR_FILENO))
         /* This message clutters error logs. It is printed only on a TTY.

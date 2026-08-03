@@ -1571,12 +1571,20 @@ msgstr "បណ្ដាញ"
 msgid "Mouse Gestures"
 msgstr "កាយវិការ​កណ្ដុរ"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "កំពុងដំណើរការ powervlc ជាមួយចំណុចប្រទាក់លំនាំដើម។ ប្រើ «cpowervlc» ដើម្បីដំណើរការ powervlc "
+"ដោយគ្មានចំណុចប្រទាក់។"
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"កំពុងដំណើរការ powervlc ជាមួយចំណុចប្រទាក់លំនាំដើម។ ប្រើ «-I dummy» ដើម្បីដំណើរការ powervlc "
 "ដោយគ្មានចំណុចប្រទាក់។"
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...

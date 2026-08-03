@@ -1532,9 +1532,15 @@ msgstr "ဝက်ဘ်"
 msgid "Mouse Gestures"
 msgstr "မောက်စ် အမူအရာ"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
+"without interface."
+msgstr ""
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
 "without interface."
 msgstr ""
 
@@ -29589,15 +29595,6 @@ msgid ""
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "VLC ဗားရှင်း %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr "မူလ သွင်ပြင် ဖြင့် VLC ကို မောင်းနှင်ခြင်း။  VLC ကို သွင်ပြင် မရှိပဲ သုံးရန် 'cvlc' ကိုသုံးပါ။"
-
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
 msgstr ""
@@ -29625,3 +29622,12 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "VLC ဗားရှင်း %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr "မူလ သွင်ပြင် ဖြင့် VLC ကို မောင်းနှင်ခြင်း။  VLC ကို သွင်ပြင် မရှိပဲ သုံးရန် 'cvlc' ကိုသုံးပါ။"

@@ -219,9 +219,18 @@ int libvlc_InternalAddIntf(libvlc_int_t *libvlc, const char *name)
                 free(pidfile);
             else
 #endif
+#ifdef __APPLE__
+                /* The cpowervlc/rpowervlc aliases are shell scripts installed
+                 * in $bindir by "make install"; the .app bundle only ships
+                 * Contents/MacOS/PowerVLC, so point at the option instead. */
+                msg_Info(libvlc, _("Running powervlc with the default "
+                         "interface. Use '-I dummy' to use powervlc without "
+                         "interface."));
+#else
                 msg_Info(libvlc, _("Running powervlc with the default "
                          "interface. Use 'cpowervlc' to use powervlc without "
                          "interface."));
+#endif
         }
         ret = intf_Create(playlist, intf);
         free(intf);

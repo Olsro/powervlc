@@ -1481,12 +1481,20 @@ msgstr ""
 msgid "Mouse Gestures"
 msgstr ""
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Стартување на powervlc со стандардниот интерфејс. Користете «cpowervlc» за "
+"да го користите powervlc без интерфејс."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"Стартување на powervlc со стандардниот интерфејс. Користете «-I dummy» за "
 "да го користите powervlc без интерфејс."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...

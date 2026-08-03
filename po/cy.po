@@ -1554,12 +1554,20 @@ msgstr "Y we"
 msgid "Mouse Gestures"
 msgstr "Ystumiau Llygoden"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Yn rhedeg powervlc gyda'r rhyngwyneb rhagosodedig. Defnyddiwch «cpowervlc» i "
+"redeg powervlc heb ryngwyneb."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"Yn rhedeg powervlc gyda'r rhyngwyneb rhagosodedig. Defnyddiwch «-I dummy» i "
 "redeg powervlc heb ryngwyneb."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...

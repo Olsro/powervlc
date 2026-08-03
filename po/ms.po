@@ -1592,12 +1592,20 @@ msgstr "Sesawang"
 msgid "Mouse Gestures"
 msgstr "Gerak Isyarat Tetikus"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Menjalankan powervlc dengan antara muka lalai. Gunakan «cpowervlc» untuk "
+"menjalankan powervlc tanpa antara muka."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"Menjalankan powervlc dengan antara muka lalai. Gunakan «-I dummy» untuk "
 "menjalankan powervlc tanpa antara muka."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -31379,27 +31387,6 @@ msgid ""
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "VLC versi %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "Menjalankan vlc dengan antara muka lalai. Guna 'cvlc' untuk guna vlc "
-#~ "tanpa antara muka."
-
-#~ msgid ""
-#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
-#~ "not have it."
-#~ msgstr ""
-#~ "Cakera Blu-ray ini perlukan pustaka untuk penyahkodan AACS, dan sistem "
-#~ "anda tidak mempunyainya."
-
-#~ msgid "Missing AACS configuration file!"
-#~ msgstr "Fail konfigurasi AACS hilang!"
-
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
 msgstr ""
@@ -31427,3 +31414,24 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "VLC versi %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "Menjalankan vlc dengan antara muka lalai. Guna 'cvlc' untuk guna vlc "
+#~ "tanpa antara muka."
+
+#~ msgid ""
+#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
+#~ "not have it."
+#~ msgstr ""
+#~ "Cakera Blu-ray ini perlukan pustaka untuk penyahkodan AACS, dan sistem "
+#~ "anda tidak mempunyainya."
+
+#~ msgid "Missing AACS configuration file!"
+#~ msgstr "Fail konfigurasi AACS hilang!"

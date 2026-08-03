@@ -1609,12 +1609,20 @@ msgstr "Splet"
 msgid "Mouse Gestures"
 msgstr "Kretnje z miško"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Zaganjanje powervlc s privzetim vmesnikom. Uporabite «cpowervlc» za zagon "
+"powervlc brez vmesnika."
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
+"without interface."
+msgstr ""
+"Zaganjanje powervlc s privzetim vmesnikom. Uporabite «-I dummy» za zagon "
 "powervlc brez vmesnika."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -31450,27 +31458,6 @@ msgid ""
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "Različica VLC %s (%s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "Zagon predvajalnika s privzetim vmesnikom. Uporabite »cvlc« za zagon brez "
-#~ "vmesnika."
-
-#~ msgid ""
-#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
-#~ "not have it."
-#~ msgstr ""
-#~ "Ta disk Blu-ray za odkodiranje AACS potrebuje knjižnico, ki ni nameščena "
-#~ "na vašem sistemu."
-
-#~ msgid "Missing AACS configuration file!"
-#~ msgstr "Nastavitvena datoteka AACS manjka!"
-
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
 msgstr ""
@@ -31498,3 +31485,24 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "Različica VLC %s (%s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "Zagon predvajalnika s privzetim vmesnikom. Uporabite »cvlc« za zagon brez "
+#~ "vmesnika."
+
+#~ msgid ""
+#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
+#~ "not have it."
+#~ msgstr ""
+#~ "Ta disk Blu-ray za odkodiranje AACS potrebuje knjižnico, ki ni nameščena "
+#~ "na vašem sistemu."
+
+#~ msgid "Missing AACS configuration file!"
+#~ msgstr "Nastavitvena datoteka AACS manjka!"

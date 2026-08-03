@@ -139,15 +139,26 @@ pvlc_reclaim() {  # pvlc_reclaim <name of the target being built>
 # The raw .exe / .AppImage is KEPT alongside the zip -- that is the file you
 # run locally; the zip is the one you hand out.
 #
+# Only what THIS run produced goes in: out/ keeps every artifact ever built,
+# so a plain "*win64*.exe" glob also swept up the installers of previous
+# versions and shipped all of them in a single zip. The caller lays down a
+# stamp file just before the build; anything not newer than it belongs to
+# another version and stays out.
+#
 # Never fatal: a missing zip binary or an unexpected artifact name must not
 # throw away a build that can take hours under emulation.
-package_zip() { # package_zip <label> <glob relative to $OUT>
+package_zip() { # package_zip <label> <glob relative to $OUT> <stamp file>
   ( cd "$OUT"
     if ! command -v zip >/dev/null 2>&1; then
       echo "WARN: 'zip' not found; skipping the $1 archive" >&2
       exit 0
     fi
-    files=$(ls $2 2>/dev/null || true)
+    if [ -n "${3:-}" ] && [ -e "$3" ]; then
+      files=$(find . -maxdepth 1 -name "$2" -newer "$3" 2>/dev/null \
+              | sed 's|^\./||')
+    else
+      files=$(ls $2 2>/dev/null || true)
+    fi
     if [ -z "$files" ]; then
       echo "WARN: nothing matching '$2'; no $1 archive made" >&2
       exit 0
@@ -160,6 +171,8 @@ package_zip() { # package_zip <label> <glob relative to $OUT>
 
 build_windows() { # build_windows <arch-flags> <name-glob>
   WORK_VOL="powervlc-build-windows"
+  # marks the artifacts of this run, see package_zip
+  STAMP=$(mktemp)
   # Only (re)build the image when it does not exist yet: the docker build
   # is not reproducible offline (bionic-era apt repositories move), and a
   # pruned build cache would otherwise force a full re-run of it.
@@ -196,12 +209,15 @@ build_windows() { # build_windows <arch-flags> <name-glob>
      found=\$(find /work -maxdepth 2 -name 'PowerVLC-*-$2*.exe' -o -maxdepth 2 -name 'vlc-*-$2*.exe' | head -20)
      [ -n \"\$found\" ] || { echo 'ERROR: no $2 installer produced'; exit 1; }
      for f in \$found; do cp -v \"\$f\" /out/; done"
-  package_zip "$2" "*$2*.exe"
+  package_zip "$2" "*$2*.exe" "$STAMP"
+  rm -f "$STAMP"
 }
 
 build_linux_appimage() { # build_linux_appimage <platform> <base-image> <appimage-arch>
   arch_tag="$(echo "$1" | tr '/' '-')"
   WORK_VOL="powervlc-build-$arch_tag"
+  # marks the artifacts of this run, see package_zip
+  STAMP=$(mktemp)
   # See build_windows: reuse the existing image rather than re-running an
   # apt-get against end-of-life repositories.
   docker image inspect "powervlc-linux-$arch_tag" >/dev/null 2>&1 || \
@@ -239,7 +255,8 @@ build_linux_appimage() { # build_linux_appimage <platform> <base-image> <appimag
      VERSION=\"\$PVLC_VER\" BUILDDIR=/work WORKDIR=/work \
        extras/package/appimage/build-appimage.sh
      cp -v /work/PowerVLC-*.AppImage /out/"
-  package_zip "linux-$3" "PowerVLC-*-$3.AppImage"
+  package_zip "linux-$3" "PowerVLC-*-$3.AppImage" "$STAMP"
+  rm -f "$STAMP"
 }
 
 [ "$#" -ge 1 ] || { grep '^#   ' "$0" | sed 's/^#  //'; exit 1; }

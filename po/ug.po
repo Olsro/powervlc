@@ -1577,9 +1577,15 @@ msgstr "تور"
 msgid "Mouse Gestures"
 msgstr "مائۇس قول ئىشارىسى"
 
-#: src/interface/interface.c:222
+#: src/interface/interface.c:230
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
+"without interface."
+msgstr ""
+
+#: src/interface/interface.c:226
+msgid ""
+"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
 "without interface."
 msgstr ""
 
@@ -31337,26 +31343,6 @@ msgid ""
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#, c-format
-#~ msgid "VLC version %s (%s)\n"
-#~ msgstr "VLC نەشرى% s (% s)\n"
-
-#~ msgid ""
-#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
-#~ "interface."
-#~ msgstr ""
-#~ "سۈكۈتتىكى كۆرۈنمە يۈزى بىلەن vlc نى ئىجرا قىلىش. كۆرۈنمە يۈزى يوق vlc نى "
-#~ "ئىشلىتىش ئۈچۈن 'cvlc' نى ئىشلىتىڭ."
-
-#~ msgid ""
-#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
-#~ "not have it."
-#~ msgstr ""
-#~ "بۇ كۆك نۇر دېسكىسى AACS يېشىش ئۈچۈن كۈتۈپخانىغا موھتاج ، سىستېمىڭىزدا يوق."
-
-#~ msgid "Missing AACS configuration file!"
-#~ msgstr "يوقاپ كەتكەن AACS سەپلىمە ھۆججىتى!"
-
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "Installing %@..."
 msgstr ""
@@ -31384,3 +31370,23 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
+
+#, c-format
+#~ msgid "VLC version %s (%s)\n"
+#~ msgstr "VLC نەشرى% s (% s)\n"
+
+#~ msgid ""
+#~ "Running vlc with the default interface. Use 'cvlc' to use vlc without "
+#~ "interface."
+#~ msgstr ""
+#~ "سۈكۈتتىكى كۆرۈنمە يۈزى بىلەن vlc نى ئىجرا قىلىش. كۆرۈنمە يۈزى يوق vlc نى "
+#~ "ئىشلىتىش ئۈچۈن 'cvlc' نى ئىشلىتىڭ."
+
+#~ msgid ""
+#~ "This Blu-ray Disc needs a library for AACS decoding, and your system does "
+#~ "not have it."
+#~ msgstr ""
+#~ "بۇ كۆك نۇر دېسكىسى AACS يېشىش ئۈچۈن كۈتۈپخانىغا موھتاج ، سىستېمىڭىزدا يوق."
+
+#~ msgid "Missing AACS configuration file!"
+#~ msgstr "يوقاپ كەتكەن AACS سەپلىمە ھۆججىتى!"
