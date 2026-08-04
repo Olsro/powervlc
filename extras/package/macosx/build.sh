@@ -184,7 +184,21 @@ case $ARCH in
         case $ARCH in
             g4)  LEGACY_VLC_CPUFLAGS="-mcpu=7400 -mtune=7400 -maltivec -mabi=altivec" ;;
             g4e) LEGACY_VLC_CPUFLAGS="-mcpu=7450 -mtune=7450 -maltivec -mabi=altivec" ;;
-            g5)  LEGACY_VLC_CPUFLAGS="-mcpu=970 -mtune=970 -maltivec -mabi=altivec" ;;
+            # -mno-powerpc64 is NOT optional. Unlike -mcpu=7400/7450,
+            # GCC's -mcpu=970 turns on -mpowerpc64, which lets it emit
+            # 64-bit GPR instructions (std/ld/rldicl/sldi/srdi) inside a
+            # 32-bit binary -- and Mac OS X does not preserve the upper
+            # halves of the GPRs across context switches for a 32-bit
+            # task, so any value living in one is corrupted at the first
+            # preemption. Apple's own GCC never enabled this for -m32.
+            # PowerVLC 1.1.0 shipped without it and the G5 slice died at
+            # startup on a PowerMac7,2 (EXC_BAD_ACCESS at 0x0 in
+            # var_Inherit, called from AllocateAllPlugins) while the G3,
+            # G4 and G4e slices ran fine on the same machine -- and the
+            # universal build died too, since a G5 grades the ppc970
+            # subtype highest and picks exactly that slice.
+            # -mtune=970 (scheduling) and -mmfcrf are unaffected.
+            g5)  LEGACY_VLC_CPUFLAGS="-mcpu=970 -mtune=970 -mno-powerpc64 -maltivec -mabi=altivec" ;;
         esac
         ;;
     i686)
