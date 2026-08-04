@@ -13,6 +13,11 @@
 #   win32                 PowerVLC-<ver>-win32.exe    (mingw-w64 GCC, msvcrt, XP floor)
 #   win64                 PowerVLC-<ver>-win64.exe    (mingw-w64 GCC, msvcrt, Vista floor)
 #   winarm64              PowerVLC-<ver>-winarm64.exe (llvm-mingw, ucrt, Win10 floor)
+#
+# Every Windows target ships TWO archives, from one and the same build:
+#   powervlc-<ver>-<arch>-nsis.zip      the NSIS installer, zipped
+#   powervlc-<ver>-<arch>-portable.zip  the app tree, settings kept next to
+#                                       powervlc.exe (see package.mak)
 #   linux-arm64-appimage  PowerVLC-<ver>-aarch64.AppImage   (native on arm64 host: fast)
 #   linux-amd64-appimage  PowerVLC-<ver>-x86_64.AppImage    (emulated on arm64 host: slow)
 #   linux-i386-appimage   PowerVLC-<ver>-i386.AppImage      (emulated, legacy)
@@ -134,8 +139,11 @@ pvlc_reclaim() {  # pvlc_reclaim <name of the target being built>
 '
 
 # Zip what a target just produced, mirroring the macOS convention: section 4 of
-# BUILD-POWERVLC.md ships every bundle as powervlc-<version>-<target>.zip, so
+# BUILD-POWERVLC.md ships every bundle as powervlc-<version>-<label>.zip, so
 # the Windows installers and the Linux AppImages are archived the same way.
+# The Windows callers pass '<arch>-nsis' as the label, since a Windows target
+# now also produces a '<arch>-portable' archive (which needs no wrapping and
+# does not go through here).
 # The raw .exe / .AppImage is KEPT alongside the zip -- that is the file you
 # run locally; the zip is the one you hand out.
 #
@@ -208,8 +216,21 @@ build_windows() { # build_windows <arch-flags> <name-glob>
      extras/package/win32/build.sh $1 -r -l -i r
      found=\$(find /work -maxdepth 2 -name 'PowerVLC-*-$2*.exe' -o -maxdepth 2 -name 'vlc-*-$2*.exe' | head -20)
      [ -n \"\$found\" ] || { echo 'ERROR: no $2 installer produced'; exit 1; }
-     for f in \$found; do cp -v \"\$f\" /out/; done"
-  package_zip "$2" "*$2*.exe" "$STAMP"
+     for f in \$found; do cp -v \"\$f\" /out/; done
+     # The portable archive (package-win32-portable-zip) is already the final
+     # deliverable -- a zip of the app tree with the 'portable' marker folder in
+     # it -- so it is copied out under its release name directly rather than
+     # being wrapped in a second zip like the installer is. Renaming here and
+     # not in the Makefile keeps the case fold from biting: /out lives on the
+     # host, and on macOS 'PowerVLC-....zip' and 'powervlc-....zip' are the
+     # same file.
+     port=\$(find /work -maxdepth 2 -name 'PowerVLC-*-$2-portable.zip' | head -1)
+     [ -n \"\$port\" ] || { echo 'ERROR: no $2 portable archive produced'; exit 1; }
+     cp -v \"\$port\" \"/out/powervlc-\$PVLC_VER-$2-portable.zip\""
+  # '-nsis': what this zip holds is the installer, and it now has a portable
+  # sibling to be told apart from. The plain 'powervlc-<ver>-<arch>.zip' of
+  # earlier releases was this same file under an ambiguous name.
+  package_zip "$2-nsis" "*$2*.exe" "$STAMP"
   rm -f "$STAMP"
 }
 

@@ -100,6 +100,8 @@
     NSArray *columnWeights;      /* natural width of each column's content */
     BOOL layingOut;
     NSTimeInterval filledAt;     /* when the list last got its content */
+    NSArray *promisedNames;      /* file names promised by the drag under way */
+    NSArray *promisedIds;        /* value ids of the rows being dragged */
 }
 - (BOOL)programmaticSelection;
 - (void)setProgrammaticSelection:(BOOL)flag;
@@ -120,6 +122,16 @@
 - (void)scrollToTopOfList;
 - (BOOL)sortAscending;
 - (void)resetSort;
+@end
+
+/* Carries its widget like the other controls do, so the layout can ask
+ * where the picture should sit in the rows it covers. */
+@interface VLCLegacyDialogImageView : NSImageView
+{
+    extension_widget_t *widget;
+}
+- (extension_widget_t *)widget;
+- (void)setWidget:(extension_widget_t *)aWidget;
 @end
 
 @interface VLCLegacyDialogWindow : NSWindow
@@ -146,6 +158,10 @@ VLC_LEGACY_WIDGET_ACCESSORS
 VLC_LEGACY_WIDGET_ACCESSORS
 @end
 
+@implementation VLCLegacyDialogImageView
+VLC_LEGACY_WIDGET_ACCESSORS
+@end
+
 @implementation VLCLegacyDialogWindow
 - (extension_dialog_t *)dialog { return dialog; }
 - (void)setDialog:(extension_dialog_t *)aDialog { dialog = aDialog; }
@@ -167,6 +183,17 @@ static NSString *VLCLegacyCell(id row, NSString *key, int column)
     return [cells objectAtIndex:column];
 }
 
+/* The order the rest of the system sorts names in -- the Finder's, with
+ * accents and case where the reader expects them rather than where their
+ * code points fall ("Éric" next to "Eric", not after "Zoe"). Pre-10.6
+ * systems have no such comparison and keep the plain one. */
+static NSComparisonResult VLCLegacyCompareLabels(NSString *a, NSString *b)
+{
+    if ([a respondsToSelector:@selector(localizedStandardCompare:)])
+        return [a localizedStandardCompare:b];
+    return [a compare:b options:NSCaseInsensitiveSearch | NSNumericSearch];
+}
+
 static NSInteger VLCLegacyCompareRows(id a, id b, void *opaque)
 {
     struct VLCLegacySortCtx *ctx = (struct VLCLegacySortCtx *)opaque;
@@ -183,9 +210,8 @@ static NSInteger VLCLegacyCompareRows(id a, id b, void *opaque)
         else
             result = [keyA compare:keyB options:NSNumericSearch];
     } else {
-        result = [VLCLegacyCell(a, @"cells", ctx->column)
-                     compare:VLCLegacyCell(b, @"cells", ctx->column)
-                     options:NSCaseInsensitiveSearch | NSNumericSearch];
+        result = VLCLegacyCompareLabels(VLCLegacyCell(a, @"cells", ctx->column),
+                                        VLCLegacyCell(b, @"cells", ctx->column));
     }
     if (!ctx->ascending) {
         if (result == NSOrderedAscending)
@@ -265,8 +291,13 @@ VLC_LEGACY_WIDGET_ACCESSORS
 {
     [contentArray release];
     [columnWeights release];
+    [promisedNames release];
+    [promisedIds release];
     [super dealloc];
 }
+
+/* How many rows are measured to decide the column widths, at most. */
+#define VLC_LEGACY_WIDTH_SAMPLE 300
 
 /* The natural width of a column is that of its widest value, header
  * included. Columns then share the visible width in that proportion. */
@@ -282,6 +313,14 @@ VLC_LEGACY_WIDGET_ACCESSORS
     NSDictionary *attributes =
         [NSDictionary dictionaryWithObject:font forKey:NSFontAttributeName];
 
+    /* Measuring every cell of a listing of several thousand rows is a
+     * text layout per cell, redone on every refill -- with a search box
+     * that refills as the user types, that is the whole cost of the
+     * list on a slow machine. A spread-out sample gives the same
+     * column widths in practice for a fraction of the work. */
+    unsigned rowCount = (unsigned)[contentArray count];
+    unsigned stride = (rowCount / VLC_LEGACY_WIDTH_SAMPLE) + 1;
+
     NSMutableArray *weights = [NSMutableArray array];
     unsigned i, n;
     for (i = 0; i < [columns count]; i++) {
@@ -291,7 +330,7 @@ VLC_LEGACY_WIDGET_ACCESSORS
                 [[[columns objectAtIndex:i] headerCell] stringValue];
             widest = [title sizeWithAttributes:attributes].width;
         }
-        for (n = 0; n < [contentArray count]; n++) {
+        for (n = 0; n < rowCount; n += stride) {
             NSDictionary *row = [contentArray objectAtIndex:n];
             NSArray *cells = [row objectForKey:@"cells"];
             NSString *text = (i < [cells count])
@@ -334,22 +373,61 @@ VLC_LEGACY_WIDGET_ACCESSORS
     if (total <= 0)
         return;
 
+    /* Start from what each column actually needs. */
+    float want[64];
+    unsigned count = (unsigned)[columns count];
+    if (count > 64)
+        count = 64;
+    for (i = 0; i < count; i++)
+        want[i] = [[columnWeights objectAtIndex:i] floatValue];
+
+    if (total <= available) {
+        /* everything fits: give each column what it needs and hand the
+         * slack to the longest one, rather than padding them all */
+        want[widest] += (float)(available - total);
+    } else {
+        /* It does not fit, so something has to give -- and it should be
+         * the longest column, not all of them equally. Shaving every
+         * column in proportion truncated a date or a count (which need
+         * a fixed, small width to mean anything) so that a column of
+         * long titles could stay huge; those titles are read from their
+         * beginning anyway. The shortfall is taken off the longest
+         * column down to the next longest, then off both, and so on. */
+        double deficit = total - available;
+        unsigned guard;
+        for (guard = 0; deficit > 0.5 && guard < 500; guard++) {
+            unsigned iw = 0;
+            float w1 = -1.f, w2 = -1.f;
+            for (i = 0; i < count; i++) {
+                if (want[i] > w1) { w2 = w1; w1 = want[i]; iw = i; }
+                else if (want[i] > w2) { w2 = want[i]; }
+            }
+            float target = (w2 > 48.f) ? w2 : 48.f;
+            if (w1 <= target + 0.5f) {
+                /* every column is down to the same width: from here on
+                 * they can only shrink together */
+                float each = (float)(deficit / count);
+                for (i = 0; i < count; i++) {
+                    want[i] -= each;
+                    if (want[i] < 48.f)
+                        want[i] = 48.f;
+                }
+                break;
+            }
+            float take = (float)deficit;
+            if (take > w1 - target)
+                take = w1 - target;
+            want[iw] -= take;
+            deficit -= take;
+        }
+    }
+
     layingOut = YES;
     float used = 0.f;
-    for (i = 0; i < [columns count]; i++) {
-        float width;
-        if (total <= available) {
-            /* everything fits: give each column what it needs and hand the
-             * slack to the longest one, rather than padding them all */
-            width = [[columnWeights objectAtIndex:i] floatValue];
-            if (i == widest)
-                width += (float)(available - total);
-        } else if (i + 1 == [columns count]) {
+    for (i = 0; i < count; i++) {
+        float width = want[i];
+        if (i + 1 == count && total > available)
             width = available - used;   /* no rounding crumbs on the right */
-        } else {
-            width = (float)floor(available
-                * [[columnWeights objectAtIndex:i] floatValue] / total);
-        }
         if (width < 48.f)
             width = 48.f;
         [[columns objectAtIndex:i] setWidth:width];
@@ -431,6 +509,160 @@ VLC_LEGACY_WIDGET_ACCESSORS
     [self reloadData];
 }
 
+/* Right-click: the context menu the extension attached with set_menu.
+ * The labels belong to the extension thread: copied under the dialog
+ * lock, and nothing else happens while it is held. */
+- (NSMenu *)menuForEvent:(NSEvent *)event
+{
+    if (!widget)
+        return nil;
+    NSInteger row = [self rowAtPoint:[self convertPoint:[event locationInWindow]
+                                               fromView:nil]];
+    if (row < 0)
+        return nil;
+
+    NSMutableArray *labels = [NSMutableArray array];
+    vlc_mutex_lock(&widget->p_dialog->lock);
+    int i;
+    for (i = 0; i < widget->i_menu; i++) {
+        NSString *label = widget->pp_menu[i]
+            ? [NSString stringWithUTF8String:widget->pp_menu[i]] : nil;
+        [labels addObject:label ? label : @""];
+    }
+    vlc_mutex_unlock(&widget->p_dialog->lock);
+    if ([labels count] == 0)
+        return nil;
+
+    /* the menu acts on the row under the pointer: make it the selection
+     * the extension will read. A user action, so the selection event
+     * does go through -- the script's state follows the highlight. */
+    if (![self isRowSelected:row])
+        [self selectRow:row byExtendingSelection:NO];
+
+    NSMenu *menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
+    unsigned n;
+    for (n = 0; n < [labels count]; n++) {
+        NSMenuItem *item = [menu addItemWithTitle:[labels objectAtIndex:n]
+                                           action:@selector(contextMenuAction:)
+                                    keyEquivalent:@""];
+        [item setTarget:self];
+        [item setTag:(NSInteger)n + 1];   /* 1-based, like the Lua side */
+    }
+    return menu;
+}
+
+- (void)contextMenuAction:(id)sender
+{
+    if (!widget)
+        return;
+    widget->i_menu_choice = (int)[(NSMenuItem *)sender tag];
+    vlc_mutex_lock(&widget->p_dialog->lock);
+    extension_WidgetMenuSelected(widget->p_dialog, widget);
+    vlc_mutex_unlock(&widget->p_dialog->lock);
+}
+
+/* Drag-out: rows whose value carries a drag name are promised to the
+ * drop target as files of that name; the extension is then told where
+ * they were dropped and creates them there. Both data-source methods:
+ * AppKit prefers the indexed one from 10.4 on and only falls back to
+ * the row-array one before that. */
+- (BOOL)writeRowsCommon:(NSArray *)rowNumbers toPasteboard:(NSPasteboard *)pboard
+{
+    if (!widget || !widget->b_can_drag)
+        return NO;
+
+    /* A double-click that wobbles by a couple of pixels is still a
+     * double-click: refusing the drag here lets it through to the
+     * double action. Without this, opening a track by double-clicking
+     * it could start a file promise instead, and land a download in
+     * whatever folder the pointer happened to be over. */
+    NSEvent *event = [NSApp currentEvent];
+    if (event && [event clickCount] >= 2)
+        return NO;
+
+    NSMutableArray *names = [NSMutableArray array];
+    NSMutableArray *ids = [NSMutableArray array];
+    NSMutableArray *types = [NSMutableArray array];
+    unsigned i;
+    for (i = 0; i < [rowNumbers count]; i++) {
+        unsigned row = [[rowNumbers objectAtIndex:i] unsignedIntValue];
+        if (row >= [contentArray count])
+            continue;
+        NSDictionary *entry = [contentArray objectAtIndex:row];
+        NSString *name = [entry objectForKey:@"dragname"];
+        if ([name length] == 0)
+            continue;
+        [names addObject:name];
+        [ids addObject:[entry objectForKey:@"id"]];
+        NSString *type = [name pathExtension];
+        [types addObject:type ? type : @""];
+    }
+    if ([names count] == 0)
+        return NO;
+
+    [names retain];
+    [promisedNames release];
+    promisedNames = names;
+    [ids retain];
+    [promisedIds release];
+    promisedIds = ids;
+    [pboard declareTypes:[NSArray arrayWithObject:NSFilesPromisePboardType]
+                   owner:nil];
+    [pboard setPropertyList:types forType:NSFilesPromisePboardType];
+    return YES;
+}
+
+- (BOOL)tableView:(NSTableView *)tableView
+        writeRows:(NSArray *)rows
+     toPasteboard:(NSPasteboard *)pboard
+{
+    return [self writeRowsCommon:rows toPasteboard:pboard];
+}
+
+- (BOOL)tableView:(NSTableView *)tableView
+        writeRowsWithIndexes:(NSIndexSet *)rowIndexes
+        toPasteboard:(NSPasteboard *)pboard
+{
+    NSMutableArray *rows = [NSMutableArray array];
+    NSUInteger i;
+    for (i = [rowIndexes firstIndex]; i != NSNotFound;
+         i = [rowIndexes indexGreaterThanIndex:i])
+        [rows addObject:[NSNumber numberWithUnsignedInt:(unsigned)i]];
+    return [self writeRowsCommon:rows toPasteboard:pboard];
+}
+
+- (NSDragOperation)draggingSourceOperationMaskForLocal:(BOOL)isLocal
+{
+    /* out of the window only: within the dialog a drop means nothing */
+    return isLocal ? NSDragOperationNone : NSDragOperationCopy;
+}
+
+- (NSArray *)namesOfPromisedFilesDroppedAtDestination:(NSURL *)dropDestination
+{
+    NSArray *names = [promisedNames autorelease];
+    NSArray *ids = [promisedIds autorelease];
+    promisedNames = nil;
+    promisedIds = nil;
+    if (!widget || names == nil)
+        return nil;
+
+    /* the drop acts on the dragged rows, which may no longer be the
+     * highlight: make them the selection the extension will read --
+     * under the lock, the chain is the extension thread's */
+    NSSet *idSet = [NSSet setWithArray:ids];
+    struct extension_widget_value_t *value;
+    vlc_mutex_lock(&widget->p_dialog->lock);
+    for (value = widget->p_values; value != NULL; value = value->p_next)
+        value->b_selected = [idSet containsObject:
+            [NSNumber numberWithInt:value->i_id]] ? true : false;
+    free(widget->psz_drop_dir);
+    widget->psz_drop_dir = strdup([[dropDestination path] UTF8String]);
+    vlc_mutex_unlock(&widget->p_dialog->lock);
+
+    extension_WidgetDropDone(widget->p_dialog, widget);
+    return names;
+}
+
 @end
 
 /*****************************************************************************
@@ -485,6 +717,24 @@ static void VLCLegacyClampToScreen(NSWindow *window, NSSize *size)
         size->height = content.size.height;
 }
 
+/* How wide a dialog may grow on its own, before the user resizes it.
+ * A ceiling is wanted -- one very long single-line label should not open
+ * a window across the whole desktop -- but a fixed one was cutting off
+ * real content instead: a listing of half a dozen columns next to a
+ * cover was clipped at the window edge, artwork and buttons with it.
+ * The screen is the honest bound, so it is the one used. */
+static CGFloat VLCLegacyMaxAutoWidth(NSWindow *window)
+{
+    NSScreen *screen = [window screen];
+    if (!screen)
+        screen = [NSScreen mainScreen];
+    if (!screen)
+        return 720.f;
+
+    CGFloat widest = [screen visibleFrame].size.width * 0.9f;
+    return (widest < 720.f) ? 720.f : widest;
+}
+
 /* natural size of a control, honouring the width/height hints of the widget */
 static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
 {
@@ -532,7 +782,23 @@ static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
         size = [view frame].size;
     }
 
-    if (widget != NULL) {
+    if (widget != NULL && [view isKindOfClass:[NSImageView class]]
+     && (widget->i_width > 0 || widget->i_height > 0)) {
+        /* For a picture the hints are the size it is meant to be drawn
+         * at, so they BOUND it, proportions kept. What a server sends
+         * is not always what was asked for -- a cover can come back at
+         * a thousand pixels square -- and a picture must not be what
+         * decides how tall the window is. */
+        float maxW = widget->i_width > 0 ? widget->i_width : size.width;
+        float maxH = widget->i_height > 0 ? widget->i_height : size.height;
+        if (size.width > maxW || size.height > maxH) {
+            float scaleW = (size.width > 0) ? maxW / size.width : 1.f;
+            float scaleH = (size.height > 0) ? maxH / size.height : 1.f;
+            float scale = (scaleW < scaleH) ? scaleW : scaleH;
+            size.width *= scale;
+            size.height *= scale;
+        }
+    } else if (widget != NULL) {
         if (widget->i_width > 0 && size.width < widget->i_width)
             size.width = widget->i_width;
         if (widget->i_height > 0 && size.height < widget->i_height)
@@ -989,11 +1255,16 @@ static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
                 x += (w - want.width) / 2;
                 w = want.width;
             }
-            /* Top of the block, level with the title it illustrates --
-             * centred, it drifted away from the text it belongs to as
-             * sections were unfolded below. */
-            if (want.height > 0.f && want.height < h)
+            /* Top of the block by default, level with the title it
+             * illustrates -- centred, it drifted away from the text it
+             * belongs to as sections were unfolded below. A script whose
+             * picture sits beside a list asks for the middle instead. */
+            if (want.height > 0.f && want.height < h) {
+                extension_widget_t *w = [self widgetOfView:view];
+                if (w && w->b_image_centered)
+                    y += (h - want.height) / 2;
                 h = want.height;
+            }
         }
 
         [view setFrame:NSMakeRect(x, y, w, h)];
@@ -1015,6 +1286,29 @@ static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
 @interface VLCLegacyExtensionsDialogProvider ()
 - (void)updateExtensionDialog:(NSValue *)value;
 @end
+
+/* Where each extension's window was left standing.
+ *
+ * A script that shows another screen does it by deleting its dialog and
+ * building the next one, so what the user sees as one window is really
+ * a succession of them -- and every new one was being centred. Moving
+ * the window then meant nothing: the next view snapped it back. The
+ * corner it was left at is remembered per extension and given to its
+ * next window, which is what "the window stays put" means. */
+static NSMutableDictionary *VLCLegacyDialogCorners(void)
+{
+    static NSMutableDictionary *corners = nil;
+    if (!corners)
+        corners = [[NSMutableDictionary alloc] init];
+    return corners;
+}
+
+static id VLCLegacyCornerKey(extension_dialog_t *p_dialog)
+{
+    /* the extension owning the dialog, not the dialog itself: the whole
+     * point is to carry across a dialog being replaced */
+    return [NSNumber numberWithUnsignedLong:(unsigned long)p_dialog->p_sys];
+}
 
 static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
                                     void *p_data)
@@ -1071,6 +1365,11 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
         [field setEditable:NO];
         [field setBordered:NO];
         [field setDrawsBackground:NO];
+        /* Selecting the text of a label hands it to the field editor,
+         * and that one throws the attributes away unless it is told the
+         * content is rich: one click on a bold title left it plain for
+         * good, focused or not. */
+        [field setAllowsEditingTextAttributes:YES];
         [field setSelectable:YES];
         /* a label whose text carries newlines is a paragraph: draw every
          * line of it, at the font's own leading rather than a grid row
@@ -1166,7 +1465,9 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
     }
     case EXTENSION_WIDGET_IMAGE:
     {
-        NSImageView *imageView = [[NSImageView alloc] init];
+        VLCLegacyDialogImageView *imageView =
+            [[VLCLegacyDialogImageView alloc] init];
+        [imageView setWidget:widget];
         [imageView setImageFrameStyle:NSImageFramePhoto];
         /* NSImageScaleProportionallyUpOrDown is 10.5; this is its ancestor */
         [imageView setImageScaling:NSScaleProportionally];
@@ -1316,16 +1617,31 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
                         [cell substringFromIndex:sep.location + sep.length]];
                 }
             }
-            [array addObject:[NSDictionary dictionaryWithObjectsAndKeys:
-                [NSNumber numberWithInt:value->i_id], @"id",
-                text, @"text",
-                cells, @"cells",
-                sortKeys, @"sortKeys",
-                nil]];
+            NSMutableDictionary *entry =
+                [NSMutableDictionary dictionaryWithObjectsAndKeys:
+                    [NSNumber numberWithInt:value->i_id], @"id",
+                    text, @"text",
+                    cells, @"cells",
+                    sortKeys, @"sortKeys",
+                    nil];
+            /* rows with a promised file name may be dragged out */
+            if (value->psz_dragname) {
+                NSString *dragname =
+                    [NSString stringWithUTF8String:value->psz_dragname];
+                if (dragname)
+                    [entry setObject:dragname forKey:@"dragname"];
+            }
+            [array addObject:entry];
         }
         [list setProgrammaticSelection:YES];
         [list setContentArray:array];
         [list resetSort];   /* fresh content, extension's order */
+        /* ...unless the script asked for a column order, in which case
+         * it is sorted here, by the very comparison a click on that
+         * header uses -- so that both give the same thing */
+        if (widget->i_sort_column > 0)
+            [list sortByColumn:widget->i_sort_column - 1
+                     ascending:widget->b_sort_ascending];
         [list reloadData];
         [list fitColumnsToContent];
 
@@ -1382,8 +1698,12 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
     vlc_mutex_lock(&widget->p_dialog->lock);
     if (widget->type == EXTENSION_WIDGET_BUTTON)
         extension_WidgetClicked(widget->p_dialog, widget);
-    else
+    else {
         widget->b_checked = [(NSButton *)sender state] == NSOnState;
+        /* a toggle is a click too: scripts with an on_toggle callback
+         * react on the spot, scripts without one never see the event */
+        extension_WidgetClicked(widget->p_dialog, widget);
+    }
     vlc_mutex_unlock(&widget->p_dialog->lock);
 }
 
@@ -1433,8 +1753,20 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
 
     if (!widget)
         return;
+    /* The value chain belongs to the extension thread, which frees it
+     * whole on widget:clear(): walking it unlocked is a use-after-free
+     * whenever a script refills a list while the user is clicking.
+     * While the interface repopulates the menu, though, the lock is
+     * already held by this thread and taking it again would freeze. */
+    BOOL locked = NO;
+    if (!popup->programmaticSelection) {
+        vlc_mutex_lock(&widget->p_dialog->lock);
+        locked = YES;
+    }
     for (value = widget->p_values; value != NULL; value = value->p_next, i++)
         value->b_selected = (i == [(NSPopUpButton *)sender indexOfSelectedItem]);
+    if (locked)
+        vlc_mutex_unlock(&widget->p_dialog->lock);
 
     /* a choice the user made is an event; refilling the menu is not */
     if (!popup->programmaticSelection)
@@ -1453,6 +1785,17 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
 
     if (!widget)
         return;
+    /* Our own repopulation lands here too, and must be left alone
+     * entirely. It runs from updateExtensionDialog, which already holds
+     * the dialog lock on this very thread: taking it again below froze
+     * the whole application (the mutex is not recursive). Its
+     * -deselectAll: also runs *before* the loop that restores the
+     * selection the extension asked for, so writing the model from the
+     * table here would wipe that selection. Same for a header-click
+     * sort, which clears the model at the sort site instead. */
+    if ([list programmaticSelection])
+        return;
+
     /* Map by value id, not by row index: sorting reorders the rows on
      * screen while p_values keeps the extension's order.
      * -selectedRowIndexes is 10.3; -isRowSelected: works everywhere */
@@ -1464,13 +1807,17 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
             [selectedIds addObject:
                 [[rows objectAtIndex:i] objectForKey:@"id"]];
     }
+    /* Under the lock: the extension thread frees this whole chain on
+     * widget:clear(), and a script that refills a list as the user
+     * types was writing b_selected into freed memory (a crash on a
+     * plain click, reached from -[NSTableView mouseDown:]). */
+    vlc_mutex_lock(&widget->p_dialog->lock);
     for (value = widget->p_values; value != NULL; value = value->p_next)
         value->b_selected = [selectedIds containsObject:
             [NSNumber numberWithInt:value->i_id]] ? true : false;
+    vlc_mutex_unlock(&widget->p_dialog->lock);
 
-    /* only report what the user did, not our own repopulation */
-    if (![list programmaticSelection])
-        extension_WidgetSelectionChanged(widget->p_dialog, widget);
+    extension_WidgetSelectionChanged(widget->p_dialog, widget);
 }
 
 - (void)tableView:(NSTableView *)tableView
@@ -1489,6 +1836,19 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
     [list deselectAll:nil];
     [list sortByColumn:columnIndex ascending:ascending];
     [list setProgrammaticSelection:NO];
+
+    /* The rows moved, so nothing is selected any more: say so in the
+     * model too, or the extension would act on rows the user can no
+     * longer see highlighted. (The selection handler stays out of the
+     * way while we sort, see -tableViewSelectionDidChange:.) */
+    extension_widget_t *widget = [list widget];
+    if (widget) {
+        struct extension_widget_value_t *value;
+        vlc_mutex_lock(&widget->p_dialog->lock);
+        for (value = widget->p_values; value != NULL; value = value->p_next)
+            value->b_selected = false;
+        vlc_mutex_unlock(&widget->p_dialog->lock);
+    }
 }
 
 - (void)textFieldActivated:(id)sender
@@ -1649,8 +2009,9 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
         wanted.height = p_dialog->i_height;
     /* same ceiling the update path applies: one very long label must not
      * decide how wide the window opens */
-    if (wanted.width > 720.f)
-        wanted.width = 720.f;
+    CGFloat widest = VLCLegacyMaxAutoWidth(window);
+    if (wanted.width > widest)
+        wanted.width = widest;
     VLCLegacyClampToScreen(window, &wanted);
     /* the width is settled: ask again how tall the content is at THAT
      * width, since a narrower paragraph takes more lines */
@@ -1674,6 +2035,17 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
 
     if (!window)
         return;
+
+    /* Remember the corner before it goes: the next screen this
+     * extension shows is a brand new window, and it should come up
+     * where the user left this one. */
+    if ([window isVisible]) {
+        NSRect frame = [window frame];
+        [VLCLegacyDialogCorners()
+            setObject:[NSValue valueWithPoint:
+                          NSMakePoint(frame.origin.x, NSMaxY(frame))]
+               forKey:VLCLegacyCornerKey(p_dialog)];
+    }
 
     /* a debounced text change must not fire at a widget that is going
      * away with this window */
@@ -1716,7 +2088,26 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
     if (!p_dialog->b_kill && !window) {
         window = [self createExtensionDialog:p_dialog];
         if (!p_dialog->b_hide) {
-            [window center];
+            /* Where this extension's last window stood, if it had one:
+             * the top-left corner, since the window under it may not be
+             * the same height and that corner is the one a reader
+             * thinks of as "where the window is". */
+            NSValue *corner = [VLCLegacyDialogCorners()
+                                  objectForKey:VLCLegacyCornerKey(p_dialog)];
+            if (corner) {
+                NSPoint topLeft = [corner pointValue];
+                NSRect frame = [window frame];
+                [window setFrameOrigin:
+                    NSMakePoint(topLeft.x, topLeft.y - frame.size.height)];
+                /* a screen that changed, or a window that grew, must not
+                 * put it out of reach */
+                if (![[NSScreen screens] count]
+                 || !NSIntersectsRect([window frame],
+                                      [[window screen] ? [window screen]
+                                        : [NSScreen mainScreen] visibleFrame]))
+                    [window center];
+            } else
+                [window center];
             [window makeKeyAndOrderFront:self];
         } else
             [window orderOut:nil];
@@ -1728,8 +2119,9 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
         VLCLegacyDialogGridView *grid =
             (VLCLegacyDialogGridView *)[window contentView];
         NSSize wanted = [grid preferredSize];
-        if (wanted.width > 720.f)
-            wanted.width = 720.f;   /* absurd texts must not eat the screen */
+        CGFloat widest = VLCLegacyMaxAutoWidth(window);
+        if (wanted.width > widest)
+            wanted.width = widest;  /* absurd texts must not eat the screen */
         NSSize current = [[window contentView] frame].size;
         if (wanted.width < current.width)
             wanted.width = current.width;   /* the user may have widened it */

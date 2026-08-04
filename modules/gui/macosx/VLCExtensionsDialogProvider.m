@@ -159,7 +159,8 @@ static NSView *createControlFromWidget(extension_widget_t *widget, id self)
             }
             case EXTENSION_WIDGET_IMAGE:
             {
-                NSImageView *imageView = [[NSImageView alloc] init];
+                VLCDialogImageView *imageView = [[VLCDialogImageView alloc] init];
+                [imageView setWidget:widget];
                 [imageView setAutoresizingMask:NSViewHeightSizable | NSViewWidthSizable];
                 [imageView setImageFrameStyle:NSImageFramePhoto];
                 [imageView setImageScaling:NSImageScaleProportionallyUpOrDown];
@@ -299,18 +300,29 @@ static void updateControlFromWidget(NSView *control, extension_widget_t *widget,
                             [sortKeys addObject:[cell substringFromIndex:NSMaxRange(sep)]];
                         }
                     }
-                    NSDictionary *entry = [NSDictionary dictionaryWithObjectsAndKeys:
+                    NSMutableDictionary *entry = [NSMutableDictionary dictionaryWithObjectsAndKeys:
                                            [NSNumber numberWithInt:value->i_id], @"id",
                                            text, @"text",
                                            cells, @"cells",
                                            sortKeys, @"sortKeys",
                                            nil];
+                    /* rows with a promised file name may be dragged out */
+                    if (value->psz_dragname)
+                        [entry setObject:toNSStr(value->psz_dragname)
+                                  forKey:@"dragname"];
                     [contentArray addObject:entry];
                 }
                 list.contentArray = contentArray;
                 /* fresh content comes in the extension's order */
                 [list setSortColumn:-1];
                 [list setProgrammaticSelection:YES];
+                /* ...unless the script asked for a column order, in
+                 * which case it is sorted here, by the very comparison
+                 * a click on that header uses -- so that both give the
+                 * same thing */
+                if (widget->i_sort_column > 0)
+                    [list sortByColumn:widget->i_sort_column - 1
+                             ascending:widget->b_sort_ascending];
                 [list reloadData];
                 [list fitColumnsToContent];
                 /* and is read from its first row: keeping the scroll of
@@ -413,6 +425,9 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
     vlc_mutex_lock(&widget->p_dialog->lock);
     widget->b_checked = [button state] == NSOnState;
     vlc_mutex_unlock(&widget->p_dialog->lock);
+    /* a toggle is a click too: scripts with an on_toggle callback react
+     * on the spot, scripts without one never see the event */
+    extension_WidgetClicked(widget->p_dialog, widget);
 }
 
 - (void)syncTextField:(NSNotification *)notifcation
@@ -466,6 +481,14 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
     assert(sender && [sender isKindOfClass:[VLCDialogList class]]);
     VLCDialogList *list = sender;
 
+    /* Our own repopulation lands here too, and must be left alone
+     * entirely: it runs from updateWidgets, which already holds the
+     * dialog lock on this very thread, and taking it again below would
+     * freeze the application (the mutex is not recursive). A
+     * header-click sort clears the model at the sort site instead. */
+    if ([list programmaticSelection])
+        return;
+
     /* Map by value id, not by row index: a header-click sort reorders the
      * rows on screen while p_values keeps the extension's order. */
     NSMutableSet *selectedIds = [NSMutableSet set];
@@ -478,13 +501,16 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
 
     extension_widget_t *widget = [list widget];
     struct extension_widget_value_t *value;
+    /* Under the lock: the extension thread frees this whole chain on
+     * widget:clear(), and a script that refills a list as the user
+     * types was writing b_selected into freed memory (a crash on a
+     * plain click, reached from -[NSTableView mouseDown:]). */
+    vlc_mutex_lock(&widget->p_dialog->lock);
     for (value = widget->p_values; value != NULL; value = value->p_next)
         value->b_selected = [selectedIds containsObject:[NSNumber numberWithInt:value->i_id]];
+    vlc_mutex_unlock(&widget->p_dialog->lock);
 
-    /* Only a selection the user made is an event: repopulating the list
-     * changes the selection too, and that must not reach the extension. */
-    if (![list programmaticSelection])
-        extension_WidgetSelectionChanged(widget->p_dialog, widget);
+    extension_WidgetSelectionChanged(widget->p_dialog, widget);
 }
 
 - (void)tableView:(NSTableView *)tableView didClickTableColumn:(NSTableColumn *)tableColumn
@@ -501,6 +527,18 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
     [list deselectAll:nil];
     [list sortByColumn:columnIndex ascending:ascending];
     [list setProgrammaticSelection:NO];
+
+    /* The rows moved, so nothing is selected any more: say so in the
+     * model too, or the extension would act on rows the user can no
+     * longer see highlighted. */
+    extension_widget_t *widget = [list widget];
+    if (widget) {
+        struct extension_widget_value_t *value;
+        vlc_mutex_lock(&widget->p_dialog->lock);
+        for (value = widget->p_values; value != NULL; value = value->p_next)
+            value->b_selected = false;
+        vlc_mutex_unlock(&widget->p_dialog->lock);
+    }
 }
 
 - (void)textFieldActivated:(id)sender
@@ -546,8 +584,18 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
     extension_widget_t *widget = [popup widget];
     struct extension_widget_value_t *value;
     unsigned i = 0;
+    /* The value chain belongs to the extension thread, see above -- but
+     * updateControlFromWidget calls this method itself while holding
+     * the dialog lock, and taking it again there would freeze. */
+    BOOL locked = NO;
+    if (![popup programmaticSelection]) {
+        vlc_mutex_lock(&widget->p_dialog->lock);
+        locked = YES;
+    }
     for (value = widget->p_values; value != NULL; value = value->p_next, i++)
         value->b_selected = (i == [popup indexOfSelectedItem]);
+    if (locked)
+        vlc_mutex_unlock(&widget->p_dialog->lock);
 
     /* Tell the extension, so a script can react to the choice right away
      * -- but only for a choice the user made: refilling the menu lands
@@ -694,6 +742,27 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
 
 /** Destroy a dialog
  * Note: Lock on p_dialog->lock must be held. */
+/* Where each extension's window was left standing.
+ *
+ * A script that shows another screen does it by deleting its dialog and
+ * building the next one, so what the user sees as one window is really
+ * a succession of them -- and every new one was being centred. Moving
+ * the window then meant nothing: the next view snapped it back. */
+static NSMutableDictionary *VLCDialogCorners(void)
+{
+    static NSMutableDictionary *corners = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ corners = [NSMutableDictionary dictionary]; });
+    return corners;
+}
+
+static id VLCDialogCornerKey(extension_dialog_t *p_dialog)
+{
+    /* the extension owning the dialog, not the dialog itself: the whole
+     * point is to carry across a dialog being replaced */
+    return @((unsigned long)p_dialog->p_sys);
+}
+
 - (int)destroyExtensionDialog:(extension_dialog_t *)p_dialog
 {
     assert(p_dialog);
@@ -702,6 +771,17 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
     if (!dialogWindow) {
         msg_Warn(getIntf(), "dialog window not found");
         return VLC_EGENERIC;
+    }
+
+    /* Remember the corner before it goes: the next screen this
+     * extension shows is a brand new window, and it should come up
+     * where the user left this one. */
+    if ([dialogWindow isVisible]) {
+        NSRect frame = [dialogWindow frame];
+        [VLCDialogCorners() setObject:
+            [NSValue valueWithPoint:NSMakePoint(frame.origin.x,
+                                                NSMaxY(frame))]
+                               forKey:VLCDialogCornerKey(p_dialog)];
     }
 
     /* a debounced text change must not fire at a widget that is going
@@ -749,7 +829,27 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
 
             BOOL visible = !p_dialog->b_hide;
             if (visible) {
-                [dialogWindow center];
+                /* Where this extension's last window stood, if it had
+                 * one: the top-left corner, since the window under it
+                 * may not be the same height and that corner is the one
+                 * a reader thinks of as "where the window is". */
+                NSValue *corner = [VLCDialogCorners()
+                    objectForKey:VLCDialogCornerKey(p_dialog)];
+                if (corner) {
+                    NSPoint topLeft = [corner pointValue];
+                    NSRect frame = [dialogWindow frame];
+                    [dialogWindow setFrameOrigin:
+                        NSMakePoint(topLeft.x, topLeft.y - frame.size.height)];
+                    NSScreen *screen = [dialogWindow screen]
+                                     ?: [NSScreen mainScreen];
+                    /* a screen that changed, or a window that grew, must
+                     * not put it out of reach */
+                    if (!screen
+                     || !NSIntersectsRect([dialogWindow frame],
+                                          [screen visibleFrame]))
+                        [dialogWindow center];
+                } else
+                    [dialogWindow center];
                 [dialogWindow makeKeyAndOrderFront:self];
             } else
                 [dialogWindow orderOut:nil];

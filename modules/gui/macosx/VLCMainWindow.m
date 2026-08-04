@@ -332,8 +332,24 @@ static NSString *defaultWindowTitle(void)
                                            forAttribute:NSAccessibilityDescriptionAttribute];
 
     // Podcast view
-    [_podcastAddButton setTitle:_NS("Subscribe")];
-    [_podcastRemoveButton setTitle:_NS("Unsubscribe")];
+    /* the strip is a fixed dark image in either appearance, so the round
+     * rect buttons, which draw their title in the control text colour,
+     * come out unreadable: spell the colour out */
+    NSDictionary *podcastButtonAttributes = @{
+        NSForegroundColorAttributeName: [NSColor whiteColor],
+        NSFontAttributeName: [NSFont systemFontOfSize:[NSFont smallSystemFontSize]],
+        NSParagraphStyleAttributeName: ({
+            NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
+            [style setAlignment:NSTextAlignmentCenter];
+            style;
+        })
+    };
+    [_podcastAddButton setAttributedTitle:
+        [[NSAttributedString alloc] initWithString:_NS("Subscribe")
+                                        attributes:podcastButtonAttributes]];
+    [_podcastRemoveButton setAttributedTitle:
+        [[NSAttributedString alloc] initWithString:_NS("Unsubscribe")
+                                        attributes:podcastButtonAttributes]];
 
     // Podcast subscribe window
     [_podcastSubscribeTitle setStringValue:_NS("Subscribe to a podcast")];
@@ -1195,15 +1211,45 @@ static NSString *defaultWindowTitle(void)
     }
 }
 
+/* The feeds to drop are the ones selected in the list, which is
+ * unambiguous: no confirmation sheet, and re-subscribing is one URL
+ * away. Only the top level holds the feeds, below it are the episodes. */
 - (IBAction)removePodcast:(id)sender
 {
-    char *psz_urls = var_InheritString(pl_Get(getIntf()), "podcast-urls");
-    if (psz_urls != NULL) {
-        [_podcastUnsubscribePopUpButton removeAllItems];
-        [_podcastUnsubscribePopUpButton addItemsWithTitles:[toNSStr(psz_urls) componentsSeparatedByString:@"|"]];
-        [NSApp beginSheet:_podcastUnsubscribeWindow modalForWindow:self modalDelegate:self didEndSelector:NULL contextInfo:nil];
-    }
+    char *psz_urls = config_GetPsz(getIntf(), "podcast-urls");
+    if (psz_urls == NULL)
+        return;
+    NSMutableArray *urls = [NSMutableArray arrayWithArray:[toNSStr(psz_urls) componentsSeparatedByString:@"|"]];
     free(psz_urls);
+
+    VLCPlaylist *playlist = [[VLCMain sharedInstance] playlist];
+    NSOutlineView *outlineView = [playlist outlineView];
+    NSMutableArray *selectedUrls = [[NSMutableArray alloc] init];
+    NSIndexSet *selectedRows = [outlineView selectedRowIndexes];
+    NSUInteger row = [selectedRows firstIndex];
+    while (row != NSNotFound) {
+        if ([outlineView levelForRow:row] == 0) {
+            VLCPLItem *item = [outlineView itemAtRow:row];
+            char *psz_uri = [item input] ? input_item_GetURI([item input]) : NULL;
+            if (psz_uri) {
+                [selectedUrls addObject:toNSStr(psz_uri)];
+                free(psz_uri);
+            }
+        }
+        row = [selectedRows indexGreaterThanIndex:row];
+    }
+
+    NSUInteger countBefore = [urls count];
+    [urls removeObjectsInArray:selectedUrls];
+    if ([urls count] == countBefore)
+        return;
+
+    NSString *joinedUrls = [urls componentsJoinedByString:@"|"];
+    config_PutPsz(getIntf(), "podcast-urls", [joinedUrls UTF8String]);
+    var_SetString(pl_Get(getIntf()), "podcast-urls", [joinedUrls UTF8String]);
+
+    if (playlist_IsServicesDiscoveryLoaded(pl_Get(getIntf()), "podcast"))
+        [playlist playlistUpdated];
 }
 
 - (IBAction)removePodcastWindowAction:(id)sender

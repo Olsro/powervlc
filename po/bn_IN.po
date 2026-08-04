@@ -1585,20 +1585,12 @@ msgstr "ওয়েব"
 msgid "Mouse Gestures"
 msgstr "মাউস ঠারে"
 
-#: src/interface/interface.c:230
+#: src/interface/interface.c:222
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc ডিফল্ট ইন্টারফেস নিয়ে চলছে। ইন্টারফেস ছাড়া powervlc চালাতে «cpowervlc» "
-"ব্যবহার করুন।"
-
-#: src/interface/interface.c:226
-msgid ""
-"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
-"without interface."
-msgstr ""
-"powervlc ডিফল্ট ইন্টারফেস নিয়ে চলছে। ইন্টারফেস ছাড়া powervlc চালাতে «-I dummy» "
 "ব্যবহার করুন।"
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -30722,7 +30714,62 @@ msgstr ""
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
 
-#, c-format
+#: share/lua/sd/radiobrowser.lua:99
+msgid "Africa"
+msgstr "আফ্রিকা"
+
+#: share/lua/sd/radiobrowser.lua:103
+msgid "Asia"
+msgstr "এশিয়া"
+
+#: share/lua/sd/radiobrowser.lua:106
+msgid "Europe"
+msgstr "ইউরোপ"
+
+#: share/lua/sd/radiobrowser.lua:109
+msgid "North America"
+msgstr "উত্তর আমেরিকা"
+
+#: share/lua/sd/radiobrowser.lua:112
+msgid "Oceania"
+msgstr "ওশেনিয়া"
+
+#: share/lua/sd/radiobrowser.lua:114
+msgid "South America"
+msgstr "দক্ষিণ আমেরিকা"
+
+#: share/lua/playlist/radiobrowser.lua:186 share/lua/sd/radiobrowser.lua:137
+msgid "Play a random station (%s)"
+msgstr "একটি এলোমেলো স্টেশন বাজান (%s)"
+
+#: modules/access/radiobrowser.c:77
+msgid "Radio-Browser.info random station picker"
+msgstr ""
+
+#: modules/access/radiobrowser.c
+msgid "Station"
+msgstr "স্টেশন"
+
+#: modules/access/radiobrowser.c
+msgid "Stream URL"
+msgstr "স্ট্রিম URL"
+
+#: modules/access/radiobrowser.c
+msgid "Homepage"
+msgstr "হোমপেজ"
+
+#: modules/access/radiobrowser.c
+msgctxt "Radio station"
+msgid "Country"
+msgstr "দেশ"
+
+#~ msgid ""
+#~ "Running powervlc with the default interface. Use '-I dummy' to use "
+#~ "powervlc without interface."
+#~ msgstr ""
+#~ "powervlc ডিফল্ট ইন্টারফেস নিয়ে চলছে। ইন্টারফেস ছাড়া powervlc চালাতে «-I "
+#~ "dummy» ব্যবহার করুন।"
+
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "VLC সংস্করণ %s (%s)\n"
 

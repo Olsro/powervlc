@@ -1557,20 +1557,12 @@ msgstr "Vefur"
 msgid "Mouse Gestures"
 msgstr "Músarbendingar"
 
-#: src/interface/interface.c:230
+#: src/interface/interface.c:222
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Keyri powervlc með sjálfgefna viðmótinu. Notaðu «cpowervlc» til að keyra "
-"powervlc án viðmóts."
-
-#: src/interface/interface.c:226
-msgid ""
-"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
-"without interface."
-msgstr ""
-"Keyri powervlc með sjálfgefna viðmótinu. Notaðu «-I dummy» til að keyra "
 "powervlc án viðmóts."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -29904,7 +29896,62 @@ msgstr ""
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
 
-#, c-format
+#: share/lua/sd/radiobrowser.lua:99
+msgid "Africa"
+msgstr "Afríka"
+
+#: share/lua/sd/radiobrowser.lua:103
+msgid "Asia"
+msgstr "Asía"
+
+#: share/lua/sd/radiobrowser.lua:106
+msgid "Europe"
+msgstr "Evrópa"
+
+#: share/lua/sd/radiobrowser.lua:109
+msgid "North America"
+msgstr "Norður-Amerika"
+
+#: share/lua/sd/radiobrowser.lua:112
+msgid "Oceania"
+msgstr "Eyjaálfa"
+
+#: share/lua/sd/radiobrowser.lua:114
+msgid "South America"
+msgstr "Suður-Amerika"
+
+#: share/lua/playlist/radiobrowser.lua:186 share/lua/sd/radiobrowser.lua:137
+msgid "Play a random station (%s)"
+msgstr "Spila stöð af handahófi (%s)"
+
+#: modules/access/radiobrowser.c:77
+msgid "Radio-Browser.info random station picker"
+msgstr ""
+
+#: modules/access/radiobrowser.c
+msgid "Station"
+msgstr "Stöð"
+
+#: modules/access/radiobrowser.c
+msgid "Stream URL"
+msgstr "Slóð streymis"
+
+#: modules/access/radiobrowser.c
+msgid "Homepage"
+msgstr "Heimasíða"
+
+#: modules/access/radiobrowser.c
+msgctxt "Radio station"
+msgid "Country"
+msgstr "Land"
+
+#~ msgid ""
+#~ "Running powervlc with the default interface. Use '-I dummy' to use "
+#~ "powervlc without interface."
+#~ msgstr ""
+#~ "Keyri powervlc með sjálfgefna viðmótinu. Notaðu «-I dummy» til að keyra "
+#~ "powervlc án viðmóts."
+
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "VLC útgáfa %s (%s)\n"
 

@@ -36,6 +36,9 @@ access_LTLIBRARIES += libimem_plugin.la
 libaccess_imem_plugin_la_SOURCES = access/imem.c
 access_LTLIBRARIES += libaccess_imem_plugin.la
 
+libradiobrowser_plugin_la_SOURCES = access/radiobrowser.c
+access_LTLIBRARIES += libradiobrowser_plugin.la
+
 libsdp_plugin_la_SOURCES = access/sdp.c
 access_LTLIBRARIES += libsdp_plugin.la
 

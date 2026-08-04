@@ -37,6 +37,7 @@
 #include <vlc_plugin.h>
 #include <vlc_meta.h>
 #include <vlc_charset.h>
+#include <vlc_md5.h>
 
 #include "../vlc.h"
 #include "../libs.h"
@@ -175,6 +176,39 @@ static int vlclua_from_charset( lua_State *L )
     return 1;
 }
 
+/* Hex digest of the argument, as md5sum prints it. Scripts need it for
+ * protocols whose authentication is an MD5 token (Subsonic among them):
+ * Lua 5.1 has no bit operators, so the core's implementation serves. */
+static int vlclua_md5( lua_State *L )
+{
+    size_t i_len;
+    const char *psz_input = luaL_checklstring( L, 1, &i_len );
+    struct md5_s md5;
+    InitMD5( &md5 );
+    AddMD5( &md5, psz_input, i_len );
+    EndMD5( &md5 );
+    char *psz_hash = psz_md5_hash( &md5 );
+    if( !psz_hash )
+        return vlclua_error( L );
+    lua_pushstring( L, psz_hash );
+    free( psz_hash );
+    return 1;
+}
+
+/* The folding the playlist search uses (case, accents, Latin ligatures
+ * and typographic punctuation): a script filtering a list of its own
+ * must match what the user would get from the search field. */
+static int vlclua_fold( lua_State *L )
+{
+    const char *psz_input = luaL_checkstring( L, 1 );
+    char *psz_folded = vlc_strfold( psz_input );
+    if( !psz_folded )
+        return vlclua_error( L );
+    lua_pushstring( L, psz_folded );
+    free( psz_folded );
+    return 1;
+}
+
 /*****************************************************************************
  *
  *****************************************************************************/
@@ -187,6 +221,8 @@ static const luaL_Reg vlclua_strings_reg[] = {
     { "resolve_xml_special_chars", vlclua_resolve_xml_special_chars },
     { "convert_xml_special_chars", vlclua_convert_xml_special_chars },
     { "from_charset", vlclua_from_charset },
+    { "md5", vlclua_md5 },
+    { "fold", vlclua_fold },
     { NULL, NULL }
 };
 

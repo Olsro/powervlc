@@ -101,7 +101,13 @@ typedef float CGFloat;
     NSView *dropzoneView;
     NSTextField *viewTitleLabel;
     NSTextField *searchField;   /* an NSSearchField except on 10.2 */
+    /* Subscribe / Unsubscribe strip, shown at the bottom of the playlist
+     * area while the Podcasts service is selected (3.0 parity) */
+    NSView *podcastBar;
+    NSButton *podcastRemoveButton;  /* disabled while nothing is subscribed */
+    BOOL podcastBarVisible;
     NSString *searchString;
+    NSString *searchStringFolded;   /* accent/case-folded, see vlc_strfold */
     NSMutableArray *visibleColumns; /* playlist column identifiers */
 
     /* embedded video */

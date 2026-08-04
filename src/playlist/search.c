@@ -60,6 +60,23 @@ static void playlist_LiveSearchClean( playlist_item_t *p_root )
  * @param psz_string: the string to search
  * @return true if an item match
  */
+/* Both sides are folded (case, accents, Latin ligatures and typographic
+ * punctuation), so that "au coeur de l'histoire" finds a feed titled
+ * "Au Cœur de l’Histoire". The needle is folded once by the caller. */
+static bool SearchMatches( const char *psz_haystack, const char *psz_folded_needle )
+{
+    if( !psz_haystack )
+        return false;
+
+    char *psz_folded = vlc_strfold( psz_haystack );
+    if( unlikely(psz_folded == NULL) ) /* out of memory: plain search */
+        return vlc_strcasestr( psz_haystack, psz_folded_needle ) != NULL;
+
+    bool b_match = strstr( psz_folded, psz_folded_needle ) != NULL;
+    free( psz_folded );
+    return b_match;
+}
+
 static bool playlist_LiveSearchUpdateInternal( playlist_item_t *p_root,
                                                const char *psz_string, bool b_recursive )
 {
@@ -88,12 +105,12 @@ static bool playlist_LiveSearchUpdateInternal( playlist_item_t *p_root,
                     psz_title = p_item->p_input->psz_name;
                 const char *psz_album = vlc_meta_Get( p_item->p_input->p_meta, vlc_meta_Album );
                 const char *psz_artist = vlc_meta_Get( p_item->p_input->p_meta, vlc_meta_Artist );
-                b_enable = ( psz_title && vlc_strcasestr( psz_title, psz_string ) ) ||
-                           ( psz_album && vlc_strcasestr( psz_album, psz_string ) ) ||
-                           ( psz_artist && vlc_strcasestr( psz_artist, psz_string ) );
+                b_enable = SearchMatches( psz_title, psz_string ) ||
+                           SearchMatches( psz_album, psz_string ) ||
+                           SearchMatches( psz_artist, psz_string );
             }
             else
-                b_enable = p_item->p_input->psz_name && vlc_strcasestr( p_item->p_input->psz_name, psz_string );
+                b_enable = SearchMatches( p_item->p_input->psz_name, psz_string );
             vlc_mutex_unlock( &p_item->p_input->lock );
         }
 
@@ -122,7 +139,14 @@ int playlist_LiveSearchUpdate( playlist_t *p_playlist, playlist_item_t *p_root,
     PL_ASSERT_LOCKED;
     pl_priv(p_playlist)->b_reset_currently_playing = true;
     if( *psz_string )
-        playlist_LiveSearchUpdateInternal( p_root, psz_string, b_recursive );
+    {
+        /* fold the needle once for the whole walk */
+        char *psz_folded = vlc_strfold( psz_string );
+        playlist_LiveSearchUpdateInternal( p_root,
+                                           psz_folded ? psz_folded : psz_string,
+                                           b_recursive );
+        free( psz_folded );
+    }
     else
         playlist_LiveSearchClean( p_root );
     vlc_cond_signal( &pl_priv(p_playlist)->signal );

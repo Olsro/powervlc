@@ -236,7 +236,15 @@ static const struct vlc_avcodec_fourcc video_codecs[] =
     { VLC_CODEC_G2M4, AV_CODEC_ID_G2M },
     { VLC_CODEC_G2M2, AV_CODEC_ID_G2M },
     { VLC_CODEC_G2M3, AV_CODEC_ID_G2M },
-    /* AV_CODEC_ID_WEBP */
+    /* Left out upstream, which leaves a WebP picture to the vpx module
+     * -- and that one only knows the bare VP8 bitstream, not the RIFF
+     * container a .webp file actually is, so it fails on every one of
+     * them ("Bitstream not supported by this decoder"). Servers now
+     * hand out cover art in WebP, so a player that cannot read it
+     * shows no artwork at all. libavcodec has a native decoder for it
+     * (CONFIG_WEBP_DECODER, on in every contrib here, PowerPC
+     * included) and outranks vpx, so naming it here is enough. */
+    { VLC_CODEC_WEBP, AV_CODEC_ID_WEBP },
     { VLC_CODEC_HNM4_VIDEO, AV_CODEC_ID_HNM4_VIDEO },
     { VLC_CODEC_HEVC, AV_CODEC_ID_HEVC },
 

@@ -32,6 +32,15 @@ function probe()
         and string.match(vlc.path, "api%.radio%-browser%.info/xml/stations/")
 end
 
+-- Same helper as the service discovery: "_" is one of the keywords
+-- po/Makevars hands to xgettext, so the string below lands in po/vlc.pot.
+local function _(s)
+    if vlc.gettext then
+        return vlc.gettext._(s)
+    end
+    return s
+end
+
 local function trim(s)
     return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
@@ -121,6 +130,8 @@ function parse()
                 elseif bitrate > 0 then
                     desc = string.format("%d kbps", bitrate)
                 end
+                local country = trim(attrs.country or "")
+                local code = trim(attrs.countrycode or "")
                 stations[#stations + 1] = {
                     name = name,
                     path = url,
@@ -129,6 +140,9 @@ function parse()
                     genre = attrs.tags,
                     arturl = attrs.favicon,
                     description = desc,
+                    -- only used to build the random entry of the country
+                    country = country ~= "" and country or nil,
+                    countrycode = code ~= "" and code or nil,
                 }
             end
         end
@@ -149,6 +163,32 @@ function parse()
     end)
 
     local items = {}
+
+    --[[
+     The random entry of the country goes on top, like the ones the service
+     discovery puts at the head of its own lists.  Both the code and the
+     display name are read off the stations themselves: the API spells the
+     country the very same way in /json/countries (which is what the node
+     above is titled after) and in the station attributes.
+    --]]
+    if string.match(vlc.path, "/bycountrycodeexact/") and stations[1] then
+        local code, country
+        for _, station in ipairs(stations) do
+            code = code or station.countrycode
+            country = country or station.country
+            if code and country then
+                break
+            end
+        end
+        if code and code:match("^[A-Z][A-Z]$") then
+            items[1] = {
+                path = "radiobrowser://random/cc/" .. code,
+                name = string.format(_("Play a random station (%s)"),
+                                     country or code),
+            }
+        end
+    end
+
     local previous = nil
     for _, station in ipairs(stations) do
         if not previous

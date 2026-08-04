@@ -254,6 +254,16 @@ typedef enum
     CACHE_WRITE_FILE = 0x4,
 } cache_mode_t;
 
+/* Platforms where the app is deployed by unpacking an archive, so that no
+ * installer ever runs vlc-cache-gen and the plugin cache has to heal itself
+ * at runtime -- see the end of AllocatePluginPath(). One macro for the three
+ * sites (the counter, its increment and the test), because they only work
+ * together: guarding them separately is how this last got built with the
+ * field compiled out from under the code reading it. */
+#if defined(__APPLE__) || defined(_WIN32)
+# define VLC_SELF_HEALING_PLUGIN_CACHE 1
+#endif
+
 typedef struct module_bank
 {
     vlc_object_t *obj;
@@ -263,7 +273,7 @@ typedef struct module_bank
     size_t        size;
     vlc_plugin_t **plugins;
     vlc_plugin_t *cache;
-#ifdef __APPLE__
+#ifdef VLC_SELF_HEALING_PLUGIN_CACHE
     size_t        misses; /* plugins that had to be loaded from disk */
 #endif
 } module_bank_t;
@@ -301,7 +311,7 @@ static int AllocatePluginFile (module_bank_t *bank, const char *abspath,
             plugin->path = xstrdup(relpath);
             plugin->mtime = st->st_mtime;
             plugin->size = st->st_size;
-#ifdef __APPLE__
+#ifdef VLC_SELF_HEALING_PLUGIN_CACHE
             bank->misses++;
 #endif
         }
@@ -514,13 +524,24 @@ static void AllocatePluginPath(vlc_object_t *obj, const char *path,
 
     if (mode & CACHE_WRITE_FILE)
         CacheSave(obj, path, bank.plugins, bank.size);
-#ifdef __APPLE__
-    /* The app bundle is deployed by unpacking an archive: no installer ever
-     * runs vlc-cache-gen, and without a cache every launch re-loads and
-     * re-links all ~330 plugins (tens of seconds on the PowerPC Macs this
-     * branch targets). When the scan had to load plugins the cache did not
-     * cover, save an updated cache (atomic tmp+rename; fails silently on a
-     * read-only install). */
+#ifdef VLC_SELF_HEALING_PLUGIN_CACHE
+    /* The app is deployed by unpacking an archive: no installer ever runs
+     * vlc-cache-gen, and without a cache every launch re-loads and re-links
+     * all ~330 plugins (tens of seconds on the PowerPC Macs this branch
+     * targets). When the scan had to load plugins the cache did not cover,
+     * save an updated cache (atomic tmp+rename; fails silently on a
+     * read-only install).
+     *
+     * _WIN32 for the PORTABLE archive, which has the same problem for the
+     * same reason -- the NSIS installer runs powervlc-cache-gen.exe on the
+     * target machine, the zip cannot (packaging happens on Linux, and the
+     * binary is a Windows one for a foreign architecture). Without this the
+     * portable build would pay the full scan on EVERY start, forever, since
+     * on Windows nothing else ever writes plugins.dat. It is a no-op for the
+     * installed build: cache-gen already covered every plugin, so misses is
+     * zero. Where it does fire is the case it should -- a user dropping a
+     * third-party plugin into plugins/, which until now was rescanned on
+     * every launch on Windows too. */
     else if ((mode & (CACHE_READ_FILE|CACHE_SCAN_DIR)) ==
                      (CACHE_READ_FILE|CACHE_SCAN_DIR) && bank.misses > 0)
     {

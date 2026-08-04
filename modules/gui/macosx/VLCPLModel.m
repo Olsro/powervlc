@@ -327,6 +327,16 @@ static int VolumeUpdated(vlc_object_t *p_this, const char *psz_var,
         return;
     }
 
+    /* The append notification is handed over to the main thread, so a
+     * rebuild can run in between and pick the item up on its own -- that
+     * is what selecting a service discovery does: the module starts
+     * adding on its own thread and changeRootItem: reads the finished
+     * tree. Adding it again would leave two rows for one playlist item
+     * (a podcast subscription showing up twice). */
+    if ([self findItemByPlaylistId:i_item]) {
+        return;
+    }
+
     PL_LOCK;
     playlist_item_t *p_item = playlist_ItemGetById(p_playlist, i_item);
     if (!p_item || p_item->i_flags & PLAYLIST_DBL_FLAG)

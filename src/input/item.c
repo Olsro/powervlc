@@ -1257,6 +1257,7 @@ static int GuessType( const input_item_t *p_item, bool *p_net )
         { "qpsk",   ITEM_TYPE_CARD, false },
         { "qtcapt", ITEM_TYPE_CARD, false }, /* qtcapture */
         { "qtsound",ITEM_TYPE_CARD, false },
+        { "radiobrowser", ITEM_TYPE_STREAM, true },
         { "raw139", ITEM_TYPE_CARD, false }, /* raw1394 */
         { "rt",     ITEM_TYPE_STREAM, true }, /* rtp, rtsp, rtmp */
         { "satell", ITEM_TYPE_CARD, false }, /* satellite */

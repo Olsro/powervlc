@@ -145,6 +145,11 @@ static int probe_luascript(vlc_object_t *obj, const char *filename,
     luaopen_stream( L );
     luaopen_variables( L );
     luaopen_xml( L );
+    /* Playlist scripts build item names, so they need to be able to
+     * translate them (only the interface and the services discovery had
+     * vlc.gettext, which left every name a playlist script makes up in
+     * English whatever the chosen language). */
+    luaopen_gettext( L );
 
     if (sys->path != NULL)
         lua_pushstring(L, sys->path);

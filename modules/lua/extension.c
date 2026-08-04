@@ -78,6 +78,7 @@ static void WatchTimerCallback( void* );
 
 static int vlclua_extension_deactivate( lua_State *L );
 static int vlclua_extension_keep_alive( lua_State *L );
+static int vlclua_extension_timer( lua_State *L );
 
 /* Interactions */
 static int vlclua_extension_dialog_callback( vlc_object_t *p_this,
@@ -195,6 +196,7 @@ void Close_Extension( vlc_object_t *p_this )
         vlc_cond_destroy( &p_ext->p_sys->wait );
         vlc_timer_destroy( p_ext->p_sys->timer );
 
+        free( p_ext->p_sys->psz_timer_func );
         free( p_ext->p_sys );
         free( p_ext );
     }
@@ -510,6 +512,7 @@ exit:
         vlc_mutex_destroy( &p_ext->p_sys->command_lock );
         vlc_mutex_destroy( &p_ext->p_sys->running_lock );
         vlc_cond_destroy( &p_ext->p_sys->wait );
+        free( p_ext->p_sys->psz_timer_func );
         free( p_ext->p_sys );
         free( p_ext );
     }
@@ -710,9 +713,15 @@ int lua_ExtensionDeactivate( extensions_manager_t *p_mgr, extension_t *p_ext )
  * with several interactions (a list has both an activation and a selection
  * callback) store a table of named functions instead. Doing nothing is a
  * valid outcome: scripts only register what they care about.
+ *
+ * The arguments passed on to the Lua function follow psz_field and the
+ * list MUST end with LUA_END even when it is otherwise empty -- the
+ * reader stops on that value, and without it the first va_arg is
+ * indeterminate and the call is dropped as a bad argument type.
  */
 static int WidgetCallback( extensions_manager_t *p_mgr, extension_t *p_ext,
-                           extension_widget_t *p_widget, const char *psz_field )
+                           extension_widget_t *p_widget, const char *psz_field,
+                           ... )
 {
     lua_State *L = GetLuaState( p_mgr, p_ext );
     if( !L )
@@ -738,7 +747,11 @@ static int WidgetCallback( extensions_manager_t *p_mgr, extension_t *p_ext,
         return VLC_SUCCESS;
     }
 
-    return lua_ExecuteFunction( p_mgr, p_ext, NULL, LUA_END );
+    va_list args;
+    va_start( args, psz_field );
+    int i_ret = lua_ExecuteFunctionVa( p_mgr, p_ext, NULL, args );
+    va_end( args );
+    return i_ret;
 }
 
 int lua_ExtensionWidgetClick( extensions_manager_t *p_mgr,
@@ -748,7 +761,7 @@ int lua_ExtensionWidgetClick( extensions_manager_t *p_mgr,
     if( !p_ext->p_sys->L )
         return VLC_SUCCESS;
 
-    return WidgetCallback( p_mgr, p_ext, p_widget, "click" );
+    return WidgetCallback( p_mgr, p_ext, p_widget, "click", LUA_END );
 }
 
 int lua_ExtensionWidgetSelect( extensions_manager_t *p_mgr,
@@ -758,7 +771,30 @@ int lua_ExtensionWidgetSelect( extensions_manager_t *p_mgr,
     if( !p_ext->p_sys->L )
         return VLC_SUCCESS;
 
-    return WidgetCallback( p_mgr, p_ext, p_widget, "select" );
+    return WidgetCallback( p_mgr, p_ext, p_widget, "select", LUA_END );
+}
+
+int lua_ExtensionWidgetMenu( extensions_manager_t *p_mgr,
+                             extension_t *p_ext,
+                             extension_widget_t *p_widget, int i_entry )
+{
+    if( !p_ext->p_sys->L )
+        return VLC_SUCCESS;
+
+    return WidgetCallback( p_mgr, p_ext, p_widget, "menu",
+                           LUA_NUM, i_entry, LUA_END );
+}
+
+int lua_ExtensionWidgetDrop( extensions_manager_t *p_mgr,
+                             extension_t *p_ext,
+                             extension_widget_t *p_widget,
+                             const char *psz_dir )
+{
+    if( !p_ext->p_sys->L )
+        return VLC_SUCCESS;
+
+    return WidgetCallback( p_mgr, p_ext, p_widget, "drop",
+                           LUA_TEXT, psz_dir, LUA_END );
 }
 
 
@@ -914,6 +950,7 @@ static lua_State* GetLuaState( extensions_manager_t *p_mgr,
         luaopen_volume( L );
         luaopen_clipboard( L );
         luaopen_http( L );
+        luaopen_browser( L );
         luaopen_keystore( L );
         luaopen_xml( L );
         luaopen_vlcio( L );
@@ -928,6 +965,8 @@ static lua_State* GetLuaState( extensions_manager_t *p_mgr,
         lua_setfield( L, -2, "deactivate" );
         lua_pushcfunction( L, vlclua_extension_keep_alive );
         lua_setfield( L, -2, "keep_alive" );
+        lua_pushcfunction( L, vlclua_extension_timer );
+        lua_setfield( L, -2, "timer" );
 
         /* Setup the module search path */
         if( !strncmp( p_ext->psz_name, "zip://", 6 ) )
@@ -1153,6 +1192,43 @@ int vlclua_extension_deactivate( lua_State *L )
     return ( b_ret == true ) ? 1 : 0;
 }
 
+/** Ask to be called back later: vlc.timer( delay_ms, "function_name" )
+ *
+ * An extension is otherwise deaf to everything but the user -- there is no
+ * periodic callback of any kind -- so a script waiting on something outside
+ * VLC has no way to notice that it arrived. One shot: the callback re-arms
+ * it if it wants another. vlc.timer( 0 ) cancels a pending one.
+ *
+ * Milliseconds, and an integer, on purpose: a script must never have to
+ * write a decimal literal, which a comma-decimal locale makes the Lua lexer
+ * reject outright.
+ **/
+static int vlclua_extension_timer( lua_State *L )
+{
+    extension_t *p_ext = vlclua_extension_get( L );
+    lua_Integer i_delay = luaL_checkinteger( L, 1 );
+    const char *psz_func = luaL_optstring( L, 2, NULL );
+
+    vlc_mutex_lock( &p_ext->p_sys->command_lock );
+    free( p_ext->p_sys->psz_timer_func );
+    p_ext->p_sys->psz_timer_func = NULL;
+
+    if( i_delay > 0 && psz_func != NULL && *psz_func != '\0' )
+    {
+        p_ext->p_sys->psz_timer_func = strdup( psz_func );
+        p_ext->p_sys->i_timer_deadline = mdate()
+                                       + (mtime_t)i_delay * INT64_C(1000);
+    }
+    else
+        p_ext->p_sys->i_timer_deadline = 0;
+
+    /* The thread may be parked on an untimed wait, or on a later deadline
+     * than the one just asked for: either way it has to look again. */
+    vlc_cond_signal( &p_ext->p_sys->wait );
+    vlc_mutex_unlock( &p_ext->p_sys->command_lock );
+    return 0;
+}
+
 /** Keep an extension alive. This resets the watch timer to 0
  * @param L lua_State
  * @note This is the "vlc.keep_alive()" function
@@ -1211,6 +1287,21 @@ static int vlclua_extension_dialog_callback( vlc_object_t *p_this,
             /* Unique: dragging over a list must not queue one command per
              * row the selection passed through. */
             PushCommandUnique( p_ext, CMD_SELECT, p_widget );
+            break;
+        case EXTENSION_EVENT_MENU_SELECTED:
+            assert( p_widget != NULL );
+            /* This callback runs synchronously in the UI thread that set
+             * the fields, so reading and clearing them here is race-free.
+             * Each choice matters: not Unique. */
+            PushCommand( p_ext, CMD_WIDGET_MENU, p_widget,
+                         p_widget->i_menu_choice );
+            break;
+        case EXTENSION_EVENT_DROP_DONE:
+            assert( p_widget != NULL );
+            /* take ownership of the folder path from the widget */
+            PushCommand( p_ext, CMD_WIDGET_DROP, p_widget,
+                         p_widget->psz_drop_dir );
+            p_widget->psz_drop_dir = NULL;
             break;
         case EXTENSION_EVENT_CLOSE:
             PushCommandUnique( p_ext, CMD_CLOSE );

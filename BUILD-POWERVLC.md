@@ -349,7 +349,8 @@ extras/package/docker/build-in-docker.sh win64 win32 winarm64 linux-arm64-appima
 Produces in `extras/package/docker/out/`:
 `PowerVLC-<ver>-win64.exe`, `-win32.exe`, `-winarm64.exe` and
 `PowerVLC-<ver>-aarch64.AppImage` (`<ver>` is the PowerVLC version, e.g. `1.0.0`),
-**plus one zip per target** — see 6.4.
+**plus the zips** — one per Linux target, **two per Windows target** (installer
+and portable) — see 6.4.
 
 Floors match VLC 3.0: win32 → Windows XP SP3, win64 → Vista, winarm64 → Windows 10.
 
@@ -370,12 +371,12 @@ Each target is zipped automatically at the end of its build, next to the raw
 artifact, following the naming of section 4:
 
 ```
-extras/package/docker/out/powervlc-<version>-<target>.zip
+extras/package/docker/out/powervlc-<version>-<label>.zip
 ```
 
-| Build target | Zip |
+| Build target | Zip(s) |
 |---|---|
-| `win32` / `win64` / `winarm64` | `powervlc-<ver>-win32.zip` … |
+| `win32` / `win64` / `winarm64` | `powervlc-<ver>-win32-nsis.zip` **and** `powervlc-<ver>-win32-portable.zip` … |
 | `linux-arm64-appimage` | `powervlc-<ver>-linux-aarch64.zip` |
 | `linux-amd64-appimage` | `powervlc-<ver>-linux-x86_64.zip` |
 | `linux-i386-appimage` | `powervlc-<ver>-linux-i386.zip` |
@@ -387,6 +388,52 @@ The raw `.exe` / `.AppImage` is **kept** alongside its zip: that is the file you
 run locally, the zip is the one you hand out. Zipping is deliberately
 never fatal — a missing `zip` binary or an unexpected artifact name warns and
 moves on rather than discarding a build that can take hours under emulation.
+
+#### The two Windows archives
+
+One build, two deliverables, from the same `-i r` run of
+`extras/package/win32/build.sh`:
+
+| Archive | Contains | Where the settings go |
+|---|---|---|
+| `powervlc-<ver>-<arch>-nsis.zip` | `PowerVLC-<ver>-<arch>.exe`, the NSIS installer | `%APPDATA%\powervlc` |
+| `powervlc-<ver>-<arch>-portable.zip` | the folder `PowerVLC-<ver>-<arch>-portable/`, ready to run | next to `powervlc.exe`, in `portable/` |
+
+Portable mode is **not a separate build**: the binaries are byte-for-byte the
+ones in the installer. VLC's core already implements it —
+`config_GetAppDir()` in `src/win32/dirs.c` looks for a folder named `portable`
+next to `powervlc.exe`, and redirects the configuration, the plugin cache and
+the per-user data there as soon as it finds one. So
+`package-win32-portable-zip` (in `extras/package/win32/package.mak`) simply
+ships the packaging tree, minus the installer scaffolding (NSIS scripts, the
+installer's own translations, the SDK), plus that one folder.
+
+Two things worth knowing about that folder:
+
+- It is **not shipped empty**. A directory with no files in it is a zip entry
+  that "extract here" shell integrations and several extractors drop without a
+  word, and losing it would silently turn the portable build back into a normal
+  one — it would still run, just writing to `%APPDATA%` behind the user's back.
+  So it carries `README.txt` (`extras/package/win32/portable-README.txt`,
+  UTF-8 **with BOM** and CRLF, so XP's Notepad renders it), which also explains
+  the mode to whoever unzips it.
+- The portable tree ships **no `plugins.dat`**: `powervlc-cache-gen.exe` is a
+  Windows binary for a foreign architecture and the packaging runs on Linux
+  with no wine (the NSIS installer runs it on the target machine instead). The
+  first launch pays the full scan of the ~330 plugins and then writes the cache
+  itself into `plugins/`, so it costs **one** slow start, once. That
+  self-healing is the `_WIN32` branch of `AllocatePluginPath()` in
+  `src/modules/bank.c` (it already existed for the macOS zips, which are
+  deployed the same way): without it, nothing on Windows ever writes
+  `plugins.dat` outside the installer, and the portable build would pay the
+  scan on **every** start, forever.
+
+`package-win32` no longer pulls in `package-win32-zip` and
+`package-win32-7zip`: nothing ever collected either of them, the plain zip is
+what the portable archive now is (minus the marker folder), and the 7z was a
+second full-tree archive at `-mx=9` — minutes of CPU and a gigabyte of the
+shared Docker volume for a file no release used. Both targets still work if
+you invoke them by name.
 
 ### 6.5 Notes
 

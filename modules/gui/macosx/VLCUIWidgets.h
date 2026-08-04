@@ -41,6 +41,12 @@
 @interface VLCDialogLabel : NSTextField
 @end
 
+/// Carries its widget like the other controls do, so the layout can ask
+/// where the picture should sit in the rows it covers.
+@interface VLCDialogImageView : NSImageView
+@property (readwrite) extension_widget_t *widget;
+@end
+
 @interface VLCDialogTextField : NSTextField
 @property (readwrite) extension_widget_t *widget;
 @end

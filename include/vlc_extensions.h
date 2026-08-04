@@ -190,6 +190,10 @@ typedef enum
     EXTENSION_EVENT_CLOSE,       ///< Close the dialog: no data
     EXTENSION_EVENT_SELECTION_CHANGED, ///< List selection: data = widget
     // EXTENSION_EVENT_TEXT_CHANGED,
+    EXTENSION_EVENT_MENU_SELECTED, ///< List context-menu entry picked:
+                                   ///< data = widget, i_menu_choice set
+    EXTENSION_EVENT_DROP_DONE,     ///< List rows dragged out to a folder:
+                                   ///< data = widget, psz_drop_dir set
 } extension_dialog_event_e;
 
 /// Command to pass to the extension dialog owner
@@ -261,6 +265,20 @@ static inline int extension_DialogCommand( extension_dialog_t* p_dialog,
 #define extension_WidgetSelectionChanged( dlg, wdg ) \
         extension_DialogCommand( dlg, EXTENSION_EVENT_SELECTION_CHANGED, wdg )
 
+/** Forward a context-menu choice on a list widget.
+ * The UI stores the entry index in wdg->i_menu_choice (and selects the
+ * right-clicked row) before sending this.
+ **/
+#define extension_WidgetMenuSelected( dlg, wdg ) \
+        extension_DialogCommand( dlg, EXTENSION_EVENT_MENU_SELECTED, wdg )
+
+/** Forward a completed drag of list rows out to a file manager.
+ * The UI stores the drop folder in wdg->psz_drop_dir (and marks the
+ * dragged rows selected) before sending this; the receiver frees it.
+ **/
+#define extension_WidgetDropDone( dlg, wdg ) \
+        extension_DialogCommand( dlg, EXTENSION_EVENT_DROP_DONE, wdg )
+
 /// Widget types
 typedef enum
 {
@@ -288,9 +306,42 @@ struct extension_widget_t
         int i_id;          ///< Identifier for the extension module
                            ///< (weird behavior may occur if not unique)
         char *psz_text;    ///< String value
+        char *psz_dragname; ///< File name promised when this row is
+                            ///< dragged out (NULL = row not draggable)
         bool b_selected;   ///< True if this item is selected
         struct extension_widget_value_t *p_next; ///< Next value or NULL
     } *p_values;                  ///< Chained list of values (Drop-down/List)
+    /// Last link of p_values (this fork). Without it every add_value
+    /// walked the whole chain to find the end, so filling a list of a
+    /// few thousand rows cost millions of steps -- felt on any machine,
+    /// crippling on the slow ones this fork exists for.
+    struct extension_widget_value_t *p_values_tail;
+
+    /* Image widgets (this fork): sit in the middle of the rows the
+     * picture covers rather than hanging from the top of them. Top is
+     * the default because a poster usually illustrates the title it
+     * sits next to; a cover beside a list looks better centred on it. */
+    bool b_image_centered;
+
+    /* List widgets: the order the script wants its rows shown in (this
+     * fork). Sorting is left to the interface so that what a listing
+     * opens on and what a click on that column gives are the same
+     * order, decided by the same platform comparison.
+     * 0 = keep the order the values were added in. */
+    int i_sort_column;            ///< 1-based column index
+    bool b_sort_ascending;
+
+    /* List widgets: right-click context menu (this fork) */
+    char **pp_menu;               ///< Context-menu entry labels
+    int i_menu;                   ///< Number of entries (0 = no menu)
+    int i_menu_choice;            ///< 1-based entry index, set by the UI
+                                  ///< right before MENU_SELECTED
+
+    /* List widgets: drag-out to a file manager (this fork) */
+    bool b_can_drag;              ///< Rows with a psz_dragname may be
+                                  ///< dragged out of the window
+    char *psz_drop_dir;           ///< Drop folder, set by the UI right
+                                  ///< before DROP_DONE (malloc'd)
 
     /* Check-box */
     bool b_checked;               ///< Is this entry checked

@@ -27,12 +27,14 @@
 #import "VLCLegacyControls.h"
 #import "VLCLegacyMain.h"
 #import "VLCLegacyMenu.h"
+#import "VLCLegacyHUDWindow.h"
 #import "misc.h"
 
 /* SetSystemUIMode(): menu bar/Dock hiding available since Mac OS X 10.2 */
 #import <Carbon/Carbon.h>
 
 #include <vlc_playlist.h>
+#include <vlc_charset.h>
 #include <vlc_input.h>
 #include <vlc_input_item.h>
 #include <vlc_services_discovery.h>
@@ -43,6 +45,23 @@
 
 #define SIDEBAR_WIDTH 150.0f
 #define BOTTOM_BAR_HEIGHT 36.0f
+/* height of the Subscribe / Unsubscribe strip under the podcast list */
+#define PODCAST_BAR_HEIGHT 32.0f
+
+/* Accents, case, Latin ligatures and typographic punctuation folded away,
+ * through the very function the core-side search uses: the display filter
+ * and the playback flags must agree on what matches. */
+static NSString *VLCLegacyFoldedString(NSString *string)
+{
+    if (!string)
+        return @"";
+    char *psz_folded = vlc_strfold([string UTF8String]);
+    if (!psz_folded)
+        return string;
+    NSString *folded = [NSString stringWithUTF8String:psz_folded];
+    free(psz_folded);
+    return folded ? folded : string;
+}
 
 static NSString *timeToString(int64_t us)
 {
@@ -1068,6 +1087,8 @@ static NSString *const VLCLegacyArtHeightKey = @"VLCLegacySidebarArtHeight";
     [sidebarScroll release];
     [sidebarPane release];
     [sidebarArtUrl release];
+    [searchString release];
+    [searchStringFolded release];
     [visibleColumns release];
     [fileSizeCache release];
     [resumeTrackedURI release];
@@ -1515,6 +1536,35 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
     }
     [playlistScroll setDocumentView:playlistTable];
     [rightContainer addSubview:playlistScroll];
+
+    /* Podcast strip: sits at the bottom of the playlist area, right above
+     * the controls bar, and is revealed only while the Podcasts service is
+     * the selected sidebar entry (same place as the 3.0 podcastView). */
+    podcastBar = [[[VLCLegacyBottomBarView alloc]
+        initWithFrame:NSMakeRect(0, 0, rightBounds.size.width,
+                                 PODCAST_BAR_HEIGHT)] autorelease];
+    [podcastBar setAutoresizingMask:NSViewWidthSizable | NSViewMaxYMargin];
+    {
+        NSButton *button = [[[NSButton alloc]
+            initWithFrame:NSMakeRect(10, 3, 130, 26)] autorelease];
+        [button setTitle:_NS("Subscribe")];
+        [button setBezelStyle:NSRoundedBezelStyle];
+        [button setTarget:self];
+        [button setAction:@selector(subscribePodcast:)];
+        [podcastBar addSubview:button];
+
+        button = [[[NSButton alloc]
+            initWithFrame:NSMakeRect(146, 3, 130, 26)] autorelease];
+        [button setTitle:_NS("Unsubscribe")];
+        [button setBezelStyle:NSRoundedBezelStyle];
+        [button setTarget:self];
+        [button setAction:@selector(unsubscribePodcast:)];
+        [podcastBar addSubview:button];
+        podcastRemoveButton = button;
+    }
+    VLCLegacySetViewHidden(podcastBar, YES);
+    podcastBarVisible = NO;
+    [rightContainer addSubview:podcastBar];
 
     /* dropzone, shown while the playlist is empty (3.0 style) */
     dropzoneView = [[[VLCLegacyDropView alloc]
@@ -2791,6 +2841,10 @@ static const struct {
 {
     [searchString release];
     searchString = [[sender stringValue] copy];
+    /* the display filter must agree with the core-side flags, which are
+     * set from the folded needle too */
+    [searchStringFolded release];
+    searchStringFolded = [VLCLegacyFoldedString(searchString) retain];
     [self rebuildItemsSnapshot];
 }
 
@@ -3054,6 +3108,155 @@ static const struct {
 }
 
 /*****************************************************************************
+ * podcasts
+ *****************************************************************************/
+
+/* "podcast-urls" is one pipe-separated string, shared by the module and
+ * its stored configuration. */
+- (NSArray *)podcastUrls
+{
+    char *psz_urls = config_GetPsz(p_intf, "podcast-urls");
+    if (!psz_urls || !*psz_urls) {
+        free(psz_urls);
+        return [NSArray array];
+    }
+    NSArray *urls = [[NSString stringWithUTF8String:psz_urls]
+        componentsSeparatedByString:@"|"];
+    free(psz_urls);
+    return urls;
+}
+
+- (void)setPodcastUrls:(NSArray *)urls
+{
+    const char *psz_urls = [[urls componentsJoinedByString:@"|"] UTF8String];
+    /* the running module watches the playlist variable, the preference
+     * carries the list over to the next launch: both need the update */
+    config_PutPsz(p_intf, "podcast-urls", psz_urls);
+    var_SetString(pl_Get(p_intf), "podcast-urls", psz_urls);
+    /* the module rebuilds its node in its own thread; the periodic
+     * refresh picks the result up, this only shortens the wait */
+    [self rebuildItemsSnapshot];
+    [self updatePodcastRemoveButton];
+}
+
+/* Unsubscribe acts on the list selection, so it only makes sense while a
+ * feed row -- not an episode -- is selected. */
+- (void)updatePodcastRemoveButton
+{
+    if (!podcastBarVisible)
+        return;
+    [podcastRemoveButton setEnabled:
+        [[self selectedPodcastFeedUrls] count] > 0];
+}
+
+/* the podcast service is a plain C module: its sidebar entry carries the
+ * module name verbatim (the Lua ones read lua{sd='...'}) */
+- (BOOL)podcastRowIsSelected
+{
+    if (sidebarSelection < 0
+     || (unsigned)sidebarSelection >= [sidebarItems count])
+        return NO;
+    NSString *sd = [[sidebarItems objectAtIndex:sidebarSelection]
+        objectForKey:@"sd"];
+    return sd != nil && [sd isEqualToString:@"podcast"];
+}
+
+- (void)setPodcastBarVisible:(BOOL)visible
+{
+    if (!podcastBar || podcastBarVisible == visible)
+        return;
+    podcastBarVisible = visible;
+    if (visible)
+        [self updatePodcastRemoveButton];
+    VLCLegacySetViewHidden(podcastBar, !visible);
+    /* the table has no flexible margin, only a flexible size: shifting
+     * it once by the strip height holds across every later resize */
+    NSRect frame = [playlistScroll frame];
+    frame.origin.y += visible ? PODCAST_BAR_HEIGHT : -PODCAST_BAR_HEIGHT;
+    frame.size.height -= visible ? PODCAST_BAR_HEIGHT : -PODCAST_BAR_HEIGHT;
+    if (frame.size.height < 0.0f)
+        frame.size.height = 0.0f;
+    [playlistScroll setFrame:frame];
+}
+
+- (void)subscribePodcast:(id)sender
+{
+    NSString *url = VLCLegacyRunTextPrompt(
+        _NS("Subscribe to a podcast"),
+        _NS("Enter URL of the podcast to subscribe to:"),
+        _NS("Subscribe"), _NS("Cancel"), @"");
+    if (!url)
+        return;
+    url = [url stringByTrimmingCharactersInSet:
+        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    /* an empty entry would add a bogus feed, a duplicate would be
+     * dropped by the module anyway */
+    if ([url length] == 0)
+        return;
+    NSMutableArray *urls =
+        [NSMutableArray arrayWithArray:[self podcastUrls]];
+    if ([urls containsObject:url])
+        return;
+    [urls addObject:url];
+    [self setPodcastUrls:urls];
+}
+
+/* Feed URLs of the rows selected in the list. Only the top-level rows
+ * are feeds; their children are the episodes and unsubscribing on one of
+ * those would silently drop the whole podcast. */
+- (NSArray *)selectedPodcastFeedUrls
+{
+    NSMutableArray *urls = [NSMutableArray array];
+    NSArray *selection = VLCLegacySelectedRows(playlistTable);
+    playlist_t *p_playlist = pl_Get(p_intf);
+    unsigned i;
+    for (i = 0; i < [selection count]; i++) {
+        NSInteger row = (NSInteger)[[selection objectAtIndex:i] intValue];
+        NSDictionary *entry = [playlistTable itemAtRow:row];
+        /* -parentForItem: would say the same but is 10.4 */
+        if (!entry || [playlistTable levelForRow:row] != 0)
+            continue;
+        char *psz_uri = NULL;
+        playlist_Lock(p_playlist);
+        playlist_item_t *p_item = playlist_ItemGetById(p_playlist,
+            [[entry objectForKey:@"id"] intValue]);
+        if (p_item && p_item->p_input)
+            psz_uri = input_item_GetURI(p_item->p_input);
+        playlist_Unlock(p_playlist);
+        if (!psz_uri)
+            continue;
+        [urls addObject:[NSString stringWithUTF8String:psz_uri]];
+        free(psz_uri);
+    }
+    return urls;
+}
+
+/* Delete on the podcast list means unsubscribe: dropping the node alone
+ * would leave the feed in the configuration and the module would put it
+ * straight back. NO when the selection holds no feed. */
+- (BOOL)unsubscribeSelectedPodcasts
+{
+    NSArray *selected = [self selectedPodcastFeedUrls];
+    if ([selected count] == 0)
+        return NO;
+    NSMutableArray *urls =
+        [NSMutableArray arrayWithArray:[self podcastUrls]];
+    NSUInteger before = [urls count];
+    [urls removeObjectsInArray:selected];
+    if ([urls count] == before)
+        return NO;
+    [self setPodcastUrls:urls];
+    return YES;
+}
+
+/* No confirmation panel: the feeds to drop are the ones selected in the
+ * list, which is unambiguous, and re-subscribing is one URL away. */
+- (void)unsubscribePodcast:(id)sender
+{
+    [self unsubscribeSelectedPodcasts];
+}
+
+/*****************************************************************************
  * playlist table
  *****************************************************************************/
 
@@ -3096,6 +3299,10 @@ static const struct {
 {
     NSArray *selection = VLCLegacySelectedRows(playlistTable);
     if (![selection count])
+        return;
+
+    /* on the podcast list the delete shortcut unsubscribes instead */
+    if ([self podcastRowIsSelected] && [self unsubscribeSelectedPodcasts])
         return;
 
     /* collect the ids first: the outline rows shift as nodes go away */
@@ -3309,6 +3516,11 @@ static const struct {
     }
 }
 
+- (void)outlineViewSelectionDidChange:(NSNotification *)notification
+{
+    [self updatePodcastRemoveButton];
+}
+
 - (void)tableViewSelectionDidChange:(NSNotification *)notification
 {
     if ([notification object] != sidebarTable)
@@ -3321,6 +3533,8 @@ static const struct {
         return;
     sidebarSelection = row;
     [viewTitleLabel setStringValue:[entry objectForKey:@"title"]];
+    /* Subscribe / Unsubscribe belong to the podcast list only */
+    [self setPodcastBarVisible:[self podcastRowIsSelected]];
 
     /* activate the services discovery on first use, like 3.0 */
     NSString *sd = [entry objectForKey:@"sd"];
@@ -3791,8 +4005,7 @@ static const struct {
     }
 
     if ([searchString length]
-     && [title rangeOfString:searchString
-                     options:NSCaseInsensitiveSearch].location
+     && [VLCLegacyFoldedString(title) rangeOfString:searchStringFolded].location
             == NSNotFound) {
         /* the playing item stays visible even if a live-stream title
          * update made it stop matching the filter */
@@ -4018,6 +4231,7 @@ static const struct {
          * items appended after the search (radio directory still loading)
          * are filtered too. */
         if ([searchString length]) {
+            /* the core folds the needle itself, feed it the raw string */
             playlist_LiveSearchUpdate(p_playlist, p_root,
                                       [searchString UTF8String], true);
             searchFlagsWereSet = YES;

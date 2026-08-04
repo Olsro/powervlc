@@ -1632,20 +1632,12 @@ msgstr "Web"
 msgid "Mouse Gestures"
 msgstr "Gesta myši"
 
-#: src/interface/interface.c:230
+#: src/interface/interface.c:222
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Spouštím powervlc s výchozím rozhraním. Použijte «cpowervlc» pro spuštění "
-"powervlc bez rozhraní."
-
-#: src/interface/interface.c:226
-msgid ""
-"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
-"without interface."
-msgstr ""
-"Spouštím powervlc s výchozím rozhraním. Použijte «-I dummy» pro spuštění "
 "powervlc bez rozhraní."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -31425,7 +31417,62 @@ msgstr ""
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
 
-#, c-format
+#: share/lua/sd/radiobrowser.lua:99
+msgid "Africa"
+msgstr "Afrika"
+
+#: share/lua/sd/radiobrowser.lua:103
+msgid "Asia"
+msgstr "Asie"
+
+#: share/lua/sd/radiobrowser.lua:106
+msgid "Europe"
+msgstr "Evropa"
+
+#: share/lua/sd/radiobrowser.lua:109
+msgid "North America"
+msgstr "Severní Amerika"
+
+#: share/lua/sd/radiobrowser.lua:112
+msgid "Oceania"
+msgstr "Oceánie"
+
+#: share/lua/sd/radiobrowser.lua:114
+msgid "South America"
+msgstr "Jižní Amerika"
+
+#: share/lua/playlist/radiobrowser.lua:186 share/lua/sd/radiobrowser.lua:137
+msgid "Play a random station (%s)"
+msgstr "Přehrát náhodnou stanici (%s)"
+
+#: modules/access/radiobrowser.c:77
+msgid "Radio-Browser.info random station picker"
+msgstr "Výběr náhodné stanice z Radio-Browser.info"
+
+#: modules/access/radiobrowser.c
+msgid "Station"
+msgstr "Stanice"
+
+#: modules/access/radiobrowser.c
+msgid "Stream URL"
+msgstr "Adresa URL proudu"
+
+#: modules/access/radiobrowser.c
+msgid "Homepage"
+msgstr "Domovská stránka"
+
+#: modules/access/radiobrowser.c
+msgctxt "Radio station"
+msgid "Country"
+msgstr "Země"
+
+#~ msgid ""
+#~ "Running powervlc with the default interface. Use '-I dummy' to use "
+#~ "powervlc without interface."
+#~ msgstr ""
+#~ "Spouštím powervlc s výchozím rozhraním. Použijte «-I dummy» pro spuštění "
+#~ "powervlc bez rozhraní."
+
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "Verze přehrávače VLC %s (%s)\n"
 

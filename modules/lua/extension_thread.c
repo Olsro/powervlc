@@ -130,6 +130,10 @@ static void FreeCommands( struct command_t *command )
             case CMD_PLAYING_CHANGED:
                 free( command->data[0] ); // free allocated data
                 break;
+            case CMD_WIDGET_MENU:
+            case CMD_WIDGET_DROP:
+                free( command->data[1] ); // arg 0 is the widget, not owned
+                break;
             default:
                 break;
         }
@@ -238,6 +242,23 @@ int PushCommand__( extension_t *p_ext,  bool b_unique, command_type_e i_command,
                 cmd->data[0] = pi;
             }
             break;
+        case CMD_WIDGET_MENU:
+            {
+                cmd->data[0] = va_arg( args, void* );
+                int *pi = malloc( sizeof( int ) );
+                if( !pi )
+                {
+                    free( cmd );
+                    return VLC_ENOMEM;
+                }
+                *pi = va_arg( args, int );
+                cmd->data[1] = pi;
+            }
+            break;
+        case CMD_WIDGET_DROP:
+            cmd->data[0] = va_arg( args, void* );
+            cmd->data[1] = va_arg( args, void* ); /* char*, ownership taken */
+            break;
         case CMD_CLOSE:
         case CMD_SET_INPUT:
         case CMD_UPDATE_META:
@@ -308,7 +329,46 @@ static void* Run( void *data )
         /* Pop command in front */
         if( cmd == NULL )
         {
-            vlc_cond_wait( &p_ext->p_sys->wait, &p_ext->p_sys->command_lock );
+            /* Nothing queued, but a script may have asked to be called back
+             * later: an extension has no other way to notice that something
+             * outside VLC has moved on (a browser handing a session back,
+             * say). Waiting on the very same condition keeps a real command
+             * ahead of the timer -- it just wakes us up early. */
+            if( p_ext->p_sys->i_timer_deadline == 0 )
+            {
+                vlc_cond_wait( &p_ext->p_sys->wait,
+                               &p_ext->p_sys->command_lock );
+                continue;
+            }
+
+            if( vlc_cond_timedwait( &p_ext->p_sys->wait,
+                                    &p_ext->p_sys->command_lock,
+                                    p_ext->p_sys->i_timer_deadline ) == 0 )
+                continue; /* signalled: look at the queue again */
+
+            /* One shot: the script re-arms it if it wants another. */
+            char *psz_func = p_ext->p_sys->psz_timer_func;
+            p_ext->p_sys->psz_timer_func = NULL;
+            p_ext->p_sys->i_timer_deadline = 0;
+            if( psz_func == NULL || p_ext->p_sys->b_exiting )
+            {
+                free( psz_func );
+                continue;
+            }
+
+            /* Same watchdog and same lock as any other command: the call
+             * runs Lua, so nothing else may be running it at the time. */
+            vlc_timer_schedule( p_ext->p_sys->timer, false,
+                                WATCH_TIMER_PERIOD, 0 );
+            vlc_mutex_unlock( &p_ext->p_sys->command_lock );
+
+            vlc_mutex_lock( &p_ext->p_sys->running_lock );
+            lua_ExecuteFunction( p_mgr, p_ext, psz_func, LUA_END );
+            vlc_mutex_unlock( &p_ext->p_sys->running_lock );
+            free( psz_func );
+
+            vlc_mutex_lock( &p_ext->p_sys->command_lock );
+            vlc_timer_schedule( p_ext->p_sys->timer, false, 0, 0 );
             continue;
         }
         p_ext->p_sys->command = cmd->next;
@@ -388,6 +448,32 @@ static void* Run( void *data )
                 msg_Dbg( p_mgr, "Trigger menu %d of '%s'",
                          *pi_id, p_ext->psz_name );
                 lua_ExtensionTriggerMenu( p_mgr, p_ext, *pi_id );
+                break;
+            }
+
+            case CMD_WIDGET_MENU:
+            {
+                extension_widget_t *p_widget = cmd->data[0];
+                int *pi_entry = cmd->data[1];
+                assert( p_widget && pi_entry );
+                if( lua_ExtensionWidgetMenu( p_mgr, p_ext, p_widget,
+                                             *pi_entry ) < 0 )
+                {
+                    msg_Warn( p_mgr, "Could not translate menu choice" );
+                }
+                break;
+            }
+
+            case CMD_WIDGET_DROP:
+            {
+                extension_widget_t *p_widget = cmd->data[0];
+                char *psz_dir = cmd->data[1];
+                assert( p_widget && psz_dir );
+                if( lua_ExtensionWidgetDrop( p_mgr, p_ext, p_widget,
+                                             psz_dir ) < 0 )
+                {
+                    msg_Warn( p_mgr, "Could not translate drop" );
+                }
                 break;
             }
 

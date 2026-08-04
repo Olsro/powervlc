@@ -120,6 +120,7 @@ VLC_API int vlc_iconv_close( vlc_iconv_t );
 VLC_API int utf8_vfprintf( FILE *stream, const char *fmt, va_list ap );
 VLC_API int utf8_fprintf( FILE *, const char *, ... ) VLC_FORMAT( 2, 3 );
 VLC_API char * vlc_strcasestr(const char *, const char *) VLC_USED;
+VLC_API char * vlc_strfold(const char *) VLC_USED VLC_MALLOC;
 
 VLC_API char * FromCharset( const char *charset, const void *data, size_t data_size ) VLC_USED;
 VLC_API void * ToCharset( const char *charset, const char *in, size_t *outsize ) VLC_USED;

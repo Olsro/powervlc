@@ -1592,20 +1592,12 @@ msgstr "Lìon"
 msgid "Mouse Gestures"
 msgstr "Gluasadan na luchaige"
 
-#: src/interface/interface.c:230
+#: src/interface/interface.c:222
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "A' ruith powervlc leis an eadar-aghaidh bhunaiteach. Cleachd «cpowervlc» gus "
-"powervlc a ruith gun eadar-aghaidh."
-
-#: src/interface/interface.c:226
-msgid ""
-"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
-"without interface."
-msgstr ""
-"A' ruith powervlc leis an eadar-aghaidh bhunaiteach. Cleachd «-I dummy» gus "
 "powervlc a ruith gun eadar-aghaidh."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -29850,7 +29842,62 @@ msgstr ""
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
 
-#, c-format
+#: share/lua/sd/radiobrowser.lua:99
+msgid "Africa"
+msgstr "Afraga"
+
+#: share/lua/sd/radiobrowser.lua:103
+msgid "Asia"
+msgstr "Àisia"
+
+#: share/lua/sd/radiobrowser.lua:106
+msgid "Europe"
+msgstr "An Roinn-Eòrpa"
+
+#: share/lua/sd/radiobrowser.lua:109
+msgid "North America"
+msgstr "Aimeireaga a Tuath"
+
+#: share/lua/sd/radiobrowser.lua:112
+msgid "Oceania"
+msgstr "Roinn a' Chuain Sèimh"
+
+#: share/lua/sd/radiobrowser.lua:114
+msgid "South America"
+msgstr "Aimeireaga a Deas"
+
+#: share/lua/playlist/radiobrowser.lua:186 share/lua/sd/radiobrowser.lua:137
+msgid "Play a random station (%s)"
+msgstr "Cluich stèisean air thuaiream (%s)"
+
+#: modules/access/radiobrowser.c:77
+msgid "Radio-Browser.info random station picker"
+msgstr ""
+
+#: modules/access/radiobrowser.c
+msgid "Station"
+msgstr "Stèisean"
+
+#: modules/access/radiobrowser.c
+msgid "Stream URL"
+msgstr "URL an t-srutha"
+
+#: modules/access/radiobrowser.c
+msgid "Homepage"
+msgstr "Duilleag-dhachaigh"
+
+#: modules/access/radiobrowser.c
+msgctxt "Radio station"
+msgid "Country"
+msgstr "Dùthaich"
+
+#~ msgid ""
+#~ "Running powervlc with the default interface. Use '-I dummy' to use "
+#~ "powervlc without interface."
+#~ msgstr ""
+#~ "A' ruith powervlc leis an eadar-aghaidh bhunaiteach. Cleachd «-I dummy» "
+#~ "gus powervlc a ruith gun eadar-aghaidh."
+
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "Tionndadh VLC %s (%s)\n"
 

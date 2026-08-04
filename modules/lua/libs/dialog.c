@@ -94,6 +94,10 @@ static int vlclua_widget_get_value( lua_State *L );
 static int vlclua_widget_set_value( lua_State *L );
 static int vlclua_widget_clear( lua_State *L );
 static int vlclua_widget_get_selection( lua_State *L );
+static int vlclua_widget_set_centered( lua_State *L );
+static int vlclua_widget_set_sort( lua_State *L );
+static int vlclua_widget_set_menu( lua_State *L );
+static int vlclua_widget_set_drag( lua_State *L );
 static int vlclua_widget_animate( lua_State *L );
 static int vlclua_widget_stop( lua_State *L );
 
@@ -136,6 +140,10 @@ static const luaL_Reg vlclua_widget_reg[] = {
     { "set_value", vlclua_widget_set_value },
     { "clear", vlclua_widget_clear },
     { "get_selection", vlclua_widget_get_selection },
+    { "set_centered", vlclua_widget_set_centered },
+    { "set_sort", vlclua_widget_set_sort },
+    { "set_menu", vlclua_widget_set_menu },
+    { "set_drag", vlclua_widget_set_drag },
     { "animate", vlclua_widget_animate },
     { "stop", vlclua_widget_stop },
     { NULL, NULL }
@@ -333,8 +341,13 @@ static int vlclua_dialog_delete( lua_State *L )
         {
             p_next = p_value->p_next;
             free( p_value->psz_text );
+            free( p_value->psz_dragname );
             free( p_value );
         }
+        for( int i = 0; i < p_widget->i_menu; i++ )
+            free( p_widget->pp_menu[i] );
+        free( p_widget->pp_menu );
+        free( p_widget->psz_drop_dir );
         free( p_widget );
     }
     FOREACH_END()
@@ -593,6 +606,16 @@ static int vlclua_dialog_add_check_box( lua_State *L )
     p_widget->type = EXTENSION_WIDGET_CHECK_BOX;
     p_widget->psz_text = strdup( luaL_checkstring( L, 2 ) );
     p_widget->b_checked = lua_toboolean( L, 3 );
+
+    /* add_check_box( text, checked, col, row, hspan, vspan [, on_toggle ] ):
+     * without the callback a script only sees the box when it happens to
+     * read get_checked(), so a filter box could not refilter on the spot */
+    if( lua_gettop( L ) >= 8 && lua_isfunction( L, 8 ) )
+    {
+        lua_pushlightuserdata( L, p_widget );
+        lua_pushvalue( L, 8 );
+        lua_settable( L, LUA_REGISTRYINDEX );
+    }
 
     return vlclua_create_widget_inner( L, 2, p_widget );
 }
@@ -882,6 +905,10 @@ static int vlclua_widget_add_value( lua_State *L )
         *p_new_value = calloc( 1, sizeof( struct extension_widget_value_t ) );
     p_new_value->psz_text = strdup( luaL_checkstring( L, 2 ) );
     p_new_value->i_id = lua_tointeger( L, 3 );
+    /* optional 4th argument: the file name promised when this row is
+     * dragged out of the window (see set_drag) */
+    if( lua_isstring( L, 4 ) )
+        p_new_value->psz_dragname = strdup( luaL_checkstring( L, 4 ) );
 
     vlc_mutex_lock( &p_widget->p_dialog->lock );
 
@@ -891,14 +918,20 @@ static int vlclua_widget_add_value( lua_State *L )
         if( p_widget->type == EXTENSION_WIDGET_DROPDOWN )
             p_new_value->b_selected = true;
     }
+    else if( p_widget->p_values_tail != NULL )
+    {
+        p_widget->p_values_tail->p_next = p_new_value;
+    }
     else
     {
+        /* a chain built before the tail was tracked */
         for( p_value = p_widget->p_values;
              p_value->p_next != NULL;
              p_value = p_value->p_next )
         { /* Do nothing, iterate to find the end */ }
         p_value->p_next = p_new_value;
     }
+    p_widget->p_values_tail = p_new_value;
 
     p_widget->b_update = true;
     vlc_mutex_unlock( &p_widget->p_dialog->lock );
@@ -1004,15 +1037,180 @@ static int vlclua_widget_clear( lua_State *L )
     {
         p_next = p_value->p_next;
         free( p_value->psz_text );
+        free( p_value->psz_dragname );
         free( p_value );
     }
 
     p_widget->p_values = NULL;
+    p_widget->p_values_tail = NULL;
     p_widget->b_update = true;
 
     vlc_mutex_unlock( &p_widget->p_dialog->lock );
 
     lua_SetDialogUpdate( L, 1 );
+
+    return 1;
+}
+
+/* Fetch the registry entry of a widget as a table of named callbacks,
+ * creating it when the widget had none yet, and leave it on the stack.
+ * Lists only ever store tables (add_list), so nothing is overwritten. */
+static void widget_callback_table( lua_State *L, extension_widget_t *p_widget )
+{
+    lua_pushlightuserdata( L, p_widget );
+    lua_gettable( L, LUA_REGISTRYINDEX );
+    if( !lua_istable( L, -1 ) )
+    {
+        lua_pop( L, 1 );
+        lua_pushlightuserdata( L, p_widget );
+        lua_newtable( L );
+        lua_settable( L, LUA_REGISTRYINDEX );
+        lua_pushlightuserdata( L, p_widget );
+        lua_gettable( L, LUA_REGISTRYINDEX );
+    }
+}
+
+/**
+ * Centre a picture on the rows it covers: image:set_centered( true )
+ * A picture hangs from the top of its block by default, level with the
+ * title it illustrates; beside a list, centred reads better.
+ **/
+static int vlclua_widget_set_centered( lua_State *L )
+{
+    extension_widget_t **pp_widget =
+            (extension_widget_t **) luaL_checkudata( L, 1, "widget" );
+    if( !pp_widget || !*pp_widget )
+        return luaL_error( L, "Can't get pointer to widget" );
+    extension_widget_t *p_widget = *pp_widget;
+
+    if( p_widget->type != EXTENSION_WIDGET_IMAGE )
+        return luaL_error( L, "method set_centered not valid for this widget" );
+
+    vlc_mutex_lock( &p_widget->p_dialog->lock );
+    p_widget->b_image_centered = lua_isnone( L, 2 ) ? true
+                                                    : lua_toboolean( L, 2 );
+    p_widget->b_update = true;
+    vlc_mutex_unlock( &p_widget->p_dialog->lock );
+
+    lua_SetDialogUpdate( L, 1 );
+
+    return 1;
+}
+
+/**
+ * Ask for a list to be shown sorted on one of its columns:
+ * list:set_sort( column [, ascending] )   -- column is 1-based, 0 = none
+ *
+ * The interface sorts it, with the same comparison a click on that
+ * column header uses -- which is the point: a listing that opens
+ * alphabetically and the same listing after a click on that header are
+ * then in the same order, and both in the order the rest of the system
+ * sorts names in. Order-carrying listings (an album's tracks, a
+ * playlist) simply do not call this.
+ **/
+static int vlclua_widget_set_sort( lua_State *L )
+{
+    extension_widget_t **pp_widget =
+            (extension_widget_t **) luaL_checkudata( L, 1, "widget" );
+    if( !pp_widget || !*pp_widget )
+        return luaL_error( L, "Can't get pointer to widget" );
+    extension_widget_t *p_widget = *pp_widget;
+
+    if( p_widget->type != EXTENSION_WIDGET_LIST )
+        return luaL_error( L, "method set_sort not valid for this widget" );
+
+    int i_column = luaL_checkint( L, 2 );
+    bool b_ascending = lua_isnone( L, 3 ) ? true : lua_toboolean( L, 3 );
+
+    vlc_mutex_lock( &p_widget->p_dialog->lock );
+    p_widget->i_sort_column = ( i_column > 0 ) ? i_column : 0;
+    p_widget->b_sort_ascending = b_ascending;
+    p_widget->b_update = true;
+    vlc_mutex_unlock( &p_widget->p_dialog->lock );
+
+    lua_SetDialogUpdate( L, 1 );
+
+    return 1;
+}
+
+/**
+ * Attach a right-click context menu to a list:
+ * list:set_menu( { "label 1", "label 2", ... }, callback )
+ * The callback receives the 1-based index of the picked entry; the
+ * right-clicked row is selected before the callback runs.
+ **/
+static int vlclua_widget_set_menu( lua_State *L )
+{
+    extension_widget_t **pp_widget =
+            (extension_widget_t **) luaL_checkudata( L, 1, "widget" );
+    if( !pp_widget || !*pp_widget )
+        return luaL_error( L, "Can't get pointer to widget" );
+    extension_widget_t *p_widget = *pp_widget;
+
+    if( p_widget->type != EXTENSION_WIDGET_LIST )
+        return luaL_error( L, "method set_menu not valid for this widget" );
+    if( !lua_istable( L, 2 ) || !lua_isfunction( L, 3 ) )
+        return luaL_error( L, "widget:set_menu usage: (labels table, callback)" );
+
+    int i_count = lua_objlen( L, 2 );
+    char **pp_menu = NULL;
+    if( i_count > 0 )
+    {
+        pp_menu = calloc( i_count, sizeof( char * ) );
+        if( !pp_menu )
+            return vlclua_error( L );
+        for( int i = 0; i < i_count; i++ )
+        {
+            lua_rawgeti( L, 2, i + 1 );
+            pp_menu[i] = strdup( luaL_checkstring( L, -1 ) );
+            lua_pop( L, 1 );
+        }
+    }
+
+    vlc_mutex_lock( &p_widget->p_dialog->lock );
+    for( int i = 0; i < p_widget->i_menu; i++ )
+        free( p_widget->pp_menu[i] );
+    free( p_widget->pp_menu );
+    p_widget->pp_menu = pp_menu;
+    p_widget->i_menu = i_count;
+    vlc_mutex_unlock( &p_widget->p_dialog->lock );
+
+    widget_callback_table( L, p_widget );
+    lua_pushvalue( L, 3 );
+    lua_setfield( L, -2, "menu" );
+    lua_pop( L, 1 );
+
+    return 1;
+}
+
+/**
+ * Let rows that carry a drag name (3rd argument of add_value) be dragged
+ * out to a file manager: list:set_drag( callback )
+ * Once the names have been promised, the callback receives the drop
+ * folder; the dragged rows are selected. It is then up to the script to
+ * create each promised file in that folder.
+ **/
+static int vlclua_widget_set_drag( lua_State *L )
+{
+    extension_widget_t **pp_widget =
+            (extension_widget_t **) luaL_checkudata( L, 1, "widget" );
+    if( !pp_widget || !*pp_widget )
+        return luaL_error( L, "Can't get pointer to widget" );
+    extension_widget_t *p_widget = *pp_widget;
+
+    if( p_widget->type != EXTENSION_WIDGET_LIST )
+        return luaL_error( L, "method set_drag not valid for this widget" );
+    if( !lua_isfunction( L, 2 ) )
+        return luaL_error( L, "widget:set_drag usage: (callback)" );
+
+    vlc_mutex_lock( &p_widget->p_dialog->lock );
+    p_widget->b_can_drag = true;
+    vlc_mutex_unlock( &p_widget->p_dialog->lock );
+
+    widget_callback_table( L, p_widget );
+    lua_pushvalue( L, 2 );
+    lua_setfield( L, -2, "drop" );
+    lua_pop( L, 1 );
 
     return 1;
 }
@@ -1258,10 +1456,15 @@ static int DeleteWidget( extension_dialog_t *p_dialog,
 
     /* Now free the data */
     free( p_widget->p_sys );
+    for( int i = 0; i < p_widget->i_menu; i++ )
+        free( p_widget->pp_menu[i] );
+    free( p_widget->pp_menu );
+    free( p_widget->psz_drop_dir );
     struct extension_widget_value_t *p_value = p_widget->p_values;
     while( p_value )
     {
         free( p_value->psz_text );
+        free( p_value->psz_dragname );
         struct extension_widget_value_t *old = p_value;
         p_value = p_value->p_next;
         free( old );

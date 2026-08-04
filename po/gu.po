@@ -1581,20 +1581,12 @@ msgstr "વેબ"
 msgid "Mouse Gestures"
 msgstr "માઉસ હાવભાવ"
 
-#: src/interface/interface.c:230
+#: src/interface/interface.c:222
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc મૂળભૂત ઇન્ટરફેસ સાથે ચાલી રહ્યું છે. ઇન્ટરફેસ વગર powervlc વાપરવા «cpowervlc» "
-"વાપરો."
-
-#: src/interface/interface.c:226
-msgid ""
-"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
-"without interface."
-msgstr ""
-"powervlc મૂળભૂત ઇન્ટરફેસ સાથે ચાલી રહ્યું છે. ઇન્ટરફેસ વગર powervlc વાપરવા «-I dummy» "
 "વાપરો."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -30758,7 +30750,62 @@ msgstr ""
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
 
-#, c-format
+#: share/lua/sd/radiobrowser.lua:99
+msgid "Africa"
+msgstr "આફ્રિકા"
+
+#: share/lua/sd/radiobrowser.lua:103
+msgid "Asia"
+msgstr "એશિયા"
+
+#: share/lua/sd/radiobrowser.lua:106
+msgid "Europe"
+msgstr "યુરોપ"
+
+#: share/lua/sd/radiobrowser.lua:109
+msgid "North America"
+msgstr "ઉત્તર અમેરિકા"
+
+#: share/lua/sd/radiobrowser.lua:112
+msgid "Oceania"
+msgstr "ઓશનિયા"
+
+#: share/lua/sd/radiobrowser.lua:114
+msgid "South America"
+msgstr "દક્ષિણ અમેરિકા"
+
+#: share/lua/playlist/radiobrowser.lua:186 share/lua/sd/radiobrowser.lua:137
+msgid "Play a random station (%s)"
+msgstr ""
+
+#: modules/access/radiobrowser.c:77
+msgid "Radio-Browser.info random station picker"
+msgstr ""
+
+#: modules/access/radiobrowser.c
+msgid "Station"
+msgstr ""
+
+#: modules/access/radiobrowser.c
+msgid "Stream URL"
+msgstr ""
+
+#: modules/access/radiobrowser.c
+msgid "Homepage"
+msgstr ""
+
+#: modules/access/radiobrowser.c
+msgctxt "Radio station"
+msgid "Country"
+msgstr ""
+
+#~ msgid ""
+#~ "Running powervlc with the default interface. Use '-I dummy' to use "
+#~ "powervlc without interface."
+#~ msgstr ""
+#~ "powervlc મૂળભૂત ઇન્ટરફેસ સાથે ચાલી રહ્યું છે. ઇન્ટરફેસ વગર powervlc વાપરવા «-I "
+#~ "dummy» વાપરો."
+
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "VLC આવૃત્તિ %s (%s)\n"
 

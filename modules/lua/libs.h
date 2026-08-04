@@ -50,6 +50,7 @@ void luaopen_vlcio( lua_State *L );
 void luaopen_errno( lua_State *L );
 void luaopen_clipboard( lua_State *L );
 void luaopen_http( lua_State *L );
+void luaopen_browser( lua_State *L );
 void luaopen_keystore( lua_State *L );
 #ifdef _WIN32
 void luaopen_win( lua_State *L );

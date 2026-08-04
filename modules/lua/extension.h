@@ -42,7 +42,11 @@ typedef enum
     CMD_CLOSE,
     CMD_SET_INPUT,      /* No arg. Just signal current input changed */
     CMD_UPDATE_META,    /* No arg. Just signal current input item meta changed */
-    CMD_PLAYING_CHANGED /* Arg1 = int*, New playing status  */
+    CMD_PLAYING_CHANGED, /* Arg1 = int*, New playing status  */
+    CMD_WIDGET_MENU,    /* Arg1 = extension_widget_t*,
+                           Arg2 = int* (1-based menu entry). free Arg2 */
+    CMD_WIDGET_DROP     /* Arg1 = extension_widget_t*,
+                           Arg2 = char* (drop folder). free Arg2 */
 } command_type_e;
 
 //Data types
@@ -85,6 +89,12 @@ struct extension_sys_t
     // The two following booleans are protected by command_lock
     vlc_dialog_id *p_progress_id;
     vlc_timer_t timer; ///< This timer makes sure Lua never gets stuck >5s
+
+    /* vlc.timer(): when the script asked to be called back, and what to
+     * call. Both protected by command_lock, read by the extension thread
+     * only. Extensions otherwise hear nothing until the user acts. */
+    mtime_t i_timer_deadline; ///< 0 when no callback is pending
+    char *psz_timer_func;
 
     /* Interruption context of the extension thread: lets shutdown and
      * KillExtension abort blocking network I/O (vlc.stream on a dead
@@ -136,6 +146,13 @@ int lua_ExtensionWidgetSelect( extensions_manager_t *p_mgr,
 int lua_ExtensionWidgetClick( extensions_manager_t *p_mgr,
                               extension_t *p_ext,
                               extension_widget_t *p_widget );
+int lua_ExtensionWidgetMenu( extensions_manager_t *p_mgr,
+                             extension_t *p_ext,
+                             extension_widget_t *p_widget, int i_entry );
+int lua_ExtensionWidgetDrop( extensions_manager_t *p_mgr,
+                             extension_t *p_ext,
+                             extension_widget_t *p_widget,
+                             const char *psz_dir );
 int lua_ExtensionTriggerMenu( extensions_manager_t *p_mgr,
                               extension_t *p_ext, int id );
 

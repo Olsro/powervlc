@@ -31257,6 +31257,56 @@ msgid ""
 msgstr ""
 
 #, c-format
+#: share/lua/sd/radiobrowser.lua:99
+msgid "Africa"
+msgstr "ആഫ്രിക്ക"
+
+#: share/lua/sd/radiobrowser.lua:103
+msgid "Asia"
+msgstr "ഏഷ്യ"
+
+#: share/lua/sd/radiobrowser.lua:106
+msgid "Europe"
+msgstr "യൂറോപ്പ്"
+
+#: share/lua/sd/radiobrowser.lua:109
+msgid "North America"
+msgstr "വടക്കേ അമേരിക്ക"
+
+#: share/lua/sd/radiobrowser.lua:112
+msgid "Oceania"
+msgstr "ഓഷ്യാനിയ"
+
+#: share/lua/sd/radiobrowser.lua:114
+msgid "South America"
+msgstr "തെക്കേ അമേരിക്ക"
+
+#: share/lua/playlist/radiobrowser.lua:186
+#: share/lua/sd/radiobrowser.lua:137
+msgid "Play a random station (%s)"
+msgstr ""
+
+#: modules/access/radiobrowser.c:77
+msgid "Radio-Browser.info random station picker"
+msgstr ""
+
+#: modules/access/radiobrowser.c
+msgid "Station"
+msgstr ""
+
+#: modules/access/radiobrowser.c
+msgid "Stream URL"
+msgstr ""
+
+#: modules/access/radiobrowser.c
+msgid "Homepage"
+msgstr ""
+
+#: modules/access/radiobrowser.c
+msgctxt "Radio station"
+msgid "Country"
+msgstr ""
+
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "വിഎല്‍സി പതിപ്പ് %s (%s)\n"
 

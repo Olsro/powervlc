@@ -1566,21 +1566,13 @@ msgstr "وب"
 msgid "Mouse Gestures"
 msgstr "حرکت‌های ماوس"
 
-#: src/interface/interface.c:230
+#: src/interface/interface.c:222
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc با رابط پیش‌فرض اجرا می‌شود. برای اجرای powervlc بدون رابط از "
 "«cpowervlc» استفاده کنید."
-
-#: src/interface/interface.c:226
-msgid ""
-"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
-"without interface."
-msgstr ""
-"powervlc با رابط پیش‌فرض اجرا می‌شود. برای اجرای powervlc بدون رابط از "
-"«-I dummy» استفاده کنید."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
 #: src/libvlc.c:174
@@ -29837,6 +29829,61 @@ msgstr ""
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
 
-#, c-format
+#: share/lua/sd/radiobrowser.lua:99
+msgid "Africa"
+msgstr "آفریقا"
+
+#: share/lua/sd/radiobrowser.lua:103
+msgid "Asia"
+msgstr "آسیا"
+
+#: share/lua/sd/radiobrowser.lua:106
+msgid "Europe"
+msgstr "اروپا"
+
+#: share/lua/sd/radiobrowser.lua:109
+msgid "North America"
+msgstr "آمریکای شمالی"
+
+#: share/lua/sd/radiobrowser.lua:112
+msgid "Oceania"
+msgstr "اقیانوسیه"
+
+#: share/lua/sd/radiobrowser.lua:114
+msgid "South America"
+msgstr "آمریکای جنوبی"
+
+#: share/lua/playlist/radiobrowser.lua:186 share/lua/sd/radiobrowser.lua:137
+msgid "Play a random station (%s)"
+msgstr "پخش یک ایستگاه تصادفی (%s)"
+
+#: modules/access/radiobrowser.c:77
+msgid "Radio-Browser.info random station picker"
+msgstr "انتخابگر ایستگاه تصادفی Radio-Browser.info"
+
+#: modules/access/radiobrowser.c
+msgid "Station"
+msgstr "ایستگاه"
+
+#: modules/access/radiobrowser.c
+msgid "Stream URL"
+msgstr "نشانی جریان"
+
+#: modules/access/radiobrowser.c
+msgid "Homepage"
+msgstr "صفحهٔ خانگی"
+
+#: modules/access/radiobrowser.c
+msgctxt "Radio station"
+msgid "Country"
+msgstr "کشور"
+
+#~ msgid ""
+#~ "Running powervlc with the default interface. Use '-I dummy' to use "
+#~ "powervlc without interface."
+#~ msgstr ""
+#~ "powervlc با رابط پیش‌فرض اجرا می‌شود. برای اجرای powervlc بدون رابط از «-I "
+#~ "dummy» استفاده کنید."
+
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "نسخه وی‌ال‌سی %s (%s)\n"

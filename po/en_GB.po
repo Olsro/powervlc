@@ -1598,20 +1598,12 @@ msgstr "Web"
 msgid "Mouse Gestures"
 msgstr "Mouse Gestures"
 
-#: src/interface/interface.c:230
+#: src/interface/interface.c:222
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
-"without interface."
-
-#: src/interface/interface.c:226
-msgid ""
-"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
-"without interface."
-msgstr ""
-"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
 "without interface."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -30264,7 +30256,62 @@ msgstr ""
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
 
-#, c-format
+#: share/lua/sd/radiobrowser.lua:99
+msgid "Africa"
+msgstr "Africa"
+
+#: share/lua/sd/radiobrowser.lua:103
+msgid "Asia"
+msgstr "Asia"
+
+#: share/lua/sd/radiobrowser.lua:106
+msgid "Europe"
+msgstr "Europe"
+
+#: share/lua/sd/radiobrowser.lua:109
+msgid "North America"
+msgstr "North America"
+
+#: share/lua/sd/radiobrowser.lua:112
+msgid "Oceania"
+msgstr "Oceania"
+
+#: share/lua/sd/radiobrowser.lua:114
+msgid "South America"
+msgstr "South America"
+
+#: share/lua/playlist/radiobrowser.lua:186 share/lua/sd/radiobrowser.lua:137
+msgid "Play a random station (%s)"
+msgstr "Play a random station (%s)"
+
+#: modules/access/radiobrowser.c:77
+msgid "Radio-Browser.info random station picker"
+msgstr "Radio-Browser.info random station picker"
+
+#: modules/access/radiobrowser.c
+msgid "Station"
+msgstr "Station"
+
+#: modules/access/radiobrowser.c
+msgid "Stream URL"
+msgstr "Stream URL"
+
+#: modules/access/radiobrowser.c
+msgid "Homepage"
+msgstr "Homepage"
+
+#: modules/access/radiobrowser.c
+msgctxt "Radio station"
+msgid "Country"
+msgstr "Country"
+
+#~ msgid ""
+#~ "Running powervlc with the default interface. Use '-I dummy' to use "
+#~ "powervlc without interface."
+#~ msgstr ""
+#~ "Running powervlc with the default interface. Use '-I dummy' to use "
+#~ "powervlc without interface."
+
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "VLC version %s (%s)\n"
 

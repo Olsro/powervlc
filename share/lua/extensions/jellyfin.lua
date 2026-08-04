@@ -409,6 +409,16 @@ local function trim(s)
   return (string.gsub(s or "", "^%s*(.-)%s*$", "%1"))
 end
 
+-- Long work has to say it is still there. The core watches the extension
+-- thread and, after ten seconds without a sign of life, offers to kill
+-- it -- and kills it outright when it cannot even show that question.
+-- A slow server or a big library is not a hung script.
+local function still_alive()
+  if vlc.keep_alive then
+    pcall(vlc.keep_alive)
+  end
+end
+
 local function set_message(text)
   if ui.message then
     ui.message:set_text(text or "")
@@ -430,6 +440,7 @@ local function get_body(url)
   end
   local parts = {}
   while true do
+    still_alive()
     local chunk = stream:read(READ_CHUNK)
     if not chunk or #chunk == 0 then
       break
@@ -538,8 +549,20 @@ local ACCENT_FOLD = {
   ["æ"]="ae", ["Æ"]="ae", ["œ"]="oe", ["Œ"]="oe", ["ß"]="ss",
 }
 
+-- vlc.strings.fold is the very folding the playlist search field uses,
+-- and it reaches much further than the table above: Latin Extended-A,
+-- decomposed accents, typographic quotes and dashes. The table stays as
+-- the fallback for a build that predates it.
 local function fold_accents(s)
-  s = string.lower(s or "")
+  s = s or ""
+  local core_fold = vlc.strings and vlc.strings.fold
+  if core_fold then
+    local ok, folded = pcall(core_fold, s)
+    if ok and folded then
+      return folded
+    end
+  end
+  s = string.lower(s)
   return (string.gsub(s, "[\194-\223][\128-\191]", function(c)
     return ACCENT_FOLD[c] or c
   end))
@@ -1067,7 +1090,12 @@ local function fill_genres()
   ui.genre:clear()
   ui.genre:add_value(lang.all_genres, 1)
   local seen, names = {}, {}
+  local walked = 0
   for _, item in ipairs(category_items()) do
+    walked = walked + 1
+    if walked % 500 == 0 then
+      still_alive()
+    end
     for _, g in ipairs(item.Genres or {}) do
       if not seen[g] then
         seen[g] = true
@@ -1093,7 +1121,14 @@ local function fill_library()
 
   local items = category_items()
   local shown = 0
+  local seen_rows = 0
   for _, item in ipairs(items) do
+    -- a library of a few thousand titles takes a while to walk: say so
+    -- to the watchdog rather than be taken for a hung script
+    seen_rows = seen_rows + 1
+    if seen_rows % 500 == 0 then
+      still_alive()
+    end
     local ok = true
     if query ~= "" then
       local hay = fold_accents(item.Name or "")
@@ -1392,6 +1427,31 @@ local function fetch_artwork(item, series)
   f:write(body)
   f:close()
 
+  -- Jellyfin honours the bounds and the format asked for above, so this
+  -- costs nothing on the usual path: a JPEG is left exactly as it came,
+  -- and a G3 is not made to decode and re-encode a picture that was
+  -- already right. Anything else -- a proxy that converted to WebP, a
+  -- server that ignored the request -- goes through the core instead,
+  -- which is both what keeps the picture from dictating the window size
+  -- and what makes it displayable at all on the older machines.
+  local head = io.open(path, "rb")
+  local magic = head and head:read(3) or ""
+  if head then
+    head:close()
+  end
+  local is_jpeg = magic == "\255\216\255"
+  if not is_jpeg and vlc.misc and vlc.misc.image_scale then
+    local converted = path .. ".conv"
+    local ok, width = pcall(vlc.misc.image_scale, path, converted,
+                            ARTWORK_WIDTH, ARTWORK_HEIGHT)
+    if ok and width then
+      os.remove(path)
+      os.rename(converted, path)
+    else
+      os.remove(converted)
+    end
+  end
+
   if app.art_path and app.art_path ~= path then
     os.remove(app.art_path)
   end
@@ -1465,7 +1525,10 @@ end
 -- to a third of the window and never blows it up past its own size.
 local function place_artwork(rows)
   if app.artwork then
-    dlg:add_image(app.artwork, 5, 1, 1, rows)
+    -- The bounds are stated, so the layout knows the size the picture is
+    -- meant to take even if what arrived is bigger than was asked for:
+    -- an image is never what decides how large the window is.
+    dlg:add_image(app.artwork, 5, 1, 1, rows, ARTWORK_WIDTH, ARTWORK_HEIGHT)
   end
 end
 

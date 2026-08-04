@@ -35,6 +35,7 @@ class QGridLayout;
 class QSignalMapper;
 class QCloseEvent;
 class QKeyEvent;
+class QListWidget;
 
 class ExtensionsDialogProvider;
 class ExtensionDialog;
@@ -119,6 +120,10 @@ private slots:
     void SyncSelection( QObject *object );
     void NotifyTextChanged();
     void parentDestroyed();
+
+private:
+    void ListContextMenu( QListWidget *list, extension_widget_t *p_widget,
+                          const QPoint &pos );
 
 signals:
     void destroyDialog( extension_dialog_t *p_dialog );

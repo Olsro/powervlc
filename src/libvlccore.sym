@@ -475,6 +475,7 @@ vlc_readdir
 vlc_scandir
 vlc_stat
 vlc_strcasestr
+vlc_strfold
 vlc_unlink
 vlc_rename
 vlc_getcwd

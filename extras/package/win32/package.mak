@@ -26,6 +26,12 @@ WINVERSION=PowerVLC-$(POWERVLC_VERSION)-win32
 endif
 endif
 
+# Staging directory for the portable archive, and the name the user ends up
+# with after extracting it. It doubles as the top-level folder inside the zip,
+# so it has to say what it is on its own: someone who downloads both archives
+# must not end up with two identically named folders.
+win32_portabledir=$(abs_top_builddir)/$(WINVERSION)-portable
+
 package-win-install:
 	$(MAKE) install
 	cp '$(DESTDIR)$(libdir)/libpowervlc.dll.a' '$(DESTDIR)$(libdir)/libpowervlc.lib'
@@ -231,6 +237,52 @@ package-win32-zip: package-win-strip
 	rm -f -- $(WINVERSION).zip
 	zip -r -9 $(WINVERSION).zip vlc-$(VERSION) --exclude \*.nsi \*NSIS\* \*languages\* \*sdk\* \*helpers\* spad\*
 
+# PowerVLC: the portable archive shipped alongside the NSIS installer.
+#
+# Portable mode is not a build flavour -- it is the SAME binaries. VLC's core
+# already implements it: config_GetAppDir() (src/win32/dirs.c) looks for a
+# folder named "portable" next to powervlc.exe and, when it finds one, puts the
+# configuration, the media library and the per-user caches there instead of
+# %APPDATA%\powervlc. So the only thing this target adds to the installed tree
+# is that one folder; everything else is the packaging tree minus the installer
+# scaffolding (NSIS scripts, the installer's own translations, the SDK).
+#
+# The marker folder is NOT shipped empty. A directory with no files in it is a
+# zip entry that "extract here" shell integrations and several extractors drop
+# without a word, and losing it would silently turn the portable build back into
+# a normal one -- it would still run, just writing to %APPDATA% behind the
+# user's back. A README inside it makes the folder a real payload, and it is
+# also the natural place to explain what the folder does.
+#
+# Staged through hard links when the filesystem allows it: the tree is close to
+# a gigabyte, it is only ever read here, and the Docker volume the Windows
+# builds share is already the tightest resource in the campaign.
+#
+# No plugins.dat is generated here: powervlc-cache-gen.exe is a Windows binary
+# for a foreign architecture and the packaging runs on Linux with no wine (the
+# NSIS installer runs it on the target machine instead). The first launch pays
+# the full scan of the ~330 plugins and then writes the cache itself into
+# plugins/, so it costs one slow start, once -- see the _WIN32 branch of
+# AllocatePluginPath() in src/modules/bank.c, without which Windows never
+# writes that file on its own and the portable build would pay the scan on
+# every single start.
+package-win32-portable-zip: package-win-strip
+	rm -f -- $(WINVERSION)-portable.zip
+	rm -rf -- "$(win32_portabledir)"
+	cp -al "$(win32_destdir)" "$(win32_portabledir)" 2>/dev/null || \
+	    { rm -rf -- "$(win32_portabledir)"; \
+	      cp -a "$(win32_destdir)" "$(win32_portabledir)"; }
+	rm -rf -- "$(win32_portabledir)/sdk" "$(win32_portabledir)/NSIS" \
+	          "$(win32_portabledir)/languages" "$(win32_portabledir)/helpers" \
+	          "$(win32_portabledir)/msi"
+	rm -f -- "$(win32_portabledir)"/*.nsi "$(win32_portabledir)"/spad*
+	mkdir -p "$(win32_portabledir)/portable"
+	cp "$(top_srcdir)/extras/package/win32/portable-README.txt" \
+	   "$(win32_portabledir)/portable/README.txt"
+	zip -r -9 -q $(WINVERSION)-portable.zip "$(WINVERSION)-portable"
+	rm -rf -- "$(win32_portabledir)"
+	@echo "  PACKAGE  $(WINVERSION)-portable.zip"
+
 package-win32-debug-zip: package-win-common
 	rm -f -- $(WINVERSION)-debug.zip
 	zip -r -9 $(WINVERSION)-debug.zip vlc-$(VERSION)
@@ -242,10 +294,18 @@ package-win32-debug-7zip: package-win-common
 	7z a $(7Z_OPTS) $(WINVERSION)-debug.7z vlc-$(VERSION)
 
 package-win32-cleanup:
-	rm -Rf $(win32_destdir) $(win32_debugdir) $(win32_xpi_destdir)
+	rm -Rf $(win32_destdir) $(win32_debugdir) $(win32_xpi_destdir) "$(win32_portabledir)"
 
 # PowerVLC: drop package-win32-xpi (the obsolete NPAPI/Mozilla browser plugin).
-package-win32: package-win32-zip package-win32-7zip package-win32-exe
+#
+# The two shipped artifacts are the NSIS installer and the portable archive.
+# package-win32-zip and package-win32-7zip used to be pulled in here too, and
+# nothing ever collected either of them: the plain zip is exactly what
+# package-win32-portable-zip now produces (minus the marker folder), and the 7z
+# is a second full-tree archive at -mx=9, which is several minutes of CPU and a
+# gigabyte of the shared Docker volume spent on a file no release ever used.
+# Both targets are still here for anyone who wants them by name.
+package-win32: package-win32-portable-zip package-win32-exe
 
 package-win32-debug: package-win32-debug-zip package-win32-debug-7zip
 
@@ -267,9 +327,10 @@ package-wince: package-win-strip
 	rm -f -- PowerVLC-$(POWERVLC_VERSION)-wince.zip
 	zip -r -9 PowerVLC-$(POWERVLC_VERSION)-wince.zip vlc-$(VERSION)
 
-.PHONY: package-win-install package-win-common package-win-strip package-win32-webplugin-common package-win32-xpi package-win32-crx package-win32-src package-win32-exe package-win32-zip package-win32-debug-zip package-win32-7zip package-win32-debug-7zip package-win32-cleanup package-win32 package-win32-debug package-wince
+.PHONY: package-win-install package-win-common package-win-strip package-win32-webplugin-common package-win32-xpi package-win32-crx package-win32-src package-win32-exe package-win32-zip package-win32-portable-zip package-win32-debug-zip package-win32-7zip package-win32-debug-7zip package-win32-cleanup package-win32 package-win32-debug package-wince
 
 EXTRA_DIST += \
+	extras/package/win32/portable-README.txt \
 	extras/package/win32/vlc.exe.manifest \
 	extras/package/win32/libvlc.dll.manifest \
 	extras/package/win32/configure.sh \

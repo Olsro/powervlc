@@ -1601,20 +1601,12 @@ msgstr "Web"
 msgid "Mouse Gestures"
 msgstr "Pokreti mišom"
 
-#: src/interface/interface.c:230
+#: src/interface/interface.c:222
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "Pokretanje powervlc sa zadanim sučeljem. Koristite «cpowervlc» za pokretanje "
-"powervlc bez sučelja."
-
-#: src/interface/interface.c:226
-msgid ""
-"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
-"without interface."
-msgstr ""
-"Pokretanje powervlc sa zadanim sučeljem. Koristite «-I dummy» za pokretanje "
 "powervlc bez sučelja."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -31107,7 +31099,62 @@ msgstr ""
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
 
-#, c-format
+#: share/lua/sd/radiobrowser.lua:99
+msgid "Africa"
+msgstr "Afrika"
+
+#: share/lua/sd/radiobrowser.lua:103
+msgid "Asia"
+msgstr "Azija"
+
+#: share/lua/sd/radiobrowser.lua:106
+msgid "Europe"
+msgstr "Europa"
+
+#: share/lua/sd/radiobrowser.lua:109
+msgid "North America"
+msgstr "Sjeverna Amerika"
+
+#: share/lua/sd/radiobrowser.lua:112
+msgid "Oceania"
+msgstr "Oceanija"
+
+#: share/lua/sd/radiobrowser.lua:114
+msgid "South America"
+msgstr "Južna Amerika"
+
+#: share/lua/playlist/radiobrowser.lua:186 share/lua/sd/radiobrowser.lua:137
+msgid "Play a random station (%s)"
+msgstr "Pusti slučajnu stanicu (%s)"
+
+#: modules/access/radiobrowser.c:77
+msgid "Radio-Browser.info random station picker"
+msgstr "Odabir slučajne stanice s Radio-Browser.info"
+
+#: modules/access/radiobrowser.c
+msgid "Station"
+msgstr "Stanica"
+
+#: modules/access/radiobrowser.c
+msgid "Stream URL"
+msgstr "URL toka"
+
+#: modules/access/radiobrowser.c
+msgid "Homepage"
+msgstr "Početna stranica"
+
+#: modules/access/radiobrowser.c
+msgctxt "Radio station"
+msgid "Country"
+msgstr "Država"
+
+#~ msgid ""
+#~ "Running powervlc with the default interface. Use '-I dummy' to use "
+#~ "powervlc without interface."
+#~ msgstr ""
+#~ "Pokretanje powervlc sa zadanim sučeljem. Koristite «-I dummy» za "
+#~ "pokretanje powervlc bez sučelja."
+
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "VLC-ova inačica %s (%s)\n"
 

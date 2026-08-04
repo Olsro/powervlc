@@ -1512,20 +1512,12 @@ msgstr "Gréasán"
 msgid "Mouse Gestures"
 msgstr "Gothaí na Luchóige"
 
-#: src/interface/interface.c:230
+#: src/interface/interface.c:222
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc á rith leis an gcomhéadan réamhshocraithe. Úsáid «cpowervlc» chun "
-"powervlc a rith gan chomhéadan."
-
-#: src/interface/interface.c:226
-msgid ""
-"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
-"without interface."
-msgstr ""
-"powervlc á rith leis an gcomhéadan réamhshocraithe. Úsáid «-I dummy» chun "
 "powervlc a rith gan chomhéadan."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
@@ -29676,7 +29668,62 @@ msgstr ""
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
 
-#, c-format
+#: share/lua/sd/radiobrowser.lua:99
+msgid "Africa"
+msgstr "An Afraic"
+
+#: share/lua/sd/radiobrowser.lua:103
+msgid "Asia"
+msgstr "An Áise"
+
+#: share/lua/sd/radiobrowser.lua:106
+msgid "Europe"
+msgstr "An Eoraip"
+
+#: share/lua/sd/radiobrowser.lua:109
+msgid "North America"
+msgstr "Meiriceá Thuaidh"
+
+#: share/lua/sd/radiobrowser.lua:112
+msgid "Oceania"
+msgstr "An Aigéine"
+
+#: share/lua/sd/radiobrowser.lua:114
+msgid "South America"
+msgstr "Meiriceá Theas"
+
+#: share/lua/playlist/radiobrowser.lua:186 share/lua/sd/radiobrowser.lua:137
+msgid "Play a random station (%s)"
+msgstr "Seinn stáisiún randamach (%s)"
+
+#: modules/access/radiobrowser.c:77
+msgid "Radio-Browser.info random station picker"
+msgstr ""
+
+#: modules/access/radiobrowser.c
+msgid "Station"
+msgstr "Stáisiún"
+
+#: modules/access/radiobrowser.c
+msgid "Stream URL"
+msgstr "URL an tsrutha"
+
+#: modules/access/radiobrowser.c
+msgid "Homepage"
+msgstr "Leathanach baile"
+
+#: modules/access/radiobrowser.c
+msgctxt "Radio station"
+msgid "Country"
+msgstr "Tír"
+
+#~ msgid ""
+#~ "Running powervlc with the default interface. Use '-I dummy' to use "
+#~ "powervlc without interface."
+#~ msgstr ""
+#~ "powervlc á rith leis an gcomhéadan réamhshocraithe. Úsáid «-I dummy» chun "
+#~ "powervlc a rith gan chomhéadan."
+
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "Leagan %s (%s) de VLC\n"
 

@@ -205,6 +205,7 @@ modules/access/mtp.c
 modules/access/nfs.c
 modules/access/oss.c
 modules/access/pulse.c
+modules/access/radiobrowser.c
 modules/access/rdp.c
 modules/access/rist.c
 modules/access/rtp/rtp.c
@@ -1334,6 +1335,8 @@ share/lua/http/mobile_browse.html
 share/lua/http/mobile_equalizer.html
 share/lua/http/mobile.html
 share/lua/http/mobile_view.html
+share/lua/playlist/radiobrowser.lua
+share/lua/sd/radiobrowser.lua
 
 
 # qt .ui files

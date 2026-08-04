@@ -31504,6 +31504,56 @@ msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
 
 #, c-format
+#: share/lua/sd/radiobrowser.lua:99
+msgid "Africa"
+msgstr "Āfrika"
+
+#: share/lua/sd/radiobrowser.lua:103
+msgid "Asia"
+msgstr "Āzija"
+
+#: share/lua/sd/radiobrowser.lua:106
+msgid "Europe"
+msgstr "Eiropa"
+
+#: share/lua/sd/radiobrowser.lua:109
+msgid "North America"
+msgstr "Ziemeļamerika"
+
+#: share/lua/sd/radiobrowser.lua:112
+msgid "Oceania"
+msgstr "Okeānija"
+
+#: share/lua/sd/radiobrowser.lua:114
+msgid "South America"
+msgstr "Dienvidamerika"
+
+#: share/lua/playlist/radiobrowser.lua:186
+#: share/lua/sd/radiobrowser.lua:137
+msgid "Play a random station (%s)"
+msgstr "Atskaņot nejaušu staciju (%s)"
+
+#: modules/access/radiobrowser.c:77
+msgid "Radio-Browser.info random station picker"
+msgstr "Radio-Browser.info nejaušas stacijas atlasītājs"
+
+#: modules/access/radiobrowser.c
+msgid "Station"
+msgstr "Stacija"
+
+#: modules/access/radiobrowser.c
+msgid "Stream URL"
+msgstr "Straumes URL"
+
+#: modules/access/radiobrowser.c
+msgid "Homepage"
+msgstr "Mājaslapa"
+
+#: modules/access/radiobrowser.c
+msgctxt "Radio station"
+msgid "Country"
+msgstr "Valsts"
+
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "VLC versija %s (%s)\n"
 

@@ -38,6 +38,7 @@
 #include <QComboBox>
 #include <QCloseEvent>
 #include <QKeyEvent>
+#include <QMenu>
 #include <QRegularExpression>
 #include <QTimer>
 #include "util/customwidgets.hpp"
@@ -241,8 +242,12 @@ QWidget* ExtensionDialog::CreateWidget( extension_widget_t *p_widget )
                 label->setMaximumHeight( p_widget->i_height );
             /* Kept to its own size and hung from the top of the cells it
              * covers: stretched to a block of several rows, a poster came
-             * out distorted and drifted away from the text it goes with. */
-            label->setAlignment( Qt::AlignTop | Qt::AlignHCenter );
+             * out distorted and drifted away from the text it goes with.
+             * A script whose picture sits beside a list asks for the
+             * middle of the block instead (set_centered). */
+            label->setAlignment( p_widget->b_image_centered
+                                 ? Qt::AlignCenter
+                                 : ( Qt::AlignTop | Qt::AlignHCenter ) );
             p_widget->p_sys_intf = label;
             return label;
 
@@ -342,6 +347,15 @@ QWidget* ExtensionDialog::CreateWidget( extension_widget_t *p_widget )
             clickMapper->setMapping( list, new WidgetMapper( list, p_widget ) );
             connect( list, &QListWidget::itemDoubleClicked,
                      clickMapper, QOverload<>::of(&QSignalMapper::map) );
+            /* right-click: the context menu the extension attached with
+             * set_menu. set_drag (drag-out with a file promise) has no
+             * Qt wiring yet: downloads go through the button and this
+             * menu instead. */
+            list->setContextMenuPolicy( Qt::CustomContextMenu );
+            connect( list, &QListWidget::customContextMenuRequested,
+                     this, [this, list, p_widget]( const QPoint &pos ) {
+                         ListContextMenu( list, p_widget, pos );
+                     } );
             return list;
 
         case EXTENSION_WIDGET_SPIN_ICON:
@@ -392,7 +406,14 @@ int ExtensionDialog::TriggerClick( QObject *object )
         case EXTENSION_WIDGET_CHECK_BOX:
             checkBox = static_cast< QCheckBox* >( p_widget->p_sys_intf );
             p_widget->b_checked = checkBox->isChecked();
-            i_ret = VLC_SUCCESS;
+            /* A toggle is a click too -- but only one the user made:
+             * UpdateWidget re-checks the box while the dialog lock is
+             * already held, and lockedHere is false then. Scripts
+             * without an on_toggle callback never see the event. */
+            if( lockedHere )
+                i_ret = extension_WidgetClicked( p_dialog, p_widget );
+            else
+                i_ret = VLC_SUCCESS;
             break;
 
         default:
@@ -407,6 +428,57 @@ int ExtensionDialog::TriggerClick( QObject *object )
     }
 
     return i_ret;
+}
+
+/**
+ * Right-click on a list: pop up the context menu the extension attached
+ * with set_menu and forward the picked entry (1-based); the clicked row
+ * becomes the selection the extension reads.
+ **/
+void ExtensionDialog::ListContextMenu( QListWidget *list,
+                                       extension_widget_t *p_widget,
+                                       const QPoint &pos )
+{
+    QListWidgetItem *item = list->itemAt( pos );
+    if( item == NULL )
+        return;
+
+    /* the labels belong to the extension thread: copy them under the
+     * dialog lock and hold it for nothing else -- the menu below runs
+     * an event loop */
+    QStringList labels;
+    bool lockedHere = false;
+    if( !has_lock )
+    {
+        vlc_mutex_lock( &p_dialog->lock );
+        has_lock = true;
+        lockedHere = true;
+    }
+    for( int i = 0; i < p_widget->i_menu; i++ )
+        labels << qfu( p_widget->pp_menu[i] );
+    if( lockedHere )
+    {
+        vlc_mutex_unlock( &p_dialog->lock );
+        has_lock = false;
+    }
+    if( labels.isEmpty() )
+        return;
+
+    /* a user action: the selection change does reach the extension, so
+     * its state follows the highlight */
+    if( !item->isSelected() )
+        list->setCurrentItem( item );
+
+    QMenu menu( list );
+    for( int i = 0; i < labels.count(); i++ )
+        menu.addAction( labels.at( i ) )->setData( i + 1 );
+    QAction *picked = menu.exec( list->viewport()->mapToGlobal( pos ) );
+    if( picked == NULL )
+        return;
+    p_widget->i_menu_choice = picked->data().toInt();
+    /* unlocked on purpose: this wakes the extension thread, which may
+     * answer with an update this very thread has to run */
+    extension_WidgetMenuSelected( p_dialog, p_widget );
 }
 
 /**
@@ -644,6 +716,11 @@ QWidget* ExtensionDialog::UpdateWidget( extension_widget_t *p_widget )
         case EXTENSION_WIDGET_IMAGE:
             label = static_cast< QLabel* >( p_widget->p_sys_intf );
             label->setPixmap( QPixmap( qfu( p_widget->psz_text ) ) );
+            /* set_centered may have been called after the picture was
+             * created, so the alignment is settled here too */
+            label->setAlignment( p_widget->b_image_centered
+                                 ? Qt::AlignCenter
+                                 : ( Qt::AlignTop | Qt::AlignHCenter ) );
             return label;
 
         case EXTENSION_WIDGET_HTML:

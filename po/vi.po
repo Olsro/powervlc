@@ -31745,6 +31745,56 @@ msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
 
 #, c-format
+#: share/lua/sd/radiobrowser.lua:99
+msgid "Africa"
+msgstr "Châu Phi"
+
+#: share/lua/sd/radiobrowser.lua:103
+msgid "Asia"
+msgstr "Châu Á"
+
+#: share/lua/sd/radiobrowser.lua:106
+msgid "Europe"
+msgstr "Châu Âu"
+
+#: share/lua/sd/radiobrowser.lua:109
+msgid "North America"
+msgstr "Bắc Mỹ"
+
+#: share/lua/sd/radiobrowser.lua:112
+msgid "Oceania"
+msgstr "Châu Đại Dương"
+
+#: share/lua/sd/radiobrowser.lua:114
+msgid "South America"
+msgstr "Nam Mỹ"
+
+#: share/lua/playlist/radiobrowser.lua:186
+#: share/lua/sd/radiobrowser.lua:137
+msgid "Play a random station (%s)"
+msgstr "Phát một kênh ngẫu nhiên (%s)"
+
+#: modules/access/radiobrowser.c:77
+msgid "Radio-Browser.info random station picker"
+msgstr "Bộ chọn kênh ngẫu nhiên Radio-Browser.info"
+
+#: modules/access/radiobrowser.c
+msgid "Station"
+msgstr "Kênh"
+
+#: modules/access/radiobrowser.c
+msgid "Stream URL"
+msgstr "URL luồng"
+
+#: modules/access/radiobrowser.c
+msgid "Homepage"
+msgstr "Trang chủ"
+
+#: modules/access/radiobrowser.c
+msgctxt "Radio station"
+msgid "Country"
+msgstr "Quốc gia"
+
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "Phiên bản VLC %s (%s)\n"
 

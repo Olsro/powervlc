@@ -24,6 +24,7 @@
 
 #import "CompatibilityFixes.h"
 #import "VLCUIWidgets.h"
+#import "VLCStringUtility.h"
 
 #import <stdlib.h>
 
@@ -57,12 +58,18 @@
 
 @end
 
+@implementation VLCDialogImageView
+
+@end
+
 
 @interface VLCDialogList ()
 {
     NSArray *_columnWeights;   ///< natural width of each column's content
     BOOL _layingOut;
     NSTimeInterval _filledAt;  ///< when this list last got its content
+    NSArray *_promisedNames;   ///< file names promised by the drag under way
+    NSArray *_promisedIds;     ///< value ids of the rows being dragged
 }
 @end
 
@@ -72,6 +79,9 @@
 {
     return [self.contentArray count];
 }
+
+/* How many rows are measured to decide the column widths, at most. */
+#define VLC_DIALOG_WIDTH_SAMPLE 300
 
 /* The natural width of a column is that of its widest value, header
  * included. Columns then share the visible width in that proportion. */
@@ -87,6 +97,14 @@
     NSDictionary *attributes = [NSDictionary dictionaryWithObject:font
                                                            forKey:NSFontAttributeName];
 
+    /* Measuring every cell of a listing of several thousand rows is a
+     * text layout per cell, redone on every refill -- with a search box
+     * that refills as the user types, that is the whole cost of the
+     * list on a slow machine. A spread-out sample gives the same
+     * column widths in practice for a fraction of the work. */
+    NSUInteger rowCount = [self.contentArray count];
+    NSUInteger stride = (rowCount / VLC_DIALOG_WIDTH_SAMPLE) + 1;
+
     NSMutableArray *weights = [NSMutableArray array];
     for (NSUInteger i = 0; i < [columns count]; i++) {
         CGFloat widest = 0;
@@ -94,7 +112,8 @@
             NSString *title = [[[columns objectAtIndex:i] headerCell] stringValue];
             widest = [title sizeWithAttributes:attributes].width;
         }
-        for (NSDictionary *row in self.contentArray) {
+        for (NSUInteger n = 0; n < rowCount; n += stride) {
+            NSDictionary *row = [self.contentArray objectAtIndex:n];
             NSArray *cells = [row objectForKey:@"cells"];
             NSString *text = (i < [cells count]) ? [cells objectAtIndex:i]
                                                  : [row objectForKey:@"text"];
@@ -133,21 +152,60 @@
     if (total <= 0)
         return;
 
+    /* Start from what each column actually needs. */
+    NSUInteger count = [columns count];
+    CGFloat want[64];
+    if (count > 64)
+        count = 64;
+    for (NSUInteger i = 0; i < count; i++)
+        want[i] = [[_columnWeights objectAtIndex:i] doubleValue];
+
+    if (total <= available) {
+        /* everything fits: give each column what it needs and hand the
+         * slack to the longest one, rather than padding them all */
+        want[widest] += available - total;
+    } else {
+        /* It does not fit, so something has to give -- and it should be
+         * the longest column, not all of them equally. Shaving every
+         * column in proportion truncated a date or a count (which need
+         * a fixed, small width to mean anything) so that a column of
+         * long titles could stay huge; those titles are read from their
+         * beginning anyway. The shortfall is taken off the longest
+         * column down to the next longest, then off both, and so on. */
+        double deficit = total - available;
+        for (NSUInteger guard = 0; deficit > 0.5 && guard < 500; guard++) {
+            NSUInteger iw = 0;
+            CGFloat w1 = -1, w2 = -1;
+            for (NSUInteger i = 0; i < count; i++) {
+                if (want[i] > w1) { w2 = w1; w1 = want[i]; iw = i; }
+                else if (want[i] > w2) { w2 = want[i]; }
+            }
+            CGFloat target = (w2 > 48) ? w2 : 48;
+            if (w1 <= target + 0.5) {
+                /* every column is down to the same width: from here on
+                 * they can only shrink together */
+                CGFloat each = deficit / count;
+                for (NSUInteger i = 0; i < count; i++) {
+                    want[i] -= each;
+                    if (want[i] < 48)
+                        want[i] = 48;
+                }
+                break;
+            }
+            CGFloat take = deficit;
+            if (take > w1 - target)
+                take = w1 - target;
+            want[iw] -= take;
+            deficit -= take;
+        }
+    }
+
     _layingOut = YES;
     CGFloat used = 0;
-    for (NSUInteger i = 0; i < [columns count]; i++) {
-        CGFloat width;
-        if (total <= available) {
-            /* everything fits: give each column what it needs and hand the
-             * slack to the longest one, rather than padding them all */
-            width = [[_columnWeights objectAtIndex:i] doubleValue];
-            if (i == widest)
-                width += available - total;
-        } else if (i + 1 == [columns count]) {
+    for (NSUInteger i = 0; i < count; i++) {
+        CGFloat width = want[i];
+        if (i + 1 == count && total > available)
             width = available - used;   /* no rounding crumbs on the right */
-        } else {
-            width = floor(available * [[_columnWeights objectAtIndex:i] doubleValue] / total);
-        }
         if (width < 48)
             width = 48;
         [[columns objectAtIndex:i] setWidth:width];
@@ -276,8 +334,10 @@
             NSArray *cellsB = [b objectForKey:@"cells"];
             NSString *textA = (NSUInteger)index < [cellsA count] ? [cellsA objectAtIndex:index] : @"";
             NSString *textB = (NSUInteger)index < [cellsB count] ? [cellsB objectAtIndex:index] : @"";
-            result = [textA compare:textB
-                            options:NSCaseInsensitiveSearch | NSNumericSearch];
+            /* the order the rest of the system sorts names in (the
+             * Finder's): accents and case where the reader expects
+             * them, not where their code points fall */
+            result = [textA localizedStandardCompare:textB];
         }
         if (!ascending) {
             if (result == NSOrderedAscending)
@@ -288,6 +348,137 @@
         return result;
     }];
     [self reloadData];
+}
+
+/* Right-click: the context menu the extension attached with set_menu.
+ * The labels belong to the extension thread, so they are copied under
+ * the dialog lock; nothing else happens while it is held. */
+- (NSMenu *)menuForEvent:(NSEvent *)event
+{
+    extension_widget_t *widget = self.widget;
+    if (!widget)
+        return nil;
+    NSInteger row = [self rowAtPoint:[self convertPoint:[event locationInWindow]
+                                               fromView:nil]];
+    if (row < 0)
+        return nil;
+
+    NSMutableArray *labels = [NSMutableArray array];
+    vlc_mutex_lock(&widget->p_dialog->lock);
+    for (int i = 0; i < widget->i_menu; i++)
+        [labels addObject:toNSStr(widget->pp_menu[i])];
+    vlc_mutex_unlock(&widget->p_dialog->lock);
+    if ([labels count] == 0)
+        return nil;
+
+    /* the menu acts on the row under the pointer: make it the selection
+     * the extension will read. A user action, so the selection event
+     * does go through -- the script's state follows the highlight. */
+    if (![self isRowSelected:row])
+        [self selectRowIndexes:[NSIndexSet indexSetWithIndex:row]
+          byExtendingSelection:NO];
+
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@""];
+    for (NSUInteger i = 0; i < [labels count]; i++) {
+        NSMenuItem *item = [menu addItemWithTitle:[labels objectAtIndex:i]
+                                           action:@selector(contextMenuAction:)
+                                    keyEquivalent:@""];
+        [item setTarget:self];
+        [item setTag:(NSInteger)i + 1]; /* 1-based, like the Lua side */
+    }
+    return menu;
+}
+
+- (void)contextMenuAction:(id)sender
+{
+    extension_widget_t *widget = self.widget;
+    if (!widget)
+        return;
+    widget->i_menu_choice = (int)[(NSMenuItem *)sender tag];
+    /* unlocked, like every widget event: the callback that copies the
+     * choice runs synchronously on this very thread */
+    extension_WidgetMenuSelected(widget->p_dialog, widget);
+}
+
+/* Drag-out: rows whose value carries a drag name are promised to the
+ * drop target as files of that name; the extension is then told where
+ * they were dropped and creates them there. */
+- (BOOL)tableView:(NSTableView *)tableView
+        writeRowsWithIndexes:(NSIndexSet *)rowIndexes
+        toPasteboard:(NSPasteboard *)pboard
+{
+    extension_widget_t *widget = self.widget;
+    if (!widget || !widget->b_can_drag)
+        return NO;
+
+    /* A double-click that wobbles by a couple of pixels is still a
+     * double-click: refusing the drag here lets it through to the
+     * double action. Without this, opening a track by double-clicking
+     * it could start a file promise instead, and land a download in
+     * whatever folder the pointer happened to be over. */
+    NSEvent *event = [NSApp currentEvent];
+    if (event && [event clickCount] >= 2)
+        return NO;
+
+    NSMutableArray *names = [NSMutableArray array];
+    NSMutableArray *ids = [NSMutableArray array];
+    NSMutableArray *types = [NSMutableArray array];
+    for (NSUInteger i = [rowIndexes firstIndex]; i != NSNotFound;
+         i = [rowIndexes indexGreaterThanIndex:i]) {
+        if (i >= [self.contentArray count])
+            continue;
+        NSDictionary *entry = [self.contentArray objectAtIndex:i];
+        NSString *name = [entry objectForKey:@"dragname"];
+        if ([name length] == 0)
+            continue;
+        [names addObject:name];
+        [ids addObject:[entry objectForKey:@"id"]];
+        [types addObject:[name pathExtension] ?: @""];
+    }
+    if ([names count] == 0)
+        return NO;
+
+    _promisedNames = names;
+    _promisedIds = ids;
+    [pboard declareTypes:[NSArray arrayWithObject:NSFilesPromisePboardType]
+                   owner:nil];
+    [pboard setPropertyList:types forType:NSFilesPromisePboardType];
+    return YES;
+}
+
+- (NSDragOperation)draggingSourceOperationMaskForLocal:(BOOL)isLocal
+{
+    /* out of the window only: within the dialog a drop means nothing */
+    return isLocal ? NSDragOperationNone : NSDragOperationCopy;
+}
+
+- (NSArray *)namesOfPromisedFilesDroppedAtDestination:(NSURL *)dropDestination
+{
+    extension_widget_t *widget = self.widget;
+    NSArray *names = _promisedNames;
+    NSArray *promisedIds = _promisedIds;
+    _promisedNames = nil;
+    _promisedIds = nil;
+    if (!widget || names == nil)
+        return nil;
+
+    /* the drop acts on the dragged rows, which may no longer be the
+     * highlight: make them the selection the extension will read */
+    NSSet *ids = [NSSet setWithArray:promisedIds];
+    struct extension_widget_value_t *value;
+    /* under the lock: the chain is the extension thread's */
+    vlc_mutex_lock(&widget->p_dialog->lock);
+    for (value = widget->p_values; value != NULL; value = value->p_next)
+        value->b_selected = [ids containsObject:
+                                [NSNumber numberWithInt:value->i_id]];
+
+    free(widget->psz_drop_dir);
+    widget->psz_drop_dir = strdup([[dropDestination path] UTF8String]);
+    vlc_mutex_unlock(&widget->p_dialog->lock);
+    /* unlocked: the callback that takes ownership of the folder runs
+     * synchronously on this very thread */
+    extension_WidgetDropDone(widget->p_dialog, widget);
+    return names;
 }
 @end
 
@@ -429,7 +620,29 @@
      * holds: ask the picture itself. */
     if ([view isKindOfClass:[NSImageView class]]) {
         NSImage *image = [(NSImageView *)view image];
-        return image ? [image size] : NSMakeSize(0, 0);
+        if (!image)
+            return NSMakeSize(0, 0);
+        NSSize size = [image size];
+        /* For a picture the width/height hints are the size it is meant
+         * to be drawn at, so they BOUND it, proportions kept. What a
+         * server sends is not always what was asked for -- a cover can
+         * come back at a thousand pixels square -- and a picture must
+         * not be what decides how tall the window is. */
+        extension_widget_t *widget = nil;
+        if ([view isKindOfClass:[VLCDialogImageView class]])
+            widget = [(VLCDialogImageView *)view widget];
+        if (widget && (widget->i_width > 0 || widget->i_height > 0)) {
+            CGFloat maxW = widget->i_width > 0 ? widget->i_width : size.width;
+            CGFloat maxH = widget->i_height > 0 ? widget->i_height : size.height;
+            if (size.width > maxW || size.height > maxH) {
+                CGFloat scaleW = (size.width > 0) ? maxW / size.width : 1;
+                CGFloat scaleH = (size.height > 0) ? maxH / size.height : 1;
+                CGFloat scale = (scaleW < scaleH) ? scaleW : scaleH;
+                size.width *= scale;
+                size.height *= scale;
+            }
+        }
+        return size;
     }
     if ([view isKindOfClass:[NSControl class]]) {
         NSControl *control = (NSControl *)view;
@@ -868,10 +1081,15 @@
         if (lastRow >= _rowCount)
             lastRow = _rowCount ? _rowCount - 1 : row;
         CGFloat blockBottom = [self topOfRow:lastRow];
-        if ([view isKindOfClass:[NSImageView class]])
-            /* Top of the block, level with the title it illustrates --
-             * centred, it drifted away from the text it belongs to as
-             * sections were unfolded below. */
+        extension_widget_t *imageWidget = nil;
+        if ([view isKindOfClass:[VLCDialogImageView class]])
+            imageWidget = [(VLCDialogImageView *)view widget];
+        if ([view isKindOfClass:[NSImageView class]]
+         && !(imageWidget && imageWidget->b_image_centered))
+            /* Top of the block by default, level with the title it
+             * illustrates -- centred, it drifted away from the text it
+             * belongs to as sections were unfolded below. A script whose
+             * picture sits beside a list asks for the middle instead. */
             rect.origin.y = blockTop - rect.size.height;
         else
             rect.origin.y = blockBottom

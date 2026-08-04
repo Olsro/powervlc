@@ -125,6 +125,7 @@ nobase_vlclib_DATA += \
 	lua/extensions/VLSub.luac \
 	lua/extensions/invidious.luac \
 	lua/extensions/jellyfin.luac \
+	lua/extensions/subsonic.luac \
 	lua/intf/cli.luac \
 	lua/intf/dummy.luac \
 	lua/intf/dumpmeta.luac \
@@ -251,6 +252,7 @@ EXTRA_DIST += \
 	lua/extensions/VLSub.lua \
 	lua/extensions/invidious.lua \
 	lua/extensions/jellyfin.lua \
+	lua/extensions/subsonic.lua \
 	lua/intf/README.txt \
 	lua/intf/cli.lua \
 	lua/intf/dummy.lua \

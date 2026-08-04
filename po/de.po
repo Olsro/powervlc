@@ -1614,21 +1614,13 @@ msgstr "Web"
 msgid "Mouse Gestures"
 msgstr "Mausgesten"
 
-#: src/interface/interface.c:230
+#: src/interface/interface.c:222
 msgid ""
 "Running powervlc with the default interface. Use 'cpowervlc' to use powervlc "
 "without interface."
 msgstr ""
 "powervlc wird mit der Standardoberfläche gestartet. Verwenden Sie "
 "„cpowervlc“, um powervlc ohne Oberfläche zu starten."
-
-#: src/interface/interface.c:226
-msgid ""
-"Running powervlc with the default interface. Use '-I dummy' to use powervlc "
-"without interface."
-msgstr ""
-"powervlc wird mit der Standardoberfläche gestartet. Verwenden Sie "
-"„-I dummy“, um powervlc ohne Oberfläche zu starten."
 
 #. xgettext: Translate "C" to the language code: "fr", "en_GB", "nl", "ru"...
 #: src/libvlc.c:174
@@ -31798,7 +31790,62 @@ msgstr ""
 msgid "%@ could not be processed. The Messages window records what went wrong."
 msgstr ""
 
-#, c-format
+#: share/lua/sd/radiobrowser.lua:99
+msgid "Africa"
+msgstr "Afrika"
+
+#: share/lua/sd/radiobrowser.lua:103
+msgid "Asia"
+msgstr "Asien"
+
+#: share/lua/sd/radiobrowser.lua:106
+msgid "Europe"
+msgstr "Europa"
+
+#: share/lua/sd/radiobrowser.lua:109
+msgid "North America"
+msgstr "Nordamerika"
+
+#: share/lua/sd/radiobrowser.lua:112
+msgid "Oceania"
+msgstr "Ozeanien"
+
+#: share/lua/sd/radiobrowser.lua:114
+msgid "South America"
+msgstr "Südamerika"
+
+#: share/lua/playlist/radiobrowser.lua:186 share/lua/sd/radiobrowser.lua:137
+msgid "Play a random station (%s)"
+msgstr "Zufällige Station abspielen (%s)"
+
+#: modules/access/radiobrowser.c:77
+msgid "Radio-Browser.info random station picker"
+msgstr "Radio-Browser.info-Zufallssenderauswahl"
+
+#: modules/access/radiobrowser.c
+msgid "Station"
+msgstr "Sender"
+
+#: modules/access/radiobrowser.c
+msgid "Stream URL"
+msgstr "Stream-URL"
+
+#: modules/access/radiobrowser.c
+msgid "Homepage"
+msgstr "Webseite"
+
+#: modules/access/radiobrowser.c
+msgctxt "Radio station"
+msgid "Country"
+msgstr "Land"
+
+#~ msgid ""
+#~ "Running powervlc with the default interface. Use '-I dummy' to use "
+#~ "powervlc without interface."
+#~ msgstr ""
+#~ "powervlc wird mit der Standardoberfläche gestartet. Verwenden Sie „-I "
+#~ "dummy“, um powervlc ohne Oberfläche zu starten."
+
 #~ msgid "VLC version %s (%s)\n"
 #~ msgstr "VLC-Version %s (%s)\n"
 

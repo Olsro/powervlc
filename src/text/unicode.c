@@ -228,6 +228,154 @@ char *vlc_strcasestr (const char *haystack, const char *needle)
     return NULL;
 }
 
+/* ASCII stand-in for the Latin-1 supplement, U+00C0 to U+00FF.
+ * NULL where the code point is not a letter (multiplication and division
+ * signs), so that it goes through the general path. */
+static const char *const latin1_fold[0x40] = {
+    "a", "a", "a", "a", "a", "a", "ae", "c",    /* U+00C0 */
+    "e", "e", "e", "e", "i", "i", "i", "i",     /* U+00C8 */
+    "d", "n", "o", "o", "o", "o", "o", NULL,    /* U+00D0 */
+    "o", "u", "u", "u", "u", "y", "th", "ss",   /* U+00D8 */
+    "a", "a", "a", "a", "a", "a", "ae", "c",    /* U+00E0 */
+    "e", "e", "e", "e", "i", "i", "i", "i",     /* U+00E8 */
+    "d", "n", "o", "o", "o", "o", "o", NULL,    /* U+00F0 */
+    "o", "u", "u", "u", "u", "y", "th", "y",    /* U+00F8 */
+};
+
+/* Latin Extended-A, U+0100 to U+017F: one base letter each. The two
+ * ligatures of the block (U+0132 IJ and U+0152 OE) expand to two letters
+ * and are handled apart; their slots here are never read. */
+static const char latinA_fold[] =
+    "aaaaaa"        /* U+0100 A with macron..A with ogonek */
+    "cccccccc"      /* U+0106 C with acute..C with caron */
+    "dddd"          /* U+010E D with caron..D with stroke */
+    "eeeeeeeeee"    /* U+0112 E with macron..E with caron */
+    "gggggggg"      /* U+011C G with circumflex..G with cedilla */
+    "hhhh"          /* U+0124 H with circumflex..H with stroke */
+    "iiiiiiiiii"    /* U+0128 I with tilde..dotless i */
+    "ij"            /* U+0132 IJ ligature (see above) */
+    "jj"            /* U+0134 J with circumflex */
+    "kkk"           /* U+0136 K with cedilla..kra */
+    "llllllllll"    /* U+0139 L with acute..l with stroke */
+    "nnnnnnnnn"     /* U+0143 N with acute..eng */
+    "oooooo"        /* U+014C O with macron..o with double acute */
+    "oe"            /* U+0152 OE ligature (see above) */
+    "rrrrrr"        /* U+0154 R with acute..r with caron */
+    "ssssssss"      /* U+015A S with acute..s with caron */
+    "tttttt"        /* U+0162 T with cedilla..t with stroke */
+    "uuuuuuuuuuuu"  /* U+0168 U with tilde..u with ogonek */
+    "ww"            /* U+0174 W with circumflex */
+    "yyy"           /* U+0176 Y with circumflex..Y with diaeresis */
+    "zzzzzz"        /* U+0179 Z with acute..z with caron */
+    "s";            /* U+017F long s */
+
+/* The ASCII equivalent of a code point, or NULL when there is none and
+ * the code point must be kept as it is. An empty string drops it. */
+static const char *FoldCodePoint (uint32_t cp, char *scratch)
+{
+    if (cp < 0x80)
+    {   /* plain ASCII, only the case has to go */
+        scratch[0] = (cp >= 'A' && cp <= 'Z') ? (char)(cp + ('a' - 'A'))
+                                              : (char)cp;
+        scratch[1] = '\0';
+        return scratch;
+    }
+
+    /* combining marks: a decomposed "e" + acute accent must fold to the
+     * same thing as the precomposed "é" */
+    if (cp >= 0x0300 && cp <= 0x036F)
+        return "";
+
+    if (cp >= 0x00C0 && cp <= 0x00FF)
+        return latin1_fold[cp - 0x00C0];
+
+    if (cp >= 0x0100 && cp <= 0x017F)
+    {
+        if (cp == 0x0132 || cp == 0x0133)
+            return "ij";
+        if (cp == 0x0152 || cp == 0x0153)
+            return "oe";
+        scratch[0] = latinA_fold[cp - 0x0100];
+        scratch[1] = '\0';
+        return scratch;
+    }
+
+    switch (cp)
+    {   /* typographic punctuation, as typed on a keyboard */
+        case 0x00AB: case 0x00BB:                       /* angle quotes */
+        case 0x201C: case 0x201D: case 0x201E: case 0x201F:
+            return "\"";
+        case 0x2018: case 0x2019: case 0x201A: case 0x201B:
+            return "'";
+        case 0x2010: case 0x2011: case 0x2012: case 0x2013:
+        case 0x2014: case 0x2015:                       /* dashes */
+            return "-";
+        case 0x2026:                                    /* ellipsis */
+            return "...";
+        case 0x00A0: case 0x202F: case 0x205F:          /* fixed spaces */
+            return " ";
+    }
+    if (cp >= 0x2000 && cp <= 0x200A)                   /* en/em spaces */
+        return " ";
+
+    return NULL;
+}
+
+/**
+ * Folds an UTF-8 string down to a form fit for searching: case, accents,
+ * Latin ligatures and typographic punctuation are all reduced to plain
+ * lower-case ASCII wherever an equivalent exists, so that a search for
+ * "au coeur de l'histoire" finds "Au Cœur de l’Histoire".
+ *
+ * Only the Latin blocks are covered; anything else is passed through
+ * unchanged, so a search in a script this does not know still behaves as
+ * an exact substring search.
+ *
+ * @param str string to fold
+ * @return a nul-terminated folded UTF-8 string, to be freed with free(),
+ * or NULL on allocation failure.
+ */
+char *vlc_strfold (const char *str)
+{
+    /* no folding lengthens a code point, but the reserve costs nothing
+     * next to being wrong about it */
+    size_t size = strlen (str) * 3 + 1;
+    char *out = malloc (size);
+    if (unlikely(out == NULL))
+        return NULL;
+
+    char *dst = out;
+    for (;;)
+    {
+        uint32_t cp;
+        ssize_t s = vlc_towc (str, &cp);
+
+        if (s == 0)
+            break;
+        if (unlikely(s < 0))
+        {   /* not valid UTF-8: copy the byte over and carry on, the
+             * caller is searching, not validating */
+            *(dst++) = *(str++);
+            continue;
+        }
+
+        char scratch[2];
+        const char *fold = FoldCodePoint (cp, scratch);
+
+        if (fold != NULL)
+            while (*fold != '\0')
+                *(dst++) = *(fold++);
+        else
+        {
+            memcpy (dst, str, s);
+            dst += s;
+        }
+        str += s;
+    }
+    *dst = '\0';
+    return out;
+}
+
 /**
  * Converts a string from the given character encoding to utf-8.
  *
