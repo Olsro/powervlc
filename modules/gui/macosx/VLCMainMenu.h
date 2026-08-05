@@ -282,6 +282,10 @@
 - (IBAction)openDocumentation:(id)sender;
 - (IBAction)openAACSFolder:(id)sender;
 - (IBAction)openBDPlusFolder:(id)sender;
+- (IBAction)installBrowserAddon:(id)sender;
+- (IBAction)reloadCrystalHDDriver:(id)sender;
+- (IBAction)installCrystalHDDriver:(id)sender;
+- (IBAction)uninstallCrystalHDDriver:(id)sender;
 - (IBAction)openWebsite:(id)sender;
 - (IBAction)openForum:(id)sender;
 - (IBAction)openDonate:(id)sender;

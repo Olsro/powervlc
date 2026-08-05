@@ -309,21 +309,43 @@ bool VLCLegacyBestDeinterlaceAvailable(void)
  * video
  *****************************************************************************/
 
+/* ★★★ BASCULE PLEIN ÉCRAN — DEUX DÉCLENCHEURS AU LIEU D'UN (corrigé 2026-08-05).
+ *
+ * L'ancienne version basculait la variable de la PLAYLIST **puis** posait aussi
+ * celle du VOUT. Or la première se propage DÉJÀ au vout par le rappel
+ * playlist→vout du cœur : le vout recevait donc **deux transitions
+ * indépendantes**, lancées depuis le FIL PRINCIPAL. La reconstruction de la
+ * fenêtre vidéo, elle, doit s'exécuter sur ce même fil principal — qui était
+ * encore occupé à l'intérieur du second `var_SetBool`. D'où un GEL COMPLET.
+ *
+ * ⚠⚠ CE QUI A RENDU LE DIAGNOSTIC DIFFICILE, et qu'il faut retenir : le
+ * DOUBLE-CLIC ne gèle PAS, alors que **Commande + F** gèle à tous les coups.
+ * Le double-clic naît dans le fil du VOUT et ne bascule que la variable du
+ * vout : le fil principal reste libre de construire la fenêtre. C'est
+ * l'utilisateur qui a repéré cette différence — sans elle, j'avais attribué à
+ * tort le gel à la capture d'écran puis à la republication de la surbrillance,
+ * deux pistes que cette observation innocente.
+ *
+ * On s'aligne donc sur l'interface moderne (`VLCCoreInteraction.m`) : le VOUT
+ * est le maître, la variable de la playlist n'est qu'un MIROIR — un
+ * `var_SetBool` et non un second `var_ToggleBool`. Sans vout (rien en lecture),
+ * la playlist reste le seul porteur de l'état. */
 - (void)toggleFullscreen
 {
     playlist_t *p_playlist = pl_Get(p_intf);
-    var_ToggleBool(p_playlist, "fullscreen");
-    /* Forward to the active vout, if any, so it takes effect immediately */
     input_thread_t *p_input = playlist_CurrentInput(p_playlist);
-    if (p_input) {
-        vout_thread_t *p_vout = input_GetVout(p_input);
-        if (p_vout) {
-            var_SetBool(p_vout, "fullscreen",
-                        var_GetBool(p_playlist, "fullscreen"));
-            vlc_object_release(p_vout);
-        }
-        vlc_object_release(p_input);
+    vout_thread_t *p_vout = p_input ? input_GetVout(p_input) : NULL;
+
+    if (p_vout) {
+        const bool b_fs = var_ToggleBool(p_vout, "fullscreen");
+        var_SetBool(p_playlist, "fullscreen", b_fs);   /* miroir, pas 2e bascule */
+        vlc_object_release(p_vout);
     }
+    else
+        var_ToggleBool(p_playlist, "fullscreen");
+
+    if (p_input)
+        vlc_object_release(p_input);
 }
 
 - (void)setZoom:(float)factor

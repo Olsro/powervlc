@@ -25,6 +25,7 @@
 #define VLC_LUA_LIBS_H
 
 void luaopen_config( lua_State * );
+void luaopen_config_language( lua_State * );
 void luaopen_dialog( lua_State *, void * );
 void luaopen_httpd( lua_State * );
 void luaopen_input( lua_State * );

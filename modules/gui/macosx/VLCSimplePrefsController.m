@@ -1157,6 +1157,11 @@ static inline void save_string_list(intf_thread_t * p_intf, id object, const cha
          * les vieux Mac PPC ATI mais dont l'état doit rester cohérent. */
         if (config_GetType("mpeg2-hwaccel"))
             config_PutInt(p_intf, "mpeg2-hwaccel", [_input_hardwareAccelerationCheckbox state]);
+        /* Idem pour la carte Crystal HD : elle surclasse tous les décodeurs
+         * logiciels, donc sans cette case l'utilisateur n'a aucun moyen de
+         * revenir au processeur depuis l'interface. */
+        if (config_GetType("crystalhd"))
+            config_PutInt(p_intf, "crystalhd", [_input_hardwareAccelerationCheckbox state]);
         config_PutInt(p_intf, "postproc-q", [_input_postprocTextField intValue]);
         config_PutInt(p_intf, "skip-frames", [_input_skipFramesCheckbox state]);
 

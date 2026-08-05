@@ -606,6 +606,24 @@ make .bluray
 make .aacs
 make .bdplus
 
+# libcrystalhd for the same reason, and with a sharper failure mode than the
+# rest. Its patches do not merely build the library: they define the ioctl
+# layout it uses to talk to the BroadcomCrystalHD kext, which is installed
+# system-wide and shared with every other client on the machine. Nothing else
+# rebuilds this contrib in the non -c path, so editing contrib/src/crystalhd/
+# would silently relink the plugin against the previously built
+# libcrystalhd.a -- leaving a player that disagrees with its own driver about
+# what it is sending into the kernel.
+#
+# Only the Intel slices: the card is a mini-PCIe module, and the contrib is
+# selected for i386/x86_64 alone (contrib/src/crystalhd/rules.mak).
+case "$ARCH" in
+    i686|x86_64)
+        info "Making sure the Crystal HD contrib is current"
+        make .crystalhd
+        ;;
+esac
+
 # fontconfig and libass for the same reason, and specifically because both
 # changed with the move to fontconfig 2.16.0: libbluray needs fontconfig to
 # resolve BD-J menu fonts on Darwin (without it a disc that ships no font of

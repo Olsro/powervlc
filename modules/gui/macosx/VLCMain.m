@@ -47,6 +47,7 @@
 #import "CompatibilityFixes.h"
 #import "VLCInputManager.h"
 #import "VLCMainMenu.h"
+#import "../macosx_crystalhd.h"
 #import "VLCVoutView.h"
 #import "prefs.h"
 #import "VLCPlaylist.h"
@@ -378,7 +379,22 @@ static VLCMain *sharedInstance = nil;
             msg_Warn(p_intf, "Process is translated!");
         }
     }
+
+    /* Offer to install the Crystal HD driver when the machine has a card but
+     * no driver. Deferred rather than run inline: this puts a modal panel on
+     * screen, and it should appear over a window that already exists instead
+     * of stalling the rest of the launch behind it. */
+    [self performSelector:@selector(promptForCrystalHDDriver)
+               withObject:nil
+               afterDelay:0.5];
 }
+
+- (void)promptForCrystalHDDriver
+{
+    VLCCrystalHDMaybePromptAtStartup();
+}
+
+
 
 - (int)processIsTranslated
 {

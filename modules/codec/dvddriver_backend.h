@@ -30,6 +30,8 @@ typedef struct dvddriver_ctx dvddriver_ctx;
  * IOKit "ATIRadeon" existe. N'ouvre pas le décodeur.
  */
 bool dvddriver_available(void);
+/* Nom du greffon de carte retenu (découverte IODVDBundleName), NULL si aucun. */
+const char *dvddriver_family_name(void);
 
 /*
  * Ouvre le décodeur HW pour un flux width×height. Crée une surface WindowServer
@@ -136,8 +138,10 @@ void     dvddriver_set_present_rect(dvddriver_ctx *ctx, int x, int y, int w, int
  * /tmp/hw_nopresent=1|2 (saute le present, garde Decode). */
 /* DIAGNOSTIC qualité : répartition des macroblocs soumis par type (8) et par
  * type de DCT (2, frame/champ). */
+/* cvt3 : conversion des macroblocs à prédiction par CHAMP vers la prédiction
+ * TRAME — [0] exacte, [1] laissé au moteur field natif, [2] approchée. */
 void dvddriver_mb_stats(dvddriver_ctx *ctx, unsigned *mb8, unsigned *dct2,
-                        unsigned *cvt2);
+                        unsigned *cvt3);
 
 void dvddriver_perf_get(dvddriver_ctx *ctx, unsigned *n_dec, unsigned long *us_dec,
                         unsigned *n_pres, unsigned long *us_pres, unsigned *n_stale);
@@ -145,6 +149,10 @@ void dvddriver_perf_get(dvddriver_ctx *ctx, unsigned *n_dec, unsigned long *us_d
 /* Diagnostic : nombre de macroblocs capturés / attendus pour la picture courante
  * (utile pour comprendre un submit rc=-2 = capture incomplète). */
 unsigned dvddriver_surf_waits(const dvddriver_ctx *ctx);
+/* Diagnostic « retours en arrière » : nombre d'appels Show par chemin —
+ * [0] image cible demandée par le vout, [1] boucle de drainage du present,
+ * [2] dd_recycle_locked (contre-pression / filet anti-famine). */
+void dvddriver_show_counts(const dvddriver_ctx *ctx, unsigned out[3]);
 void dvddriver_last_progress(const dvddriver_ctx *ctx, unsigned *captured,
                              unsigned *total);
 
@@ -281,5 +289,12 @@ bool dvddriver_sp_geometry(dvddriver_ctx *ctx, uint32_t out[4]);
  * [5] ctx[0x1D0] relu après SetSPBuffer. Chaque empreinte vaut
  * (mots non nuls << 16) | hachage. Renvoie 0 si la séquence n'a pas tourné. */
 int dvddriver_sp_stage_probes(dvddriver_ctx *ctx, uint32_t out[6]);
+
+/* La surface est-elle liée à la fenêtre de VLC (true) ou à la fenêtre Carbon
+ * que le backend a créée (false) ? L'appelant PROPOSE un wid externe, mais le
+ * backend peut le refuser — certaines familles GPU n'affichent que dans leur
+ * propre fenêtre. À interroger APRÈS dvddriver_open() pour savoir ce qui a
+ * réellement été retenu. */
+bool dvddriver_uses_external_window(dvddriver_ctx *ctx);
 
 #endif /* VLC_DVDDRIVER_BACKEND_H */

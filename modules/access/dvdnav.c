@@ -190,7 +190,94 @@ struct demux_sys_t
     vlc_tick_t  i_pgc_length;
     int         i_vobu_index;
     int         i_vobu_flush;
+
+    /* ★★★ SURVEILLANCE DU SUPPORT (2026-08-05) — un lecteur optique qui lâche
+     * ne doit pas se traduire par un gel muet.
+     * Constaté sur l'iBook G3 : en revenant au menu, le lecteur a rendu une
+     * erreur de lecture IRRÉCUPÉRABLE puis a laissé tomber le disque
+     * (`ASC=0x11/0x06`, puis `ASC=0x3a` « support absent », `disk1: I/O
+     * error`, `media is not present`). libdvdnav a alors échoué à ouvrir le
+     * VTS (`ifoOpenVTSI failed`) MAIS a continué à rendre DVDNAV_STATUS_OK sur
+     * des événements sans données (HOP_CHANNEL, NOP…). Le démultiplexeur
+     * tournait donc à vide indéfiniment et le décodeur attendait une image I
+     * qui ne pouvait plus arriver : de l'extérieur, un gel sans explication.
+     * ⇒ On mesure le temps écoulé depuis le dernier bloc de données RÉEL. Au
+     * delà du seuil, on vérifie que le support répond encore ; s'il a disparu,
+     * on le DIT à l'utilisateur et on arrête proprement.
+     * ⚠ Une image fixe (STILL_FRAME) ou une attente (WAIT) sont des états
+     * LÉGITIMES sans données : ils réarment le chronomètre, sans quoi tout menu
+     * fixe déclencherait une fausse alerte. */
+    vlc_tick_t  i_last_block;      /* date du dernier bloc utile */
+    char       *psz_media_path;    /* chemin à vérifier (NULL = non vérifiable) */
+    bool        b_media_lost;      /* alerte déjà émise : ne pas la répéter */
+
+    /* ★★ La sortie vidéo vient de changer ⇒ REPUBLIER la surbrillance du menu.
+     * Posé par `EventIntf` (fil de l'input), consommé par `Demux` (fil du
+     * démultiplexeur). ⚠ C'est bien au fil du démultiplexeur de faire le
+     * travail : `ButtonUpdate` appelle libdvdnav, qui n'est PAS réentrante —
+     * l'appeler depuis le rappel d'événement la ferait courir contre la boucle
+     * de démultiplexage. Un simple booléen suffit ici : la seule conséquence
+     * d'une course serait un rafraîchissement décalé d'une itération. */
+    bool        b_highlight_refresh;
 };
+
+/* Silence sans données au-delà duquel on soupçonne le lecteur. Généreux : un
+ * DVD sain peut légitimement rester muet le temps d'un changement de VTS sur un
+ * lecteur lent (le G3 met plusieurs secondes à recaler la tête). On ne veut
+ * PAS d'alerte à tort — le coût d'un faux positif est d'interrompre une lecture
+ * qui va bien. */
+#define DVD_MEDIA_SILENCE_TIMEOUT  VLC_TICK_FROM_SEC(12)
+
+/*****************************************************************************
+ * Surveillance du support optique — cf. le commentaire de `i_last_block`.
+ *****************************************************************************/
+
+/* Le support répond-il encore ? On ne se fie PAS au seul silence de libdvdnav :
+ * on interroge le système de fichiers, seul juge fiable. `stat()` sur le point
+ * de montage échoue dès que le noyau a retiré le disque (« media is not
+ * present »), et `access()` sur VIDEO_TS confirme qu'on peut encore le lire.
+ * Renvoie vrai tant que tout va bien, y compris quand on ne peut pas juger
+ * (chemin inconnu, flux distant) : dans le doute, ne JAMAIS interrompre. */
+static bool MediaStillPresent( demux_t *p_demux )
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+
+    if( p_sys->psz_media_path == NULL || *p_sys->psz_media_path == '\0' )
+        return true;
+
+    struct stat st;
+    if( stat( p_sys->psz_media_path, &st ) != 0 )
+        return false;
+    if( !S_ISDIR( st.st_mode ) )
+        return true;            /* image disque ou nœud de périphérique */
+
+    char *psz_vts;
+    if( asprintf( &psz_vts, "%s/VIDEO_TS", p_sys->psz_media_path ) < 0 )
+        return true;            /* plus de mémoire : ne rien conclure */
+    const bool b_ok = ( access( psz_vts, R_OK ) == 0 );
+    free( psz_vts );
+    return b_ok;
+}
+
+/* Alerte l'utilisateur UNE seule fois, puis demande l'arrêt du démultiplexeur. */
+static int MediaLostFail( demux_t *p_demux )
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+
+    if( !p_sys->b_media_lost )
+    {
+        p_sys->b_media_lost = true;
+        msg_Err( p_demux, "le support optique ne répond plus — lecture arrêtée" );
+        vlc_dialog_display_error( p_demux, _("Disc no longer readable"), "%s",
+            _("The disc stopped responding, so playback cannot continue.\n\n"
+              "The drive reported an unrecoverable read error, or the disc is "
+              "no longer in the drive. This is often caused by an overheated "
+              "drive on an older machine, and more rarely by a dirty or "
+              "damaged disc. Let the machine cool down, then insert the disc "
+              "again.") );
+    }
+    return -1;      /* le démultiplexeur s'arrête proprement */
+}
 
 static int Control( demux_t *, int, va_list );
 static int Demux( demux_t * );
@@ -241,6 +328,16 @@ static int CommonOpen( vlc_object_t *p_this,
 
     ps_track_init( p_sys->tk );
     p_sys->b_readahead = b_readahead;
+
+    /* Surveillance du support (cf. `i_last_block`). Le chemin n'est connu que
+     * dans le cas access_demux, où `p_demux->psz_file` porte le point de
+     * montage ; ailleurs il reste NULL et la surveillance se désarme d'elle-même
+     * — c'est voulu, mieux vaut ne rien surveiller que de couper à tort. */
+    p_sys->i_last_block = mdate();
+    p_sys->b_media_lost = false;
+    p_sys->b_highlight_refresh = false;
+    p_sys->psz_media_path = ( p_demux->psz_file && *p_demux->psz_file )
+                          ? strdup( p_demux->psz_file ) : NULL;
 
     /* Discs open on first-play/menu material: keep the look-ahead
      * cache out of the way until a title (VTS) domain is entered --
@@ -577,6 +674,8 @@ static void Close( vlc_object_t *p_this )
             if( tk->es ) es_out_Del( p_demux->out, tk->es );
         }
     }
+
+    free( p_sys->psz_media_path );
 
     /* Free the array of titles */
     for( int i = 0; i < p_sys->i_title; i++ )
@@ -1017,6 +1116,32 @@ static int Demux( demux_t *p_demux )
         DemuxProcessVtsChange( p_demux );
     }
 
+    /* Republication de la surbrillance après un changement de sortie vidéo,
+     * faite ICI pour rester sur le fil du démultiplexeur (cf. le champ).
+     *
+     * ⛔⛔ DÉSARMÉE PAR DÉFAUT (2026-08-05) — CE CORRECTIF A GELÉ LA MACHINE.
+     * Mesure : capture d'écran désarmée SEULE ⇒ bascule plein écran en ~10 s,
+     * SANS gel (validé à l'écran). Le MÊME build + cette republication ⇒ gel
+     * total, SSH compris, donc au niveau GPU et non applicatif. C'est la seule
+     * différence entre les deux essais.
+     * Mécanisme soupçonné, cohérent avec l'incident du 2026-07-22 (« ShowSPBuffer
+     * sur le chemin de present a FIGÉ le GPU, extinction complète requise ») :
+     * republier la surbrillance PENDANT la reconstruction de la sortie vidéo
+     * fait travailler le plan subpicture au moment précis où le décodeur
+     * matériel rouvre son contexte sur une nouvelle fenêtre.
+     * ⇒ Une simple temporisation ne suffirait pas : il faut d'abord garantir que
+     * la sortie ET le contexte matériel sont stabilisés. Repris derrière
+     * `/tmp/dvd_hl_refresh` le jour où on saura le faire proprement. */
+    if( p_sys->b_highlight_refresh )
+    {
+        p_sys->b_highlight_refresh = false;
+        static int s_hl = -1;
+        if( s_hl < 0 )
+            s_hl = ( access( "/tmp/dvd_hl_refresh", F_OK ) == 0 ) ? 1 : 0;
+        if( s_hl > 0 )
+            ButtonUpdate( p_demux, false );
+    }
+
     if( p_sys->b_readahead )
         status = dvdnav_get_next_cache_block( p_sys->dvdnav, &packet, &i_event,
                                               &i_len );
@@ -1027,6 +1152,11 @@ static int Demux( demux_t *p_demux )
     {
         msg_Warn( p_demux, "cannot get next block (%s)",
                   dvdnav_err_to_string( p_sys->dvdnav ) );
+        /* ★ Avant de mettre l'échec sur le compte du disque ou du titre, voir
+         * si le support est encore là : c'est la cause la plus probable, et la
+         * seule qu'on puisse expliquer clairement à l'utilisateur. */
+        if( !MediaStillPresent( p_demux ) )
+            return MediaLostFail( p_demux );
         if( p_sys->cur_title == 0 )
         {
             msg_Dbg( p_demux, "jumping to first title" );
@@ -1034,6 +1164,29 @@ static int Demux( demux_t *p_demux )
         }
         return -1;
     }
+
+    /* ★★ CHIEN DE GARDE — libdvdnav peut rendre DVDNAV_STATUS_OK indéfiniment
+     * sur des événements SANS DONNÉES après un échec d'ouverture de VTS
+     * (`ifoOpenVTSI failed`) : rien n'arrive plus, et rien ne le signale. On ne
+     * coupe pas sur le silence seul — on s'en sert comme déclencheur pour aller
+     * DEMANDER au système si le support répond encore. */
+    if( mdate() - p_sys->i_last_block > DVD_MEDIA_SILENCE_TIMEOUT )
+    {
+        if( !MediaStillPresent( p_demux ) )
+            return MediaLostFail( p_demux );
+        /* Support présent : silence légitime (lecteur lent, VTS long à
+         * recaler). On réarme, sinon on interrogerait le disque à chaque
+         * bloc — coûteux sur un lecteur optique. */
+        p_sys->i_last_block = mdate();
+    }
+
+    /* Réarmement du chien de garde. Un bloc de données est la preuve directe
+     * que le lecteur répond ; une image FIXE ou une ATTENTE sont des états
+     * légitimement muets (menu fixe, drainage) et ne doivent surtout pas être
+     * pris pour une panne — sans quoi tout menu fixe couperait la lecture. */
+    if( i_event == DVDNAV_BLOCK_OK || i_event == DVDNAV_STILL_FRAME
+     || i_event == DVDNAV_WAIT )
+        p_sys->i_last_block = mdate();
 
     switch( i_event )
     {
@@ -1844,6 +1997,15 @@ static int EventIntf( vlc_object_t *p_input, char const *psz_var,
         {
             var_AddCallback( p_sys->p_vout, "mouse-moved", EventMouse, p_demux );
             var_AddCallback( p_sys->p_vout, "mouse-clicked", EventMouse, p_demux );
+            /* ★★ La sortie vidéo a été RECRÉÉE (bascule plein écran, changement
+             * de fenêtre) : son décodeur de sous-images repart vierge, donc la
+             * surbrillance du bouton courant a disparu de l'écran alors que la
+             * navigation, elle, fonctionne toujours. Symptôme exact : plus
+             * aucune flèche dans le menu après la bascule, mais un clic
+             * sélectionne bien la bonne entrée, et les flèches ne réapparaissent
+             * qu'en entrant dans un sous-menu (le premier événement HIGHLIGHT
+             * suivant). On redemande donc une publication. */
+            p_sys->b_highlight_refresh = true;
         }
     }
     (void) psz_var; (void) oldval;

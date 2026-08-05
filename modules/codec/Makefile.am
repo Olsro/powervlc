@@ -650,6 +650,11 @@ codec_LTLIBRARIES += $(LTLIBdav1d)
 ### Hardware encoders ###
 
 libcrystalhd_plugin_la_SOURCES = codec/crystalhd.c packetizer/h264_nal.c packetizer/h264_nal.h
+if HAVE_DARWIN
+# Card detection and firmware lookup: macOS has no vendor driver, so the plugin
+# has to find the hardware itself. Keep LDFLAGS out of this conditional.
+libcrystalhd_plugin_la_SOURCES += codec/crystalhd_osx.c codec/crystalhd_osx.h
+endif
 libcrystalhd_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)'
 libcrystalhd_plugin_la_LIBADD = $(LIBS_crystalhd)
 EXTRA_LTLIBRARIES += libcrystalhd_plugin.la

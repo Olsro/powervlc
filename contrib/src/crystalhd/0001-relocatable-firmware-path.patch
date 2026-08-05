@@ -1,0 +1,74 @@
+--- a/darwin_lib/libcrystalhd/libcrystalhd_priv.h
++++ b/darwin_lib/libcrystalhd/libcrystalhd_priv.h
+@@ -114,7 +114,9 @@
+  * while changing the file names
+  */
+ #define BC_MAX_FW_FNAME_SIZE	32
+-#define MAX_PATH		256
++/* The firmware directory is no longer a fixed system path: a host application
++ * can point it at its own bundle, and those paths get long. */
++#define MAX_PATH		1024
+ 
+ #define FWBINFILE_70012	"bcm70012fw.bin"
+ #define FWBINFILE_70015	"bcm70015fw.bin"
+--- a/darwin_lib/libcrystalhd/libcrystalhd_priv.cpp
++++ b/darwin_lib/libcrystalhd/libcrystalhd_priv.cpp
+@@ -1750,32 +1750,41 @@
+ //------------------------------------------------------------------------
+ BC_STATUS DtsGetFirmwareFiles(DTS_LIB_CONTEXT *Ctx)
+ {
+-    int fwfile_len;
+-	char fwfile[MAX_PATH + 1];
+-	char fwfilepath[MAX_PATH + 1];
+ #ifndef __APPLE__
+-	const char fwdir[] = "/lib/firmware/";
++	static const char fwdir_default[] = "/lib/firmware/";
+ #else
+-	const char fwdir[] = "/usr/lib/";
++	static const char fwdir_default[] = "/usr/lib/";
+ #endif
++	const char *fwfile, *fwdir, *sep;
++	size_t dirlen;
++	int len;
+ 
+-	if(Ctx->DevId == BC_PCI_DEVID_FLEA) {
+-        fwfile_len = strlen(FWBINFILE_70015);
+-        strncpy(fwfile, FWBINFILE_70015, fwfile_len);
+-    } else {
+-        fwfile_len = strlen(FWBINFILE_70012);
+-        strncpy(fwfile, FWBINFILE_70012, fwfile_len);
+-    }
++	fwfile = (Ctx->DevId == BC_PCI_DEVID_FLEA) ? FWBINFILE_70015
++	                                           : FWBINFILE_70012;
+ 
+-	if ((strlen(fwdir) + fwfile_len) > (MAX_PATH + 1)) {
++	/* Let the host application relocate the firmware blobs so it can ship
++	 * them inside its own bundle rather than have the user drop them into a
++	 * system directory. Unset means the historical location, so existing
++	 * installations keep working. */
++	fwdir = getenv("LIBCRYSTALHD_FW_PATH");
++	if (!fwdir || !*fwdir)
++		fwdir = fwdir_default;
++
++	dirlen = strlen(fwdir);
++	sep = (dirlen && fwdir[dirlen - 1] == '/') ? "" : "/";
++
++	len = snprintf(Ctx->DilPath, sizeof(Ctx->DilPath), "%s%s", fwdir, sep);
++	if (len < 0 || (size_t)len >= sizeof(Ctx->DilPath)) {
+ 		DebugLog_Trace(LDIL_DATA,"DtsGetFirmwareFiles:Path is too large ....");
+ 		return BC_STS_ERROR;
+ 	}
+ 
+-	strncpy(fwfilepath, fwdir, strlen(fwdir) + 1);
+-    strncat(fwfilepath, fwfile, fwfile_len);
+-    fwfilepath[strlen(fwdir) + fwfile_len] = '\0';
+-    strncpy(Ctx->FwBinFile, fwfilepath, strlen(fwdir) + fwfile_len);
++	len = snprintf(Ctx->FwBinFile, sizeof(Ctx->FwBinFile), "%s%s%s",
++	               fwdir, sep, fwfile);
++	if (len < 0 || (size_t)len >= sizeof(Ctx->FwBinFile)) {
++		DebugLog_Trace(LDIL_DATA,"DtsGetFirmwareFiles:Path is too large ....");
++		return BC_STS_ERROR;
++	}
+ 
+ 	return BC_STS_SUCCESS;
+ 

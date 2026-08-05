@@ -148,9 +148,22 @@ AoGetProperty(audio_output_t *p_aout, AudioObjectID id,
                                                   &i_out_size);
     if (err != noErr)
     {
-        msg_Err(p_aout, "AudioObjectGetPropertyDataSize failed, device id: %i, "
-                "prop: [%4.4s], OSStatus: %d", id, (const char *) &p_address[0],
-                (int)err);
+        /* ⚠ Une propriété INCONNUE n'est pas une panne : les systèmes anciens
+         * n'ont pas toutes celles des SDK récents. Sur Mac OS X 10.2,
+         * `kAudioStreamPropertyAvailablePhysicalFormats` ('pfta') n'existe pas
+         * et rend 'who?' — la sonde de sortie numérique échoue donc à chaque
+         * lancement, mais la sortie ANALOGIQUE s'ouvre ensuite normalement.
+         * Journalisé en erreur, ce message fait croire à une panne audio : il
+         * m'a fait conclure à tort que l'audio ne marchait pas sur Jaguar
+         * (2026-08-05), alors que la lecture sortait bien en 5.1. */
+        if (err == kAudioHardwareUnknownPropertyError)
+            msg_Dbg(p_aout, "propriété [%4.4s] absente sur ce système "
+                    "(périphérique %i) — sonde ignorée",
+                    (const char *) &p_address[0], id);
+        else
+            msg_Err(p_aout, "AudioObjectGetPropertyDataSize failed, device id: "
+                    "%i, prop: [%4.4s], OSStatus: %d", id,
+                    (const char *) &p_address[0], (int)err);
         return VLC_EGENERIC;
     }
 

@@ -150,6 +150,10 @@ typedef struct
     bool         b_have_cur;
     bool         b_hl_dirty;
     uint8_t     *p_scratch;       /* bitmap de travail (recadrage)             */
+    /* 10.2 : copie de travail du paquet SPU BRUT. Sur ce système le pilote
+     * analyse lui-même le paquet ; il faut donc y réécrire les couleurs de la
+     * surbrillance, sans quoi il redessine le calque aux couleurs normales. */
+    uint8_t     *p_pkt_scratch;
     uint32_t i_shown, i_failed, i_late, i_dropped;
     bool     b_warned_nohw;
     /* Mise au point : /tmp/hw_sp_nohide désarme l'effacement. Sert à séparer un
@@ -478,6 +482,7 @@ static void SpParseAndQueue(decoder_t *p_dec)
         i_dcsq = i_next;
     }
 
+
     /* Un paquet sans données RLE ni zone d'affichage n'est qu'un ordre
      * d'effacement (fin d'un sous-titre précédent). */
     if( !b_has_offsets || !b_has_area || x2 < x1 || y2 < y1 )
@@ -639,6 +644,41 @@ static void SpBuildPicture(decoder_t *p_dec, const sp_entry_t *e,
         SpCropToHighlight( p_sys->p_scratch, hl );
         sp->bitmap = p_sys->p_scratch;
         sp->lines  = SP_LINES;
+
+        /* ★★★ 10.2 — RÉÉCRIRE LES COULEURS DANS LE PAQUET BRUT.
+         * Sur 10.3/10.4 le pilote blitte depuis NOTRE descripteur : lui donner
+         * `colors`/`contrasts` de la palette de menu suffit. Sur 10.2 le pilote
+         * est un binaire tout différent qui ANALYSE le paquet SPU brut qu'on lui
+         * dépose — il y relit donc les commandes de couleur (0x03) et d'opacité
+         * (0x04) D'ORIGINE, celles du calque non sélectionné, et redessine sans
+         * surbrillance. D'où : sous-titres matériels parfaits sur Jaguar (leurs
+         * couleurs sont dans le paquet) mais surbrillance de menu invisible.
+         * On lui remet donc une COPIE du paquet dont ces deux commandes portent
+         * les valeurs du menu. `cmd_off` donne l'emplacement de chaque octet de
+         * commande : aucune analyse à refaire ici. */
+        if( e->packet_size > 0 && e->packet_size <= SP_PKT_MAX
+         && p_sys->p_pkt_scratch != NULL )
+        {
+            uint8_t *q = p_sys->p_pkt_scratch;
+            memcpy( q, e->packet, e->packet_size );
+            for( unsigned k = 0; k < e->cmd_count; k++ )
+            {
+                const unsigned o = e->cmd_off[k];
+                if( o + 2 >= e->packet_size )
+                    continue;
+                if( q[o] == SPU_CMD_SET_PALETTE )
+                {
+                    q[o + 1] = (uint8_t) (sp->colors >> 8);
+                    q[o + 2] = (uint8_t) (sp->colors & 0xff);
+                }
+                else if( q[o] == SPU_CMD_SET_ALPHACHANNEL )
+                {
+                    q[o + 1] = (uint8_t) (sp->contrasts >> 8);
+                    q[o + 2] = (uint8_t) (sp->contrasts & 0xff);
+                }
+            }
+            sp->packet = q;
+        }
     }
     else
         sp->bitmap = e->bitmap;
@@ -657,6 +697,37 @@ static void *SpThread(void *p_data)
     {
         if( p_sys->b_quit )
             break;
+
+        /* ★★★ CHANGEMENT DE BOUTON — TRAITÉ AVANT TOUTE ÉCHÉANCE.
+         *
+         * ⚠⚠ Ce bloc vivait plus bas, APRÈS le calcul d'échéance et les attentes.
+         * Il n'était donc atteignable que si une échéance venait d'expirer — or
+         * un changement de bouton n'est PAS une échéance. Quand rien n'était en
+         * file et rien d'affiché, l'échéance valait zéro, le fil repartait en
+         * `vlc_cond_wait` : le rappel le réveillait bien, la boucle recalculait
+         * zéro, et il se rendormait sans jamais exécuter le rafraîchissement.
+         * Résultat mesuré : 30 changements de bouton, 7 calques analysés, **une
+         * seule incrustation** — la surbrillance apparaissait une fois puis ne
+         * bougeait plus, ni au clavier ni à la souris.
+         * C'est une action IMMÉDIATE : elle se traite en tête de boucle.
+         *
+         * Il suffit d'avoir une incrustation en mémoire : on la repose avec le
+         * nouveau rectangle et la nouvelle palette. Le rappel `highlight`
+         * n'existe QUE dans les menus, donc cela ne peut pas ressusciter un
+         * sous-titre de film. On annule aussi l'échéance d'effacement : dans un
+         * menu la surbrillance doit rester tant qu'on y est. */
+        if( p_sys->b_hl_dirty && p_sys->b_have_cur )
+        {
+            p_sys->b_hl_dirty = false;
+            dvddriver_sp_picture sp;
+            SpBuildPicture( p_dec, &p_sys->cur, &sp );
+            vlc_mutex_unlock( &p_sys->lock );
+            dvddriver_sp_submit( SpHw( p_dec ), &sp, NULL );
+            vlc_mutex_lock( &p_sys->lock );
+            p_sys->b_visible = true;
+            p_sys->i_hide_at = 0;
+            continue;
+        }
 
         /* Prochaine échéance : soit l'effacement de l'incrustation en cours,
          * soit l'affichage du sous-titre en tête de file. */
@@ -703,19 +774,6 @@ static void *SpThread(void *p_data)
             continue;
         }
 
-        /* Changement de bouton : reposer la MÊME incrustation avec le nouveau
-         * rectangle et la nouvelle palette. Un montage par action de
-         * l'utilisateur — jamais périodique, et le backend plafonne à 10/s. */
-        if( p_sys->b_hl_dirty && p_sys->b_visible && p_sys->b_have_cur )
-        {
-            p_sys->b_hl_dirty = false;
-            dvddriver_sp_picture sp;
-            SpBuildPicture( p_dec, &p_sys->cur, &sp );
-            vlc_mutex_unlock( &p_sys->lock );
-            dvddriver_sp_submit( SpHw( p_dec ), &sp, NULL );
-            vlc_mutex_lock( &p_sys->lock );
-            continue;
-        }
 
         if( p_sys->b_stuck )
         {
@@ -731,6 +789,21 @@ static void *SpThread(void *p_data)
         /* Copie locale : le driver est appelé HORS du verrou (il prend le sien,
          * et un appel driver peut durer ; garder les deux verrous imbriqués
          * exposerait à un interblocage avec le fil de décodage). */
+        /* ★★★ NE PAS CONSOMMER L'ENTRÉE SI LE CONTEXTE MATÉRIEL N'EST PAS LÀ.
+         * Le calque peut être mis en file AVANT que le décodeur vidéo n'ait
+         * ouvert son contexte (c'est même la règle dans un menu). L'échéance
+         * d'affichage tombait alors trop tôt, la soumission échouait, et
+         * l'entrée était consommée quand même — perdue. Sur un menu ANIMÉ le
+         * paquet suivant rattrapait la chose ; sur un menu FIXE il n'y en a pas
+         * d'autre, et la surbrillance ne revenait jamais (mesuré sur Chihiro :
+         * « 0 incrustés, 1 en échec »).
+         * On repousse donc l'échéance de 100 ms sans toucher à la file. */
+        if( SpHw( p_dec ) == NULL )
+        {
+            vlc_cond_timedwait( &p_sys->wait, &p_sys->lock,
+                                mdate() + VLC_TICK_FROM_MS(100) );
+            continue;
+        }
         sp_entry_t *e = &p_sys->queue[p_sys->i_tail % SP_QUEUE];
         p_sys->cur = *e;
         p_sys->b_have_cur = true;
@@ -791,32 +864,47 @@ static int Decode(decoder_t *p_dec, block_t *p_block)
 {
     dvddriver_spu_sys_t *p_sys = p_dec->p_sys;
 
+
     if( p_block == NULL )                                    /* pas de drain */
         return VLCDEC_SUCCESS;
-    if( p_block->i_flags & (BLOCK_FLAG_CORRUPTED | BLOCK_FLAG_DISCONTINUITY) )
+    if( p_block->i_flags & BLOCK_FLAG_CORRUPTED )
     {
         p_sys->i_spu = p_sys->i_spu_size = 0;
         block_Release( p_block );
         return VLCDEC_SUCCESS;
     }
-
-    if( SpHw( p_dec ) == NULL )
-    {
-        /* Le contexte matériel n'est pas (ou plus) là. En pratique il apparaît
-         * dans la première seconde de lecture, bien avant le premier
-         * sous-titre ; s'il n'apparaît jamais, le décodage matériel a été
-         * refusé et cette piste restera muette — on le dit une fois plutôt que
-         * de laisser croire à un bug. */
-        if( !p_sys->b_warned_nohw )
-        {
-            p_sys->b_warned_nohw = true;
-            msg_Warn( p_dec, "paquet SPU reçu sans contexte matériel : "
-                             "sous-titres ignorés (désactiver "
-                             "mpeg2-hwaccel-hwsubs pour le rendu logiciel)" );
-        }
+    /* ★★★ NE PAS JETER SUR DISCONTINUITÉ — c'était la cause de l'absence totale
+     * de surbrillance dans les menus (2026-08-05).
+     * Une discontinuité invalide le paquet PARTIEL en cours de réassemblage, pas
+     * le bloc qui l'accompagne. Or dans un menu DVD, la navigation provoque un
+     * saut à chaque entrée de menu et à chaque changement de bouton : les paquets
+     * SPU y arrivent donc quasi TOUJOURS marqués `DISCONTINUITY`, et on les
+     * jetait tous — silencieusement, sans compteur ni message, ce qui donnait
+     * « le module prend la piste et n'incruste jamais rien ».
+     * `spudec` (le rendu logiciel, qui lui affiche bien la surbrillance) ne
+     * regarde QUE `CORRUPTED` : c'était la seule différence de traitement entre
+     * les deux chemins. */
+    if( p_block->i_flags & BLOCK_FLAG_DISCONTINUITY )
         p_sys->i_spu = p_sys->i_spu_size = 0;
-        block_Release( p_block );
-        return VLCDEC_SUCCESS;
+
+    /* ★★ NE PLUS JETER LE PAQUET QUAND LE CONTEXTE MATÉRIEL N'EST PAS ENCORE LÀ.
+     * L'en-tête de ce fichier le dit : la piste de sous-titres s'ouvre AVANT que
+     * le décodeur vidéo n'ait créé son contexte (il lui faut l'en-tête de
+     * séquence). Dans un MENU, le paquet qui porte le graphisme des boutons
+     * arrive précisément dans cette fenêtre — on le jetait, et il n'y en avait
+     * pas d'autre : plus aucune surbrillance de toute la session.
+     * Or le paquet n'est pas incrusté ici : il est analysé, mis en file, et
+     * soumis PLUS TARD par le fil d'ordonnancement, qui relit le contexte au
+     * moment de la soumission (`dvddriver_sp_submit( SpHw( p_dec ), … )`).
+     * Rien n'oblige donc à exiger le contexte dès maintenant. S'il n'apparaît
+     * jamais, les soumissions échoueront et le compteur « en échec » le dira —
+     * ce qui est visible, contrairement à un abandon silencieux. */
+    if( SpHw( p_dec ) == NULL && !p_sys->b_warned_nohw )
+    {
+        p_sys->b_warned_nohw = true;
+        msg_Dbg( p_dec, "paquet SPU reçu avant le contexte matériel — mis en "
+                        "file, il sera incrusté dès que le décodeur vidéo aura "
+                        "ouvert le sien" );
     }
 
     if( p_sys->i_spu_size == 0 )
@@ -934,29 +1022,35 @@ int dvddriver_spu_Open(vlc_object_t *p_this)
         return VLC_EGENERIC;
     }
 
-    /* ⚠ ENTRÉES AVEC MENUS DVD : ne pas prendre la piste si le contexte
-     * matériel n'est pas DÉJÀ là.
-     * Mesuré : dans un menu, le décodage matériel n'est pas actif
-     * (« matériel ATI actif » absent du journal) ; ce module prenait quand même
-     * la piste SPU, ne pouvait rien incruster, et les boutons de menu — donc la
-     * SURBRILLANCE — disparaissaient. La surbrillance n'est pas dans le paquet
-     * SPU : `vout_subpictures.c` l'applique au `subpicture_t` de `spudec` en le
-     * recadrant sur le bouton et en forçant `menu-palette`. Sans subpicture,
-     * plus rien.
-     * Règle : quand l'entrée expose la machinerie de menus (variable
-     * `highlight`, posée par dvdnav), on exige le contexte matériel ; sinon on
-     * décline et `spudec` reprend la main, menus compris. Hors menus
-     * (dvdsimple, fichiers), la règle permissive reste — le contexte matériel y
-     * apparaît une seconde après l'ouverture de la piste. */
-    { vlc_value_t val;
-      vlc_object_t *p_in = SpInput( p_dec );
-      if( p_in != NULL && var_Get( p_in, "highlight", &val ) == VLC_SUCCESS
-       && SpHw( p_dec ) == NULL )
-      {
-          msg_Dbg( p_dec, "entrée avec menus DVD, contexte matériel absent — "
-                          "sous-titres et surbrillance rendus en logiciel" );
-          return VLC_EGENERIC;
-      } }
+    /* ~~⚠ ENTRÉES AVEC MENUS DVD : décliner si le contexte matériel n'est pas
+     * DÉJÀ là~~ — GARDE RETIRÉE le 2026-08-05, sa prémisse est morte.
+     *
+     * Elle reposait sur un constat explicite : « dans un menu, le décodage
+     * matériel n'est pas actif ». C'était vrai tant que les menus animés
+     * cassaient l'image et faisaient démonter l'accélération ; depuis la
+     * correction du BALAYAGE ALTERNÉ (cf. `HwBlock` dans libmpeg2.c), **le
+     * décodage matériel est actif dans les menus et c'est la surface du GPU qui
+     * est affichée**.
+     * Conséquence mesurée de la garde devenue fausse : on déclinait, `spudec`
+     * (logiciel) prenait la piste, et son rendu n'atteignait plus jamais l'écran
+     * en mode REMPLACEMENT — `macosx_qt` laisse le cœur incruster dans le tampon
+     * logiciel, qui n'est plus ce qu'on affiche. Symptôme : menus nets mais
+     * AUCUNE surbrillance sur l'élément sélectionné.
+     * ⇒ On prend la piste et on attend le contexte matériel, qui arrive une
+     * seconde après — exactement comme sur les entrées sans menus. Tout le
+     * nécessaire à la surbrillance est déjà là (`SpGetHighlight` lit `highlight`,
+     * `x-start`/`y-start`/`x-end`/`y-end` et `menu-palette` posées par dvdnav,
+     * `SpCropToHighlight` recadre sur le bouton, et un rappel sur `highlight`
+     * rafraîchit à chaque changement de bouton).
+     * ⚠ Reste possible : si l'accélération n'ouvrait finalement PAS de contexte,
+     * plus personne ne rendrait les sous-titres. `mpeg2-hwaccel-subs=0` rend la
+     * piste à `spudec` dans ce cas. */
+    if( !var_InheritBool( p_dec, "mpeg2-hwaccel-subs" ) )
+    {
+        msg_Dbg( p_dec, "sous-titres matériels désactivés par l'utilisateur — "
+                        "rendu logiciel" );
+        return VLC_EGENERIC;
+    }
 
     dvddriver_spu_sys_t *p_sys = calloc( 1, sizeof( *p_sys ) );
     if( p_sys == NULL )
@@ -980,8 +1074,11 @@ int dvddriver_spu_Open(vlc_object_t *p_this)
 
     p_sys->queue = calloc( SP_QUEUE, sizeof( *p_sys->queue ) );
     p_sys->p_scratch = malloc( SP_PITCH * SP_LINES );
-    if( p_sys->queue == NULL || p_sys->p_scratch == NULL )
+    p_sys->p_pkt_scratch = malloc( SP_PKT_MAX );
+    if( p_sys->queue == NULL || p_sys->p_scratch == NULL
+     || p_sys->p_pkt_scratch == NULL )
     {
+        free( p_sys->p_pkt_scratch );
         free( p_sys->p_scratch );
         free( p_sys->queue );
         free( p_sys );
@@ -1042,6 +1139,7 @@ void dvddriver_spu_Close(vlc_object_t *p_this)
     msg_Dbg( p_dec, "sous-titres matériels : %u incrustés, %u en échec, "
              "%u en retard (>200 ms), %u abandonnés (file pleine)",
              p_sys->i_shown, p_sys->i_failed, p_sys->i_late, p_sys->i_dropped );
+    free( p_sys->p_pkt_scratch );
     free( p_sys->p_scratch );
     free( p_sys->queue );
     free( p_sys );

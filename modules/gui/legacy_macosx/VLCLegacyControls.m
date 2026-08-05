@@ -440,18 +440,40 @@ static void drawVerticalGradient(NSBezierPath *path, NSRect rect,
                                  float topWhite, float bottomWhite,
                                  BOOL flipped)
 {
+    /* ★★★ COULEURS EN ESPACE PÉRIPHÉRIQUE, ET MISES EN CACHE (2026-08-05).
+     * `colorWithCalibratedWhite:` fait passer CHAQUE bande par ColorSync à
+     * CHAQUE redessin : le profil `sample` d'une lecture DVD sur l'iBook G3
+     * montrait `CMMProcessColors` / `CWMatchColors` sous `NSRectFill`, et la
+     * descente d'affichage AppKit occupait ~20 %% du temps du fil principal —
+     * pour un simple curseur de progression, qui se redessine plusieurs fois
+     * par seconde pendant toute la lecture.
+     * `colorWithDeviceWhite:` évite la correspondance de couleurs (un gris
+     * reste un gris), et le cache évite 16 allocations d'objets par redessin.
+     * Rendu visuellement identique sur ces machines. */
+    static NSColor *s_cache[2][16];
+    static float    s_key[2] = { -1.0f, -1.0f };
+    const int steps = 16;
+    int slot = (s_key[0] == topWhite) ? 0 : (s_key[1] == topWhite) ? 1 : -1;
+    if (slot < 0) {
+        slot = (s_key[0] < 0.0f) ? 0 : 1;
+        for (int k = 0; k < steps; k++) {
+            float t = (float)k / (steps - 1);
+            [s_cache[slot][k] release];
+            s_cache[slot][k] = [[NSColor colorWithDeviceWhite:
+                topWhite + (bottomWhite - topWhite) * t alpha:1.0f] retain];
+        }
+        s_key[slot] = topWhite;
+    }
+
     [NSGraphicsContext saveGraphicsState];
     [path addClip];
-    const int steps = 16;
     float stripHeight = rect.size.height / steps;
     int i;
     for (i = 0; i < steps; i++) {
-        float t = (float)i / (steps - 1);   /* 0 = visual top */
         float y = flipped
             ? rect.origin.y + i * stripHeight
             : NSMaxY(rect) - (i + 1) * stripHeight;
-        [[NSColor colorWithCalibratedWhite:
-            topWhite + (bottomWhite - topWhite) * t alpha:1.0f] set];
+        [s_cache[slot][i] set];
         NSRectFill(NSMakeRect(rect.origin.x, y,
                               rect.size.width, stripHeight + 1.0f));
     }

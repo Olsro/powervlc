@@ -83,7 +83,17 @@ vlc_module_begin ()
     set_category( CAT_INPUT )
     set_subcategory( SUBCAT_INPUT_ACODEC )
     add_bool( "a52-dynrng", true, DYNRNG_TEXT, DYNRNG_LONGTEXT, false )
+    /* ★ Sur les tranches sans SIMD, passer DEVANT libavcodec (70). Mesuré sur
+     * l'iBook G3 600 MHz en lecture DVD : 68,9 %% de CPU contre 72,3 %% pour
+     * libavcodec, soit ~3,5 points, ET un décodage en virgule FLOTTANTE là où
+     * libavcodec retombe sur `ac3_fixed` (plancher de quantification 16 bits).
+     * Le score seul ne suffit pas : l'option de cœur `audio-liba52` doit rester
+     * vraie, sinon Open() décline et libavcodec reprend la main. */
+#if (defined (__powerpc__) || defined (__POWERPC__)) && !defined (__ALTIVEC__)
+    set_capability( "audio decoder", 80 )
+#else
     set_capability( "audio decoder", 60 )
+#endif
     set_callbacks( Open, Close )
 vlc_module_end ()
 
@@ -277,6 +287,10 @@ static int Open( vlc_object_t *p_this )
 {
     decoder_t *p_dec = (decoder_t *)p_this;
     decoder_sys_t *p_sys;
+
+    /* Interrupteur utilisateur (onglet Audio, sous le rééchantillonneur). */
+    if( !var_InheritBool( p_dec, "audio-liba52" ) )
+        return VLC_EGENERIC;
 
     if( p_dec->fmt_in.i_codec != VLC_CODEC_A52
      || p_dec->fmt_in.audio.i_rate == 0

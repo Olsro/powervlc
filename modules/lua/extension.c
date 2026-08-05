@@ -358,6 +358,19 @@ int ScanLuaCallback( vlc_object_t *p_this, const char *psz_filename,
     lua_State *L = luaL_newstate();
     lua_register( L, "require", &vlclua_dummy_require );
 
+    /* A scan is meant to be able to do nothing at all, which is why this
+     * state is bare -- but descriptor() runs in it, and descriptor() is
+     * what names the menu entry. An extension that cannot know the
+     * language can only ever name itself in English. So: the string
+     * library, which computes and nothing else, and vlc.config.language(),
+     * which reads and nothing else. Neither can touch the outside world. */
+    vlclua_set_this( L, p_mgr );
+    luaopen_string( L );
+    lua_pop( L, 1 );
+    lua_newtable( L );
+    luaopen_config_language( L );
+    lua_setglobal( L, "vlc" );
+
     /* Let's run it */
     if( vlclua_dofile( p_this, L, psz_script ) ) // luaL_dofile
     {

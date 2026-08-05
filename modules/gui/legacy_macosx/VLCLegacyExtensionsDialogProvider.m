@@ -23,8 +23,21 @@
 #endif
 
 #import "VLCLegacyExtensionsDialogProvider.h"
+/* <objc/message.h> is a 10.5+ SDK split; the 10.4u SDK declares objc_msgSend
+ * in <objc/objc-runtime.h> */
+#if defined(__has_include)
+# if __has_include(<objc/message.h>)
+#  import <objc/message.h>
+# else
+#  import <objc/objc-runtime.h>
+# endif
+#else
+# import <objc/objc-runtime.h>
+#endif
 #import "misc.h"
 
+#include <unistd.h>
+#include <stdio.h>
 #include <vlc_dialog.h>
 #include <vlc_extensions.h>
 
@@ -33,6 +46,12 @@
  * so rich text goes through -[NSAttributedString initWithHTML:] (10.0) into a
  * plain NSTextView instead. Simple markup -- what extensions actually emit --
  * renders; scripting does not, which is no loss in a dialog. */
+
+/* Layout tracing, for when a dialog looks wrong on a machine that cannot be
+ * debugged interactively: create /tmp/pvlc-grid-trace and every layout pass
+ * writes what it measured and what it placed next to it. Checked once.
+ * Declared here because the measuring pass, further down, uses it too. */
+static FILE *VLCLegacyGridTrace(void);
 
 #define GRID_MARGIN  12.f
 #define GRID_SPACING 8.f
@@ -183,6 +202,15 @@ static NSString *VLCLegacyCell(id row, NSString *key, int column)
     return [cells objectAtIndex:column];
 }
 
+/* -localizedStandardCompare: only appears in the 10.6 SDK, and this interface
+ * builds against 10.4. The -respondsToSelector: below is the runtime guard;
+ * this is the compile-time one, without which the compiler assumes the method
+ * returns id and rejects the function's NSComparisonResult. Declaration only:
+ * the implementation is the system's, wherever it exists. */
+@interface NSString (VLCLegacyStandardCompare)
+- (NSComparisonResult)localizedStandardCompare:(NSString *)string;
+@end
+
 /* The order the rest of the system sorts names in -- the Finder's, with
  * accents and case where the reader expects them rather than where their
  * code points fall ("Éric" next to "Eric", not after "Zoe"). Pre-10.6
@@ -280,8 +308,15 @@ VLC_LEGACY_WIDGET_ACCESSORS
  * momentum at all, and answer no to the test below. */
 - (void)scrollWheel:(NSEvent *)event
 {
+    /* -momentumPhase is 10.7; this target is older, so it cannot be sent
+     * literally -- a modern SDK rejects the unguarded call at compile time
+     * even though -respondsToSelector: guards it at runtime, and @available
+     * is not usable here. Typed objc_msgSend, as elsewhere in this
+     * interface. */
+    NSUInteger (*getMomentumPhase)(id, SEL) =
+        (NSUInteger (*)(id, SEL))objc_msgSend;
     if ([event respondsToSelector:@selector(momentumPhase)]
-     && [event momentumPhase] != 0
+     && getMomentumPhase(event, @selector(momentumPhase)) != 0
      && [NSDate timeIntervalSinceReferenceDate] - filledAt < 1.0)
         return;
     [super scrollWheel:event];
@@ -905,17 +940,41 @@ static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
         if (available <= 0.f)
             continue;
 
-        /* Only a text that does not fit on one line needs this: asking a
-         * cell for a bounded size adds the paragraph spacing of its
-         * style, and a one-line heading would gain empty space around it. */
         NSCell *labelCell = [(NSTextField *)view cell];
-        if ([labelCell cellSize].width <= available)
-            continue;
-
         NSSize wrapped = [labelCell cellSizeForBounds:
             NSMakeRect(0.f, 0.f, available, 100000.f)];
-        if (wrapped.height > heights[row])
-            heights[row] = wrapped.height;
+
+        /* SET the row, do not merely raise it. This runs once on the
+         * natural widths and again on the final ones, and the two are not
+         * the same width: a label measured against narrow natural columns
+         * asks for two lines and keeps them for ever, because raising is
+         * all the second pass could do. Measured on Tiger: the status line
+         * of the Invidious dialog stayed 32 px tall where it draws 16,
+         * which took 16 px away from the list above it and left a band of
+         * white at the bottom of the window.
+         *
+         * Whatever else stands on the row still has its say -- the row is
+         * the tallest of them and the label, at the width the label really
+         * gets. */
+        float others = 0.f;
+        unsigned m;
+        for (m = 0; m < [cells count]; m++) {
+            NSMutableDictionary *other = [cells objectAtIndex:m];
+            NSView *otherView = [other objectForKey:@"view"];
+            if (otherView == view)
+                continue;
+            if ([[other objectForKey:@"row"] intValue] != row
+             || [[other objectForKey:@"rowSpan"] intValue] != 1)
+                continue;
+            extension_widget_t *ow = [self widgetOfView:otherView];
+            if (ow && ow->b_hide)
+                continue;
+            NSSize size = VLCLegacyPreferredSize(otherView, ow);
+            if (size.height > others)
+                others = size.height;
+        }
+
+        heights[row] = wrapped.height > others ? wrapped.height : others;
     }
 }
 
@@ -953,6 +1012,43 @@ static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
         extension_widget_t *w = [self widgetOfView:view];
         NSSize size = (w && w->b_hide) ? NSMakeSize(0, 0)
             : VLCLegacyPreferredSize(view, w);
+
+        /* A wrapping label must be measured on ONE line here: -cellSize on
+         * a wrapping cell answers for the width the cell happens to have at
+         * that moment, which is not the width it is about to be given, and
+         * a one-line message came out two lines tall. Measured on Tiger: an
+         * empty message row 16 px, the same row 32 px the moment a line of
+         * text arrived -- so the list above it lost 16 px and everything
+         * under it climbed, leaving a band of white at the bottom of the
+         * window. growRows: below raises the row again, at the width the
+         * label really gets, whenever the text does need several lines. */
+        if (!(w && w->b_hide)
+         && [view isKindOfClass:[NSTextField class]]
+         && ![(NSTextField *)view isEditable]
+         && [[(NSTextField *)view cell] wraps]) {
+            NSSize oneLine = [[(NSTextField *)view cell] cellSizeForBounds:
+                NSMakeRect(0.f, 0.f, 100000.f, 100000.f)];
+            if (oneLine.height > 0.f)
+                size.height = oneLine.height;
+        }
+
+        if (VLCLegacyGridTrace() && [view isKindOfClass:[NSTextField class]]
+         && ![(NSTextField *)view isEditable]) {
+            NSCell *lc = [(NSTextField *)view cell];
+            NSSize cs = [lc cellSize];
+            NSSize huge = [lc cellSizeForBounds:
+                NSMakeRect(0.f, 0.f, 100000.f, 100000.f)];
+            NSSize atFrame = [lc cellSizeForBounds:
+                NSMakeRect(0.f, 0.f, [view frame].size.width, 100000.f)];
+            fprintf(VLCLegacyGridTrace(),
+                    "    label r%d wraps %d frameW %.0f  cellSize %.0fx%.0f"
+                    "  huge %.0f  atFrame %.0f  font %.1f  len %u  \"%.40s\"\n",
+                    row, [lc wraps] ? 1 : 0, [view frame].size.width,
+                    cs.width, cs.height, huge.height, atFrame.height,
+                    [[lc font] pointSize],
+                    (unsigned)[[lc stringValue] length],
+                    [[lc stringValue] UTF8String]);
+        }
 
         if (colSpan == 1 && size.width > widths[col])
             widths[col] = size.width;
@@ -1158,12 +1254,37 @@ static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
 
 }
 
+static FILE *VLCLegacyGridTrace(void)
+{
+    static FILE *trace = NULL;
+    static BOOL looked = NO;
+
+    if (!looked) {
+        looked = YES;
+        if (access("/tmp/pvlc-grid-trace", F_OK) == 0) {
+            trace = fopen("/tmp/pvlc-grid-trace.log", "a");
+            if (trace)
+                setvbuf(trace, NULL, _IOLBF, 0);
+        }
+    }
+    return trace;
+}
+
 - (void)layoutGrid
 {
     float widths[64], heights[64];
     int cols = 0, rows = 0, i;
+    FILE *trace = VLCLegacyGridTrace();
 
     [self measureColumns:widths rows:heights columns:&cols rows:&rows];
+
+    if (trace) {
+        fprintf(trace, "\n--- layout: bounds %.0fx%.0f, %d rows, %d cols\n",
+                [self bounds].size.width, [self bounds].size.height,
+                rows, cols);
+        for (i = 0; i < rows && i < 64; i++)
+            fprintf(trace, "    row %d measured %.1f\n", i, heights[i]);
+    }
 
     [self adjustWidths:widths columns:cols toWidth:[self bounds].size.width];
 
@@ -1176,6 +1297,8 @@ static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
     for (i = 0; i < rows && i < 64; i++)
         naturalH += heights[i] + (i > 0 ? GRID_SPACING : 0.f);
     float extraH = [self bounds].size.height - naturalH;
+    if (trace)
+        fprintf(trace, "    naturalH %.1f, extraH %.1f\n", naturalH, extraH);
     if (extraH > 0 && rows > 0 && rows <= 64) {
         /* Spare height belongs to the rows holding a list or a text area:
          * those are the only widgets that can show more of themselves.
@@ -1268,7 +1391,22 @@ static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
         }
 
         [view setFrame:NSMakeRect(x, y, w, h)];
+        if (trace)
+            fprintf(trace, "    %-22s r%d c%d span %dx%d -> "
+                           "x %.0f y %.0f w %.0f h %.0f\n",
+                    [NSStringFromClass([view class]) UTF8String],
+                    row, col, rowSpan, colSpan, x, y, w, h);
     }
+
+    /* Nothing paints this view's background -- it is a plain NSView with no
+     * drawRect: -- so the pixels a control leaves behind when the layout
+     * shifts stay on screen. That is what made the dialog look as though
+     * every widget had been drawn twice the moment the instance list filled
+     * up: the list grew, every row below it moved, and the old rendering was
+     * still there underneath. Ask for the whole thing to be repainted; the
+     * window background is redrawn under a non-opaque view, which is exactly
+     * what erases them. */
+    [self setNeedsDisplay:YES];
 }
 
 - (void)resizeSubviewsWithOldSize:(NSSize)oldSize
@@ -1519,8 +1657,20 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
     NSAttributedString *rich = data
         ? [[[NSAttributedString alloc] initWithHTML:data
                                  documentAttributes:NULL] autorelease] : nil;
-    return rich ? rich
-        : [[[NSAttributedString alloc] initWithString:string] autorelease];
+    if (!rich)
+        return [[[NSAttributedString alloc] initWithString:string] autorelease];
+
+    /* The HTML importer closes its last paragraph with a line break, which
+     * is an empty line under every label that uses markup -- and a row
+     * measured for two lines where one is drawn. */
+    NSMutableAttributedString *trimmed = [[rich mutableCopy] autorelease];
+    while ([trimmed length] > 0) {
+        unichar last = [[trimmed string] characterAtIndex:[trimmed length] - 1];
+        if (last != '\n' && last != '\r' && last != 0x2028 && last != 0x2029)
+            break;
+        [trimmed deleteCharactersInRange:NSMakeRange([trimmed length] - 1, 1)];
+    }
+    return trimmed;
 }
 
 - (void)updateControl:(NSView *)control forWidget:(extension_widget_t *)widget

@@ -1,0 +1,125 @@
+--- a/include/bc_dts_glob_osx.h
++++ b/include/bc_dts_glob_osx.h
+@@ -322,11 +322,50 @@
+ #define BC_IOC_IOWR(nr, type)	_IOWR(BC_IOC_BASE, nr, type)
+ #define BC_IOCTL_MB		BC_IOCTL_DATA
+ #else
++/*
++ * The kext is a system-wide resource: whoever installed it last owns
++ * /dev/crystalhd, and any client on the machine talks to it. That client is
++ * not necessarily the one this header was compiled with -- a stale
++ * libcrystalhd.dylib from an earlier crystalhd-for-osx install, or an older
++ * PowerVLC, will happily open the node and start issuing ioctls.
++ *
++ * Those peers disagree about the layout of BC_IOCTL_DATA, which the kext
++ * copies in from a user pointer. Nothing in the ioctl encoding notices: the
++ * command number carries sizeof(BC_IOCTL_ARG), and that struct was 16 bytes
++ * both before and after the layout was made architecture-invariant. So a
++ * mismatched peer used to sail straight through and have its payload read
++ * with the wrong field offsets.
++ *
++ * abi_token closes that. Its presence widens BC_IOCTL_ARG, which changes
++ * every BCM_IOC_* constant, so a mismatched peer no longer matches any entry
++ * of the kext's command table and is turned away by the dispatcher before a
++ * single user pointer is touched. The protection is symmetric: a new client
++ * is likewise refused by an old kext. The token's low half is a revision
++ * counter, so a future payload change can be locked out without having to
++ * grow this struct again -- bump BC_ABI_REVISION and mismatched peers get a
++ * precise diagnostic instead of a bare "unhandled command".
++ */
++#define BC_ABI_REVISION		1
++#define BC_ABI_TOKEN		(0x50564C4348440000ULL | BC_ABI_REVISION)
++
+ typedef struct _BC_IOCTL_ARG {
+ 	user_addr_t		user_address;
+ 	user_addr_t		user_padding;
++	bc_u64_t		abi_token;
+ } BC_IOCTL_ARG;
+ 
++/*
++ * The kext is 32-bit and its clients may be either width, so these two
++ * layouts have to come out byte for byte identical on i386 and x86_64. That
++ * was the point of making the payload architecture-invariant; leaving it as
++ * an assumption is what allows a silent regression, because a disagreement
++ * shows up as corrupted fields at runtime rather than as a build failure.
++ * Pin both sizes here: any edit that shifts them stops the build on the
++ * architecture that moved.
++ */
++typedef char bc_ioctl_abi_layout_check[
++	(sizeof(BC_IOCTL_ARG) == 24 && sizeof(BC_IOCTL_DATA) == 544) ? 1 : -1];
++
+ #define BC_IOC_BASE				'b'
+ #define BC_IOC_VOID				IOC_VOID
+ #define BC_IOC_IOWR(nr,type)	_IOWR(BC_IOC_BASE,nr,type)
+--- a/driver/darwin/BroadcomCrystalHD.cpp
++++ b/driver/darwin/BroadcomCrystalHD.cpp
+@@ -594,6 +594,32 @@
+         return EINVAL;
+     }
+     
++    /* Turn away a client that was built against a different ioctl ABI.
++     *
++     * This is deliberately decided from `cmd` alone. The kernel copies in
++     * exactly IOCPARM_LEN(cmd) bytes, so for a client that predates
++     * abi_token the buffer behind `data` is shorter than BC_IOCTL_ARG:
++     * reading the token first would read past what was copied. Checking the
++     * length keeps us inside the buffer, and it is also the check that
++     * cannot be fooled -- the length is part of the command number, so it is
++     * whatever the client was compiled with.
++     *
++     * The dispatcher below would reject such a client anyway (no cproc table
++     * entry matches a command number carrying the wrong length); this exists
++     * so the reason lands in the log instead of a puzzling
++     * "Unhandled command". */
++    if (IOCPARM_LEN(cmd) != sizeof(BC_IOCTL_ARG)) {
++        static int warned = 0;
++        if (warned < 4) {
++            warned++;
++            IOLog("BroadcomCrystalHD: refusing a client built against a "
++                  "different ioctl ABI (argument %u bytes, expected %u). "
++                  "Reinstall the driver shipped with this application.\n",
++                  (unsigned)IOCPARM_LEN(cmd), (unsigned)sizeof(BC_IOCTL_ARG));
++        }
++        return EINVAL;
++    }
++
+     if (!adp) {
+         IOLog("Invalid adp \n");
+         error = EINVAL;
+@@ -612,6 +638,23 @@
+ 
+     if (data) {
+         BC_IOCTL_ARG *tmp = (BC_IOCTL_ARG*)data;
++        /* Safe to read now: the length check above proved the kernel copied
++         * in a full BC_IOCTL_ARG. A peer that gets the size right but the
++         * payload layout wrong is caught here -- that is what the revision
++         * counter in the token is for. */
++        if (tmp->abi_token != BC_ABI_TOKEN) {
++            static int warned = 0;
++            if (warned < 4) {
++                warned++;
++                IOLog("BroadcomCrystalHD: refusing a client with ABI token "
++                      "0x%016llX, expected 0x%016llX. Reinstall the driver "
++                      "shipped with this application.\n",
++                      (unsigned long long)tmp->abi_token,
++                      (unsigned long long)BC_ABI_TOKEN);
++            }
++            error = EINVAL;
++            goto exitIoctl;
++        }
+         ua = tmp->user_address;
+         //BCMLOG_ERR("DtsDrvCmd:ioctl 0x%x 0x%llX\n", (unsigned int)cmd, arg);
+     }
+--- a/darwin_lib/libcrystalhd/libcrystalhd_priv.cpp
++++ b/darwin_lib/libcrystalhd/libcrystalhd_priv.cpp
+@@ -1104,6 +1104,10 @@
+ 	BC_IOCTL_ARG tmp;
+ 	tmp.user_address = CAST_USER_ADDR_T(pIo);
+ 	tmp.user_padding = 0;
++	/* Announce which payload layout this client speaks; a kext that does not
++	 * recognise it refuses the call rather than reading our BC_IOCTL_DATA at
++	 * the wrong offsets. See BC_ABI_TOKEN in bc_dts_glob_osx.h. */
++	tmp.abi_token = BC_ABI_TOKEN;
+ 	//DebugLog_Trace(LDIL_DBG,"DtsDrvCmd:ioctl 0x%x 0x%llX, %p\n", Code, tmp.user_address, pIo);
+ 	rc = ioctl(Ctx->DevHandle, Code, &tmp);
+ #endif

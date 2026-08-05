@@ -35,6 +35,12 @@
 # import "config.h"
 #endif
 
+#include <unistd.h>            /* access() — interrupteur /tmp/qt_capture */
+#include <fcntl.h>             /* open() — témoin de bascule synchrone */
+#include <stdlib.h>            /* getenv() */
+#include <stdio.h>             /* snprintf() */
+
+
 #import <Cocoa/Cocoa.h>
 #import <QuickTime/QuickTime.h>
 
@@ -42,6 +48,9 @@
 #include <vlc_plugin.h>
 #include <vlc_vout_display.h>
 #include <vlc_picture_pool.h>
+
+#include <math.h>                            /* lround */
+#include "../codec/dvddriver_piccontext.h"   /* present matériel piloté par le vout */
 
 static int  Open   (vlc_object_t *);
 static void Close  (vlc_object_t *);
@@ -141,7 +150,37 @@ struct vout_display_sys_t
     CGrafPtr capture_port;
 
     vout_display_place_t place;
+    /* ★★★ VERROU DE DESSIN (2026-08-05) — sépare le dessin QuickTime du
+     * DÉMÉNAGEMENT DE LA VUE d'une fenêtre à l'autre.
+     *
+     * En plein écran, l'interface legacy retire la vue vidéo de sa fenêtre et
+     * l'insère dans une fenêtre sans bordure (chemin obligatoire sous 10.4,
+     * cf. `openVideoHostWindow`). La vue étant une `NSQuickDrawView`, AppKit
+     * DÉTRUIT et recrée son port QuickDraw au passage — pendant que le fil du
+     * vout peut être en train d'y dessiner via `DecompressSequenceFrameWhen`.
+     * Résultat mesuré au témoin synchrone : le gel se produit exactement dans
+     * `addSubview:`, et il emporte la MACHINE ENTIÈRE (SSH compris).
+     * Ce verrou est pris autour de tout le dessin ; `viewWillMoveToWindow:`
+     * le prend aussi, ce qui garantit qu'aucun dessin n'est en cours au moment
+     * du déménagement, et en profite pour clore la séquence sur l'ancien port
+     * AVANT que celui-ci disparaisse. */
+    vlc_mutex_t draw_lock;
+    bool        suspended;          /* vue en cours de déménagement */
+
     vlc_mutex_t place_lock;
+
+    /* ==== Décodage DVD accéléré ATI (U1/U4) ==============================
+     * Ce vout est celui que retiennent les cartes sans textures RECTANGLE —
+     * la Rage Mobility M3 de l'iBook G3, où macosx_gl1 décline (« OpenGL 1.1
+     * YCbCr texturing not supported here »). Sans le protocole ci-dessous le
+     * décodeur matériel tourne mais AUCUNE image n'est présentée : le present
+     * est piloté par le vout, et lui seul connaît le pacing PTS.
+     * Rectangle vidéo en coordonnées FENÊTRE-locales (ce qu'attend
+     * CGSSetSurfaceBounds), publié par updateGeometry sur le thread principal
+     * et lu au display sous place_lock. */
+    int  hw_x, hw_y, hw_w, hw_h;
+    int  hw_wid;              /* numéro CGS de la fenêtre hôte, 0 = aucune */
+    bool hw_place_valid;
 };
 
 /*****************************************************************************
@@ -290,6 +329,8 @@ static int Open (vlc_object_t *this)
     {
         vd->sys = sys;
         vlc_mutex_init (&sys->place_lock);
+        vlc_mutex_init (&sys->draw_lock);
+        sys->suspended = false;
 
         /* The ICM packed-YUV path must exist (it does on any QuickTime 6+) */
         CodecComponent codec = 0;
@@ -371,6 +412,16 @@ static int Open (vlc_object_t *this)
         vout_display_PlacePicture (&sys->place, &vd->source, vd->cfg, false);
         sys->matrix_dirty = true;
 
+        /* U1 — géométrie publiée sur le bus libvlc à l'intention du décodeur
+         * matériel ATI. wid=0 tant qu'updateGeometry n'a pas vu de fenêtre :
+         * le décodeur ouvre alors sa propre fenêtre Carbon. */
+        var_Create (vd->obj.libvlc, DVDDRIVER_VAR_WID,    VLC_VAR_INTEGER);
+        var_Create (vd->obj.libvlc, DVDDRIVER_VAR_RECT_X, VLC_VAR_INTEGER);
+        var_Create (vd->obj.libvlc, DVDDRIVER_VAR_RECT_Y, VLC_VAR_INTEGER);
+        var_Create (vd->obj.libvlc, DVDDRIVER_VAR_RECT_W, VLC_VAR_INTEGER);
+        var_Create (vd->obj.libvlc, DVDDRIVER_VAR_RECT_H, VLC_VAR_INTEGER);
+        var_SetInteger (vd->obj.libvlc, DVDDRIVER_VAR_WID, 0);
+
         msg_Dbg (vd, "QuickDraw output: %ux%u planar YUV, ICM blit",
                  sys->src_width, sys->src_height);
 
@@ -419,6 +470,15 @@ void Close (vlc_object_t *this)
 
         [sys->qtView setVoutDisplay:nil];
 
+        /* U1 — retirer la géométrie du bus : wid=0 d'abord, pour qu'un décodeur
+         * encore vivant cesse de viser une fenêtre qui va disparaître. */
+        var_SetInteger (vd->obj.libvlc, DVDDRIVER_VAR_WID, 0);
+        var_Destroy (vd->obj.libvlc, DVDDRIVER_VAR_WID);
+        var_Destroy (vd->obj.libvlc, DVDDRIVER_VAR_RECT_X);
+        var_Destroy (vd->obj.libvlc, DVDDRIVER_VAR_RECT_Y);
+        var_Destroy (vd->obj.libvlc, DVDDRIVER_VAR_RECT_W);
+        var_Destroy (vd->obj.libvlc, DVDDRIVER_VAR_RECT_H);
+
         var_Destroy (vd, "drawable-nsobject");
         if ([(id)sys->container respondsToSelector:@selector(removeVoutSubview:)])
             [(id)sys->container performSelectorOnMainThread:@selector(removeVoutSubview:)
@@ -443,6 +503,7 @@ void Close (vlc_object_t *this)
         if (sys->embed)
             vout_display_DeleteWindow (vd, sys->embed);
         vlc_mutex_destroy (&sys->place_lock);
+        vlc_mutex_destroy (&sys->draw_lock);
         free (sys);
     }
     [pool release];
@@ -469,7 +530,15 @@ static picture_t *QtPicNew (const video_format_t *fmt)
     unsigned width  = fmt->i_width;
     unsigned height = fmt->i_height;
     unsigned pitch_y = (width + 15) & ~15u;
-    unsigned pitch_c = ((width / 2) + 15) & ~15u;
+    /* ⚠ Le pas de ligne CHROMA vaut exactement la MOITIÉ du pas luma en 4:2:0 —
+     * il ne s'aligne PAS pour son propre compte. L'aligner séparément
+     * (`((width/2)+15) & ~15`) donnait 368 au lieu de 360 pour une largeur de
+     * 720 : le luma tombait juste (720 est déjà multiple de 16) tandis que la
+     * chroma glissait de 8 octets par ligne, d'où une image lisible BARRÉE DE
+     * BANDES DIAGONALES rouge/bleu et une ligne verte en bas. Visible sur tout
+     * DVD PAL/NTSC (720 de large) — donc sur les menus, rendus en logiciel, et
+     * sur toute lecture non accélérée. */
+    unsigned pitch_c = pitch_y / 2;
     size_t size_y = (size_t) pitch_y * height;
     size_t size_c = (size_t) pitch_c * (height / 2);
 
@@ -551,6 +620,89 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
     vout_display_sys_t *sys = vd->sys;
     VLC_UNUSED(subpicture);
 
+    /* ==== U4 — present matériel piloté par le vout =========================
+     * Si la picture porte un contexte HW et que le décodeur a publié son device
+     * et son callback, présenter la surface GPU et NE PAS blitter : en mode
+     * remplacement les plans logiciels ne sont jamais reconstruits, les blitter
+     * afficherait du vide. Le pacing PTS du vout s'applique donc au present
+     * matériel, ce qui donne la synchro A/V.
+     *
+     * Les deux adresses sont relues à CHAQUE image, jamais mises en cache : le
+     * décodeur peut fermer puis rouvrir son contexte en cours de flux (bascule
+     * plein écran, changement de séquence). */
+    dvddriver_ctx *hw = var_GetAddress (vd->obj.libvlc, DVDDRIVER_VAR_CTX);
+    dvddriver_present_cb present =
+        (dvddriver_present_cb) var_GetAddress (vd->obj.libvlc, DVDDRIVER_VAR_PRESENT);
+
+    if (hw != NULL && present != NULL && pic->context != NULL)
+    {
+        int hx, hy, hw_, hh, hwid;
+        bool ok;
+        vlc_mutex_lock (&sys->place_lock);
+        ok = sys->hw_place_valid;
+        hx = sys->hw_x; hy = sys->hw_y; hw_ = sys->hw_w; hh = sys->hw_h;
+        hwid = sys->hw_wid;
+        if (!ok)
+        {
+            /* Pas encore de géométrie fenêtre-locale : le rectangle en coords
+             * VUE est le meilleur repli, et le décodeur l'ignore de toute façon
+             * quand il affiche dans sa propre fenêtre Carbon (wid=0). */
+            hx = sys->place.x; hy = sys->place.y;
+            hw_ = sys->place.width; hh = sys->place.height;
+            hwid = 0;
+        }
+        vlc_mutex_unlock (&sys->place_lock);
+
+        {
+            static bool s_engaged = false;
+            if (!s_engaged)
+            {
+                s_engaged = true;
+                msg_Dbg (vd, "present matériel engagé (rect fenêtre-local "
+                         "%d,%d %dx%d, wid=%d)", hx, hy, hw_, hh, hwid);
+            }
+        }
+
+        if (present (hw, pic->context, hwid, hx, hy, hw_, hh))
+        {
+            picture_Release (pic);
+            return;
+        }
+    }
+    else if (hw != NULL && present != NULL)
+    {
+        /* ★★ IMAGE SANS CONTEXTE MATÉRIEL alors que le chemin HW est ACTIF —
+         * ne PAS la blitter. En mode remplacement les plans logiciels ne sont
+         * pas reconstruits (cf. le commentaire ci-dessus), et surtout ce blit
+         * dessine dans la FENÊTRE, sous la surface CGS du décodeur : on fait
+         * alors coexister deux contenus différents au même endroit, que le
+         * WindowServer peut composer l'un puis l'autre — d'où des flashs et des
+         * « retours en arrière » résiduels. Garder la dernière image matérielle
+         * est strictement meilleur : l'image sautée est de toute façon
+         * invisible sous la surface.
+         * ⚠ Ce cas n'est PAS marginal sur du contenu entrelacé : les images à
+         * prédiction `field` ne sont pas soumises au GPU. Mesuré sur ce DVD
+         * (Rage 128, 55 s) : 1465 images, 1351 décodées en matériel ⇒ **114
+         * images, 8 %, passaient par ce blit**. Il coûte en plus une conversion
+         * ICM logicielle (~30 %% d'un cœur de G3 pendant sa durée). */
+        picture_Release (pic);
+        return;
+    }
+
+    /* ★★ Tout le dessin QuickTime sous `draw_lock` : c'est ce qui permet à
+     * `viewWillMoveToWindow:` de garantir qu'aucune image n'est en cours de
+     * blit quand AppKit détruit le port QuickDraw. */
+    vlc_mutex_lock (&sys->draw_lock);
+    if (sys->suspended)
+    {
+        /* Déménagement de la vue en cours : le port de destination est en train
+         * de disparaître. Sauter cette image est sans conséquence (au pire une
+         * image perdue pendant la bascule) ; dessiner serait fatal. */
+        vlc_mutex_unlock (&sys->draw_lock);
+        picture_Release (pic);
+        return;
+    }
+
     if (EnsureSequence (vd))
     {
         vlc_mutex_lock (&sys->place_lock);
@@ -587,6 +739,7 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
                 QDFlushPortBuffer (port, nil);
         }
     }
+    vlc_mutex_unlock (&sys->draw_lock);
 
     picture_Release (pic);
 }
@@ -708,8 +861,30 @@ static int Control (vout_display_t *vd, int query, va_list ap)
             off_y = content.size.height
                   - (inWin.origin.y + inWin.size.height);
 
+            /* ★★★ CAPTURE EXCLUSIVE DE L'ÉCRAN — DÉSARMÉE PAR DÉFAUT (2026-08-05).
+             *
+             * `CGDisplayCapture` prend l'écran en EXCLUSIVITÉ pour obtenir un
+             * chemin sans copie. C'est la SEULE chose que le plein écran fasse
+             * de particulier ici, et la bascule plein écran gèle la machine
+             * ENTIÈRE sur ce banc (SSH lui-même ne répond plus, donc ce n'est
+             * pas un blocage applicatif). Le commentaire d'en-tête du module
+             * affirmait ce chemin « inatteignable avec le plein écran par
+             * reparentage de l'interface legacy » — c'est FAUX, la condition
+             * ci-dessous est bien remplie, et c'est probablement pourquoi le
+             * défaut n'avait jamais été rapproché de la capture.
+             * ⚠ On ne perd presque rien à la désarmer : d'après ce même
+             * en-tête, QuickTime reconvertit de toute façon YUV→2vuy en
+             * logiciel dans le décompresseur (~30 % d'un cœur de G3) quelle que
+             * soit la destination — le « zéro copie » n'était donc pas atteint.
+             * Interrupteur pour l'A/B, et pour reprendre le chantier plus tard :
+             * `/tmp/qt_capture`. */
+            static int s_cap = -1;
+            if (s_cap < 0)
+                s_cap = (access ("/tmp/qt_capture", F_OK) == 0) ? 1 : 0;
+
             NSScreen *screen = [win screen];
-            if (screen && ([win styleMask] & NSBorderlessWindowMask)
+            if (s_cap > 0
+             && screen && ([win styleMask] & NSBorderlessWindowMask)
              && NSEqualRects ([win frame], [screen frame])
              && NSEqualSizes (bounds.size, [screen frame].size)) {
                 want_capture = true;
@@ -748,6 +923,76 @@ static int Control (vout_display_t *vd, int query, va_list ap)
         sys->matrix_dirty = true;
         vlc_mutex_unlock (&sys->place_lock);
 
+        /* ==== U1 — publier la géométrie vidéo pour le décodeur matériel ATI ==
+         * Thread principal (updateGeometry n'est appelé que là) : les accès
+         * AppKit fenêtre/écran sont légitimes. Le G3 est 1×, points == pixels.
+         *
+         * ⚠ Le mode CAPTURE D'ÉCRAN est exclu : la surface du décodeur est liée
+         * à une FENÊTRE, et un écran capturé ne compose plus les fenêtres — la
+         * publier ferait viser une fenêtre que le WindowServer n'affiche plus.
+         * On y publie donc wid=0, ce qui fait retomber le décodeur sur sa propre
+         * fenêtre Carbon. */
+        long widNum = (win != nil && !want_capture) ? (long)[win windowNumber] : 0;
+        if (widNum > 0 && place.width > 0 && place.height > 0)
+        {
+            /* `place` a son origine EN HAUT à gauche dans la vue ; le repère
+             * AppKit de la vue est en BAS à gauche, d'où le flip. */
+            NSRect vrect = NSMakeRect (place.x,
+                                       bounds.size.height - (place.y + place.height),
+                                       place.width, place.height);
+            NSRect wrect = [self convertRect:vrect toView:nil];       /* → fenêtre */
+            NSPoint sOrg = [win convertBaseToScreen:wrect.origin];    /* → écran (10.5-safe) */
+
+            /* L'écran « zéro » (celui de la barre de menus) est l'origine des
+             * coordonnées CGS globales ; sa hauteur sert au flip vers une
+             * origine haut-gauche. */
+            NSArray *screens = [NSScreen screens];
+            NSScreen *zero = [screens count] ? [screens objectAtIndex:0]
+                                             : [NSScreen mainScreen];
+            float screenH = [zero frame].size.height;
+
+            long rx = lround (sOrg.x);
+            long ry = lround (screenH - (sOrg.y + wrect.size.height));
+            long rw = lround (wrect.size.width);
+            long rh = lround (wrect.size.height);
+            var_SetInteger (vd->obj.libvlc, DVDDRIVER_VAR_RECT_X, rx);
+            var_SetInteger (vd->obj.libvlc, DVDDRIVER_VAR_RECT_Y, ry);
+            var_SetInteger (vd->obj.libvlc, DVDDRIVER_VAR_RECT_W, rw);
+            var_SetInteger (vd->obj.libvlc, DVDDRIVER_VAR_RECT_H, rh);
+            var_SetInteger (vd->obj.libvlc, DVDDRIVER_VAR_WID, widNum);
+
+            /* Même rectangle en coordonnées FENÊTRE-locales top-left : c'est ce
+             * qu'attend CGSSetSurfaceBounds. L'origine CGS d'une fenêtre est le
+             * coin haut-gauche de son FRAME, barre de titre comprise. */
+            NSRect wf = [win frame];
+            long wx = lround (wf.origin.x);
+            long wy = lround (screenH - (wf.origin.y + wf.size.height));
+
+            vlc_mutex_lock (&sys->place_lock);
+            sys->hw_x = (int)(rx - wx);
+            sys->hw_y = (int)(ry - wy);
+            sys->hw_w = (int)rw;
+            sys->hw_h = (int)rh;
+            sys->hw_wid = (int)widNum;
+            sys->hw_place_valid = true;
+            vlc_mutex_unlock (&sys->place_lock);
+
+            msg_Dbg (vd, "U1 géométrie vout : wid=%ld rect=%ld,%ld %ldx%ld "
+                     "→ fenêtre-local %d,%d", widNum, rx, ry, rw, rh,
+                     (int)(rx - wx), (int)(ry - wy));
+        }
+        else
+        {
+            vlc_mutex_lock (&sys->place_lock);
+            sys->hw_place_valid = false;
+            sys->hw_wid = 0;
+            vlc_mutex_unlock (&sys->place_lock);
+            var_SetInteger (vd->obj.libvlc, DVDDRIVER_VAR_WID, 0);
+        }
+
+        /* ⚠ Suspect n°1 : cet appel réveille le thread du vout, qui va
+         * reconstruire sa séquence QuickTime — depuis le THREAD PRINCIPAL, qui
+         * détient encore @synchronized(self) et place_lock. */
         vout_display_SendEventDisplaySize (vd, bounds.size.width, bounds.size.height);
     }
 }
@@ -775,6 +1020,69 @@ static int Control (vout_display_t *vd, int query, va_list ap)
     return YES;
 }
 
+/* ★★★ LE POINT CRITIQUE — cf. `draw_lock`.
+ *
+ * AppKit appelle ceci JUSTE AVANT de sortir la vue de sa fenêtre (et avant de
+ * l'insérer dans la nouvelle). C'est notre seule fenêtre de tir pour arrêter le
+ * dessin : au retour de cette méthode, le port QuickDraw de la vue va être
+ * détruit. Sans cela, `addSubview:` gèle la MACHINE ENTIÈRE — localisé au
+ * témoin synchrone (dernière étape atteinte : « L5 insertion dans la nouvelle
+ * fenetre »), parce que le fil du vout est encore dans
+ * `DecompressSequenceFrameWhen` sur un port en train de disparaître.
+ *
+ * Prendre `draw_lock` ATTEND la fin de l'image en cours — quelques
+ * millisecondes — puis interdit les suivantes. On clôt aussi la séquence de
+ * décompression tant que l'ancien port est encore valide : la laisser vivre
+ * sur un port mort est précisément ce qu'on veut éviter. `EnsureSequence` la
+ * recréera sur le nouveau port au premier affichage qui suit. */
+- (void)viewWillMoveToWindow:(NSWindow *)newWindow
+{
+    /* Une reprise programmée par un déménagement précédent ne doit pas tomber
+     * au milieu de celui-ci. */
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                        selector:@selector(resumeDrawingAfterMove) object:nil];
+    @synchronized (self) {
+        if (vd) {
+            vout_display_sys_t *sys = vd->sys;
+            vlc_mutex_lock (&sys->draw_lock);
+            sys->suspended = true;
+            if (sys->seq_started) {
+                CDSequenceEnd (sys->seq);
+                sys->seq_started = false;
+            }
+            vlc_mutex_unlock (&sys->draw_lock);
+        }
+    }
+    [super viewWillMoveToWindow:newWindow];
+}
+
+/* ★★★ REPRISE DIFFÉRÉE — la deuxième moitié du correctif.
+ *
+ * Reprendre le dessin dès `viewDidMoveToWindow` ne suffit PAS : cette méthode
+ * est appelée AU MILIEU de la bascule, alors que le fil principal a encore à
+ * masquer la barre de menus (`SetSystemUIMode`), ordonner et activer la
+ * nouvelle fenêtre. Mesuré au témoin : le fil du vout repartait aussitôt
+ * recréer sa séquence QuickTime sur le nouveau port **pendant** que le fil
+ * principal était dans `SetSystemUIMode` — deux sollicitations simultanées du
+ * serveur graphique, et la machine entière se fige (dernière étape atteinte :
+ * « L6 SetSystemUIMode(masque) »).
+ * `afterDelay:0` ne temporise pas : il place la reprise au TOUR SUIVANT de la
+ * boucle d'événements, donc APRÈS que toute la bascule (L1…L9) soit revenue.
+ * C'est exactement la garantie qu'il faut, sans délai arbitraire à calibrer.
+ * ⚠ Si la boucle d'événements ne tournait pas, la vidéo resterait figée mais
+ * la machine, elle, resterait vivante : le mode dégradé est acceptable. */
+- (void)resumeDrawingAfterMove
+{
+    @synchronized (self) {
+        if (vd) {
+            vout_display_sys_t *sys = vd->sys;
+            vlc_mutex_lock (&sys->draw_lock);
+            sys->suspended = false;
+            vlc_mutex_unlock (&sys->draw_lock);
+        }
+    }
+}
+
 /* Mouse-moved events go to the first responder (DVD menu highlighting);
  * a window change also invalidates the QuickDraw geometry. */
 - (void)viewDidMoveToWindow
@@ -783,6 +1091,11 @@ static int Control (vout_display_t *vd, int query, va_list ap)
         [[self window] makeFirstResponder:self];
     [self updateGeometry];
     [super viewDidMoveToWindow];
+    /* Ne PAS reprendre ici : la bascule n'est pas terminée (cf. ci-dessus). */
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                        selector:@selector(resumeDrawingAfterMove) object:nil];
+    [self performSelector:@selector(resumeDrawingAfterMove)
+               withObject:nil afterDelay:0.0];
 }
 
 - (BOOL)mouseDownCanMoveWindow
@@ -850,8 +1163,27 @@ static int Control (vout_display_t *vd, int query, va_list ap)
                 vlc_mutex_lock (&sys->place_lock);
                 vout_display_place_t place = sys->place;
                 vlc_mutex_unlock (&sys->place_lock);
+                /* ★★ REPÈRE VERTICAL — le piège de cette sortie.
+                 * `vout_display_SendMouseMovedDisplayCoordinates` attend un y
+                 * mesuré depuis le HAUT. Les sorties OpenGL écrivent donc
+                 * `hauteur - y`, parce que `NSOpenGLView` n'est PAS retournée
+                 * (origine en bas à gauche, convention Cocoa).
+                 * ⚠⚠ ICI la vue dérive de **`NSQuickDrawView`, qui retourne
+                 * déjà son repère** (`isFlipped` = OUI) pour coller à QuickDraw :
+                 * `ml.y` est DÉJÀ mesuré depuis le haut. Recopier la ligne des
+                 * sorties GL appliquait donc un SECOND retournement — d'où des
+                 * menus DVD où survoler « Play » sélectionnait « Set Up »,
+                 * c'est-à-dire l'entrée symétrique par rapport au centre.
+                 * Diagnostiqué à la mesure (2026-08-05) : `place y=0 h=576`,
+                 * `orientation=0`, tout le reste de la chaîne étant neutre, le
+                 * signe ne pouvait s'inverser qu'ici.
+                 * Le test porte sur `isFlipped` plutôt que sur la classe : la
+                 * ligne reste juste si la vue change de parent un jour. */
+                const int i_disp_y = [self isFlipped]
+                    ? (int) ml.y
+                    : (int) videoRect.size.height - (int) ml.y;
                 vout_display_SendMouseMovedDisplayCoordinates(vd, ORIENT_NORMAL,
-                    (int)ml.x, videoRect.size.height - (int)ml.y, &place);
+                    (int)ml.x, i_disp_y, &place);
             }
         }
     }

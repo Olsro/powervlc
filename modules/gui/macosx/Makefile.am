@@ -14,13 +14,16 @@ libmacosx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -mmacosx-version-min=10.7 -rpath '$(
 	-Wl,-framework,AVFoundation -Wl,-framework,CoreMedia -Wl,-framework,IOKit \
 	-Wl,-framework,AddressBook -Wl,-framework,WebKit -Wl,-framework,CoreAudio \
 	-Wl,-framework,SystemConfiguration -Wl,-framework,ScriptingBridge \
-	-Wl,-framework,QuartzCore -Wl,-weak_framework,MediaPlayer
+	-Wl,-framework,QuartzCore -Wl,-framework,Security \
+	-Wl,-weak_framework,MediaPlayer
 
 if HAVE_SPARKLE
 libmacosx_plugin_la_LDFLAGS += -Wl,-framework,Sparkle
 endif
 
 libmacosx_plugin_la_SOURCES = \
+	gui/macosx_crystalhd.h gui/macosx_crystalhd.m \
+	gui/macosx_browser_addon.h gui/macosx_browser_addon.m \
 	gui/macosx/helpers.h \
 	gui/macosx/VLCAboutWindowController.h gui/macosx/VLCAboutWindowController.m \
 	gui/macosx/VLCAddonListItem.h gui/macosx/VLCAddonListItem.m \

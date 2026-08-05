@@ -462,6 +462,7 @@ modules/demux/xa.c
 modules/demux/xiph.h
 modules/demux/xiph_metadata.c
 modules/demux/xiph_metadata.h
+modules/gui/macosx_crystalhd.m
 modules/gui/legacy_macosx/VLCLegacyAbout.h
 modules/gui/legacy_macosx/VLCLegacyAbout.m
 modules/gui/legacy_macosx/VLCLegacyAddons.h

@@ -202,6 +202,10 @@ struct decoder_sys_t
     unsigned         i_hw_selfheal_pics;
     int64_t          i_hw_domain_gen; /* génération de domaine dvdnav à l'ouverture */
     unsigned         i_probe_pb, i_probe_field, i_probe_pics;
+    /* Garde « vraie vidéo entrelacée » (cf. HW_CVT_MIN_PCT) : décision prise une
+     * seule fois par flux, et compteur de pictures observées depuis le commit. */
+    bool             b_cvt_checked;
+    unsigned         i_cvt_pics;
 #endif
 };
 
@@ -251,6 +255,42 @@ static int HwFieldMode( decoder_t *p_dec, bool b_102mods )
 /* U4 — nombre max de I-frames où le commit attend le wid du vout (chemin A-idéal)
  * avant de retomber sur la fenêtre Carbon (cas sans vout). */
 #define HW_MAX_COMMIT_DEFERS 4u
+
+/* ★★★ GARDE « VRAIE VIDÉO ENTRELACÉE » — ce qu'elle pèse, et pourquoi le
+ * critère a changé (2026-08-05, mesure hors machine).
+ *
+ * La sonde ci-dessus mesure la field-prediction AU NIVEAU PICTURE. Elle rend
+ * 100 % aussi bien sur un DVD de cinéma que sur les menus animés, alors que les
+ * deux se comportent de façon OPPOSÉE sur ce GPU : le verdict utile se prend au
+ * MACROBLOC. Le mode 4 ne convertit en prédiction trame que si les DEUX
+ * prédictions de champ portent le même vecteur et la même parité — vrai pour du
+ * film (les deux champs viennent de la même image), faux pour de la vidéo
+ * native. Ce qui n'est pas converti part au moteur field natif de l'ATI, dont
+ * l'adressage n'est pas reversé : blocs déplacés qui s'accumulent sur le GOP.
+ *
+ * ⚠⚠ LE PREMIER CRITÈRE ÉTAIT LE MAUVAIS, et il coûtait toute l'accélération.
+ * Il exigeait qu'une majorité des macroblocs FIELD soit convertible, et
+ * démontait le décodage matériel sinon. Or la mesure faite hors machine sur le
+ * VOB de menu du disque de test (harnais `scratchpad/mb/mbstat.c`, qui rejoue la
+ * MÊME libmpeg2 que la machine) dit ceci :
+ *   macroblocs à prédiction par champ = **3,5 % du total** ; le reste (96,5 %)
+ *   est déjà en prédiction TRAME, donc décodé EXACTEMENT par ce GPU.
+ * Le taux de convertibilité parmi ces 3,5 % est effectivement proche de zéro —
+ * mais s'en servir pour tout couper revenait à jeter 96,5 % de travail juste et
+ * à repasser 100 % au CPU, que cette machine ne tient pas à 720×576. C'est
+ * exactement le symptôme rapporté : « net 2 s, pixelisé quand le matériel
+ * s'engage, puis net mais ça lague » — la dernière phase étant le repli CPU.
+ *
+ * ⇒ On pèse désormais le DÉGÂT RÉEL : la part des macroblocs qui partent au
+ * moteur field, rapportée au TOTAL des macroblocs. En dessous du seuil, on garde
+ * l'accélération ; au-dessus (vraie vidéo 50i, où la prédiction par champ
+ * domine), on rend la main au CPU, lent mais correct.
+ * ⚠ Le film n'est concerné dans aucun cas : il a ZÉRO macrobloc field. */
+#define HW_CVT_MIN_MB   8000u   /* ~5 pictures 720x576 : de quoi juger */
+#define HW_CVT_MAX_PCT    25u   /* part max du total laissée au moteur field */
+/* Plafond de pictures après lesquelles on cesse d'interroger le compteur : un flux
+ * sans AUCUN macrobloc field (le cas du film) n'a rien à décider. */
+#define HW_CVT_MAX_PICS   60u
 
 /* GATE DE RÉSOLUTION — plafond de ce que le décodeur ATI sait faire.
  * Il a longtemps été fixé à CIF (384×288) parce que le 720×576 s'effondrait ; on
@@ -499,6 +539,8 @@ static int OpenDecoder( vlc_object_t *p_this )
     p_sys->i_hw_selfheal_pics = 0;
     p_sys->i_probe_pb = p_sys->i_probe_field = p_sys->i_probe_pics = 0;
     p_sys->i_probe_defers = 0;
+    p_sys->b_cvt_checked = false;
+    p_sys->i_cvt_pics = 0;
     p_sys->b_hwaccel = var_InheritBool( p_dec, "mpeg2-hwaccel" )
                        && dvddriver_available();
     /* U4 — bus libvlc : le vout lit le device HW (DVDDRIVER_VAR_CTX) + le callback
@@ -524,6 +566,11 @@ static int OpenDecoder( vlc_object_t *p_this )
              p_sys->b_hwaccel ? "disponible, sera tenté" : "non (repli libmpeg2 CPU)" );
     msg_Dbg( p_dec, "modifications du portage 10.2 sur le chemin matériel : %s",
              p_sys->b_102mods ? "ACTIVES" : "inactives (comportement 1.0.0)" );
+    {
+        const char *psz_fam = dvddriver_family_name();
+        msg_Dbg( p_dec, "greffon de carte retenu : %s",
+                 psz_fam ? psz_fam : "aucun" );
+    }
 #endif
 
 #if defined( __i386__ ) || defined( __x86_64__ )
@@ -616,12 +663,56 @@ extern int     mpeg2_hw_rl_n;
 extern int     mpeg2_hw_rl_on;
 extern void    mpeg2_set_hw_rl( int on );
 
+/* ★★★ BALAYAGE ALTERNÉ — LA CAUSE DES MENUS CASSÉS (2026-08-05).
+ *
+ * MPEG-2 définit DEUX ordres de parcours des coefficients : le zigzag classique
+ * et le « balayage alterné », choisi image par image par le drapeau
+ * `alternate_scan`. Mesuré hors machine sur le VOB de menu de ce disque
+ * (`scratchpad/psinfo.py`) : **100 % de ses images sont en balayage ALTERNÉ**,
+ * alors que le film — qui s'affiche parfaitement — est en zigzag classique.
+ *
+ * Or le format de coefficients du pilote ATI n'exprime PAS l'ordre employé : il
+ * ne transporte que des couples (saut, valeur), donc le pilote applique
+ * forcément un ordre FIXE — le zigzag classique. Nous, nous parcourions le bloc
+ * avec la table de l'image (`decoder->scan`). Sur une image en balayage alterné,
+ * chaque coefficient atterrissait donc dans la mauvaise fréquence.
+ *
+ * Signature exacte du défaut, et elle colle : l'image reste géométriquement
+ * juste (le coefficient continu est à la position 0 dans les DEUX tables, donc
+ * la luminosité moyenne de chaque bloc est bonne) mais perd tout son détail, en
+ * gros pavés — ce n'est PAS de la compensation de mouvement fausse. C'est ce qui
+ * a fait accuser à tort la prédiction par champ, puis la DCT par champ :
+ * neutraliser l'une et l'autre ne changeait rien, parce que le vrai coupable
+ * était ailleurs.
+ *
+ * ⇒ On parcourt TOUJOURS le bloc en zigzag classique. Le bloc est rangé en
+ * ordre RASTER (libmpeg2 y écrit `DCTblock[scan[i]] = valeur`), donc le relire
+ * avec la table classique donne exactement l'ordre attendu par le pilote,
+ * quelle que soit la table de l'image. */
+/* ⚠⚠⚠ NE JAMAIS ÉCRIRE UNE TABLE ZIGZAG EN DUR ICI. libmpeg2 PERMUTE ses deux
+ * tables de balayage à l'initialisation de son IDCT (`idct.c` : `scan[i] =
+ * ((j & 0x36) >> 1) | ((j & 0x09) << 2)`, et une permutation DIFFÉRENTE dans la
+ * version AltiVec), pour coller à la disposition interne de son transformée.
+ * `DCTblock` n'est donc PAS en ordre raster : il est en ordre PERMUTÉ, et seule
+ * la table de libmpeg2 sait le relire. Une table écrite à la main lit des cases
+ * sans rapport — essayé, l'image en sort différemment cassée.
+ * `mpeg2_scan_norm` est la table du zigzag CLASSIQUE, permutée comme il faut. */
+extern uint8_t mpeg2_scan_norm[64];
 static void HwBlock( void *priv, const int16_t *dctblock, const uint8_t *scan )
 {
-    if( mpeg2_hw_rl_on )
+    /* Le chemin rapide ne transporte que des INDICES DE BALAYAGE, sans le bloc :
+     * il n'est donc utilisable que si l'image emploie déjà le zigzag classique.
+     * ⚠ Reconnaître la table par son CONTENU est un piège : après la permutation
+     * de libmpeg2, `scan[1]` ne vaut plus 1 (zigzag) ni 8 (alterné) mais 4 et 32.
+     * Un test sur la valeur coupait donc le chemin rapide POUR TOUT LE MONDE, y
+     * compris le film — d'où un ralentissement général. On compare les POINTEURS,
+     * ce qui est exact quel que soit l'état des tables.
+     * Sinon on repasse par le bloc, intact à cet instant (la capture a lieu avant
+     * l'effacement fait par l'IDCT). */
+    if( mpeg2_hw_rl_on && scan == mpeg2_scan_norm )
         dvddriver_picture_mb_block_rl( priv, mpeg2_hw_rl, mpeg2_hw_rl_n );
     else
-        dvddriver_picture_mb_block( priv, dctblock, scan );
+        dvddriver_picture_mb_block( priv, dctblock, mpeg2_scan_norm );
 }
 static void HwMbEnd( void *priv )
 {
@@ -832,9 +923,16 @@ static bool HwOpenContext( decoder_t *p_dec, int i_replace )
     msg_Info( p_dec, "décodage MPEG-2 matériel ATI actif (%ux%u)%s%s%s",
               p_seq->width, p_seq->height,
               i_replace ? " — mode REMPLACEMENT" : " — mode additif",
-              i_ext_wid ? " (surface sur la fenêtre VLC)"
+              /* ⚠ ce que le backend a RETENU : il refuse le wid externe sur
+               * les familles GPU qui n'affichent que dans leur propre fenêtre
+               * (Rage 128). Annoncer i_ext_wid ici donnait un message FAUX. */
+              dvddriver_uses_external_window( p_sys->p_hw )
+                        ? " (surface sur la fenêtre VLC)"
                         : " (fenêtre Carbon séparée)",
-              b_subs ? ", sous-titres/OSD superposés" : "" );
+              /* idem : l'incrustation exige la fenêtre VLC, donc elle tombe
+               * avec elle quand le backend a gardé sa fenêtre Carbon. */
+              ( b_subs && dvddriver_uses_external_window( p_sys->p_hw ) )
+                        ? ", sous-titres/OSD superposés" : "" );
     /* Chantier SP — reconnaissance du plan subpicture matériel (lecture seule).
      * Objectif : savoir si les descripteurs renvoyés par DVDDriverGetSPBuffer
      * sont des adresses exploitables côté CPU ou des poignées GPU. */
@@ -1218,8 +1316,26 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                  * (flux tout-I : i_probe_pb=0 → pct=0 → progressif). Un flux sans
                  * aucune I reste en sonde/CPU (correct) — le HW ne pourrait pas
                  * démarrer sans I de toute façon. */
+                /* ★★★ MENU DVD : TRANCHER DÈS LA PREMIÈRE I.
+                 * Un menu FIXE ne produit AUCUNE image P ou B — la sonde ne peut
+                 * donc jamais atteindre son quota, et le contexte matériel ne
+                 * s'ouvre jamais. Un repli temporel ne servirait à rien non plus :
+                 * ce code ne s'exécute qu'à l'ARRIVÉE d'une image, et sur un menu
+                 * fixe il n'en arrive plus.
+                 * Conséquence mesurée (Chihiro, menus fixes) : 0 décodage
+                 * matériel, et le module de sous-titres — qui prend désormais la
+                 * piste dans les menus — attendait un contexte qui ne venait pas.
+                 * Plus aucune surbrillance, là où le rendu logiciel s'en chargeait
+                 * avant. C'est cette régression que l'on corrige ici.
+                 * Le verdict de field est alors sans objet (aucune P/B mesurée) :
+                 * on retient ENTRELACÉ, qui est de toute façon ce que mesurent les
+                 * menus animés et qui ouvre le contexte en mode remplacement. */
+                const bool b_menus =
+                    ( p_dec->obj.parent != NULL
+                      && var_Type( p_dec->obj.parent, "highlight" ) != 0 );
                 bool b_enough = b_is_i
-                             && ( p_sys->i_probe_pb  >= HW_PROBE_MIN_PB
+                             && ( b_menus
+                               || p_sys->i_probe_pb  >= HW_PROBE_MIN_PB
                                || p_sys->i_probe_pics >= HW_PROBE_MAX_PICS );
                 /* U4/A-idéal : on veut lier la surface à la fenêtre VLC (défaut).
                  * Course réelle : le commit décodeur peut précéder le 1er reshape
@@ -1227,6 +1343,25 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                  * sonde/CPU, lecture correcte) jusqu'à ce que le wid soit dispo —
                  * borné par HW_MAX_COMMIT_DEFERS pour retomber sur la fenêtre Carbon
                  * si le vout ne vient jamais (cas sans affichage). */
+                /* ★★ MENU FIXE : ATTENDRE LE WID, NE PAS LE REPORTER.
+                 * Le report ci-dessous compte sur une PROCHAINE image I pour
+                 * retenter — hypothèse fausse sur un menu fixe, où il n'en vient
+                 * plus aucune : le commit n'avait alors jamais lieu et le
+                 * contexte matériel ne s'ouvrait pas (mesuré sur les menus fixes
+                 * de Chihiro : sonde conclue, puis « commit différé (1/4) », et
+                 * plus rien). On attend donc le wid ICI, brièvement et une seule
+                 * fois. Coût nul en lecture normale : on n'y entre que si le wid
+                 * manque encore, ce qui ne dure que le temps du premier reshape
+                 * du vout. */
+                if( b_enough && b_menus && !HwForceCarbon()
+                 && HwVoutWid( p_dec ) == 0 )
+                {
+                    for( unsigned i = 0; i < 25 && HwVoutWid( p_dec ) == 0; i++ )
+                        msleep( 20000 );
+                    if( HwVoutWid( p_dec ) != 0 )
+                        msg_Dbg( p_dec, "menu DVD : wid du vout obtenu après "
+                                        "attente — commit immédiat" );
+                }
                 if( b_enough && !HwForceCarbon() && HwVoutWid( p_dec ) == 0
                  && p_sys->i_probe_defers < HW_MAX_COMMIT_DEFERS )
                 {
@@ -1239,7 +1374,7 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                 {
                     unsigned pct = p_sys->i_probe_pb
                         ? ( p_sys->i_probe_field * 100u ) / p_sys->i_probe_pb : 0;
-                    bool b_field = ( pct >= HW_PROBE_FIELD_PCT );
+                    bool b_field = b_menus || ( pct >= HW_PROBE_FIELD_PCT );
                     msg_Info( p_dec, "décodage matériel : sonde terminée — %u/%u P/B "
                               "field-predicted (%u%%) → flux %s",
                               p_sys->i_probe_field, p_sys->i_probe_pb, pct,
@@ -1813,18 +1948,87 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block )
                               n_p, us_p, n_p ? us_p / n_p : 0, n_st );
                     msg_Dbg( p_dec, "PERF HW : attentes de surface GPU=%u",
                              dvddriver_surf_waits( p_sys->p_hw ) );
+                    {
+                        unsigned sc[3];
+                        dvddriver_show_counts( p_sys->p_hw, sc );
+                        msg_Dbg( p_dec, "PERF HW : Show par chemin — cible=%u "
+                                 "drainage=%u recyclage=%u", sc[0], sc[1], sc[2] );
+                    }
                     msg_Dbg( p_dec, "PERF HW : rappels de present reçus du vout=%u",
                              g_hw_cb_calls );
-                    unsigned mb8[8] = {0}, dct2[2] = {0}, cvt2[2] = {0};
-                    dvddriver_mb_stats( p_sys->p_hw, mb8, dct2, cvt2 );
+                    unsigned mb8[8] = {0}, dct2[2] = {0}, cvt3[3] = {0};
+                    dvddriver_mb_stats( p_sys->p_hw, mb8, dct2, cvt3 );
                     msg_Dbg( p_dec, "STAT MB : intra=%u fwd=%u bwd=%u bidir=%u "
                              "skip=%u ffwd=%u fbwd=%u fbidir=%u | dct frame=%u "
                              "champ=%u", mb8[0], mb8[1], mb8[2], mb8[3], mb8[4],
                              mb8[5], mb8[6], mb8[7], dct2[0], dct2[1] );
                     msg_Dbg( p_dec, "STAT FIELD : convertis exactement=%u, "
-                             "laissés au moteur field=%u", cvt2[0], cvt2[1] );
+                             "convertis par approximation=%u, laissés au moteur "
+                             "field=%u", cvt3[0], cvt3[2], cvt3[1] );
                 }
                 p_sys->b_hw_picture = false;
+
+                /* ★★★ GARDE « VRAIE VIDÉO ENTRELACÉE » — cf. HW_CVT_MIN_PCT.
+                 * La sonde a jugé au niveau PICTURE ; ici on juge sur ce qui se
+                 * passe VRAIMENT au macrobloc. Si les prédictions de champ ne
+                 * sont pas convertibles en prédiction frame, tout part au moteur
+                 * field natif de l'ATI et l'image est fausse : mieux vaut un
+                 * décodage logiciel lent et correct. */
+                if( !p_sys->b_cvt_checked && p_sys->p_hw != NULL )
+                {
+                    unsigned mb8[8] = { 0 }, cvt3[3] = { 0, 0, 0 };
+                    dvddriver_mb_stats( p_sys->p_hw, mb8, NULL, cvt3 );
+                    unsigned u_tot_mb = 0;
+                    for( int i = 0; i < 8; i++ )
+                        u_tot_mb += mb8[i];
+
+                    if( u_tot_mb >= HW_CVT_MIN_MB )
+                    {
+                        p_sys->b_cvt_checked = true;
+                        /* Le dégât, c'est ce qui part au moteur field, rapporté
+                         * au TOTAL — pas la part des seuls macroblocs field. */
+                        const unsigned pct_bad = ( cvt3[1] * 100u ) / u_tot_mb;
+                        msg_Dbg( p_dec, "décodage matériel : macroblocs à "
+                                 "prédiction par champ — %u convertis exactement, "
+                                 "%u approchés, %u laissés au moteur field, soit "
+                                 "%u %% des %u macroblocs (seuil de repli %u %%)",
+                                 cvt3[0], cvt3[2], cvt3[1], pct_bad, u_tot_mb,
+                                 HW_CVT_MAX_PCT );
+                        if( pct_bad > HW_CVT_MAX_PCT )
+                        {
+                            msg_Info( p_dec, "décodage matériel : %u %% des "
+                                      "macroblocs partent au moteur field de "
+                                      "l'ATI, dont l'adressage produit une image "
+                                      "fausse — vraie vidéo entrelacée → repli "
+                                      "100 %% CPU pour ce flux", pct_bad );
+                            /* Même séquence de démontage que la réouverture sur
+                             * changement de fenêtre : suspendre l'affichage AVANT
+                             * de dépublier le contexte, sinon les pictures déjà en
+                             * file chez le vout portent un contexte mort. */
+                            mpeg2_hwaccel( p_sys->p_mpeg2dec, NULL );
+                            mpeg2_set_hw_replace( 0 );
+                            if( p_sys->b_102mods )
+                                var_SetBool( p_dec->obj.libvlc,
+                                             DVDDRIVER_VAR_HOLD, true );
+                            var_SetAddress( p_dec->obj.libvlc,
+                                            DVDDRIVER_VAR_CTX, NULL );
+                            dvddriver_close( p_sys->p_hw );
+                            p_sys->p_hw = NULL;
+                            p_sys->b_hw_stale = false;
+                            /* ⚠ DÉFINITIF pour ce flux : ni b_hw_reopen, ni
+                             * relance de sonde. Rouvrir reviendrait à repayer la
+                             * même image fausse à chaque I. */
+                            p_sys->b_hw_reopen = false;
+                            p_sys->b_hwaccel   = false;
+                        }
+                    }
+                    else if( ++p_sys->i_cvt_pics >= HW_CVT_MAX_PICS )
+                    {
+                        /* Trop peu de macroblocs soumis pour juger, et on a assez
+                         * attendu : on cesse d'interroger le compteur. */
+                        p_sys->b_cvt_checked = true;
+                    }
+                }
             }
 #endif
 

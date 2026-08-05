@@ -32,6 +32,10 @@
 # include "config.h"
 #endif
 
+#include <locale.h>
+#include <string.h>
+#include <stdlib.h>
+
 #include <vlc_common.h>
 
 #include "../vlc.h"
@@ -165,6 +169,46 @@ static int vlclua_datadir_list( lua_State *L )
     return 1;
 }
 
+/* vlc.config.language()
+ *
+ * The language the player is actually running in, as a locale name
+ * ("fr_FR.UTF-8", "de", ...), or an empty string when there is nothing to
+ * say. A script has no other way to know: the "language" option has been
+ * obsolete since 2.1, each interface applies the user's choice its own way
+ * -- on Mac it becomes LANG before the core starts (bin/darwinvlc.m) --
+ * and only the process locale has all of that already resolved.
+ *
+ * setlocale() first, because it is the truth for gettext and therefore for
+ * what the user is reading; the environment after it, because a build that
+ * never called setlocale() answers "C" and the variables are then the only
+ * thing left. */
+static int vlclua_language( lua_State *L )
+{
+    const char *psz_locale = setlocale( LC_MESSAGES, NULL );
+
+    if( psz_locale == NULL || !strcmp( psz_locale, "C" )
+     || !strcmp( psz_locale, "POSIX" ) )
+    {
+        static const char *const ppsz_vars[] = {
+            "LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG", NULL
+        };
+        psz_locale = NULL;
+        for( const char *const *ppsz = ppsz_vars; *ppsz != NULL; ppsz++ )
+        {
+            /* set but empty is not an answer, and "or" would take it */
+            const char *psz = getenv( *ppsz );
+            if( psz != NULL && *psz != '\0' )
+            {
+                psz_locale = psz;
+                break;
+            }
+        }
+    }
+
+    lua_pushstring( L, psz_locale != NULL ? psz_locale : "" );
+    return 1;
+}
+
 /*****************************************************************************
  *
  *****************************************************************************/
@@ -177,6 +221,7 @@ static const luaL_Reg vlclua_config_reg[] = {
     { "configdir", vlclua_configdir },
     { "cachedir", vlclua_cachedir },
     { "datadir_list", vlclua_datadir_list },
+    { "language", vlclua_language },
     { NULL, NULL }
 };
 
@@ -184,5 +229,18 @@ void luaopen_config( lua_State *L )
 {
     lua_newtable( L );
     luaL_register( L, NULL, vlclua_config_reg );
+    lua_setfield( L, -2, "config" );
+}
+
+/* The extension scanner runs descriptor() in a state with nothing in it
+ * -- no libraries, no vlc table -- so that scanning cannot do anything.
+ * But descriptor() is what names the menu entry, and an entry the user
+ * cannot read is a poor one, so that state is handed this one function
+ * and no other: it only reads, and it reads the one thing a name needs. */
+void luaopen_config_language( lua_State *L )
+{
+    lua_newtable( L );
+    lua_pushcfunction( L, vlclua_language );
+    lua_setfield( L, -2, "language" );
     lua_setfield( L, -2, "config" );
 }

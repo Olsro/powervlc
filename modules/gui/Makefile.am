@@ -29,6 +29,8 @@ gui_LTLIBRARIES += $(LTLIBminimal_macosx)
 # (ARC requires the 10.6 runtime); Carbon for SetSystemUIMode(), the
 # pre-10.6 way to hide the menu bar/Dock in fullscreen.
 liblegacy_macosx_plugin_la_SOURCES = \
+	gui/macosx_crystalhd.h gui/macosx_crystalhd.m \
+	gui/macosx_browser_addon.h gui/macosx_browser_addon.m \
 	gui/legacy_macosx/intf.h gui/legacy_macosx/intf.m \
 	gui/legacy_macosx/misc.h gui/legacy_macosx/misc.m \
 	gui/legacy_macosx/VLCLegacyVoutWindow.h gui/legacy_macosx/VLCLegacyVoutWindow.m \
@@ -67,7 +69,7 @@ liblegacy_macosx_plugin_la_CFLAGS = $(AM_CFLAGS)
 # IOKit: optical media type detection (Open dialog) and the Apple Remote
 # HID access; CoreAudio: system volume control for the Apple Remote;
 # ApplicationServices: the CGEventTap of the media keys support.
-liblegacy_macosx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(guidir)' -Wl,-framework,Cocoa,-framework,Carbon,-framework,IOKit,-framework,CoreAudio,-framework,ApplicationServices
+liblegacy_macosx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(guidir)' -Wl,-framework,Cocoa,-framework,Carbon,-framework,IOKit,-framework,CoreAudio,-framework,ApplicationServices,-framework,Security
 EXTRA_LTLIBRARIES += liblegacy_macosx_plugin.la
 gui_LTLIBRARIES += $(LTLIBlegacy_macosx)
 

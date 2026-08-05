@@ -58,7 +58,20 @@ EXTRA_DIST += \
 
 nobase_vlcdata_DATA =
 nobase_vlclib_DATA =
+
 nobase_dist_vlcdata_DATA =
+
+#
+# Browser add-on
+#
+# Shipped prebuilt on purpose: an .xpi is a zip, and making every cross
+# build of this fork depend on zip(1) to package two text files would be a
+# poor trade. share/browser-addon/build-xpi.sh rebuilds it from them.
+nobase_dist_vlcdata_DATA += powervlc.xpi
+EXTRA_DIST += \
+	browser-addon/build-xpi.sh \
+	browser-addon/powervlc/install.rdf \
+	browser-addon/powervlc/bootstrap.js
 if BUILD_SKINS
 nobase_vlcdata_DATA += skins2/default.vlt
 nobase_dist_vlcdata_DATA += $(DIST_skins2)
@@ -122,6 +135,7 @@ luac_verbose_0 = @echo "  LUAC   $@";
 
 if BUILD_LUA
 nobase_vlclib_DATA += \
+	lua/extensions/Podcasts-Discovery-iTunes.luac \
 	lua/extensions/VLSub.luac \
 	lua/extensions/invidious.luac \
 	lua/extensions/jellyfin.luac \
@@ -141,6 +155,7 @@ nobase_vlclib_DATA += \
 	lua/meta/reader/filename.luac \
 	lua/modules/common.luac \
 	lua/modules/dkjson.luac \
+	lua/modules/pvlc_i18n.luac \
 	lua/modules/sandbox.luac \
 	lua/modules/simplexml.luac \
 	lua/playlist/anevia_streams.luac \
@@ -162,6 +177,85 @@ nobase_vlclib_DATA += \
 	lua/sd/icecast.luac \
 	lua/sd/jamendo.luac \
 	lua/sd/radiobrowser.luac \
+	$(NULL)
+
+# Extension catalogues: one file per language, read by loadfile() from
+# share/lua/i18n/<extension>/<code>.lua. Installed as source on purpose --
+# the loader looks for a .lua path, and only the language in use is ever
+# read into memory.
+nobase_dist_vlclib_DATA = \
+	lua/i18n/invidious/cs.lua \
+	lua/i18n/invidious/de.lua \
+	lua/i18n/invidious/en.lua \
+	lua/i18n/invidious/es.lua \
+	lua/i18n/invidious/fr.lua \
+	lua/i18n/invidious/it.lua \
+	lua/i18n/invidious/ja.lua \
+	lua/i18n/invidious/ko.lua \
+	lua/i18n/invidious/nl.lua \
+	lua/i18n/invidious/pl.lua \
+	lua/i18n/invidious/pt_BR.lua \
+	lua/i18n/invidious/pt_PT.lua \
+	lua/i18n/invidious/ru.lua \
+	lua/i18n/invidious/sv.lua \
+	lua/i18n/invidious/tr.lua \
+	lua/i18n/invidious/uk.lua \
+	lua/i18n/invidious/zh_CN.lua \
+	lua/i18n/invidious/zh_TW.lua \
+	lua/i18n/jellyfin/cs.lua \
+	lua/i18n/jellyfin/de.lua \
+	lua/i18n/jellyfin/en.lua \
+	lua/i18n/jellyfin/es.lua \
+	lua/i18n/jellyfin/fr.lua \
+	lua/i18n/jellyfin/it.lua \
+	lua/i18n/jellyfin/ja.lua \
+	lua/i18n/jellyfin/ko.lua \
+	lua/i18n/jellyfin/nl.lua \
+	lua/i18n/jellyfin/pl.lua \
+	lua/i18n/jellyfin/pt_BR.lua \
+	lua/i18n/jellyfin/pt_PT.lua \
+	lua/i18n/jellyfin/ru.lua \
+	lua/i18n/jellyfin/sv.lua \
+	lua/i18n/jellyfin/tr.lua \
+	lua/i18n/jellyfin/uk.lua \
+	lua/i18n/jellyfin/zh_CN.lua \
+	lua/i18n/jellyfin/zh_TW.lua \
+	lua/i18n/podcasts/cs.lua \
+	lua/i18n/podcasts/de.lua \
+	lua/i18n/podcasts/en.lua \
+	lua/i18n/podcasts/es.lua \
+	lua/i18n/podcasts/fr.lua \
+	lua/i18n/podcasts/it.lua \
+	lua/i18n/podcasts/ja.lua \
+	lua/i18n/podcasts/ko.lua \
+	lua/i18n/podcasts/nl.lua \
+	lua/i18n/podcasts/pl.lua \
+	lua/i18n/podcasts/pt_BR.lua \
+	lua/i18n/podcasts/pt_PT.lua \
+	lua/i18n/podcasts/ru.lua \
+	lua/i18n/podcasts/sv.lua \
+	lua/i18n/podcasts/tr.lua \
+	lua/i18n/podcasts/uk.lua \
+	lua/i18n/podcasts/zh_CN.lua \
+	lua/i18n/podcasts/zh_TW.lua \
+	lua/i18n/subsonic/cs.lua \
+	lua/i18n/subsonic/de.lua \
+	lua/i18n/subsonic/en.lua \
+	lua/i18n/subsonic/es.lua \
+	lua/i18n/subsonic/fr.lua \
+	lua/i18n/subsonic/it.lua \
+	lua/i18n/subsonic/ja.lua \
+	lua/i18n/subsonic/ko.lua \
+	lua/i18n/subsonic/nl.lua \
+	lua/i18n/subsonic/pl.lua \
+	lua/i18n/subsonic/pt_BR.lua \
+	lua/i18n/subsonic/pt_PT.lua \
+	lua/i18n/subsonic/ru.lua \
+	lua/i18n/subsonic/sv.lua \
+	lua/i18n/subsonic/tr.lua \
+	lua/i18n/subsonic/uk.lua \
+	lua/i18n/subsonic/zh_CN.lua \
+	lua/i18n/subsonic/zh_TW.lua \
 	$(NULL)
 
 nobase_doc_DATA = \
@@ -249,6 +343,7 @@ MOSTLYCLEANFILES += $(nobase_vlcdata_DATA)
 EXTRA_DIST += \
 	lua/README.txt \
 	lua/extensions/README.txt \
+	lua/extensions/Podcasts-Discovery-iTunes.lua \
 	lua/extensions/VLSub.lua \
 	lua/extensions/invidious.lua \
 	lua/extensions/jellyfin.lua \
@@ -273,6 +368,7 @@ EXTRA_DIST += \
 	lua/meta/reader/filename.lua \
 	lua/modules/common.lua \
 	lua/modules/dkjson.lua \
+	lua/modules/pvlc_i18n.lua \
 	lua/modules/sandbox.lua \
 	lua/modules/simplexml.lua \
 	lua/playlist/README.txt \

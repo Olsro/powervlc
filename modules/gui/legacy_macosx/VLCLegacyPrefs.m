@@ -1121,6 +1121,15 @@ static BOOL haveConfig(const char *name)
             "stream is interlaced.")];
         y += 26;
     }
+    if (haveConfig("crystalhd")) {
+        NSButton *chdBox = [self checkbox:_NS("Hardware decoding (Crystal HD)")
+                                   config:"crystalhd" at:y in:pane];
+        [chdBox setToolTip:_NS("Decode H.264, VC-1 and MPEG-2 video on the "
+            "Broadcom Crystal HD card installed in this Mac. Untick to decode "
+            "with the processor instead; playback also falls back to the "
+            "processor on its own whenever the card cannot handle a stream.")];
+        y += 26;
+    }
     [self checkbox:_NS("Skip frames") config:"skip-frames" at:y in:pane];
     y += 28;
     if (haveConfig("postproc-q")) {

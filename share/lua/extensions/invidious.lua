@@ -32,286 +32,107 @@ local SEARCH_FIELDS = "type,title,videoId,author,authorId,published,publishedTex
 
             --[[ Translations ]]--
 
-local translations = {
-  en = {
-    title_connect = "Invidious — Connection",
-    title_search = "Invidious — Search",
-    title_video = "Invidious — Video",
-    -- ISO on purpose: the column sort is lexicographic
-    date_fmt = "%Y-%m-%d",
-    col_instance = "Instance",
-    col_region = "Region",
-    col_uptime = "Uptime",
-    col_title = "Title",
-    col_channel = "Channel",
-    col_date = "Published",
-    col_subs = "Subscribers",
-    col_videos = "Videos",
+-- The catalogues live one file per language under share/lua/i18n/invidious/
+-- and only the one in use is ever read: sixteen languages parsed at every
+-- activation, to keep one, is not free on the machines this fork exists for
+-- -- and it buried this file under ten screens of strings. English sits
+-- underneath, string by string, so an untranslated key shows in English
+-- rather than as a hole.
+local lang = require("pvlc_i18n").load("invidious")
 
-    btn_list_instances = "List public instances",
-    btn_use_selection = "Use selected instance",
-    lbl_instance = "Instance:",
-    chk_proxy = "Proxy streams through the instance (recommended)",
-    btn_connect = "Connect",
-    msg_fetching_instances = "Fetching public instances...",
-    msg_no_instances = "No usable instance found",
-    msg_instances_count = "%d instances — select one, then 'Use selected instance'",
-    msg_select_first = "Select an instance in the list first",
-    msg_enter_url = "Enter an instance URL first",
-    msg_connecting = "Connecting...",
-    msg_connect_fail = "Connection failed: ",
-    msg_search_blocked = "Instance reachable, but it blocks anonymous API "
-                      .. "search (anti-bot) — try another one or a "
-                      .. "personal instance",
+            --[[ Region of the results ]]--
 
-    mode_videos = "Videos",
-    mode_channels = "Channels",
-    mode_playlists = "Playlists",
-    btn_search = "Search",
-    btn_open = "Open selection",
-    btn_change_instance = "< Instance",
-    msg_enter_query = "Enter something to search for",
-    msg_searching = "Searching...",
-    msg_no_results = "No result",
-    msg_results_count = "%d results (newest first)",
-    msg_channel_loading = "Fetching channel videos...",
-    msg_playlist_loading = "Fetching the playlist...",
-    msg_target_found = "Address recognised — opening it directly",
-    msg_search_fail = "Search failed: ",
-    msg_select_result = "Select a result in the list first",
-
-    lbl_quality = "Quality:",
-    lbl_by = "by",
-    audio_only = "Audio only",
-    combined = "audio+video",
-    video_only = "video only",
-    live_hls = "HLS stream (live)",
-    btn_play = "Play",
-    btn_copy = "Copy stream URL",
-    btn_back = "< Back",
-    msg_loading_video = "Fetching video info...",
-    msg_video_fail = "Could not fetch video info: ",
-    msg_fallback_formats = "Video API blocked by the instance — standard streams probed instead",
-    msg_trying_html = "JSON API closed — trying the HTML pages...",
-    msg_html_mode = "Connected in HTML mode (API closed on this instance)",
-    dash_auto = "Automatic quality (DASH)",
-    msg_no_formats = "No playable stream found for this video",
-    msg_playing = "Playback started",
-    msg_copied = "Stream URL copied to the clipboard",
-    msg_copy_fallback = "Auto-copy unavailable — select the URL below",
-
-    title_challenge = "Invidious — Anti-bot check",
-    lbl_challenge_1 = "This instance protects itself with a check that has "
-                   .. "to run JavaScript. PowerVLC does not solve it: your "
-                   .. "browser does, and hands the result back.",
-    lbl_challenge_2 = "1. Open this address in your browser (PowerFox, "
-                   .. "Firefox, Safari...), then follow the three steps "
-                   .. "on the page:",
-    btn_challenge_copy = "Copy the address",
-    lbl_challenge_3 = "2. PowerVLC carries on by itself as soon as the "
-                   .. "browser is done. This button is only there if you "
-                   .. "would rather not wait:",
-    btn_challenge_done = "I have solved the check",
-    btn_challenge_cancel = "< Back",
-    msg_challenge_copied = "Address copied — paste it in your browser",
-    msg_challenge_waiting = "Nothing received yet — finish the steps in the "
-                         .. "browser, then press the button again",
-    msg_challenge_ok = "Session received — retrying",
-    msg_challenge_fail = "Could not open the local handover page: ",
-    msg_challenge_needed = "This instance asks for an anti-bot check",
-    msg_challenge_incomplete = "The check is not finished: the page must "
-                            .. "really be showing before you click the "
-                            .. "bookmark. Finish it, then click again.",
-    msg_challenge_click = "Your browser tab is opening this video. Once it "
-                       .. "is showing, click the bookmark -- nothing else "
-                       .. "to do.",
-    msg_challenge_no_session = "This instance grants its browser a pass for "
-                            .. "one page at a time and keeps nothing "
-                            .. "reusable, so there is nothing PowerVLC can "
-                            .. "be handed. Try another instance.",
-
-    -- served to the browser
-    web_title = "PowerVLC — anti-bot check",
-    web_intro = "The check on this instance is solved by your browser, "
-             .. "exactly as if you were visiting the site yourself. "
-             .. "PowerVLC then reads the page through that tab; it never "
-             .. "solves anything on its own.",
-    web_step1 = "Drag this link onto your bookmarks bar (once and for all):",
-    web_bookmark = "Send to PowerVLC",
-    web_step2 = "Open the instance and solve the check it shows:",
-    web_step3 = "Once the page is <strong>really showing</strong> -- some "
-             .. "instances ask for two checks in a row -- click the "
-             .. "<em>Send to PowerVLC</em> bookmark you just added.",
-    web_note = "Leave this window and the instance tab open while you "
-            .. "browse: PowerVLC reads each page through them. Closing "
-            .. "either one cuts the link, and the bookmark has to be "
-            .. "clicked again.",
-    web_done_title = "Done",
-    web_done = "PowerVLC has what it needs. Leave this window and the "
-            .. "instance tab open, and go back to the player.",
-    web_empty = "Nothing usable came through. Make sure the page is "
-             .. "really showing -- some instances ask for two checks in a "
-             .. "row -- then click the bookmark again.",
-    web_relay_on = "Connected to PowerVLC. Leave this window and the "
-                .. "instance tab open while you browse.",
-    web_relay_off = "Waiting for the instance tab...",
-    web_m_drag = "This is a bookmark, not a link: drag it onto your "
-              .. "bookmarks bar, then open the instance and click it THERE, "
-              .. "once the check has been passed.",
-    web_m_ok = "PowerVLC is connected. Leave this tab open while you browse.",
-    web_m_popup = "PowerVLC could not open its window: allow pop-ups for "
-               .. "this site, then click the bookmark again.",
-    web_m_wait = "PowerVLC: connecting...",
-    web_m_fail = "PowerVLC is not answering. Check that its page "
-              .. "(127.0.0.1) is still open, then click the bookmark again.",
-    web_m_page = "This page has been handed to PowerVLC.",
-    web_m_nav = "Opening the video PowerVLC asked for -- click the bookmark "
-             .. "again once it is showing.",
-  },
-  fr = {
-    title_connect = "Invidious — Connexion",
-    title_search = "Invidious — Recherche",
-    title_video = "Invidious — Vidéo",
-    -- ISO à dessein : le tri des colonnes est lexicographique
-    date_fmt = "%Y-%m-%d",
-    col_instance = "Instance",
-    col_region = "Région",
-    col_uptime = "Dispo.",
-    col_title = "Titre",
-    col_channel = "Chaîne",
-    col_date = "Publiée",
-    col_subs = "Abonnés",
-    col_videos = "Vidéos",
-
-    btn_list_instances = "Lister les instances publiques",
-    btn_use_selection = "Utiliser l'instance sélectionnée",
-    lbl_instance = "Instance :",
-    chk_proxy = "Relayer les flux par l'instance (recommandé)",
-    btn_connect = "Connexion",
-    msg_fetching_instances = "Récupération des instances publiques...",
-    msg_no_instances = "Aucune instance utilisable trouvée",
-    msg_instances_count = "%d instances — sélectionnez-en une puis « Utiliser l'instance sélectionnée »",
-    msg_select_first = "Sélectionnez d'abord une instance dans la liste",
-    msg_enter_url = "Saisissez d'abord l'URL d'une instance",
-    msg_connecting = "Connexion...",
-    msg_connect_fail = "Échec de la connexion : ",
-    msg_search_blocked = "L'instance répond mais bloque la recherche "
-                      .. "anonyme (anti-bot) — essayez-en une autre ou "
-                      .. "une instance personnelle",
-
-    mode_videos = "Vidéos",
-    mode_channels = "Chaînes",
-    mode_playlists = "Playlists",
-    btn_search = "Chercher",
-    btn_open = "Ouvrir la sélection",
-    btn_change_instance = "< Instance",
-    msg_enter_query = "Saisissez un terme à chercher",
-    msg_searching = "Recherche...",
-    msg_no_results = "Aucun résultat",
-    msg_results_count = "%d résultats (plus récents d'abord)",
-    msg_channel_loading = "Récupération des vidéos de la chaîne...",
-    msg_playlist_loading = "Récupération de la playlist...",
-    msg_target_found = "Adresse reconnue — ouverture directe",
-    msg_search_fail = "Échec de la recherche : ",
-    msg_select_result = "Sélectionnez d'abord un résultat dans la liste",
-
-    lbl_quality = "Qualité :",
-    lbl_by = "par",
-    audio_only = "Audio seul",
-    combined = "audio+vidéo",
-    video_only = "vidéo seule",
-    live_hls = "Flux HLS (direct)",
-    btn_play = "Lire",
-    btn_copy = "Copier le lien du flux",
-    btn_back = "< Retour",
-    msg_loading_video = "Récupération des informations de la vidéo...",
-    msg_video_fail = "Impossible de récupérer la vidéo : ",
-    msg_fallback_formats = "API vidéos bloquée par l'instance — flux standards sondés à la place",
-    msg_trying_html = "API JSON fermée — essai par les pages HTML...",
-    msg_html_mode = "Connecté en mode HTML (API fermée sur cette instance)",
-    dash_auto = "Qualité automatique (DASH)",
-    msg_no_formats = "Aucun flux lisible trouvé pour cette vidéo",
-    msg_playing = "Lecture lancée",
-    msg_copied = "Lien du flux copié dans le presse-papiers",
-    msg_copy_fallback = "Copie auto indisponible — sélectionnez le lien ci-dessous",
-
-    title_challenge = "Invidious — Vérification anti-bot",
-    lbl_challenge_1 = "Cette instance se protège par une vérification qui "
-                   .. "exige JavaScript. PowerVLC ne la contourne pas : "
-                   .. "c'est votre navigateur qui la résout et qui rend le "
-                   .. "résultat.",
-    lbl_challenge_2 = "1. Ouvrez cette adresse dans votre navigateur "
-                   .. "(PowerFox, Firefox, Safari...), puis suivez les "
-                   .. "trois étapes de la page :",
-    btn_challenge_copy = "Copier l'adresse",
-    lbl_challenge_3 = "2. PowerVLC repart tout seul dès que le navigateur a "
-                   .. "terminé. Ce bouton n'est là que si vous préférez ne "
-                   .. "pas attendre :",
-    btn_challenge_done = "J'ai passé la vérification",
-    btn_challenge_cancel = "< Retour",
-    msg_challenge_copied = "Adresse copiée — collez-la dans votre navigateur",
-    msg_challenge_waiting = "Rien reçu pour l'instant — terminez les étapes "
-                         .. "dans le navigateur puis réappuyez",
-    msg_challenge_ok = "Session reçue — nouvel essai",
-    msg_challenge_fail = "Impossible d'ouvrir la page locale de reprise : ",
-    msg_challenge_needed = "Cette instance demande une vérification anti-bot",
-    msg_challenge_incomplete = "La vérification n'est pas terminée : la page "
-                            .. "doit vraiment s'afficher avant que vous "
-                            .. "cliquiez le favori. Terminez-la, puis "
-                            .. "recliquez.",
-    msg_challenge_click = "Votre onglet ouvre cette vidéo. Dès qu'elle "
-                       .. "s'affiche, cliquez le favori — rien d'autre à "
-                       .. "faire.",
-    msg_challenge_no_session = "Cette instance n'autorise son navigateur "
-                            .. "qu'une page à la fois et ne conserve rien de "
-                            .. "réutilisable : il n'y a rien à transmettre à "
-                            .. "PowerVLC. Essayez une autre instance.",
-
-    -- pages servies au navigateur
-    web_title = "PowerVLC — vérification anti-bot",
-    web_intro = "La vérification de cette instance est résolue par votre "
-             .. "navigateur, exactement comme si vous consultiez le site "
-             .. "vous-même. PowerVLC lit ensuite la page à travers cet "
-             .. "onglet ; il ne résout jamais rien de lui-même.",
-    web_step1 = "Glissez ce lien dans votre barre de favoris (une fois "
-             .. "pour toutes) :",
-    web_bookmark = "Envoyer à PowerVLC",
-    web_step2 = "Ouvrez l'instance et résolvez la vérification qu'elle "
-             .. "affiche :",
-    web_step3 = "Une fois que la page s'affiche <strong>vraiment</strong> "
-             .. "— certaines instances demandent deux contrôles à la suite "
-             .. "— cliquez le favori <em>Envoyer à PowerVLC</em> que vous "
-             .. "venez d'ajouter.",
-    web_note = "Laissez cette fenêtre et l'onglet de l'instance ouverts "
-            .. "pendant votre navigation : PowerVLC lit chaque page à "
-            .. "travers eux. Fermer l'un des deux coupe le lien, et il "
-            .. "faut recliquer le favori.",
-    web_done_title = "C'est fait",
-    web_done = "PowerVLC a ce qu'il lui faut. Laissez cette fenêtre et "
-            .. "l'onglet de l'instance ouverts, et revenez au lecteur.",
-    web_empty = "Rien d'exploitable n'est arrivé. Vérifiez que la page "
-             .. "s'affiche vraiment — certaines instances demandent deux "
-             .. "contrôles à la suite — puis recliquez le favori.",
-    web_relay_on = "Relié à PowerVLC. Laissez cette fenêtre et l'onglet de "
-                .. "l'instance ouverts pendant votre navigation.",
-    web_relay_off = "En attente de l'onglet de l'instance...",
-    web_m_drag = "Ceci est un favori, pas un lien : glissez-le dans votre "
-              .. "barre de favoris, puis ouvrez l'instance et cliquez-le "
-              .. "LÀ-BAS, une fois la vérification passée.",
-    web_m_ok = "PowerVLC est relié. Laissez cet onglet ouvert pendant votre "
-            .. "navigation.",
-    web_m_popup = "PowerVLC n'a pas pu ouvrir sa fenêtre : autorisez les "
-               .. "fenêtres surgissantes pour ce site, puis recliquez le "
-               .. "favori.",
-    web_m_wait = "PowerVLC : connexion...",
-    web_m_fail = "PowerVLC ne répond pas. Vérifiez que sa page (127.0.0.1) "
-              .. "est toujours ouverte, puis recliquez le favori.",
-    web_m_page = "Cette page a été transmise à PowerVLC.",
-    web_m_nav = "Ouverture de la vidéo demandée par PowerVLC — recliquez le "
-             .. "favori une fois qu'elle s'affiche.",
-  }
+-- YouTube decides what to show from a country, and Invidious passes ours
+-- through: the "region" parameter is honoured by the JSON API and by the
+-- HTML /search route alike (it reads uri_params["region"] before falling
+-- back to the instance's own preferences). Without it, a search on an
+-- instance hosted in Spain answers with what YouTube shows in Spain --
+-- which is the whole of the effect, not a property of the search.
+--
+-- Only the languages this fork is translated into, plus the handful a
+-- French or English speaker is likely to want. "Any" is deliberately not
+-- offered: there is no such thing, an absent region simply means the
+-- instance's own.
+local REGIONS = {
+  { "FR", "France" },        { "BE", "Belgique / België" },
+  { "CH", "Suisse / Schweiz" }, { "CA", "Canada" },
+  { "US", "United States" }, { "GB", "United Kingdom" },
+  { "DE", "Deutschland" },   { "AT", "Österreich" },
+  { "ES", "España" },        { "MX", "México" },
+  { "IT", "Italia" },        { "PT", "Portugal" },
+  { "BR", "Brasil" },        { "NL", "Nederland" },
+  { "PL", "Polska" },        { "CZ", "Česko" },
+  { "SE", "Sverige" },       { "TR", "Türkiye" },
+  { "RU", "Россия" },        { "UA", "Україна" },
+  { "JP", "日本" },          { "KR", "대한민국" },
+  { "CN", "中国" },          { "TW", "臺灣" },
 }
-local lang = translations.en
+
+local function region_index(code)
+  for i, entry in ipairs(REGIONS) do
+    if entry[1] == code then
+      return i
+    end
+  end
+  return nil
+end
+
+-- The language the interface is actually running in. On macOS the chosen
+-- language becomes LANG at startup (bin/darwinvlc.m), and "auto" leaves it
+-- to the system -- so the environment is the answer to both cases.
+local function ui_language()
+  -- The player knows, and now says so: vlc.config.language() answers with
+  -- the locale the interface is really running in, whatever way that
+  -- interface applied the user's choice. Added to the core for this.
+  if vlc.config and vlc.config.language then
+    local ok, value = pcall(vlc.config.language)
+    if ok and type(value) == "string" and value ~= "" then
+      return string.lower(value)
+    end
+  end
+  -- A core without it: read what macOS puts there anyway. The first
+  -- variable that is SET AND NOT EMPTY -- an exported but empty LANGUAGE
+  -- is common, and "or" hands back the empty string, which would send
+  -- every locale to the default region.
+  for _, name in ipairs({ "LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG" }) do
+    local value = os.getenv(name)
+    if value and value ~= "" then
+      return string.lower(value)
+    end
+  end
+  return ""
+end
+
+-- The country a speaker of that language most likely wants. A guess, and
+-- only a default: the menu is there to be told otherwise.
+local LANGUAGE_REGION = {
+  fr = "FR", en = "US", de = "DE", es = "ES", it = "IT", nl = "NL",
+  pl = "PL", cs = "CZ", sv = "SE", tr = "TR", ru = "RU", uk = "UA",
+  ja = "JP", ko = "KR", pt = "PT",
+}
+
+local function default_region()
+  local l = ui_language()
+  local lang_part, country = string.match(l, "^(%a%a)[_%-](%a%a)")
+
+  -- The country the locale names, when the menu offers it: fr_CA is
+  -- Canada and not France, es_MX is Mexico and not Spain, and guessing
+  -- from the language alone would override what the user already said.
+  if country then
+    local code = string.upper(country)
+    if region_index(code) then
+      return code
+    end
+    -- Chinese is written the same in several places the menu does not
+    -- list one by one; Hong Kong watches what Taiwan watches.
+    if lang_part == "zh" then
+      return (country == "tw" or country == "hk") and "TW" or "CN"
+    end
+  end
+
+  local two = lang_part or string.match(l, "^(%a%a)")
+  return (two and LANGUAGE_REGION[two]) or "US"
+end
 
             --[[ State ]]--
 
@@ -320,6 +141,7 @@ local app = {
   mode = "api",      -- "api" (JSON) or "html" (front-end scraping)
   last_url = "https://",
   proxy = true,      -- rewrite stream URLs through the instance (local=true)
+  region = nil,      -- ISO 3166 country the results are asked for
   instances = {},    -- id -> instance base URL
   results = {},      -- id -> { kind, id, title, author, published }
   video = nil,       -- currently opened video { title, author, ... }
@@ -354,6 +176,71 @@ local app = {
 local dlg = nil
 local ui = {}
 
+            --[[ Settings kept between sessions ]]--
+
+-- Whoever always uses the same instance should not have to go and ask
+-- api.invidious.io for a list of them first: the address that worked last
+-- time comes back in the field, and Connect is one click away. Only what
+-- the connection view holds is kept -- the address and the proxy box --
+-- and the mode is deliberately not, so that an instance which reopens its
+-- API is found out on the next connection rather than staying on the
+-- fallback for ever.
+local function settings_path()
+  local dir = vlc.config and vlc.config.userdatadir
+               and vlc.config.userdatadir()
+  if not dir or dir == "" then
+    return nil
+  end
+  return dir .. "/invidious.json"
+end
+
+local function load_settings()
+  local path = settings_path()
+  if not (path and json) then
+    return
+  end
+  local f = io.open(path, "r")
+  if not f then
+    return
+  end
+  local body = f:read("*a")
+  f:close()
+  local obj = json.decode(body or "")
+  if type(obj) ~= "table" then
+    return
+  end
+  if type(obj.instance) == "string" and obj.instance ~= "" then
+    app.last_url = obj.instance
+  end
+  -- The box defaults to ticked, so only an explicit false may untick it:
+  -- "obj.proxy or true" would ignore the very value being read.
+  if type(obj.proxy) == "boolean" then
+    app.proxy = obj.proxy
+  end
+  -- an unknown code means a settings file from a later version, or a hand
+  -- edit: fall back rather than show a menu with nothing selected
+  if type(obj.region) == "string" and region_index(obj.region) then
+    app.region = obj.region
+  end
+end
+
+-- Called on a connection that worked. A file that cannot be written is
+-- not worth a word to the user: nothing is lost but the shortcut.
+local function save_settings()
+  local path = settings_path()
+  if not (path and json) then
+    return
+  end
+  local f = io.open(path, "w")
+  if not f then
+    vlc.msg.dbg("[Invidious] cannot write " .. path)
+    return
+  end
+  f:write(json.encode({ instance = app.last_url, proxy = app.proxy,
+                        region = app.region }, { indent = true }))
+  f:close()
+end
+
             --[[ VLC entry points ]]--
 
 function descriptor()
@@ -372,11 +259,7 @@ end
 function activate()
   vlc.msg.dbg("[Invidious] Welcome")
   json = require("dkjson")
-  local sys_lang = os.getenv("LANGUAGE") or os.getenv("LC_ALL")
-                or os.getenv("LC_MESSAGES") or os.getenv("LANG") or ""
-  if string.match(string.lower(sys_lang), "^fr") then
-    lang = translations.fr
-  end
+  load_settings()
   show_connect()
 end
 
@@ -807,21 +690,51 @@ end
 
 -- "Shared 3 months ago" -> an approximate epoch, so that HTML results can
 -- be sorted with the same "newest first" rule as API results.
+--
+-- ⚠ This reads the page in whatever language the page came in. Asking the
+-- instance for our own language (&hl=) is what stops a French search from
+-- answering with Spanish titles -- and it also translates this very line,
+-- so a parser that only knew English would silently lose every date and
+-- with it the ordering. Hence a unit table per language, and a number that
+-- is looked for on its own rather than inside an English sentence.
 local UNIT_SECONDS = {
+  -- English
   second = 1, minute = 60, hour = 3600, day = 86400,
   week = 604800, month = 2629800, year = 31557600,
+  -- French: "il y a 3 mois", "il y a 1 an"
+  seconde = 1, heure = 3600, jour = 86400, semaine = 604800,
+  mois = 2629800, an = 31557600, ["année"] = 31557600,
+  -- Spanish / Portuguese
+  segundo = 1, minuto = 60, hora = 3600, ["día"] = 86400, dia = 86400,
+  semana = 604800, mes = 2629800, ["mês"] = 2629800,
+  ["año"] = 31557600, ano = 31557600,
+  -- German ("Minute" is spelt as in English)
+  sekunde = 1, stunde = 3600, tag = 86400,
+  woche = 604800, monat = 2629800, jahr = 31557600,
+  -- Italian, plurals included: they are not formed by adding a letter
+  secondo = 1, secondi = 1, minuto_it = 60, minuti = 60,
+  ora = 3600, ore = 3600, giorno = 86400, giorni = 86400,
+  settimana = 604800, settimane = 604800,
+  mese = 2629800, mesi = 2629800, anno = 31557600, anni = 31557600,
 }
 
 local function parse_relative_date(text)
   if not text then
     return nil
   end
-  local count, unit = string.match(string.lower(text), "(%d+)%s+(%a+)%s+ago")
+  local lower = string.lower(text)
+  -- the number, then the first word after it: true of every phrasing seen
+  -- ("3 months ago", "il y a 3 mois", "hace 3 meses", "vor 3 Monaten")
+  local count, unit = string.match(lower, "(%d+)%s+([%a\128-\255]+)")
   if not count then
     return nil
   end
-  unit = string.gsub(unit, "s$", "")
+  -- plurals, in the languages that just add one
   local secs = UNIT_SECONDS[unit]
+        or UNIT_SECONDS[string.gsub(unit, "s$", "")]
+        or UNIT_SECONDS[string.gsub(unit, "en$", "")]
+        or UNIT_SECONDS[string.gsub(unit, "n$", "")]
+        or UNIT_SECONDS[string.gsub(unit, "i$", "o")]
   if not secs then
     return nil
   end
@@ -886,7 +799,7 @@ local function html_parse_cards(html, kind)
         item.author = html_decode(name)
       end
       local _, se, subs = string.find(html,
-        "<p>([^<]*subscribers?)</p>", last)
+        "<p>([^<]*%d[^<]*)</p>", last)
       if se and se < nextFirst then
         item.subCount = html_decode(subs)
       end
@@ -927,10 +840,54 @@ local function html_parse_cards(html, kind)
   return items
 end
 
+-- The country to ask for, ready to append. Empty when nothing was ever
+-- chosen, so that a build without the setting behaves as it always did.
+local function region_param()
+  local code = app.region
+  return code and ("&region=" .. code) or ""
+end
+
+-- ... and the language the titles come back in, which is NOT the same
+-- thing. "region" is YouTube's gl: it decides WHICH videos surface.
+-- Titles and descriptions are localised by "hl", and a search on an
+-- instance whose own locale is Spanish answers with Spanish titles for a
+-- video that has a French one -- whatever region was asked for.
+--
+-- Invidious reads it in before_all.cr ("locale = env.params.query["hl"]?
+-- || preferences.locale"), so it works on the HTML pages as well as on
+-- the API, and it overrides the instance's own setting for that request.
+local LOCALE_CODE = {
+  ["pt_br"] = "pt-BR", ["zh_tw"] = "zh-TW", ["zh_hk"] = "zh-TW",
+  ["zh_cn"] = "zh-CN",
+}
+
+local function hl_param()
+  local l = ui_language()
+  local lang_part, country = string.match(l, "^(%a%a)[_%-](%a%a)")
+  local code = lang_part and LOCALE_CODE[lang_part .. "_" .. country]
+  if not code then
+    code = lang_part or string.match(l, "^(%a%a)")
+  end
+  return code and ("&hl=" .. code) or ""
+end
+
+-- What every request for the instance's own content carries. The video
+-- page and a channel take the language too: their titles are localised
+-- the same way, and a French list that opens on a Spanish page would be
+-- the same bug one click further.
+local function content_params()
+  return hl_param()
+end
+
+local function search_params()
+  return region_param() .. hl_param()
+end
+
 local function html_search(instance, query, kind)
   local url = instance .. "/search?q="
            .. vlc.strings.encode_uri_component(query)
            .. "&type=" .. (kind == "channel" and "channel" or "video")
+           .. search_params()
   if kind ~= "channel" then
     url = url .. "&sort=upload_date"
   end
@@ -942,7 +899,8 @@ local function html_search(instance, query, kind)
 end
 
 local function html_channel_videos(instance, channel_id)
-  local body, err = get_body(instance .. "/channel/" .. channel_id)
+  local body, err = get_body(instance .. "/channel/" .. channel_id
+                             .. "?" .. string.sub(content_params(), 2))
   if not body then
     return nil, err
   end
@@ -955,7 +913,8 @@ local function html_channel_videos(instance, channel_id)
 end
 
 local function html_playlist_videos(instance, list_id)
-  local body, err = get_body(instance .. "/playlist?list=" .. list_id)
+  local body, err = get_body(instance .. "/playlist?list=" .. list_id
+                             .. content_params())
   if not body then
     return nil, err
   end
@@ -992,7 +951,7 @@ end
 
 -- Reads the watch page and returns the same shape as the videos API.
 local function html_video(instance, video_id)
-  local url = instance .. "/watch?v=" .. video_id
+  local url = instance .. "/watch?v=" .. video_id .. content_params()
   if app.proxy then
     url = url .. "&local=true"
   end
@@ -1051,6 +1010,8 @@ local function format_date(item)
   -- HTML pages only give "Shared 7 months ago": showing that as an exact
   -- day would be a lie, so the relative wording is kept as-is.
   if item.approx then
+    -- "Shared " only prefixes the English wording; the others say it
+    -- their own way and there is nothing to strip.
     return (string.gsub(item.publishedText or "?", "^Shared%s+", ""))
   end
   if type(item.published) == "number" and item.published > 0 then
@@ -1073,6 +1034,15 @@ local function copy_to_clipboard(text)
     return vlc.clipboard.set(text)
   end
   return false
+end
+
+-- Copying an address and pasting it into a browser is two steps too many
+-- when the player knows how to open one.
+local function open_in_browser(url)
+  if not (url and url ~= "" and vlc.browser and vlc.browser.open) then
+    return false
+  end
+  return vlc.browser.open(url) and true or false
 end
 
 function close_dlg()
@@ -1110,8 +1080,15 @@ function show_connect()
   -- Enter in the field connects straight away
   ui.url = dlg:add_text_input(app.last_url, 2, 4, 2, 1, click_connect)
   ui.proxy = dlg:add_check_box(lang.chk_proxy, app.proxy, 1, 5, 3, 1)
-  dlg:add_button(lang.btn_connect, click_connect, 1, 6, 1, 1)
-  ui.message = dlg:add_label("", 1, 7, 3, 1)
+  dlg:add_label(lang.lbl_region, 1, 6, 1, 1)
+  ui.region = dlg:add_dropdown(2, 6, 2, 1)
+  for i, entry in ipairs(REGIONS) do
+    ui.region:add_value(entry[2] .. " (" .. entry[1] .. ")", i)
+  end
+  ui.region:set_value(region_index(app.region or default_region())
+                      or region_index("US"))
+  dlg:add_button(lang.btn_connect, click_connect, 1, 7, 1, 1)
+  ui.message = dlg:add_label("", 1, 8, 3, 1)
   dlg:show()
 end
 
@@ -1198,6 +1175,10 @@ function click_connect()
     return
   end
   app.proxy = ui.proxy:get_checked()
+  -- a dropdown nobody touched answers -1, hence the fallbacks
+  local picked = ui.region and ui.region:get_value()
+  local entry = (type(picked) == "number") and REGIONS[picked] or nil
+  app.region = entry and entry[1] or app.region or default_region()
   connect_to(url)
 end
 
@@ -1238,6 +1219,7 @@ function connect_to(url)
   end
   app.instance = url
   app.last_url = url
+  save_settings()
   show_search()
   if app.mode == "html" then
     set_message(lang.msg_html_mode)
@@ -1285,6 +1267,22 @@ local function js_put(subject, token, text)
   return (string.gsub(subject, token, function() return js_escape(text) end))
 end
 
+-- The same marker tables the player judges a body with, turned into one
+-- JavaScript alternation. The page-side test and the player-side test
+-- have to be the same test: a page the script calls real and the player
+-- calls a challenge would loop between them for ever.
+local function js_regex(markers)
+  local parts = {}
+  for _, mark in ipairs(markers) do
+    -- Lua patterns escape with "%", JavaScript with "\", and a stray "/"
+    -- would close the literal.
+    local lit = string.gsub(mark, "%%(.)", "%1")
+    lit = string.gsub(lit, "[%^%$%(%)%%%.%[%]%*%+%-%?%{%}|/\\]", "\\%0")
+    table.insert(parts, lit)
+  end
+  return table.concat(parts, "|")
+end
+
 local function html_escape(s)
   s = string.gsub(s or "", "&", "&amp;")
   s = string.gsub(s, "<", "&lt;")
@@ -1310,15 +1308,65 @@ local BOOKMARKLET = "javascript:(function(){"
   .. "right:0;padding:8px;font:14px sans-serif;text-align:center;"
   .. "color:#fff;background:'+(bad?'#8a1a1e':'#1a7f37');"
   .. "d.textContent=t;}"
+  -- Ambient reporting ("connected", "not answering") belongs on a page
+  -- the user opened FOR the player -- clicked bookmark, or a page the
+  -- player sent this tab to. Elsewhere the banner is just graffiti.
+  .. "function note(t,bad){if(!AUTO||OURS)say(t,bad);}"
   -- Handing the page over means the browser is done with it: leaving the
   -- player running there would have the video going twice at once.
   .. "function stop(){try{var m=document.querySelectorAll('video,audio');"
   .. "for(var k=0;k<m.length;k++){m[k].pause();}}catch(err){}}"
+  -- ... and pausing is not enough. The page keeps its player, so it goes
+  -- on filling its buffer, and Invidious starts playing again a moment
+  -- later on its own -- two copies of the same video coming down the same
+  -- line, on machines whose whole problem is bandwidth. So empty the
+  -- element and keep it empty: anything that starts playing afterwards is
+  -- paused on the spot. Only ever called once the page has been handed
+  -- over, never while the user is merely browsing.
+  .. "function stophard(){try{var m=document.querySelectorAll('video,audio');"
+  .. "for(var k=0;k<m.length;k++){try{m[k].pause();"
+  .. "m[k].removeAttribute('src');"
+  .. "var q=m[k].getElementsByTagName('source');"
+  .. "while(q.length){q[0].parentNode.removeChild(q[0]);}"
+  .. "m[k].load();}catch(e2){}}}catch(err){}"
+  .. "if(!S.k){S.k=1;document.addEventListener('play',function(e){"
+  .. "try{e.target.pause();}catch(e3){}},true);}}"
+  -- Is this the page, or the check standing in front of it? The very
+  -- discriminants the player uses (CHALLENGE_MARKERS and INVIDIOUS_MARKS
+  -- above), so that the two halves can never disagree about what a page
+  -- is. Measured 05/08: every public instance now answers a plain client
+  -- with an interstitial, and none of them carries a mark of the site.
+  -- The answer is cached once it is yes: a check that passes navigates,
+  -- which brings a new document and a new run of this script, and
+  -- serialising a 70 kB page every two seconds is not free on the
+  -- machines this fork is for.
+  -- The tab is here to be read, not to play: once the check is passed,
+  -- keep a copy of the page and then empty it. Invidious autoplays, and a
+  -- video decoded in the browser AND in the player is the same stream
+  -- pulled twice down the same line, on a machine that has neither the
+  -- processor nor the bandwidth to spare. The copy is what the player
+  -- gets afterwards, so nothing is lost by clearing the page.
+  .. "function ready(){if(S.page)return 1;if(!real())return 0;"
+  .. "try{S.page=document.documentElement.outerHTML;}catch(e1){}"
+  -- Emptied only when this page is the player's: one it sent this tab to,
+  -- or one it is about to be handed. Anywhere else the tab belongs to
+  -- whoever is reading it, and an add-on that blanks the site as you
+  -- browse it is not a companion, it is a nuisance.
+  .. "if(OURS)wipe();return 1;}"
+  .. "function wipe(){stophard();"
+  .. "try{var b=document.body;if(b){while(b.firstChild)"
+  .. "b.removeChild(b.firstChild);}}catch(e2){}"
+  .. "say('{{M_TAKEN}}');}"
+  .. "function real(){if(S.real)return 1;try{"
+  .. "var h=document.documentElement.outerHTML;"
+  .. "if(/{{CHALLENGE_RE}}/i.test(h))return 0;"
+  .. "if(/{{INVIDIOUS_RE}}/.test(h)){S.real=1;return 1;}"
+  .. "return 0;}catch(err){return 1;}}"
   .. "var S=window.__pvlc;"
   .. "if(!S){S=window.__pvlc={};"
   .. "window.addEventListener('message',function(e){if(e.origin!==O)return;"
   .. "var d=e.data;if(!d||d.pv!==1)return;"
-  .. "if(d.ack){S.ack=1;say('{{M_OK}}');return;}"
+  .. "if(d.ack){S.ack=1;note('{{M_OK}}');return;}"
   .. "if(!d.url)return;"
   -- The page asked for may be the very one this tab is displaying. Hand
   -- that over instead of fetching it again: on the instances that only
@@ -1326,9 +1374,12 @@ local BOOKMARKLET = "javascript:(function(){"
   -- work, while the page is already here and paid for.
   .. "var a=(d.url.match(/[?&]v=([^&]*)/)||[])[1];"
   .. "var b=(location.search.match(/[?&]v=([^&]*)/)||[])[1];"
-  .. "if(a&&b&&a===b){stop();say('{{M_PAGE}}');"
+  -- The page goes first and the player is cut afterwards: emptying the
+  -- <video> rewrites the very DOM being serialised.
+  .. "if(a&&b&&a===b){say('{{M_PAGE}}');OURS=1;"
   .. "S.w.postMessage({pv:1,id:d.id,s:200,"
-  .. "body:document.documentElement.outerHTML},O);return;}"
+  .. "body:S.page||document.documentElement.outerHTML},O);"
+  .. "wipe();return;}"
   .. "var x=new XMLHttpRequest();x.open('GET',d.url,true);"
   .. "x.onreadystatechange=function(){if(x.readyState==4){"
   .. "var t=x.responseText||'';"
@@ -1339,29 +1390,51 @@ local BOOKMARKLET = "javascript:(function(){"
   .. "if(a&&b&&(x.status==418||/not a bot|goaway/i.test(t.substring(0,4000))))"
   .. "{stop();say('{{M_NAV}}');"
   .. "S.w.postMessage({pv:1,id:d.id,s:200,body:'PVLC_NAVIGATING'},O);"
+  -- The page this tab is about to load IS the player's; sessionStorage
+  -- carries that one bit across the navigation, and is cleared on the
+  -- way in so a later visit by hand is not caught by it.
+  .. "try{sessionStorage.setItem('pvlc','1');}catch(e4){}"
   .. "location.href=d.url;return;}"
   .. "S.w.postMessage({pv:1,id:d.id,s:x.status,body:t},O);}};"
   .. "x.send();},false);}"
-  .. "function h(){if(S.w)S.w.postMessage({pv:1,hello:1,"
-  .. "cookie:document.cookie,ua:navigator.userAgent},O);}"
-  .. "var w=window.opener;"
+  -- A tab still working through a check has nothing to give: saying so
+  -- keeps the player from asking, and keeps its half-earned cookie out of
+  -- the player's hands -- measured on go-away, the state grows in stages
+  -- and only the last one opens anything.
+  .. "function h(){if(!S.w)return;var ok=ready();"
+  .. "S.w.postMessage({pv:1,hello:1,busy:ok?0:1,"
+  .. "cookie:ok?document.cookie:'',ua:navigator.userAgent},O);}"
+  -- Run by the browser add-on rather than clicked, this page was never
+  -- opened from PowerVLC's own, so there is no opener to find: the add-on
+  -- hands the window over instead. Bare name on purpose -- the add-on
+  -- sets it on the sandbox, which is not window.
+  .. "var w=(typeof __pvlcw!=='undefined'&&__pvlcw)||window.opener;"
+  -- Clicked, the bookmark IS the intent to hand this page over, so the
+  -- player is stopped at once. Injected by the add-on, the script runs on
+  -- every page of the instance, including ones the user is watching in
+  -- the browser and never asked to send anywhere: pausing there would be
+  -- the add-on breaking their browsing.
+  .. "var AUTO=(typeof __pvlcauto!=='undefined'&&__pvlcauto)?1:0;"
+  .. "var OURS=AUTO?0:1;"
+  .. "try{if(AUTO&&sessionStorage.getItem('pvlc')==='1'){OURS=1;"
+  .. "sessionStorage.removeItem('pvlc');}}catch(e5){}"
   .. "if(!w||w.closed){w=window.open('{{BASE}}','powervlc');}"
   .. "if(!w){say('{{M_POPUP}}',1);return;}"
-  .. "S.w=w;if(!S.t){S.t=setInterval(h,2000);}h();stop();"
-  .. "if(!S.ack)say('{{M_WAIT}}');"
+  .. "S.w=w;if(!S.t){S.t=setInterval(h,2000);}h();if(!AUTO)stop();"
+  .. "if(!S.ack)note('{{M_WAIT}}');"
   -- the opener may be some other page entirely, in which case the messages
   -- go nowhere: no acknowledgement means open our own window and retry
   .. "setTimeout(function(){if(S.ack)return;"
   .. "var w2=window.open('{{BASE}}','powervlc');"
   .. "if(w2){S.w=w2;h();}"
-  .. "setTimeout(function(){if(!S.ack)say('{{M_FAIL}}',1);},4000);},4000);"
+  .. "setTimeout(function(){if(!S.ack)note('{{M_FAIL}}',1);},4000);},4000);"
   .. "})()"
 
 -- Runs on our own page. Nothing here is subject to the instance's policy.
 local RELAY_JS = [==[
 (function(){
  var BASE='{{BASE}}', TARGET='__TARGET__';
- var tab=null, lastHello=0, lastCookie='', job=null;
+ var tab=null, lastHello=0, lastCookie='', job=null, busy=false;
  var st=document.getElementById('st');
  function say(t){ if(st) st.innerHTML=t; }
  function xhr(m,u,b,cb){
@@ -1373,7 +1446,7 @@ local RELAY_JS = [==[
    if(e.origin!==TARGET) return;
    var d=e.data; if(!d||d.pv!==1) return;
    if(d.hello){
-     tab=e.source; lastHello=new Date().getTime();
+     tab=e.source; lastHello=new Date().getTime(); busy=!!d.busy;
      /* tell the page its messages are arriving: without this it has no
         way to know whether the opener it found is really us */
      try{ e.source.postMessage({pv:1,ack:1},TARGET); }catch(err){}
@@ -1387,8 +1460,8 @@ local RELAY_JS = [==[
         is exactly what we ask it to do -- so a fresh hello means it is
         ready again and the job has to be put to it once more. Handing it
         out once left the player waiting for its whole timeout. */
-     if(job){ tab.postMessage({pv:1,id:job.id,url:job.url},TARGET); }
-     say('__ON__'); return;
+     if(job&&!busy){ tab.postMessage({pv:1,id:job.id,url:job.url},TARGET); }
+     say(busy?'__BUSY__':'__ON__'); return;
    }
    if(d.id!==undefined){ job=null; post(d.id,d.s,d.body||''); }
  },false);
@@ -1411,9 +1484,14 @@ local RELAY_JS = [==[
    if(n===0){ xhr('POST',BASE+'/reply?id='+id+'&s='+s+'&last=1',''); return; }
    step();
  }
+ /* A tab still working through a check is not a relay: it has nothing to
+    answer with, and asking it anyway is what had the player fed one
+    interstitial after another. Stopping the polling is the whole of it --
+    the player sees no relay at all and simply waits, which is what it
+    already does well. */
  function loop(){
-   if(!tab||new Date().getTime()-lastHello>6000){
-     say('__OFF__'); setTimeout(loop,600); return;
+   if(!tab||busy||new Date().getTime()-lastHello>6000){
+     say(busy?'__BUSY__':'__OFF__'); setTimeout(loop,600); return;
    }
    xhr('GET',BASE+'/next',null,function(x){
      var t=x.responseText||'';
@@ -1434,6 +1512,7 @@ margin:0;padding:2em 1em;background:#f4f4f6;color:#1d1d1f}
 main{max-width:40em;margin:0 auto;background:#fff;border-radius:10px;
 padding:1.5em 2em;box-shadow:0 1px 6px rgba(0,0,0,0.15)}
 h1{font-size:1.25em;margin:0 0 .6em;color:#c1272d}
+h2{font-size:1.05em;margin:0 0 .4em}
 ol{padding-left:1.2em}li{margin:1em 0}
 a.bm{display:inline-block;padding:.4em .9em;background:#c1272d;color:#fff;
 text-decoration:none;border-radius:6px;font-weight:bold}
@@ -1446,9 +1525,9 @@ code{background:#f0f0f2;padding:0 .3em;border-radius:3px}
 </style>
 ]==]
 
-local function web_page(title, body)
+local function web_page(title, body, head)
   return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'
-      .. html_escape(title) .. "</title>" .. WEB_CSS
+      .. html_escape(title) .. "</title>" .. (head or "") .. WEB_CSS
       .. '</head><body><main><h1>' .. html_escape(title) .. "</h1>"
       .. body .. "</main></body></html>"
 end
@@ -1467,13 +1546,30 @@ local function challenge_pages(instance)
         M_DRAG = lang.web_m_drag, M_OK = lang.web_m_ok,
         M_POPUP = lang.web_m_popup, M_WAIT = lang.web_m_wait,
         M_FAIL = lang.web_m_fail, M_PAGE = lang.web_m_page,
-        M_NAV = lang.web_m_nav }) do
+        M_NAV = lang.web_m_nav, M_TAKEN = lang.web_m_taken }) do
     bm = js_put(bm, "{{" .. token .. "}}", text)
   end
+
+  bm = string.gsub(bm, "{{CHALLENGE_RE}}",
+                   function() return js_regex(CHALLENGE_MARKERS) end)
+  bm = string.gsub(bm, "{{INVIDIOUS_RE}}",
+                   function() return js_regex(INVIDIOUS_MARKS) end)
+
+  -- The same script the bookmark carries, for the browser add-on to put
+  -- on the page itself where a bookmark is refused. One script, one
+  -- protocol: the add-on holds no copy of either.
+  local inject = string.sub(bm, #"javascript:" + 1)
+
+  -- What the add-on needs and nothing else: where to talk to us, and the
+  -- single site it may run the relay on.
+  local head = '<meta name="powervlc-handoff" content="{{BASE}}">'
+            .. '<meta name="powervlc-origin" content="'
+            .. attr_escape(origin) .. '">'
 
   local js = js_put(RELAY_JS, "__TARGET__", origin)
   js = js_put(js, "__ON__", lang.web_relay_on)
   js = js_put(js, "__OFF__", lang.web_relay_off)
+  js = js_put(js, "__BUSY__", lang.web_relay_busy)
 
   local landing = web_page(lang.web_title,
     "<p>" .. lang.web_intro .. "</p><ol>"
@@ -1489,14 +1585,18 @@ local function challenge_pages(instance)
        .. html_escape(target) .. "</a></li>"
     .. "<li>" .. lang.web_step3 .. "</li></ol>"
     .. '<div id="st">' .. lang.web_relay_off .. "</div>"
+    -- Not a footnote: on the machines this fork exists for, this is the
+    -- only path that works at all -- see web_addon.
+    .. "<hr><h2>" .. lang.web_addon_title .. "</h2>"
+    .. "<p>" .. lang.web_addon .. "</p>"
     .. "<hr><p class=\"note\">" .. lang.web_note .. "</p>"
-    .. "<script>" .. js .. "</script>")
+    .. "<script>" .. js .. "</script>", head)
 
   local thanks = web_page(lang.web_done_title, "<p>" .. lang.web_done
     .. "</p>")
   local empty = web_page(lang.web_done_title, "<p>" .. lang.web_empty
     .. "</p>")
-  return landing, thanks, empty
+  return landing, thanks, empty, inject
 end
 
 -- Armed while the challenge view is up, so that the browser finishing its
@@ -1548,9 +1648,10 @@ function start_challenge(instance, retry_fn)
     app.handoff:close()
     app.handoff = nil
   end
-  local landing, thanks, empty = challenge_pages(instance)
+  local landing, thanks, empty, inject = challenge_pages(instance)
   local handle, err = vlc.browser.handoff({ landing = landing,
-                                            thanks = thanks, empty = empty })
+                                            thanks = thanks, empty = empty,
+                                            inject = inject })
   if not handle then
     set_message(lang.msg_challenge_fail .. tostring(err))
     return
@@ -1566,15 +1667,16 @@ function show_challenge()
   close_dlg()
   dlg = vlc.dialog(lang.title_challenge)
   dlg:set_size(DIALOG_WIDTH, 0)
-  dlg:add_label(lang.lbl_challenge_1, 1, 1, 3, 1)
-  dlg:add_label(lang.lbl_challenge_2, 1, 2, 3, 1)
+  dlg:add_label(lang.lbl_challenge_1, 1, 1, 4, 1)
+  dlg:add_label(lang.lbl_challenge_2, 1, 2, 4, 1)
   ui.local_url = dlg:add_text_input(
     app.handoff and app.handoff:url() or "", 1, 3, 2, 1)
   dlg:add_button(lang.btn_challenge_copy, click_challenge_copy, 3, 3, 1, 1)
-  dlg:add_label(lang.lbl_challenge_3, 1, 4, 3, 1)
+  dlg:add_button(lang.btn_challenge_open, click_challenge_open, 4, 3, 1, 1)
+  dlg:add_label(lang.lbl_challenge_3, 1, 4, 4, 1)
   dlg:add_button(lang.btn_challenge_done, click_challenge_done, 1, 5, 1, 1)
   dlg:add_button(lang.btn_challenge_cancel, show_connect, 2, 5, 1, 1)
-  ui.message = dlg:add_label(lang.msg_challenge_needed, 1, 6, 3, 1)
+  ui.message = dlg:add_label(lang.msg_challenge_needed, 1, 6, 4, 1)
   dlg:show()
   app.awaiting_challenge = true
   if vlc.timer then
@@ -1590,6 +1692,17 @@ function click_challenge_copy()
     set_message(lang.msg_challenge_copied)
   else
     set_message(lang.msg_copy_fallback)
+  end
+end
+
+function click_challenge_open()
+  if not ui.local_url then
+    return
+  end
+  if open_in_browser(ui.local_url:get_text()) then
+    set_message(lang.msg_challenge_opened)
+  else
+    set_message(lang.msg_challenge_no_browser)
   end
 end
 
@@ -1633,6 +1746,14 @@ function challenge_resume(quiet)
   -- so "a relay is there" stays true for ever -- but the button is the
   -- user asking in so many words, and answering "nothing received yet"
   -- when a relay is sitting right there was simply wrong.
+  -- A relay that went away and came back is a new chance; one that has
+  -- been sitting there all along is not. The tab stops asking for work
+  -- while it is on a check, so this is exactly "it is ready again" --
+  -- without it, one attempt made while the tab was busy would be the
+  -- only one the poll ever made.
+  if not relaying then
+    app.tried_relay = false
+  end
   local may_relay = relaying and (not app.tried_relay or not quiet)
   if not fresh and not may_relay then
     return false
@@ -1812,15 +1933,18 @@ function click_search()
   elseif kind == "channel" then
     obj, err = get_json(app.instance .. "/api/v1/search?q="
        .. vlc.strings.encode_uri_component(query)
-       .. "&type=channel&fields=type,author,authorId,subCount")
+       .. "&type=channel&fields=type,author,authorId,subCount"
+       .. search_params())
   elseif kind == "playlist" then
     obj, err = get_json(app.instance .. "/api/v1/search?q="
        .. vlc.strings.encode_uri_component(query)
-       .. "&type=playlist&fields=type,title,playlistId,author,videoCount")
+       .. "&type=playlist&fields=type,title,playlistId,author,videoCount"
+       .. search_params())
   else
     obj, err = get_json(app.instance .. "/api/v1/search?q="
        .. vlc.strings.encode_uri_component(query)
-       .. "&type=video&sort_by=upload_date&fields=" .. SEARCH_FIELDS)
+       .. "&type=video&sort_by=upload_date&fields=" .. SEARCH_FIELDS
+       .. search_params())
   end
 
   if not obj then
@@ -1859,7 +1983,7 @@ function open_result(result)
       obj, err = html_playlist_videos(app.instance, result.id)
     else
       obj, err = get_json(app.instance .. "/api/v1/playlists/" .. result.id
-                          .. "?fields=title,videos")
+                          .. "?fields=title,videos" .. content_params())
     end
     if not obj then
       if err == "challenge" then
@@ -1886,7 +2010,8 @@ function open_result(result)
       obj, err = html_channel_videos(app.instance, result.id)
     else
       obj, err = get_json(app.instance .. "/api/v1/channels/" .. result.id
-                          .. "/videos?fields=videos," .. SEARCH_FIELDS)
+                          .. "/videos?fields=videos," .. SEARCH_FIELDS
+                          .. content_params())
     end
     if not obj then
       if err == "challenge" then
@@ -2088,6 +2213,7 @@ function open_video(result)
   local url = app.instance .. "/api/v1/videos/" .. result.id
            .. "?fields=title,author,published,publishedText,"
            .. "formatStreams,adaptiveFormats,hlsUrl,liveNow"
+           .. content_params()
   if app.proxy then
     url = url .. "&local=true"
   end

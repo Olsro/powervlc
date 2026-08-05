@@ -1,0 +1,125 @@
+--[[ ko.lua: the ko catalogue of the invidious extension.
+     Loaded on its own by share/lua/modules/pvlc_i18n.lua: only
+     the language in use is ever parsed or kept in memory. ]]
+
+return {
+  title_connect = "Invidious — 연결",
+  title_search = "Invidious — 검색",
+  title_video = "Invidious — 동영상",
+  date_fmt = "%Y-%m-%d",
+  col_instance = "인스턴스",
+  col_region = "지역",
+  col_uptime = "가동률",
+  col_title = "제목",
+  col_channel = "채널",
+  col_date = "게시일",
+  col_subs = "구독자",
+  col_videos = "동영상",
+  btn_list_instances = "공개 인스턴스 목록",
+  btn_use_selection = "선택한 인스턴스 사용",
+  lbl_instance = "인스턴스:",
+  chk_proxy = "인스턴스를 통해 스트림 중계(권장)",
+  btn_connect = "연결",
+  msg_fetching_instances = "공개 인스턴스를 가져오는 중…",
+  msg_no_instances = "사용할 수 있는 인스턴스가 없습니다",
+  msg_instances_count = "%d개 인스턴스 — 하나를 고른 뒤 ‘선택한 인스턴스 사용’을 누르십시오",
+  msg_select_first = "먼저 목록에서 인스턴스를 선택하십시오",
+  msg_enter_url = "먼저 인스턴스 주소를 입력하십시오",
+  msg_connecting = "연결하는 중…",
+  msg_connect_fail = "연결 실패: ",
+  msg_search_blocked = "인스턴스에 연결되지만 API 익명 검색을 막고 있습니다(봇 차단) — 다른 인스턴스나 직접 "
+                     .. "운영하는 인스턴스를 사용해 보십시오",
+  mode_videos = "동영상",
+  mode_channels = "채널",
+  mode_playlists = "재생 목록",
+  btn_search = "검색",
+  btn_open = "선택 항목 열기",
+  btn_change_instance = "< 인스턴스",
+  msg_enter_query = "검색할 내용을 입력하십시오",
+  msg_searching = "검색하는 중…",
+  msg_no_results = "결과 없음",
+  msg_results_count = "%d개 결과(최신순)",
+  msg_channel_loading = "채널 동영상을 가져오는 중…",
+  msg_playlist_loading = "재생 목록을 가져오는 중…",
+  msg_target_found = "주소를 인식했습니다 — 바로 엽니다",
+  msg_search_fail = "검색 실패: ",
+  msg_select_result = "먼저 목록에서 결과를 선택하십시오",
+  lbl_quality = "화질:",
+  lbl_by = "—",
+  audio_only = "소리만",
+  combined = "소리+영상",
+  video_only = "영상만",
+  live_hls = "HLS 스트림(실시간)",
+  btn_play = "재생",
+  btn_copy = "스트림 주소 복사",
+  btn_back = "< 뒤로",
+  msg_loading_video = "동영상 정보를 가져오는 중…",
+  msg_video_fail = "동영상 정보를 가져오지 못했습니다: ",
+  msg_fallback_formats = "인스턴스가 동영상 API를 막아 표준 스트림을 대신 확인했습니다",
+  msg_trying_html = "JSON API가 닫혀 있습니다 — HTML 페이지를 시도합니다…",
+  msg_html_mode = "HTML 모드로 연결했습니다(이 인스턴스는 API가 닫혀 있음)",
+  dash_auto = "자동 화질(DASH)",
+  msg_no_formats = "이 동영상에서 재생할 수 있는 스트림을 찾지 못했습니다",
+  msg_playing = "재생을 시작했습니다",
+  msg_copied = "스트림 주소를 클립보드에 복사했습니다",
+  msg_copy_fallback = "자동 복사를 사용할 수 없습니다 — 아래 주소를 선택하십시오",
+  title_challenge = "Invidious — 봇 확인",
+  lbl_challenge_1 = "이 인스턴스는 자바스크립트 실행이 필요한 확인으로 스스로를 보호합니다. PowerVLC는 그것을 풀지 "
+                  .. "않습니다. 브라우저가 풀고 결과를 돌려줍니다.",
+  lbl_challenge_2 = "1. 이 주소를 브라우저(PowerFox, Firefox, Safari 등)에서 열고 페이지의 세 "
+                  .. "단계를 따르십시오:",
+  lbl_region = "결과 지역:",
+  btn_challenge_copy = "주소 복사",
+  btn_challenge_open = "브라우저에서 열기",
+  lbl_challenge_3 = "2. 브라우저가 끝나는 대로 PowerVLC가 알아서 이어갑니다. 이 단추는 기다리고 싶지 않을 때만 "
+                  .. "쓰십시오:",
+  btn_challenge_done = "확인을 통과했습니다",
+  btn_challenge_cancel = "< 뒤로",
+  msg_challenge_copied = "주소를 복사했습니다 — 브라우저에 붙여 넣으십시오",
+  msg_challenge_opened = "브라우저에서 열었습니다 — 그쪽에서 계속하십시오",
+  msg_challenge_no_browser = "PowerVLC가 브라우저를 열지 못했습니다. 대신 주소를 복사하십시오.",
+  msg_challenge_waiting = "아직 아무것도 오지 않았습니다 — 브라우저에서 단계를 마친 뒤 다시 누르십시오",
+  msg_challenge_ok = "세션을 받았습니다 — 다시 시도합니다",
+  msg_challenge_fail = "로컬 전달 페이지를 열지 못했습니다: ",
+  msg_challenge_needed = "이 인스턴스는 봇 확인을 요구합니다",
+  msg_challenge_incomplete = "확인이 끝나지 않았습니다. 즐겨찾기를 누르기 전에 페이지가 실제로 보여야 합니다. "
+                           .. "확인을 마친 뒤 다시 누르십시오.",
+  msg_challenge_click = "탭이 이 동영상을 열고 있습니다. 화면에 나타나면 즐겨찾기를 누르십시오 — 그 밖에 할 일은 "
+                      .. "없습니다.",
+  msg_challenge_no_session = "이 인스턴스는 브라우저에 한 번에 한 페이지만 허용하고 재사용할 수 있는 것을 남기지 "
+                           .. "않습니다. PowerVLC에 넘길 것이 없으니 다른 인스턴스를 사용해 보십시오.",
+  web_title = "PowerVLC — 봇 확인",
+  web_intro = "이 인스턴스의 확인은 여러분이 직접 사이트를 방문한 것과 똑같이 브라우저가 풉니다. PowerVLC는 그 탭을 "
+            .. "통해 페이지를 읽을 뿐, 스스로는 아무것도 풀지 않습니다.",
+  web_step1 = "이 링크를 즐겨찾기 막대로 끌어다 놓으십시오(한 번만 하면 됩니다):",
+  web_bookmark = "PowerVLC로 보내기",
+  web_step2 = "인스턴스를 열고 표시되는 확인을 통과하십시오:",
+  web_step3 = "페이지가 <strong>실제로 보이면</strong> — 일부 인스턴스는 확인을 두 번 연달아 요구합니다 — 방금 "
+            .. "추가한 <em>PowerVLC로 보내기</em> 즐겨찾기를 누르십시오.",
+  web_note = "둘러보는 동안 이 창과 인스턴스 탭을 열어 두십시오. PowerVLC는 그 둘을 통해 각 페이지를 읽습니다. 둘 중 "
+           .. "하나를 닫으면 연결이 끊기고 즐겨찾기를 다시 눌러야 합니다.",
+  web_done_title = "완료",
+  web_done = "PowerVLC에 필요한 것이 모두 있습니다. 이 창과 인스턴스 탭을 열어 둔 채 재생기로 돌아가십시오.",
+  web_empty = "쓸 만한 것이 오지 않았습니다. 페이지가 실제로 보이는지 확인하고 — 일부 인스턴스는 확인을 두 번 연달아 "
+            .. "요구합니다 — 즐겨찾기를 다시 누르십시오.",
+  web_relay_on = "PowerVLC에 연결되었습니다. 둘러보는 동안 이 창과 인스턴스 탭을 열어 두십시오.",
+  web_relay_off = "인스턴스 탭을 기다리는 중…",
+  web_relay_busy = "인스턴스 탭이 아직 확인을 진행 중입니다 — PowerVLC는 아무것도 요구하지 않고 기다립니다.",
+  web_m_drag = "이것은 링크가 아니라 즐겨찾기입니다. 즐겨찾기 막대로 끌어다 놓은 뒤 인스턴스를 열고, 확인을 통과한 다음 "
+             .. "거기에서 누르십시오.",
+  web_m_ok = "PowerVLC가 연결되었습니다. 둘러보는 동안 이 탭을 열어 두십시오.",
+  web_m_popup = "PowerVLC가 자기 창을 열지 못했습니다. 이 사이트의 팝업을 허용한 뒤 즐겨찾기를 다시 누르십시오.",
+  web_m_wait = "PowerVLC: 연결하는 중…",
+  web_m_fail = "PowerVLC가 응답하지 않습니다. 그 페이지(127.0.0.1)가 아직 열려 있는지 확인하고 즐겨찾기를 다시 "
+             .. "누르십시오.",
+  web_m_page = "이 페이지를 PowerVLC에 넘겼습니다.",
+  web_m_nav = "PowerVLC가 요청한 동영상을 여는 중입니다 — 화면에 나타나면 즐겨찾기를 다시 누르십시오.",
+  web_m_taken = "이 페이지는 PowerVLC가 가져갔습니다. 탭은 일부러 비웠습니다. 여기서도 동영상을 재생하면 기기에 두 "
+              .. "번의 디코딩과 두 번의 내려받기를 시키는 셈입니다. 열어 두십시오.",
+  web_addon_title = "오래된 브라우저: PowerVLC 확장 기능을 설치하십시오",
+  web_addon = "TenFourFox, PowerFox를 비롯해 Firefox 69 이전의 모든 브라우저는 보안 정책이 있는 "
+            .. "페이지에서 즐겨찾기의 스크립트를 실행하지 않으며, 모든 인스턴스가 그 정책을 보냅니다. 그래서 그곳에서는 "
+            .. "즐겨찾기를 눌러도 아무 일도 일어나지 않습니다. 재생기에서 <strong>도움말 &gt; PowerVLC 확장 "
+            .. "기능 설치</strong>를 고르면 같은 일을 스스로 해내는 작은 확장 기능이 브라우저에 설치됩니다 — "
+            .. "즐겨찾기도, 클릭도 필요 없이 모든 페이지에서 동작합니다.",
+}

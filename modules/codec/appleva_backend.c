@@ -17,6 +17,7 @@
  *     finaliser (picture_params + readback surface). Cf. §3/§5 de la spec.
  *****************************************************************************/
 #include <dlfcn.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ApplicationServices/ApplicationServices.h>
@@ -43,7 +44,9 @@ enum {
     VT_SET_SOURCE_IMAGE_SIZE   = 0x3c, /* (ctx, {u32 w,h}*, arg2) */
     VT_SET_TARGET_IMAGE_SIZE   = 0x40, /* NO-OP sur GMA950 */
     VT_GET_TARGET_IMAGE_INFO   = 0x48, /* NO-OP sur GMA950 (surfaces gérées en interne) */
-    VT_SWAP_TO_EXTERNAL_TARGET = 0x54, /* (ctx, u8 index) = submit GPU + rotation surface */
+    VT_SET_SOURCE_IMAGE        = 0x4c, /* (ctx, u8 index) — designe l'image decodee */
+    VT_SWAP_TO_TARGET          = 0x50, /* (ctx, u8 index, …) */
+    VT_SWAP_TO_EXTERNAL_TARGET = 0x54, /* (ctx) — un SEUL argument */
     VT_DESTROY_RENDERER        = 0x58, /* (renderer) */
 };
 
@@ -404,18 +407,52 @@ int appleva_picture_submit(appleva_ctx *ctx)
  * arg3 (struct ≥0x24 o) : [0]=largeur, [4]=hauteur, [8]/[0xc]/[0x18]/[0x20] =
  * champs du descripteur picture (mis à 0 ici — sémantique à finir). arg4 = picture[0x14].
  * ⚠️ arg3/arg4 mal formés peuvent figer le GPU → tester avec watchdog court. */
-typedef int (*ava_swap_fn)(void *ctx, unsigned char index, void *info, uint32_t arg4);
+/* ★★★ PRÉSENTATION — SÉQUENCE RELEVÉE DANS APPLEVA ELLE-MÊME (2026-08-05).
+ *
+ * L'ancienne version n'appelait QUE `SwapToExternalTargetImage`, avec quatre
+ * arguments dont trois inventés. Résultat mesuré : `IDCTMCP` rendait 0 et la
+ * surface restait NOIRE — le GPU acceptait le travail sans jamais publier
+ * l'image.
+ *
+ * Le désassemblage d'AppleVA (site d'appel 0x31920) montre une séquence de
+ * QUATRE appels sur le même renderer, dans cet ordre :
+ *     call *0x4c   SetSourceImage(ctx, index)          <- MANQUAIT
+ *     call *0x50   SwapToTargetImage(ctx, index, …)    <- MANQUAIT
+ *     call *0x74   (emplacement non identifié)
+ *     call *0x54   SwapToExternalTargetImage(ctx)      <- UN SEUL argument
+ * `SetSourceImage` prend bien un OCTET en 2e argument (`movzbl 0x0c(%ebp)`),
+ * c'est-à-dire l'index d'image — pas une structure.
+ *
+ * ⚠ L'emplacement 0x74 n'est PAS appelé ici : sur notre renderer GMA950 il
+ * contient une valeur qui ressemble à une donnée (voisine de l'objet), pas à
+ * une fonction — l'appeler serait un saut à l'aveugle. À reverser avant de
+ * l'ajouter, si la séquence à trois appels ne suffit pas. */
+typedef int (*ava_set_src_img_fn)(void *ctx, unsigned char index);
+typedef int (*ava_swap_tgt_fn)(void *ctx, unsigned char index, void *arg3);
+typedef int (*ava_swap_ext_fn)(void *ctx);
+
 void appleva_present(appleva_ctx *ctx, unsigned index)
 {
     if (ctx == NULL || ctx->renderer == NULL || ctx->decoder_ctx == NULL)
         return;
-    ava_swap_fn Swap =
-        (ava_swap_fn) AVA_VFN(ctx->renderer, VT_SWAP_TO_EXTERNAL_TARGET);
-    uint8_t info[0x28];
-    memset(info, 0, sizeof(info));
-    *(uint32_t *)(info + 0x00) = ctx->width;
-    *(uint32_t *)(info + 0x04) = ctx->height;
-    Swap(ctx->decoder_ctx, (unsigned char) index, info, 0);
+    const unsigned char idx = (unsigned char) index;
+
+    ava_set_src_img_fn SetSourceImage =
+        (ava_set_src_img_fn) AVA_VFN(ctx->renderer, VT_SET_SOURCE_IMAGE);
+    ava_swap_tgt_fn SwapToTarget =
+        (ava_swap_tgt_fn) AVA_VFN(ctx->renderer, VT_SWAP_TO_TARGET);
+    ava_swap_ext_fn SwapToExternal =
+        (ava_swap_ext_fn) AVA_VFN(ctx->renderer, VT_SWAP_TO_EXTERNAL_TARGET);
+
+    /* ⚠ TÉMOIN TEMPORAIRE : la séquence s'est bloquée une fois ; on veut savoir
+     * LEQUEL des trois appels bloque, plutôt que de le deviner. */
+    fprintf(stderr, "  [present] SetSourceImage(%u)...\n", index); fflush(stderr);
+    SetSourceImage(ctx->decoder_ctx, idx);
+    fprintf(stderr, "  [present] SwapToTarget(%u)...\n", index); fflush(stderr);
+    SwapToTarget(ctx->decoder_ctx, idx, NULL);
+    fprintf(stderr, "  [present] SwapToExternal()...\n"); fflush(stderr);
+    SwapToExternal(ctx->decoder_ctx);
+    fprintf(stderr, "  [present] termine\n"); fflush(stderr);
 }
 
 /* DEBUG : expose la région mappée par SwapToExternalTargetImage (ctx[0x21c4]

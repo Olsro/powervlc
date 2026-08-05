@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Legacy (XUL, bootstrapped) add-on on purpose. The browsers this fork
+     exists for (TenFourFox on PowerPC, PowerFox on Tiger/Intel) are Gecko
+     45 to 52, which is exactly the range that still takes one. A
+     WebExtension would install there too, but could not do the one thing
+     needed: run a script on a page whose Content-Security-Policy forbids
+     inline script.
+     Note for whoever edits this: two consecutive hyphens are not allowed
+     inside an XML comment, and an install.rdf that does not parse simply
+     fails to install, with nothing said about why. -->
+<RDF xmlns="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+     xmlns:em="http://www.mozilla.org/2004/em-rdf#">
+  <Description about="urn:mozilla:install-manifest">
+    <em:id>companion@powervlc</em:id>
+    <em:type>2</em:type>
+    <em:name>PowerVLC</em:name>
+    <em:version>1.0</em:version>
+    <em:creator>the PowerVLC team</em:creator>
+    <em:description>Companion to the PowerVLC player: sends what you are watching over to it, and lets it read pages you have opened.</em:description>
+    <em:homepageURL>https://github.com/Olsro/powervlc</em:homepageURL>
+    <em:bootstrap>true</em:bootstrap>
+    <em:unpack>false</em:unpack>
+    <em:multiprocessCompatible>false</em:multiprocessCompatible>
+
+    <!-- Firefox and everything built on it: TenFourFox reports itself as
+         45, PowerFox as 52.9.x -->
+    <em:targetApplication>
+      <Description>
+        <em:id>{ec8030f7-c20a-464f-9b0e-13a3a9e97384}</em:id>
+        <em:minVersion>38.0</em:minVersion>
+        <em:maxVersion>60.*</em:maxVersion>
+      </Description>
+    </em:targetApplication>
+    <!-- SeaMonkey, for the machines that run it instead -->
+    <em:targetApplication>
+      <Description>
+        <em:id>{92650c4d-4b8e-4d2a-b7eb-24ecf4f6b63a}</em:id>
+        <em:minVersion>2.35</em:minVersion>
+        <em:maxVersion>2.57.*</em:maxVersion>
+      </Description>
+    </em:targetApplication>
+  </Description>
+</RDF>

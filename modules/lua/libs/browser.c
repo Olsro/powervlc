@@ -47,6 +47,14 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <errno.h>
+#ifndef _WIN32
+# include <unistd.h>
+# include <sys/wait.h>
+#else
+# include <windows.h>
+# include <shellapi.h>
+#endif
 
 #include <vlc_common.h>
 #include <vlc_httpd.h>
@@ -75,11 +83,16 @@ typedef struct
     httpd_url_t  *p_url_return;
     httpd_url_t  *p_url_next;
     httpd_url_t  *p_url_reply;
+    httpd_url_t  *p_url_inject;
 
     char *psz_base;          /* http://127.0.0.1:PORT/<secret> */
     char *psz_landing;       /* served on psz_base */
     char *psz_thanks;        /* served on the return point, answer in hand */
     char *psz_empty;         /* ... and when it came back empty-handed */
+    /* The relay script, served rather than shipped: the browser add-on
+     * that puts it on the page takes it from here, so a page and the
+     * player it talks to can never be two different versions. */
+    char *psz_inject;
 
     /* written by the httpd thread, read by the script's thread */
     vlc_mutex_t lock;
@@ -270,6 +283,30 @@ static int LandingCallback( httpd_callback_sys_t *opaque, httpd_client_t *cl,
         return VLC_SUCCESS;
 
     AnswerHtml( answer, query, p_ho->psz_landing );
+    return VLC_SUCCESS;
+}
+
+/* The relay script itself, for the browser add-on.
+ *
+ * Until Firefox 69 a bookmarklet counted as inline script, so a page
+ * carrying "script-src 'self'" -- every Invidious instance does -- simply
+ * refused to run it, and clicking the bookmark did nothing at all. Every
+ * browser these machines can run is older than that, so the add-on puts
+ * the script on the page from chrome, where no page policy reaches, and
+ * fetches it here. */
+static int InjectCallback( httpd_callback_sys_t *opaque, httpd_client_t *cl,
+                           httpd_message_t *answer,
+                           const httpd_message_t *query )
+{
+    vlclua_handoff_t *p_ho = (vlclua_handoff_t *)opaque;
+    VLC_UNUSED(cl);
+
+    if( answer == NULL || query == NULL )
+        return VLC_SUCCESS;
+
+    const char *psz_js = p_ho->psz_inject ? p_ho->psz_inject : "";
+    AnswerBody( answer, query, "application/javascript; charset=utf-8",
+                psz_js, strlen( psz_js ), true );
     return VLC_SUCCESS;
 }
 
@@ -471,6 +508,11 @@ static void HandoffStop( vlclua_handoff_t *p_ho )
         httpd_UrlDelete( p_ho->p_url_reply );
         p_ho->p_url_reply = NULL;
     }
+    if( p_ho->p_url_inject != NULL )
+    {
+        httpd_UrlDelete( p_ho->p_url_inject );
+        p_ho->p_url_inject = NULL;
+    }
     if( p_ho->p_url_next != NULL )
     {
         httpd_UrlDelete( p_ho->p_url_next );
@@ -501,6 +543,7 @@ static void HandoffStop( vlclua_handoff_t *p_ho )
     free( p_ho->psz_landing );
     free( p_ho->psz_thanks );
     free( p_ho->psz_empty );
+    free( p_ho->psz_inject );
     free( p_ho->psz_cookie );
     free( p_ho->psz_agent );
     free( p_ho->psz_origin );
@@ -520,6 +563,7 @@ static void HandoffStop( vlclua_handoff_t *p_ho )
     p_ho->i_last_poll = 0;
     p_ho->psz_base = p_ho->psz_landing = NULL;
     p_ho->psz_thanks = p_ho->psz_empty = NULL;
+    p_ho->psz_inject = NULL;
     p_ho->psz_cookie = p_ho->psz_agent = p_ho->psz_origin = NULL;
     p_ho->psz_language = p_ho->psz_encoding = NULL;
 }
@@ -597,6 +641,31 @@ static int vlclua_handoff_relay( lua_State *L )
     return 1;
 }
 
+/* The core kills an extension that has shown no sign of life for ten
+ * seconds (WATCH_TIMER_PERIOD): it puts up "Extension not responding, kill
+ * it?" and kills outright when it cannot even show that. Waiting on a
+ * browser is not a hung script, so say so while waiting -- measured on a
+ * Tiger machine, one request the tab never answered took the whole player
+ * down with it, this local server included. */
+#define HANDOFF_KEEPALIVE (CLOCK_FREQ * 2)
+
+static void KeepAlive( lua_State *L )
+{
+    lua_getglobal( L, "vlc" );
+    if( lua_istable( L, -1 ) )
+    {
+        lua_getfield( L, -1, "keep_alive" );
+        if( lua_isfunction( L, -1 ) )
+        {
+            if( lua_pcall( L, 0, 0, 0 ) != 0 )
+                lua_pop( L, 1 ); /* the error message */
+        }
+        else
+            lua_pop( L, 1 );
+    }
+    lua_pop( L, 1 );
+}
+
 /* h:fetch( url [, timeout_seconds] )
  *
  * Has the relay tab fetch a URL of the site it is sitting on, and waits for
@@ -632,8 +701,30 @@ static int vlclua_handoff_fetch( lua_State *L )
 
     mtime_t i_deadline = mdate() + CLOCK_FREQ * (mtime_t)i_timeout;
     while( p_ho->i_reply_seq != i_seq )
-        if( vlc_cond_timedwait( &p_ho->wait, &p_ho->lock, i_deadline ) )
+    {
+        mtime_t i_now = mdate();
+        if( i_now >= i_deadline )
             break; /* timed out */
+        /* The relay has stopped asking for work: it is busy with a check,
+         * or it is gone. Either way nobody is going to answer this one,
+         * and sitting out the whole timeout is what gets the extension
+         * killed. */
+        if( i_now - p_ho->i_last_poll >= HANDOFF_RELAY_STALE )
+            break;
+
+        mtime_t i_slice = i_now + HANDOFF_KEEPALIVE;
+        if( i_slice > i_deadline )
+            i_slice = i_deadline;
+        vlc_cond_timedwait( &p_ho->wait, &p_ho->lock, i_slice );
+        if( p_ho->i_reply_seq == i_seq )
+            break;
+
+        /* Not under the lock: keep_alive takes the extension's own, and
+         * an httpd callback must never be left waiting on ours. */
+        vlc_mutex_unlock( &p_ho->lock );
+        KeepAlive( L );
+        vlc_mutex_lock( &p_ho->lock );
+    }
 
     if( p_ho->i_reply_seq != i_seq )
     {
@@ -704,6 +795,8 @@ static int vlclua_browser_handoff( lua_State *L )
     const char *psz_thanks = luaL_optstring( L, -1, psz_landing );
     lua_getfield( L, 1, "empty" );
     const char *psz_empty = luaL_optstring( L, -1, psz_thanks );
+    lua_getfield( L, 1, "inject" );
+    const char *psz_inject = luaL_optstring( L, -1, "" );
 
     /* 64 bits of path: the loopback is shared with every other process on
      * the machine, and the answer must reach nobody else. */
@@ -760,10 +853,12 @@ static int vlclua_browser_handoff( lua_State *L )
 
     char *psz_path = NULL, *psz_return_path = NULL, *psz_return = NULL;
     char *psz_next_path = NULL, *psz_reply_path = NULL;
+    char *psz_inject_path = NULL;
     if( asprintf( &psz_path, "/%s", psz_secret ) < 0
      || asprintf( &psz_return_path, "/%s/done", psz_secret ) < 0
      || asprintf( &psz_next_path, "/%s/next", psz_secret ) < 0
      || asprintf( &psz_reply_path, "/%s/reply", psz_secret ) < 0
+     || asprintf( &psz_inject_path, "/%s/inject.js", psz_secret ) < 0
      || asprintf( &p_ho->psz_base, "http://127.0.0.1:%u/%s",
                   i_port, psz_secret ) < 0
      || asprintf( &psz_return, "http://127.0.0.1:%u/%s/done",
@@ -773,6 +868,7 @@ static int vlclua_browser_handoff( lua_State *L )
         free( psz_return_path );
         free( psz_next_path );
         free( psz_reply_path );
+        free( psz_inject_path );
         free( psz_return );
         HandoffStop( p_ho );
         lua_pushnil( L );
@@ -793,6 +889,8 @@ static int vlclua_browser_handoff( lua_State *L )
                                    psz_origin );
         p_ho->psz_empty = Expand( psz_empty, psz_return, p_ho->psz_base,
                                   psz_origin );
+        p_ho->psz_inject = Expand( psz_inject, psz_return, p_ho->psz_base,
+                                   psz_origin );
     }
     free( psz_origin );
     free( psz_return );
@@ -808,14 +906,18 @@ static int vlclua_browser_handoff( lua_State *L )
                                          NULL, NULL );
         p_ho->p_url_reply = httpd_UrlNew( p_ho->p_host, psz_reply_path,
                                           NULL, NULL );
+        p_ho->p_url_inject = httpd_UrlNew( p_ho->p_host, psz_inject_path,
+                                           NULL, NULL );
     }
     free( psz_path );
     free( psz_return_path );
     free( psz_next_path );
     free( psz_reply_path );
+    free( psz_inject_path );
 
     if( p_ho->p_url_landing == NULL || p_ho->p_url_return == NULL
-     || p_ho->p_url_next == NULL || p_ho->p_url_reply == NULL )
+     || p_ho->p_url_next == NULL || p_ho->p_url_reply == NULL
+     || p_ho->p_url_inject == NULL )
     {
         HandoffStop( p_ho );
         lua_pushnil( L );
@@ -835,16 +937,83 @@ static int vlclua_browser_handoff( lua_State *L )
                     (httpd_callback_sys_t *)p_ho );
     httpd_UrlCatch( p_ho->p_url_reply, HTTPD_MSG_POST, ReplyCallback,
                     (httpd_callback_sys_t *)p_ho );
+    httpd_UrlCatch( p_ho->p_url_inject, HTTPD_MSG_HEAD, InjectCallback,
+                    (httpd_callback_sys_t *)p_ho );
+    httpd_UrlCatch( p_ho->p_url_inject, HTTPD_MSG_GET, InjectCallback,
+                    (httpd_callback_sys_t *)p_ho );
 
     msg_Dbg( p_this, "browser handover waiting on %s", p_ho->psz_base );
 
-    /* the userdata is already on top, above the two fields read from the
+    /* the userdata is already on top, above the fields read from the
      * argument table */
     return 1;
 }
 
+/* vlc.browser.open( url )
+ *
+ * Opens an address in whatever the user browses with. http(s) only, and
+ * the address goes to the launcher as an argument -- never through a
+ * shell -- so there is nothing to quote and nothing to inject.
+ *
+ * Returns true, or false and a message. */
+static int vlclua_browser_open( lua_State *L )
+{
+    const char *psz_url = luaL_checkstring( L, 1 );
+
+    if( strncmp( psz_url, "http://", 7 ) != 0
+     && strncmp( psz_url, "https://", 8 ) != 0 )
+    {
+        lua_pushboolean( L, 0 );
+        lua_pushliteral( L, "not a web address" );
+        return 2;
+    }
+
+#ifdef _WIN32
+    wchar_t *wurl = ToWide( psz_url );
+    if( wurl == NULL )
+    {
+        lua_pushboolean( L, 0 );
+        lua_pushliteral( L, "out of memory" );
+        return 2;
+    }
+    HINSTANCE res = ShellExecuteW( NULL, L"open", wurl, NULL, NULL,
+                                   SW_SHOWNORMAL );
+    free( wurl );
+    lua_pushboolean( L, (INT_PTR)res > 32 );
+    return 1;
+#else
+# ifdef __APPLE__
+    const char *psz_cmd = "/usr/bin/open";
+# else
+    const char *psz_cmd = "xdg-open";
+# endif
+    pid_t pid = fork();
+    if( pid == 0 )
+    {
+        /* Nothing after a failed exec may come back into the player. */
+        setsid();
+        execlp( psz_cmd, psz_cmd, psz_url, (char *)NULL );
+        _exit( 1 );
+    }
+    if( pid < 0 )
+    {
+        lua_pushboolean( L, 0 );
+        lua_pushliteral( L, "cannot start the browser" );
+        return 2;
+    }
+    /* Reaped here: the launcher hands over to the browser and returns at
+     * once, and a zombie would sit in the player's process table until it
+     * quits. */
+    while( waitpid( pid, NULL, 0 ) < 0 && errno == EINTR )
+        ;
+    lua_pushboolean( L, 1 );
+    return 1;
+#endif
+}
+
 static const luaL_Reg vlclua_browser_reg[] = {
     { "handoff", vlclua_browser_handoff },
+    { "open",    vlclua_browser_open },
     { NULL, NULL }
 };
 

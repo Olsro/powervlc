@@ -2682,6 +2682,26 @@ dnl
 AC_ARG_ENABLE(crystalhd,
   [  --enable-crystalhd      crystalhd codec plugin (default auto)])
 if test "${enable_crystalhd}" != "no"; then
+  if test "${SYS}" = "darwin"; then
+    dnl There is no vendor driver on macOS, so the contrib builds the Broadcom
+    dnl userspace library and we link it statically: nothing has to be dropped
+    dnl into /usr/lib. The price is that this C plugin must pull in the C++
+    dnl runtime itself, plus the IOKit glue used to detect the card.
+    AC_CHECK_HEADER(libcrystalhd/libcrystalhd_if.h, [
+      CRYSTALHD_CXXLIB=""
+      AC_CHECK_LIB([c++], [main], [CRYSTALHD_CXXLIB="-lc++"], [
+        AC_CHECK_LIB([stdc++], [main], [CRYSTALHD_CXXLIB="-lstdc++"])
+      ])
+      VLC_ADD_PLUGIN([crystalhd])
+      VLC_ADD_LIBS([crystalhd], [-lcrystalhd ${CRYSTALHD_CXXLIB} -Wl,-framework,IOKit,-framework,CoreFoundation])
+    ],[
+      AS_IF([test x"${enable_crystalhd}" = "xyes"],
+            [AC_MSG_ERROR("Could not find CrystalHD development headers")],
+            [AC_MSG_WARN("Could not find CrystalHD development headers")])
+    ],[#define __LINUX_USER__
+       #include <libcrystalhd/bc_dts_types.h>
+      ])
+  else
     AC_CHECK_HEADER(libcrystalhd/libcrystalhd_if.h, [
       VLC_ADD_PLUGIN([crystalhd])
       VLC_ADD_LIBS([crystalhd], [-lcrystalhd])
@@ -2703,6 +2723,7 @@ if test "${enable_crystalhd}" != "no"; then
     ],[
        #include <libcrystalhd/bc_dts_types.h>
       ])
+  fi
 fi
 
 dnl

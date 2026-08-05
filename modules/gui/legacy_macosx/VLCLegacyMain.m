@@ -27,6 +27,7 @@
 #import "VLCLegacyCoreInteraction.h"
 #import "VLCLegacyMainWindow.h"
 #import "VLCLegacyMenu.h"
+#import "../macosx_crystalhd.h"
 #import "VLCLegacyOpen.h"
 #import "VLCLegacyPrefs.h"
 #import "VLCLegacyAudioEffects.h"
@@ -44,6 +45,7 @@
 #include <vlc_configuration.h>
 
 #define _NS(s) ((NSString *)[NSString stringWithUTF8String:vlc_gettext(s)])
+
 
 /*****************************************************************************
  * Core dialog provider: errors are collected in the Errors and Warnings
@@ -486,8 +488,23 @@ static const vlc_dialog_cbs dialog_callbacks = {
                                        userInfo:nil
                                         repeats:NO];
 
+    /* Offer to install the Crystal HD driver when the machine has a card but
+     * no driver. Deferred rather than run inline: this puts a modal panel on
+     * screen, and it should appear over a window that already exists instead
+     * of stalling the rest of the setup behind it. */
+    [self performSelector:@selector(promptForCrystalHDDriver)
+               withObject:nil
+               afterDelay:0.5];
+
     msg_Dbg(p_intf, "setup: done");
 }
+
+- (void)promptForCrystalHDDriver
+{
+    VLCCrystalHDMaybePromptAtStartup();
+}
+
+
 
 - (void)applicationBecameActive:(NSNotification *)notification
 {

@@ -36,8 +36,14 @@ case "$TARGET" in
         ;;
     g3)
         ARCH="ppc"
+        # --enable-a52 : liba52 est fourni par les contribs mais le support est
+        # DÉSACTIVÉ par défaut dans configure.ac, donc le greffon n'était jamais
+        # construit. Sur PowerPC sans SIMD il bat libavcodec de ~3,5 points en
+        # lecture DVD (68,9 %% contre 72,3 %% sur iBook G3 600 MHz) ET décode en
+        # virgule flottante, là où libavcodec retombe sur `ac3_fixed`. Le choix
+        # reste débrayable par l'option `audio-liba52` (onglet Audio).
         ARGS="--disable-sparkle --disable-macosx --disable-altivec \
---enable-run-as-root --enable-libmpeg2"
+--enable-run-as-root --enable-libmpeg2 --enable-a52"
         ;;
     g4|g4e|g5)
         ARCH="$TARGET"

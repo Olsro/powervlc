@@ -87,6 +87,21 @@ endif
 	## before 10.6, so the gnutls module falls back to this file in the
 	## data dir (see modules/misc/gnutls.c) for HTTPS/TLS streams.
 	-cp $(srcdir)/share/certs/ca-certificates.crt $@/Contents/MacOS/share/
+	## Browser add-on, offered from the Help menu. It has to sit in the data
+	## dir, which is where config_GetDataDir() -- and so
+	## modules/gui/macosx_browser_addon.m -- looks for it.
+	cp $(srcdir)/share/powervlc.xpi $@/Contents/MacOS/share/
+	## CrystalHD firmware: pushed to the card by the userspace library, which
+	## would otherwise look in /usr/lib. The codec points it here instead
+	## (see modules/codec/crystalhd_osx.c). Intel-only, hence the leading -.
+	-mkdir -p $@/Contents/MacOS/share/crystalhd && \
+		cp "$(CONTRIB_DIR)/share/crystalhd/"*.bin $@/Contents/MacOS/share/crystalhd/
+	## CrystalHD driver and its installer, offered from the Help menu. The
+	## kext is checked in pre-built: it targets the 10.4 kernel and modern
+	## clang refuses -fapple-kext for i386, so the normal build cannot produce
+	## it (see extras/package/macosx/BroadcomCrystalHD.kext).
+	-cp -R $(srcdir)/extras/package/macosx/BroadcomCrystalHD.kext $@/Contents/Resources/
+	-cp $(srcdir)/share/macosx/crystalhd-kext.sh $@/Contents/Resources/
 	## Copy some other stuff (?)
 	mkdir -p $@/Contents/MacOS/include/
 	(cd "$(prefix)/include" && $(AMTAR) -c --exclude "plugins" vlc) | $(AMTAR) -x -C $@/Contents/MacOS/include/

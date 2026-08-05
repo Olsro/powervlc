@@ -80,6 +80,12 @@ static struct { uint64_t upload, clear, draw, swap; unsigned n; } gl1_prof;
 #ifndef GL_UNSIGNED_SHORT_8_8_APPLE
 # define GL_UNSIGNED_SHORT_8_8_APPLE 0x85BA
 #endif
+/* The reversed order of the same extension: _APPLE uploads UYVY, _REV_APPLE
+ * uploads YUY2. Having both lets a 4:2:2 source of either order be textured
+ * as it stands, with no conversion. */
+#ifndef GL_UNSIGNED_SHORT_8_8_REV_APPLE
+# define GL_UNSIGNED_SHORT_8_8_REV_APPLE 0x85BB
+#endif
 #ifndef GL_TEXTURE_RECTANGLE_EXT
 # define GL_TEXTURE_RECTANGLE_EXT 0x84F5
 #endif
@@ -366,6 +372,7 @@ struct vout_display_sys_t
     bool fragprog;        /* planar in one pass, via ARB_fragment_program */
     GLuint fp;            /* the compiled fragment program, 0 = none */
     bool packed_cached;   /* gl1-packed-cached option */
+    GLenum packed_type;   /* 8_8 for UYVY, 8_8_REV for YUY2 */
     GLuint textures[2][3];
     unsigned tex_index;
     GLenum storage_hint;  /* current GL_TEXTURE_STORAGE_HINT_APPLE value */
@@ -747,7 +754,7 @@ static void OpenglUpload (vout_display_sys_t *sys, picture_t *pic)
             glBindTexture (GL_TEXTURE_RECTANGLE_EXT, sys->pic_tex[i].texture);
             glTexSubImage2D (GL_TEXTURE_RECTANGLE_EXT, 0, 0, 0,
                              sys->tex_width, sys->tex_height,
-                             GL_YCBCR_422_APPLE, GL_UNSIGNED_SHORT_8_8_APPLE,
+                             GL_YCBCR_422_APPLE, sys->packed_type,
                              data);
         }
         else
@@ -770,7 +777,7 @@ static void OpenglUpload (vout_display_sys_t *sys, picture_t *pic)
             sys->pic_tex[i].pixels = p->p_pixels;
             glTexImage2D (GL_TEXTURE_RECTANGLE_EXT, 0, GL_RGB,
                           sys->tex_width, sys->tex_height, 0,
-                          GL_YCBCR_422_APPLE, GL_UNSIGNED_SHORT_8_8_APPLE,
+                          GL_YCBCR_422_APPLE, sys->packed_type,
                           data);
         }
         glPixelStorei (GL_UNPACK_ROW_LENGTH, 0);
@@ -1607,7 +1614,28 @@ static int Open (vlc_object_t *this)
             msg_Err(vd, "OpenGL 1.1 YCbCr texturing not supported here");
             goto error;
         }
-        fmt.i_chroma = sys->planar ? VLC_CODEC_I420 : VLCGL1_CHROMA;
+        /* GL_APPLE_ycbcr_422 textures either byte order, so take whichever
+         * packed 4:2:2 the decoder already produces -- the Crystal HD card
+         * emits YUY2 and only YUY2. The planar path exists to spare the CPU an
+         * I420 -> 4:2:2 interleave; choosing it for a 4:2:2 source would buy
+         * nothing and impose the opposite conversion, one full-frame pass per
+         * picture, which is enough on a GMA 950 to turn 1080p into a
+         * slideshow. */
+        sys->packed_type = GL_UNSIGNED_SHORT_8_8_APPLE;   /* UYVY */
+        if (fmt.i_chroma == VLC_CODEC_YUYV || fmt.i_chroma == VLC_CODEC_UYVY)
+        {
+            if (sys->planar)
+                msg_Dbg (vd, "source is already packed 4:2:2 (%4.4s): using "
+                             "the packed path, no chroma conversion",
+                         (const char *) &fmt.i_chroma);
+            sys->planar = false;
+            sys->per_buffer_tex = false;
+            sys->fragprog = false;
+            if (fmt.i_chroma == VLC_CODEC_YUYV)
+                sys->packed_type = GL_UNSIGNED_SHORT_8_8_REV_APPLE;
+        }
+        else
+            fmt.i_chroma = sys->planar ? VLC_CODEC_I420 : VLCGL1_CHROMA;
         sys->packed_cached = var_InheritBool (vd, "gl1-packed-cached");
         OpenglInit(sys);
         vlc_gl_ReleaseCurrent(sys->gl);

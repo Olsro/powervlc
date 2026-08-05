@@ -84,11 +84,14 @@ Even Mac OS X 10.5 and 10.6 that feels mostly the same graphically had many inte
 
 PowerVLC is derived from the whole VLC3 source code and crafted with love for you to feel the same, but internally many things had to be improved so it feel great & powerful on your legacy hardware & OS. And some things had to be heavily recoded & changed internally so it can just work as intended on this hardware, even if you probably won't feel it because everything has been carefully tested for you to feel the same at usage.
 
-## When VLC4 will be released, do you plan to migrate to VLC4 ?
+## When VLC4 will be released, do you plan to rebase on VLC4 ?
 The UI will be completely moved to much more modern tech on VLC4. I plan only to take what users really want & technical "under-the-hood" improvements provided by VLC4. VLC4 is not even released at this point, but as of today I plan to keep on the legacy of VLC3 visually and in terms of user experience just like how PowerFox remained on the legacy of the Firefox Australis user experience.
 
 ## Current quality level
 I believe most features will work, with some obvious limitations on old systems. Though there's real chances things will work bad for you on your specific machine, which is also why I encourage donations which will afford me to get more legacy Macs models to test on.
+
+## Supporting MacOS Classic (9) or X 10.0/10.1 ?
+Not planned
 
 ## Retro machines general usage tricks
 - Use also some others *neo-retro* projects like Basilisk (10.7+) or PowerFox (10.4+) so you can find radio streams links to send on to PowerVLC from the modern web ; enjoy synergies

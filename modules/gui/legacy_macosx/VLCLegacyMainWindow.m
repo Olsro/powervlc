@@ -33,6 +33,10 @@
 /* SetSystemUIMode(): menu bar/Dock hiding available since Mac OS X 10.2 */
 #import <Carbon/Carbon.h>
 
+#include <ctype.h>
+#include <fcntl.h>      /* open() — journal de bascule synchrone */
+#include <unistd.h>     /* write(), fsync(), close() */
+
 #include <vlc_playlist.h>
 #include <vlc_charset.h>
 #include <vlc_input.h>
@@ -2631,13 +2635,15 @@ static const struct {
     [fsBlackWindows removeAllObjects];
 }
 
+
 /* Chantier F — bascule plein écran de la fenêtre HÔTE : un redimensionnement,
  * rien d'autre. La vue vidéo ne déménage pas, le numéro de fenêtre ne change
  * pas → la sortie accélérée continue sans réouverture ni image noire. */
 - (void)setVideoHostFullscreen:(BOOL)enter
 {
-    if (enter == videoHostFullscreen)
+    if (enter == videoHostFullscreen) {
         return;
+    }
 
     VLCLegacyVideoHostWindow *host = (VLCLegacyVideoHostWindow *)videoHostWindow;
 
@@ -2675,16 +2681,25 @@ static const struct {
 - (void)setVideoFullscreenFromNumber:(NSNumber *)fullscreen
 {
     BOOL enter = [fullscreen boolValue];
-    if (!videoActive)
+    if (!videoActive) {
         return;
+    }
 
     if (videoHostWindow) {
         [self setVideoHostFullscreen:enter];
         return;
     }
 
-    if ((enter && fsVideoWindow) || (!enter && !fsVideoWindow))
+    /* ⚠⚠ CHEMIN LOURD : pas de fenêtre hôte ⇒ on CRÉE une fenêtre sans bordure
+     * et on y DÉMÉNAGE la vue vidéo. Avec la sortie QuickDraw, changer de
+     * fenêtre change de port QuickDraw, donc impose de détruire et recréer la
+     * séquence de décompression QuickTime. C'est le chemin le plus exposé, et
+     * c'est précisément celui que ma première instrumentation ne couvrait pas —
+     * le témoin ne montrait AUCUNE étape parce qu'il regardait l'autre branche. */
+
+    if ((enter && fsVideoWindow) || (!enter && !fsVideoWindow)) {
         return;
+    }
 
     if (enter) {
         /* fullscreen device (legacy-macosx-vdev): 0 = the window's own
@@ -2902,14 +2917,42 @@ static const struct {
     [self addPaths:paths playFirst:YES];
 }
 
+/* Une chaîne qui porte DÉJÀ un schéma (« dvdsimple://… », « http://… ») est une
+ * MRL, pas un chemin : la passer à vlc_path2uri(…, "file") la transformerait en
+ * nom de fichier RELATIF, donc en `file:///Users/…/dvdsimple%3A///Volumes/…`.
+ * Grammaire RFC 3986 : ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":".
+ * ⚠ Un chemin absolu commence par « / » et n'a donc jamais de schéma ; sur HFS
+ * un nom de fichier PEUT contenir « : », mais jamais avant le premier « / ». */
+static BOOL VLCLegacyStringIsMRL(NSString *s)
+{
+    const char *p = [s UTF8String];
+    if (p == NULL || !isalpha((unsigned char) *p))
+        return NO;
+    for (p++; *p != '\0'; p++) {
+        if (*p == ':')
+            return p[1] != '\0';          /* schéma non vide suivi de quelque chose */
+        if (!isalnum((unsigned char) *p) && *p != '+' && *p != '-' && *p != '.')
+            return NO;
+    }
+    return NO;
+}
+
 - (void)addPaths:(NSArray *)paths playFirst:(BOOL)play
 {
     playlist_t *p_playlist = pl_Get(p_intf);
     unsigned count = (unsigned)[paths count];
     unsigned i;
     for (i = 0; i < count; i++) {
-        char *psz_uri = vlc_path2uri([[paths objectAtIndex:i] UTF8String],
-                                     "file");
+        NSString *entry = [paths objectAtIndex:i];
+        /* ⚠⚠ Ce chemin reçoit AUSSI les arguments de lancement, que le
+         * délégué NSApplication relaie en « openFile ». Une MRL passée en
+         * ligne de commande y arrivait donc telle quelle et repartait en
+         * chemin de fichier bidon — un SECOND item, mort, ajouté avec
+         * playFirst ⇒ il PRÉEMPTAIT le vrai, d'où le « incoming request -
+         * stopping current input » juste après un « successfully opened ». */
+        char *psz_uri = VLCLegacyStringIsMRL(entry)
+                      ? strdup([entry UTF8String])
+                      : vlc_path2uri([entry UTF8String], "file");
         if (!psz_uri)
             continue;
         playlist_Add(p_playlist, psz_uri, play && i == 0);

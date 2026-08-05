@@ -1236,6 +1236,7 @@ static int DecoderPlayVideo( decoder_t *p_dec, picture_t *p_picture,
     size_t i_cache_target = 0;
     if( p_owner->i_cache_bytes > 0 && p_vout != NULL )
         i_cache_target = DecoderVideoCacheTarget( p_dec );
+
     if( p_owner->b_waiting && !p_owner->b_first
      && p_owner->i_cache_bytes > 0 && p_vout != NULL
      && vout_GetDecoderFifoCount( p_vout ) < i_cache_target )

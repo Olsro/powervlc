@@ -36,6 +36,8 @@
 #import "VLCErrorWindowController.h"
 #import "VLCTrackSynchronizationWindowController.h"
 #import "VLCHelpWindowController.h"
+#import "../macosx_crystalhd.h"
+#import "../macosx_browser_addon.h"
 #import "VLCVideoEffectsWindowController.h"
 #import "VLCBookmarksWindowController.h"
 #import "VLCSimplePrefsController.h"
@@ -198,6 +200,52 @@
             keyEquivalent:@""];
         [item setTarget:self];
         [_helpMenu addItem:item];
+    }
+
+    /* The browser half of PowerVLC: it hands what the browser is playing over
+     * to the player, and lets the player read pages the user has opened --
+     * which is the only way in on a browser older than Firefox 69, since
+     * those refuse to run a bookmarklet on a page carrying a security
+     * policy. Only offered when this build ships it. */
+    if (VLCBrowserAddonPath() != nil) {
+        [_helpMenu addItem:[NSMenuItem separatorItem]];
+
+        NSMenuItem *addonItem = [[NSMenuItem alloc]
+            initWithTitle:_NS("Install the PowerVLC add-on in your browser...")
+                   action:@selector(installBrowserAddon:)
+            keyEquivalent:@""];
+        [addonItem setTarget:self];
+        [_helpMenu addItem:addonItem];
+    }
+
+    /* Crystal HD: offer to install the driver when there is a card to drive,
+     * and to remove it whenever one is installed -- including on a machine
+     * whose card has since been taken out, which is the only way left to get
+     * rid of it. */
+    VLCCrystalHDState chdState = VLCCrystalHDGetState();
+    if (chdState != VLCCrystalHDAbsent) {
+        BOOL install = (chdState == VLCCrystalHDCardWithoutDriver);
+
+        [_helpMenu addItem:[NSMenuItem separatorItem]];
+
+        NSMenuItem *item = [[NSMenuItem alloc]
+            initWithTitle:install ? _NS("Install the Crystal HD driver...")
+                                  : _NS("Remove the Crystal HD driver...")
+                   action:install ? @selector(installCrystalHDDriver:)
+                                  : @selector(uninstallCrystalHDDriver:)
+            keyEquivalent:@""];
+        [item setTarget:self];
+        [_helpMenu addItem:item];
+
+        /* Only worth offering when there is a driver to reload. */
+        if (!install) {
+            NSMenuItem *reload = [[NSMenuItem alloc]
+                initWithTitle:_NS("Reload the Crystal HD driver...")
+                       action:@selector(reloadCrystalHDDriver:)
+                keyEquivalent:@""];
+            [reload setTarget:self];
+            [_helpMenu addItem:reload];
+        }
     }
 
     key = config_GetPsz(p_intf, "key-quit");
@@ -1489,6 +1537,60 @@
 - (IBAction)openAACSFolder:(id)sender
 {
     [self openDiscLibFolder:"aacs"];
+}
+
+/* Handing the file to the browser is the whole of it: the browser then shows
+ * its own install prompt, which is where this belongs -- the player has no
+ * business installing anything inside somebody's browser. */
+- (IBAction)installBrowserAddon:(id)sender
+{
+    if (VLCBrowserAddonInstall())
+        return;
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setMessageText:_NS("Error")];
+    [alert setInformativeText:_NS("PowerVLC could not open the add-on with "
+                                  "your browser. Drag share/powervlc.xpi "
+                                  "from the application onto a browser "
+                                  "window to install it.")];
+    [alert addButtonWithTitle:_NS("OK")];
+    [alert runModal];
+}
+
+- (IBAction)reloadCrystalHDDriver:(id)sender
+{
+    VLCCrystalHDRunReloadFlow();
+}
+
+/* The menu is built once at startup, so flip the item over itself rather than
+ * leaving it offering to install a driver that is now installed. */
+- (IBAction)installCrystalHDDriver:(id)sender
+{
+    if (!VLCCrystalHDRunInstallFlow(NO))
+        return;
+
+    if ([sender isKindOfClass:[NSMenuItem class]]) {
+        [sender setTitle:_NS("Remove the Crystal HD driver...")];
+        [sender setAction:@selector(uninstallCrystalHDDriver:)];
+    }
+}
+
+- (IBAction)uninstallCrystalHDDriver:(id)sender
+{
+    if (!VLCCrystalHDRunUninstallFlow())
+        return;
+
+    if (![sender isKindOfClass:[NSMenuItem class]])
+        return;
+
+    /* Without a card there is nothing left to offer, so retire the item
+     * instead of inviting a pointless reinstall. */
+    if (VLCCrystalHDGetState() == VLCCrystalHDCardWithoutDriver) {
+        [sender setTitle:_NS("Install the Crystal HD driver...")];
+        [sender setAction:@selector(installCrystalHDDriver:)];
+    } else {
+        [sender setEnabled:NO];
+    }
 }
 
 - (IBAction)openBDPlusFolder:(id)sender

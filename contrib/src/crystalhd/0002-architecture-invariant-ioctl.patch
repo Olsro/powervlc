@@ -1,0 +1,277 @@
+diff -urN --exclude=*.o --exclude=*.a --exclude=build ref/crystalhd-osx-a7b5062/darwin_lib/libcrystalhd/libcrystalhd_int_if.cpp crystalhd-osx-a7b5062/darwin_lib/libcrystalhd/libcrystalhd_int_if.cpp
+--- a/darwin_lib/libcrystalhd/libcrystalhd_int_if.cpp	2026-08-04 22:52:21
++++ b/darwin_lib/libcrystalhd/libcrystalhd_int_if.cpp	2026-08-05 02:40:58
+@@ -1035,7 +1035,7 @@
+ 	pIocData->RetSts = BC_STS_ERROR;
+ 	pIocData->IoctlDataSz = sizeof(BC_IOCTL_DATA);
+ 	pIocData->u.ProcInput.DramOffset =0;
+-	pIocData->u.ProcInput.pDmaBuff = pDmaBuff;
++	pIocData->u.ProcInput.pDmaBuff = (bc_u64_t)(uintptr_t)pDmaBuff;
+ 	pIocData->u.ProcInput.BuffSz = ulDmaSz;
+ 	pIocData->u.ProcInput.Mapped = FALSE;
+ 	pIocData->u.ProcInput.Encrypted = Encrypted;
+diff -urN --exclude=*.o --exclude=*.a --exclude=build ref/crystalhd-osx-a7b5062/darwin_lib/libcrystalhd/libcrystalhd_priv.cpp crystalhd-osx-a7b5062/darwin_lib/libcrystalhd/libcrystalhd_priv.cpp
+--- a/darwin_lib/libcrystalhd/libcrystalhd_priv.cpp	2026-08-05 02:42:03
++++ b/darwin_lib/libcrystalhd/libcrystalhd_priv.cpp	2026-08-05 02:40:58
+@@ -867,11 +867,11 @@
+ 
+ 	if(pIo->u.DecOutData.Flags & COMP_FLAG_DATA_VALID)
+ 	{
+-		pOut->Ybuff = pIo->u.DecOutData.OutPutBuffs.YuvBuff;
++		pOut->Ybuff = (uint8_t *)(uintptr_t)pIo->u.DecOutData.OutPutBuffs.YuvBuff;
+ 		pOut->YBuffDoneSz = pIo->u.DecOutData.OutPutBuffs.YBuffDoneSz;
+ 		pOut->YbuffSz = pIo->u.DecOutData.OutPutBuffs.UVbuffOffset;
+ 
+-		pOut->UVbuff = pIo->u.DecOutData.OutPutBuffs.YuvBuff +
++		pOut->UVbuff = (uint8_t *)(uintptr_t)pIo->u.DecOutData.OutPutBuffs.YuvBuff +
+ 					pIo->u.DecOutData.OutPutBuffs.UVbuffOffset;
+ 		pOut->UVBuffDoneSz = pIo->u.DecOutData.OutPutBuffs.UVBuffDoneSz;
+ 		pOut->UVbuffSz = (pIo->u.DecOutData.OutPutBuffs.YuvBuffSz -
+@@ -1132,7 +1132,7 @@
+ {
+ 	DtsLock(Ctx);
+ 
+-	pIoData->next = Ctx->pIoDataFreeHd;
++	pIoData->next = (bc_u64_t)(uintptr_t)Ctx->pIoDataFreeHd;
+     Ctx->pIoDataFreeHd = pIoData;
+ 
+ 	DtsUnLock(Ctx);
+@@ -1147,7 +1147,8 @@
+ 	BC_IOCTL_DATA *temp=NULL;
+ 	DtsLock(Ctx);
+     if((temp=Ctx->pIoDataFreeHd) != NULL){
+-        Ctx->pIoDataFreeHd = Ctx->pIoDataFreeHd->next;
++        Ctx->pIoDataFreeHd =
++            (BC_IOCTL_DATA *)(uintptr_t)Ctx->pIoDataFreeHd->next;
+         memset(temp,0,sizeof(*temp));
+     }
+ 	DtsUnLock(Ctx);
+@@ -1354,7 +1355,7 @@
+ 
+ 	DtsGetMaxYUVSize(Ctx, &YbSz, &UVbSz);
+ 
+-	pIocData->u.RxBuffs.YuvBuff = buff;
++	pIocData->u.RxBuffs.YuvBuff = (bc_u64_t)(uintptr_t)buff;
+ 	pIocData->u.RxBuffs.YuvBuffSz = YbSz + UVbSz;
+ 
+ 	if(Ctx->b422Mode)
+@@ -2648,7 +2649,8 @@
+ 	for(i=0; i<Ctx->MpoolCnt; i++){
+ 		mp = &Ctx->Mpools[i];
+ 		if(mp->type & BC_MEM_DEC_YUVBUFF){
+-			if(mp->buff == pIo->u.DecOutData.OutPutBuffs.YuvBuff){
++			if((bc_u64_t)(uintptr_t)mp->buff ==
++			   pIo->u.DecOutData.OutPutBuffs.YuvBuff){
+ 				bRet = TRUE;
+ 				break;
+ 			}
+diff -urN --exclude=*.o --exclude=*.a --exclude=build ref/crystalhd-osx-a7b5062/driver/darwin/BroadcomCrystalHD.cpp crystalhd-osx-a7b5062/driver/darwin/BroadcomCrystalHD.cpp
+--- a/driver/darwin/BroadcomCrystalHD.cpp	2026-08-04 22:52:21
++++ b/driver/darwin/BroadcomCrystalHD.cpp	2026-08-05 03:08:03
+@@ -581,6 +581,18 @@
+     struct crystalhd_user *uc = NULL;
+     user_addr_t           ua = NULL;
+     int                   error = -1;
++
++    /* A 32-bit kext cannot serve a 64-bit process. Its user addresses live
++     * far above the 4 GB this kernel can reach, and letting the request
++     * through does not merely fail: it corrupts kernel memory and panics the
++     * machine a moment later (observed on 10.6.8, page fault at 0x35 with an
++     * unrelated thread on the stack). Refuse it cleanly instead -- 64-bit
++     * callers need the x86_64 build of this kext, which only loads on a
++     * 64-bit kernel anyway. */
++    if (sizeof(void *) == 4 && proc_is64bit(p)) {
++        IOLog("BroadcomCrystalHD: refusing a 64-bit process\n");
++        return EINVAL;
++    }
+     
+     if (!adp) {
+         IOLog("Invalid adp \n");
+diff -urN --exclude=*.o --exclude=*.a --exclude=build ref/crystalhd-osx-a7b5062/driver/darwin/crystalhd_cmds.c crystalhd-osx-a7b5062/driver/darwin/crystalhd_cmds.c
+--- a/driver/darwin/crystalhd_cmds.c	2026-08-04 22:52:21
++++ b/driver/darwin/crystalhd_cmds.c	2026-08-05 02:41:43
+@@ -533,7 +533,11 @@
+ 		return BC_STS_INV_ARG;
+ 	}
+ 
+-	ubuff = idata->udata.u.ProcInput.pDmaBuff;
++	/* The field is a fixed-width host address now, so the kext sees the same
++	 * layout whatever the calling process. Note the kernel here is 32-bit,
++	 * so an address above 4 GB could not be reached anyway; that only
++	 * becomes reachable with the x86_64 kext. */
++	ubuff = (void *)(uintptr_t)idata->udata.u.ProcInput.pDmaBuff;
+ 	ub_sz = idata->udata.u.ProcInput.BuffSz;
+ 
+ 	sts = bc_cproc_check_inbuffs(1, ubuff, ub_sz, 0, 0);
+@@ -571,7 +575,7 @@
+ 		return BC_STS_INV_ARG;
+ 	}
+ 
+-	ubuff = idata->udata.u.RxBuffs.YuvBuff;
++	ubuff = (void *)(uintptr_t)idata->udata.u.RxBuffs.YuvBuff;
+ 	ub_sz = idata->udata.u.RxBuffs.YuvBuffSz;
+ 	uv_off = idata->udata.u.RxBuffs.UVbuffOffset;
+ 	en_422 = idata->udata.u.RxBuffs.b422Mode;
+@@ -645,11 +649,7 @@
+ 	if (frame->Flags & COMP_FLAG_FMT_CHANGE)
+ 		return bc_cproc_fmt_change(ctx, dio);
+ 
+-#ifndef __APPLE__
+-	frame->OutPutBuffs.YuvBuff = dio->uinfo.xfr_buff;
+-#else
+-	frame->OutPutBuffs.YuvBuff = (uint8_t*)dio->uinfo.xfr_buff;
+-#endif
++	frame->OutPutBuffs.YuvBuff = (bc_u64_t)(uintptr_t)dio->uinfo.xfr_buff;
+ 	frame->OutPutBuffs.YuvBuffSz = dio->uinfo.xfr_len;
+ 	frame->OutPutBuffs.UVbuffOffset = dio->uinfo.uv_offset;
+ 	frame->OutPutBuffs.b422Mode = dio->uinfo.b422mode;
+diff -urN --exclude=*.o --exclude=*.a --exclude=build ref/crystalhd-osx-a7b5062/driver/darwin/crystalhd_fw_if.h crystalhd-osx-a7b5062/driver/darwin/crystalhd_fw_if.h
+--- a/driver/darwin/crystalhd_fw_if.h	2026-08-04 22:52:21
++++ b/driver/darwin/crystalhd_fw_if.h	2026-08-05 02:39:04
+@@ -65,7 +65,7 @@
+    /* MPEG_VALID_USERDATA
+       User data is in the form of a linked list. */
+    int32_t		userDataSize;
+-   UD_HDR		*userData;
++   uint32_t		userData;   /* card-side address */
+ 
+ } PPB_MPEG;
+ 
+@@ -92,7 +92,7 @@
+    /* VC1_VALID_USERDATA
+       User data is in the form of a linked list. */
+    int32_t		userDataSize;
+-   UD_HDR		*userData;
++   uint32_t		userData;   /* card-side address */
+ 
+ } PPB_VC1;
+ 
+@@ -177,7 +177,7 @@
+    UD_HDR		*user_data;
+ 
+    /* H264 VALID FGT */
+-   FGT_SEI		*pfgt;
++   uint32_t		pfgt;       /* card-side address */
+ 
+ } PPB_H264;
+ 
+diff -urN --exclude=*.o --exclude=*.a --exclude=build ref/crystalhd-osx-a7b5062/include/bc_dts_glob_osx.h crystalhd-osx-a7b5062/include/bc_dts_glob_osx.h
+--- a/include/bc_dts_glob_osx.h	2026-08-04 22:52:20
++++ b/include/bc_dts_glob_osx.h	2026-08-05 02:40:04
+@@ -111,6 +111,13 @@
+ #define HW_PAUSE_THRESHOLD (BC_RX_LIST_CNT)
+ #define HW_RESUME_THRESHOLD (BC_RX_LIST_CNT/2)
+ 
++/* A 64-bit field whose alignment does not depend on the architecture.
++ * i386 aligns uint64_t on 4 bytes and x86_64 on 8: without this the tail
++ * padding differs and the structures change size even when every field sits
++ * at the same offset. Used for every 64-bit member that crosses the ioctl
++ * boundary. */
++typedef uint64_t bc_u64_t __attribute__((aligned(8)));
++
+ typedef union _addr_64_ {
+ 	struct {
+ 		uint32_t	low_part;
+@@ -184,7 +191,7 @@
+ 	uint32_t		opFrameDropped;
+ 	uint32_t		opFrameCaptured;
+ 	uint32_t		ipSampleCnt;
+-	uint64_t		ipTotalSize;
++	bc_u64_t		ipTotalSize;
+ 	uint32_t		reptdFrames;
+ 	uint32_t		pauseCount;
+ 	uint32_t		pibMisses;
+@@ -205,7 +212,7 @@
+ 	 * BIT-31 MEANS READ Next PIB Info.
+ 	 * Width will be in bit 0-16.
+ 	 */
+-	uint64_t		DrvNextMDataPLD;
++	bc_u64_t		DrvNextMDataPLD;
+ 	uint32_t		DrvcpbEmptySize;
+ 
+ 	float			Temperature;
+@@ -216,7 +223,10 @@
+ } BC_DTS_STATS;
+ 
+ typedef struct _BC_PROC_INPUT_ {
+-	uint8_t			*pDmaBuff;
++	/* Host address, carried at a fixed width so this structure has the same
++	 * layout whatever the caller: a 64-bit application must be able to talk
++	 * to a 32-bit kext (a kext matches the KERNEL, not the process). */
++	bc_u64_t		pDmaBuff;
+ 	uint32_t		BuffSz;
+ 	uint8_t			Mapped;
+ 	uint8_t			Encrypted;
+@@ -226,7 +236,8 @@
+ 
+ typedef struct _BC_DEC_YUV_BUFFS {
+ 	uint32_t		b422Mode;
+-	uint8_t			*YuvBuff;
++	uint32_t		Rsrd0;		/* keeps YuvBuff 8-byte aligned */
++	bc_u64_t		YuvBuff;	/* host address, fixed width */
+ 	uint32_t		YuvBuffSz;
+ 	uint32_t		UVbuffOffset;
+ 	uint32_t		YBuffDoneSz;
+@@ -274,7 +285,9 @@
+ 		BC_DTS_STATS		drvStat;
+ 		BC_NOTIFY_MODE		NotifyMode;
+ 	} u;
+-	struct _BC_IOCTL_DATA	*next;
++	/* Free-list chaining, private to the library. Fixed width so it does not
++	 * move everything above it when the process is 64-bit. */
++	bc_u64_t		next;
+ } BC_IOCTL_DATA;
+ 
+ typedef enum _BC_DRV_CMD{
+diff -urN --exclude=*.o --exclude=*.a --exclude=build ref/crystalhd-osx-a7b5062/include/vdec_info.h crystalhd-osx-a7b5062/include/vdec_info.h
+--- a/include/vdec_info.h	2026-08-04 22:52:20
++++ b/include/vdec_info.h	2026-08-05 02:39:04
+@@ -63,7 +63,7 @@
+    /* MPEG_VALID_USERDATA
+       User data is in the form of a linked list. */
+    int32_t	userDataSize;
+-   UD_HDR* userData;
++   uint32_t userData;   /* card-side address, 32-bit engine */
+ 
+ } PPB_MPEG;
+ 
+@@ -101,7 +101,7 @@
+    /* VC1_VALID_USERDATA
+       User data is in the form of a linked list. */
+    int32_t	userDataSize;
+-   UD_HDR* userData;
++   uint32_t userData;   /* card-side address, 32-bit engine */
+ 
+ } PPB_VC1;
+ 
+@@ -197,10 +197,10 @@
+ 
+    /* H264_VALID_USER */
+    uint32_t	user_data_size;
+-   UD_HDR* user_data;
++   uint32_t user_data;  /* card-side address, 32-bit engine */
+ 
+    /* H264 VALID FGT */
+-   FGT_SEI* pfgt;
++   uint32_t pfgt;       /* card-side address, 32-bit engine */
+ 
+ } PPB_H264;
+ 
+@@ -448,7 +448,7 @@
+     uint32_t queue_write_offset; /* offset is w.r.t base of this data struct so value of 0-1 prohibited */
+     /* queue if full if (write_offset+1 == read_offset) */
+     /* write_offset modified by firmware and read_offset modified by Display Manager in host */
+-    PPB* display_elements[62];
++    uint32_t display_elements[62]; /* card-side addresses */
+ } PictureDeliveryQueue;
+ 
+ /* Picture Release parameters returned by Display Manager to firmware */
+@@ -457,7 +457,7 @@
+     uint32_t queue_write_offset; /* offset is w.r.t base of this data struct so value of 0-1 prohibited */
+     /* queue if full if (write_offset+1 == read_offset) */
+     /* read_offset modified by firmware and write_offset modified by Display Manager in host */
+-    PPB* display_elements[62];
++    uint32_t display_elements[62]; /* card-side addresses */
+ } PictureReleaseQueue;
+ #endif
+ 

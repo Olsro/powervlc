@@ -37,6 +37,7 @@
 #include <vlc_plugin.h>
 #include <vlc_meta.h>
 #include <vlc_stream_extractor.h>
+#include <vlc_access.h>
 
 #include "../vlc.h"
 #include "../libs.h"
@@ -92,6 +93,30 @@ static int vlclua_stream_new( lua_State *L )
     vlc_object_t * p_this = vlclua_get_this( L );
     const char * psz_url = luaL_checkstring( L, 1 );
     stream_t *p_stream = vlc_stream_NewMRL( p_this, psz_url );
+    return vlclua_stream_new_inner( L, p_stream );
+}
+
+/* vlc.raw_stream( url )
+ *
+ * The bytes of a document, and nothing else.
+ *
+ * vlc.stream() goes through vlc_stream_NewMRL(), and so -- this is the
+ * part that catches people out -- does vlc_stream_NewURL(): both end in
+ * stream_FilterAutoNew(), which chains every content filter that
+ * recognises what is coming down the wire. One of them, "playlist",
+ * turns anything VLC knows how to parse into a DIRECTORY stream. A
+ * podcast feed, an M3U, an XSPF or a ZIP therefore reads as zero bytes,
+ * with nothing in the log to call it an error: the stream is simply not
+ * a byte stream any more. A script that wants to read a feed itself --
+ * for the description an RSS carries and a playlist cannot express, say
+ * -- had no way to ask for the bytes. This is it: the access alone,
+ * redirects and all, and not one filter on top.
+ */
+static int vlclua_raw_stream_new( lua_State *L )
+{
+    vlc_object_t * p_this = vlclua_get_this( L );
+    const char * psz_url = luaL_checkstring( L, 1 );
+    stream_t *p_stream = vlc_access_NewMRL( p_this, psz_url );
     return vlclua_stream_new_inner( L, p_stream );
 }
 
@@ -291,6 +316,8 @@ void luaopen_stream( lua_State *L )
 {
     lua_pushcfunction( L, vlclua_stream_new );
     lua_setfield( L, -2, "stream" );
+    lua_pushcfunction( L, vlclua_raw_stream_new );
+    lua_setfield( L, -2, "raw_stream" );
     lua_pushcfunction( L, vlclua_memory_stream_new );
     lua_setfield( L, -2, "memory_stream" );
     lua_pushcfunction( L, vlclua_directory_stream_new );
