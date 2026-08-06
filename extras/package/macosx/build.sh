@@ -167,12 +167,26 @@ case $ARCH in
         LEGACY_CONTRIB_CPUFLAGS="-mcpu=750 -mtune=750"
         LEGACY_VLC_CPUFLAGS="-mcpu=750 -mtune=750"
         ;;
-    g4|g4e|g5)
+    g4|g5)
         # PowerPC with AltiVec, Mac OS X **10.2 Jaguar** (floor lowered with
         # the G3 slice; see the `ppc` case). The contribs are
-        # shared between the three variants and built for the lowest
+        # shared between the variants and built for the lowest
         # common ISA (7400 + AltiVec: a 7450 or a 970 runs all of it);
         # VLC itself is tuned per variant below.
+        #
+        # There used to be a third variant, g4e (-mcpu=7450), shipping a
+        # ppc7450 slice. Dropped after measuring it on the machine it was
+        # meant for -- a 1.42 GHz Mac mini G4, machine = ppc7450:
+        #   MPEG-2 DVD, 60 s, x4 : 18.145 s CPU (7400) vs 18.060 s (7450)
+        #   H.264 720p,  40 s, x5 : 30.9 s     (7400) vs 31.0 s     (7450)
+        # 0.5 % on one workload, nothing on the other, for ~90 MB in the
+        # universal bundle. The reason it buys so little: -mcpu=7450 only
+        # reschedules VLC's own code (same ISA, same instruction mix -- the
+        # AltiVec asm is byte-identical), while the contribs, where decoding
+        # actually spends its time, are the shared -mtune=7400 build either
+        # way. A 7450 now grades the ppc7400 slice highest and keeps AltiVec.
+        # NEVER drop ppc7400 instead: a 7400 cannot grade a ppc7450 slice and
+        # would fall back to ppc750, i.e. no AltiVec -- measured 13 % slower.
         LEGACY_TRIPLE="powerpc-apple-darwin8"
         LEGACY_GCC="$LEGACY_TOOLCHAIN_ROOT/opt/gcc-ppc-tiger"
         MINIMAL_OSX_VERSION="10.2"
@@ -183,7 +197,6 @@ case $ARCH in
         LEGACY_PPC_ALTIVEC="yes"
         case $ARCH in
             g4)  LEGACY_VLC_CPUFLAGS="-mcpu=7400 -mtune=7400 -maltivec -mabi=altivec" ;;
-            g4e) LEGACY_VLC_CPUFLAGS="-mcpu=7450 -mtune=7450 -maltivec -mabi=altivec" ;;
             # -mno-powerpc64 is NOT optional. Unlike -mcpu=7400/7450,
             # GCC's -mcpu=970 turns on -mpowerpc64, which lets it emit
             # 64-bit GPR instructions (std/ld/rldicl/sldi/srdi) inside a
@@ -698,6 +711,41 @@ if [ -n "$LEGACY_GCC" ]; then
     esac
 else
     export LDFLAGS="$ARCH_CFLAG"
+    # x86_64 targets 10.5, and on a deployment target that old the current ld
+    # (ld-1230) lays __LINKEDIT out in an order cctools strip will not touch:
+    # every dylib comes back "function starts data out of place", so this slice
+    # alone would ship its full debug map. Reproducible in three lines, and it
+    # is the deployment target that decides -- 10.9 and later are fine:
+    #
+    #   clang -arch x86_64 -mmacosx-version-min=10.5 -g -dynamiclib t.c -o t.dylib
+    #   strip -x t.dylib        # -> function starts data out of place
+    #
+    # Nothing can strip the result afterwards. -no_function_starts only moves
+    # the complaint to the data-in-code table, then to the symbol table.
+    # llvm-strip refuses outright ("shared library is not yet supported").
+    # -ld_classic does produce a strippable layout -- and CRASHES on a real
+    # plugin link (assertion in ld::passes::stubs::x86_64::classic::
+    # StubHelperAtom::copyRawContent, reproduced relinking libgnutls_plugin
+    # against the contribs), so it is not an option.
+    #
+    # So drop the debug info at link time instead: -Wl,-S emits no STABS at
+    # all, which is the same end state strip -S reaches elsewhere. Measured on
+    # that relink: 4212K -> 3446K, 38570 STABS entries -> 0, and all 5872 local
+    # function names kept, so backtraces stay readable.
+    #
+    # The one thing lost, and only on this slice: atos can no longer add
+    # file:line, because there is no debug map left to point at the .o files.
+    # It still resolves the function name.
+    case "$ARCH" in
+        x86_64)
+            case "$MINIMAL_OSX_VERSION" in
+                10.*)
+                    LDFLAGS="$LDFLAGS -Wl,-S"
+                    STRIP_DEBUG_AT_LINK="yes"
+                    ;;
+            esac
+            ;;
+    esac
 fi
 
 #
@@ -893,6 +941,64 @@ if [ "$NEEDS_EXECUTABLE_PATH" = "yes" ] && [ -n "$LEGACY_GCC" ] && [ -d VLC.app/
     done
 fi
 
+# Everything is compiled with -g, which leaves a debug *map* in each Mach-O:
+# ~100k STABS entries per plugin (SO/OSO/FUN -- source file names and pointers
+# to the .o files of THIS build tree). None of it is usable on the target
+# machine, and it is the single biggest avoidable weight in the bundle: ~15 MB
+# per architecture, ~100 MB across the seven slices of the universal build.
+#
+# -S removes that map and nothing else. Every local function name survives
+# (measured on libavcodec_plugin: 16880 before, 16880 after), so a crash log
+# stays readable on the user's machine -- which matters here, because 10.2-10.6
+# have no dSYM and no way to symbolicate after the fact. -x would take another
+# ~50 MB but leaves only the three exported vlc_entry symbols, turning every
+# PowerPC backtrace into raw offsets.
+#
+# Debugging here is unaffected either way: strip preserves LC_UUID and the
+# unstripped originals stay in modules/.libs, so atos and symbolicatecrash
+# still find them by UUID and resolve down to file:line.
+#
+# Two ordering constraints, each verified by the failure it causes:
+#  - "$STRIP", never a plain strip: Xcode's cctools answers "unknown cputype
+#    (18)" on PowerPC and leaves 23 of the fat plugins untouched. The legacy
+#    toolchain's strip reads them fine.
+#  - this has to run BEFORE add-dylib-toc.py below. Once that script has
+#    rebuilt LC_DYSYMTAB's table of contents, strip refuses the file
+#    ("table of contents out of place") -- it hit all 8 of lib/*.dylib.
+#
+# strip also invalidates the linker's ad-hoc signature, and an invalid
+# signature is fatal on Apple Silicon (an absent one is not), so re-sign each
+# file that was touched. Only those files: the bundle seal and
+# Contents/MacOS/PowerVLC are deliberately left alone, because the app's ad-hoc
+# code identity is what Keychain Services binds the saved Subsonic/Jellyfin
+# secrets to, and re-sealing it makes the keystore ask again.
+if [ "$PACKAGETYPE" = "u" ]; then
+    info "Copying app with debug symbols into VLC-debug.app"
+    rm -rf VLC-debug.app
+    cp -Rp VLC.app VLC-debug.app
+
+    # Workaround for breakpad symbol parsing:
+    # Symbols must be uploaded for libvlc(core).dylib, not libvlc(core).x.dylib
+    (cd VLC-debug.app/Contents/MacOS/lib/ && rm libpowervlccore.dylib && mv libpowervlccore.*.dylib libpowervlccore.dylib)
+    (cd VLC-debug.app/Contents/MacOS/lib/ && rm libpowervlc.dylib && mv libpowervlc.*.dylib libpowervlc.dylib)
+fi
+
+# A file strip refuses just keeps its debug map: bigger bundle, still correct.
+# Report it rather than aborting -- and never let it trip `set -e`.
+if [ "$STRIP_DEBUG_AT_LINK" = "yes" ]; then
+    info "Debug map already dropped at link time (-Wl,-S), not stripping"
+else
+    info "Stripping the debug map from the bundled dylibs (strip -S)"
+    find VLC.app/Contents/MacOS -type f -name "*.dylib" -print | while read -r so; do
+        if ! "$STRIP" -S "$so" 2>/dev/null; then
+            echo "  strip -S refused ${so#VLC.app/}, debug map kept" >&2
+        elif [ -z "$LEGACY_GCC" ]; then
+            codesign -f -s - "$so" >/dev/null 2>&1 || \
+                echo "  could not re-sign ${so#VLC.app/} after strip" >&2
+        fi
+    done
+fi
+
 # Mac OS X 10.2's dyld finds a dylib's exported symbols only through the
 # LC_DYSYMTAB table of contents, which modern ld64 no longer emits (it builds
 # single-module dylibs, and -multi_module is accepted then ignored). Without
@@ -918,23 +1024,8 @@ case "$MINIMAL_OSX_VERSION" in
         ;;
 esac
 
+# VLC-debug.app and the strip both moved up, ahead of add-dylib-toc.py.
 if [ "$PACKAGETYPE" = "u" ]; then
-    info "Copying app with debug symbols into VLC-debug.app and stripping"
-    rm -rf VLC-debug.app
-    cp -Rp VLC.app VLC-debug.app
-
-    # Workaround for breakpad symbol parsing:
-    # Symbols must be uploaded for libvlc(core).dylib, not libvlc(core).x.dylib
-    (cd VLC-debug.app/Contents/MacOS/lib/ && rm libpowervlccore.dylib && mv libpowervlccore.*.dylib libpowervlccore.dylib)
-    (cd VLC-debug.app/Contents/MacOS/lib/ && rm libpowervlc.dylib && mv libpowervlc.*.dylib libpowervlc.dylib)
-
-
-    find VLC.app/ -name "*.dylib" -exec strip -x {} \;
-    find VLC.app/ -type f -name "PowerVLC" -exec strip -x {} \;
-    find VLC.app/ -type f -name "Sparkle" -exec strip -x {} \;
-    find VLC.app/ -type f -name "Growl" -exec strip -x {} \;
-    find VLC.app/ -type f -name "Breakpad" -exec strip -x {} \;
-
 if [ "$BUILD_TRIPLET" = "$HOST_TRIPLET" ]; then
     bin/powervlc-cache-gen VLC.app/Contents/MacOS/plugins
 fi

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Zip a PowerVLC bundle as powervlc-<version>-mac-<architecture>.zip.
 #
-# Usage: package-powervlc.sh <x64|x86|g3|g4|g4e|g5|arm64|universal>
+# Usage: package-powervlc.sh <x64|x86|g3|g4|g5|arm64|universal>
 # The version is read from the bundle's Info.plist
 # (CFBundleShortVersionString); the architecture label is the build
 # target name. The "mac" tag keeps these archives distinguishable from

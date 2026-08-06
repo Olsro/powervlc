@@ -45,6 +45,16 @@ libcrystalhd: $(CRYSTAL_SOURCES) .sum-crystalhd
 # -D__LINUX_USER__ selects the POSIX side of the Broadcom sources; the Darwin
 # specifics sit behind __APPLE__ inside those same branches.
 CRYSTALHD_CXXFLAGS := -D__LINUX_USER__ -Iinclude -Iinclude/link -Iinclude/flea
+# bc_dts_glob_osx.h defines its own `inline int posix_memalign(...)` (malloc,
+# Darwin already aligns on 16 bytes) right after including <stdlib.h>. In C++
+# that is a redefinition of the SDK's declaration, so it inherits its
+# API_AVAILABLE(macos(10.6)) and every call site trips
+# -Werror=partial-availability on the 10.5 target -- even though the function
+# being called is the shim, which is available everywhere. The i386 slice never
+# showed it: the legacy GCC has no availability diagnostics at all, which is
+# why libcrystalhd.a exists for i686-apple-darwin8 and has never once built for
+# x86_64. The warning is about a declaration, not about the code that runs.
+CRYSTALHD_CXXFLAGS += -Wno-error=unguarded-availability -Wno-unguarded-availability
 
 .crystalhd: libcrystalhd
 	cd $< && for f in darwin_lib/libcrystalhd/*.cpp; do \

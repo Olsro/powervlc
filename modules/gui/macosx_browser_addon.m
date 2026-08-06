@@ -40,6 +40,31 @@
 
 #import "macosx_browser_addon.h"
 
+/* This file is compiled into both interfaces: the modern one under ARC, the
+ * legacy one under manual retain/release with a GCC that predates ARC
+ * entirely. A Core Foundation pointer handed to Objective-C needs __bridge
+ * under ARC and must not carry it otherwise, and __has_feature itself does
+ * not exist on the legacy compiler. */
+#ifndef __has_feature
+# define __has_feature(x) 0
+#endif
+#if __has_feature(objc_arc)
+# define VLC_BRIDGE(type, expr) ((__bridge type)(expr))
+#else
+# define VLC_BRIDGE(type, expr) ((type)(expr))
+#endif
+
+/* Both interfaces compile this file, and on 10.7+ both plugins can be resident
+ * at once (the interface switcher). The anchor class below must therefore not
+ * carry the same name in the two copies, or the Objective-C runtime warns that
+ * it is implemented twice. Each plugin's Makefile.am passes its own tag. */
+#ifndef VLC_OBJC_ANCHOR_TAG
+# define VLC_OBJC_ANCHOR_TAG Shared
+#endif
+#define VLC_ANCHOR_JOIN_(a, b) a##b
+#define VLC_ANCHOR_JOIN(a, b) VLC_ANCHOR_JOIN_(a, b)
+#define VLC_ANCHOR_CLASS(base) VLC_ANCHOR_JOIN(base, VLC_OBJC_ANCHOR_TAG)
+
 NSString *VLCBrowserAddonPath(void)
 {
     char *psz_dir = config_GetDataDir();
@@ -65,7 +90,7 @@ static NSString *VLCDefaultBrowserPath(void)
 
     if (cfIdent != NULL) {
         path = [[NSWorkspace sharedWorkspace]
-                  absolutePathForAppBundleWithIdentifier:(NSString *)cfIdent];
+                  absolutePathForAppBundleWithIdentifier:VLC_BRIDGE(NSString *, cfIdent)];
         CFRelease(cfIdent);
     }
     return path;
@@ -88,3 +113,19 @@ BOOL VLCBrowserAddonInstall(void)
      * broken. */
     return [[NSWorkspace sharedWorkspace] openFile:addon];
 }
+
+/*****************************************************************************
+ * ⚠ ANCRE OBJECTIVE-C — NE PAS SUPPRIMER (Mac OS X 10.2)
+ *****************************************************************************
+ * Même défaut que dans macosx_crystalhd.m, et pour la même raison : ce
+ * fichier utilise Objective-C (Cocoa) mais ne définissait aucune classe, donc
+ * son module laisse `module->symtab` à NULL. L'`_objcInit()` de 10.2 le
+ * déréférence et tue le processus au `dlopen` du greffon qui le contient —
+ * ici encore l'interface legacy, l'unique fournisseur de fenêtre vidéo.
+ * Compiler en .c n'est pas une option : le fichier envoie des messages à
+ * NSWorkspace. Contrôlé par extras/package/macosx/check-objc-modules.sh.
+ *****************************************************************************/
+@interface VLC_ANCHOR_CLASS(VLCBrowserAddonObjCAnchor) : NSObject
+@end
+@implementation VLC_ANCHOR_CLASS(VLCBrowserAddonObjCAnchor)
+@end

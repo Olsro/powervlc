@@ -59,7 +59,11 @@ liblegacy_macosx_plugin_la_SOURCES = \
 	gui/legacy_macosx/VLCLegacyMediaKeys.h gui/legacy_macosx/VLCLegacyMediaKeys.m \
 	gui/legacy_macosx/VLCLegacySystemVolume.h gui/legacy_macosx/VLCLegacySystemVolume.c \
 	gui/legacy_macosx/macosx.c
-liblegacy_macosx_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -fobjc-exceptions
+# VLC_OBJC_ANCHOR_TAG: see the same flag on libmacosx_plugin -- the two shared
+# .m files each define an empty anchor class, and both plugins can be resident
+# together, so the class names have to differ per plugin.
+liblegacy_macosx_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -fobjc-exceptions \
+	-DVLC_OBJC_ANCHOR_TAG=Legacy
 # Force per-target object names for the C sources too: without this,
 # macosx.c compiles as plain macosx.lo and the MODULE_NAME rule (derived
 # from the object basename) registers the module as "macosx" -- colliding

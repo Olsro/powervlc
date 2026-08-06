@@ -1,7 +1,7 @@
 #!/bin/sh
 # PowerVLC per-target build driver.
 #
-# Usage: build-powervlc.sh <x64|x86|g3|g4|g4e|g5|arm64> [extra build.sh args]
+# Usage: build-powervlc.sh <x64|x86|g3|g4|g5|arm64> [extra build.sh args]
 #
 # Runs extras/package/macosx/build.sh inside the matching build<name>
 # directory at the repository root with the PowerVLC configure policy:
@@ -15,7 +15,7 @@
 set -e
 
 TARGET="$1"
-[ -n "$TARGET" ] || { echo "usage: $0 <x64|x86|g3|g4|g4e|g5|arm64> [args]"; exit 1; }
+[ -n "$TARGET" ] || { echo "usage: $0 <x64|x86|g3|g4|g5|arm64> [args]"; exit 1; }
 shift
 
 case "$TARGET" in
@@ -45,7 +45,7 @@ case "$TARGET" in
         ARGS="--disable-sparkle --disable-macosx --disable-altivec \
 --enable-run-as-root --enable-libmpeg2 --enable-a52"
         ;;
-    g4|g4e|g5)
+    g4|g5)
         ARCH="$TARGET"
         ARGS="--disable-sparkle --disable-macosx --enable-run-as-root \
 --enable-libmpeg2"
@@ -66,7 +66,7 @@ BUILDDIR="$VLCROOT/build$TARGET"
 # of 10.4 objects, with no error anywhere -- the failure only shows up as a dyld
 # error on the old machine. Stamp the target and refuse a mismatched reuse.
 case "$TARGET" in
-    g3|g4|g4e|g5) WANT_MIN="10.2" ;;
+    g3|g4|g5)    WANT_MIN="10.2" ;;
     x86)          WANT_MIN="10.4" ;;
     x64)          WANT_MIN="10.5" ;;
     arm64)        WANT_MIN="11.0" ;;

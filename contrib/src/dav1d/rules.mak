@@ -33,7 +33,7 @@ endif
 # whether the backend is *compiled*: the G3 (750/750FX) has no vector unit at
 # all, and dav1d's meson would hand -maltivec to the AltiVec sub-target
 # regardless of the CPU flags this contrib was configured with. build.sh
-# exports VLC_PPC_ALTIVEC for the g4/g4e/g5 targets only, so the G3 slice keeps
+# exports VLC_PPC_ALTIVEC for the g4/g5 targets only, so the G3 slice keeps
 # the C DSP -- as it already does for ffmpeg (contrib/src/ffmpeg/rules.mak).
 #
 # 0008 is the second half of that safety net, at runtime: Darwin has no

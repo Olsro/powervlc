@@ -5,13 +5,12 @@ from a PowerPC G3 on Mac OS X 10.4 "Tiger" up to a current Apple‑Silicon Mac.
 To make that possible the app is built **once per CPU target** and the results
 are then fused into a single fat `PowerVLC.app`.
 
-The seven targets:
+The six targets:
 
 | Target  | CPU / machine                         | Min. macOS | Interface        |
 |---------|---------------------------------------|------------|------------------|
 | `g3`    | PowerPC G3 (750), no AltiVec          | 10.4       | legacy only      |
 | `g4`    | PowerPC G4 (7400) + AltiVec           | 10.4       | legacy only      |
-| `g4e`   | PowerPC G4e (7448/7450) + AltiVec     | 10.4       | legacy only      |
 | `g5`    | PowerPC G5 (970) + AltiVec            | 10.4       | legacy only      |
 | `x86`   | Intel 32‑bit                          | 10.4       | legacy only      |
 | `x64`   | Intel 64‑bit                          | 10.6*      | legacy + modern  |
@@ -19,6 +18,26 @@ The seven targets:
 
 \*The 64‑bit Intel slice is gated at 10.6 on purpose so that a 10.5 Intel Mac
 picks the `x86` slice instead (see the comments in `make-universal.sh`).
+
+There used to be a seventh target, `g4e` (`-mcpu=7450`), shipping a `ppc7450`
+slice. It was dropped after being measured on the machine it existed for — a
+1.42 GHz Mac mini G4, `machine` = `ppc7450`:
+
+| Workload | `ppc7400` build | `ppc7450` build |
+|---|---|---|
+| MPEG‑2 DVD, 60 s of media, ×4 | 18.145 s CPU | 18.060 s CPU |
+| H.264 720p, 40 s of media, ×5 | 30.9 s CPU | 31.0 s CPU |
+
+0.5 % on one workload, nothing on the other, for ~90 MB in the universal
+bundle. `-mcpu=7450` only reschedules VLC's own code — same ISA, same
+instruction mix, and the AltiVec assembly is byte‑identical — while the
+contribs, where decoding actually spends its time, are the shared
+`-mtune=7400` build either way. A 7450 machine now grades the `ppc7400` slice
+highest and keeps AltiVec.
+
+⚠ **Never drop `ppc7400` instead.** A 7400 cannot grade a `ppc7450` slice and
+would fall back to `ppc750`, i.e. no AltiVec — measured 13 % slower on the same
+H.264 clip.
 
 All the scripts below live in `extras/package/macosx/` and are run **from the
 repository root**.
@@ -39,18 +58,17 @@ Once the machine is set up (section 1), from the repo root:
 
 ```bash
 # 1. Build every architecture (each writes build<target>/PowerVLC.app)
-for t in g3 g4 g4e g5 x86 x64 arm64; do
+for t in g3 g4 g5 x86 x64 arm64; do
     extras/package/macosx/build-powervlc.sh "$t" || break
 done
 
 # 2. Fuse them into one universal bundle (order matters — see section 3)
 extras/package/macosx/make-universal.sh builduniversal/PowerVLC.app \
     buildarm64/PowerVLC.app buildx64/PowerVLC.app buildx86/PowerVLC.app \
-    buildg3/PowerVLC.app  buildg4/PowerVLC.app  buildg4e/PowerVLC.app \
-    buildg5/PowerVLC.app
+    buildg3/PowerVLC.app  buildg4/PowerVLC.app  buildg5/PowerVLC.app
 
 # 3. Make the zips (one per target + the universal one)
-for t in g3 g4 g4e g5 x86 x64 arm64 universal; do
+for t in g3 g4 g5 x86 x64 arm64 universal; do
     extras/package/macosx/package-powervlc.sh "$t"
 done
 
@@ -99,7 +117,7 @@ brew install nasm gettext autoconf automake libtool pkg-config
 ### 1.3 The legacy cross‑toolchain (for the PowerPC and Intel‑32 slices)
 
 Modern clang can no longer target PowerPC or 10.4‑era Intel, so those five
-slices (`g3 g4 g4e g5 x86`) are built with a **home‑made GCC cross‑toolchain**.
+slices (`g3 g4 g5 x86`) are built with a **home‑made GCC cross‑toolchain**.
 The build scripts look for it at:
 
 ```
@@ -141,7 +159,7 @@ is cached, so it only happens once per target family.
 ## 2. Build one architecture
 
 ```bash
-extras/package/macosx/build-powervlc.sh <target>     # target ∈ g3 g4 g4e g5 x86 x64 arm64
+extras/package/macosx/build-powervlc.sh <target>     # target ∈ g3 g4 g5 x86 x64 arm64
 ```
 
 Result: `build<target>/PowerVLC.app`.
@@ -177,8 +195,7 @@ first** — the Info.plist, icon and any single‑arch resources are taken from 
 ```bash
 extras/package/macosx/make-universal.sh builduniversal/PowerVLC.app \
     buildarm64/PowerVLC.app buildx64/PowerVLC.app buildx86/PowerVLC.app \
-    buildg3/PowerVLC.app  buildg4/PowerVLC.app  buildg4e/PowerVLC.app \
-    buildg5/PowerVLC.app
+    buildg3/PowerVLC.app  buildg4/PowerVLC.app  buildg5/PowerVLC.app
 ```
 
 The script also:
@@ -260,7 +277,7 @@ does not re-install the catalog, leaving the old strings in the app. Copy it in
 explicitly after building, for every target you package:
 
 ```bash
-for a in g3 g4 g4e g5 x86 x64 arm64; do
+for a in g3 g4 g5 x86 x64 arm64; do
     cp po/fr.gmo "build$a/PowerVLC.app/Contents/MacOS/share/locale/fr/LC_MESSAGES/vlc.mo"
 done
 ```
@@ -497,7 +514,7 @@ build the shipped PowerPC/Intel‑32 slices.
 | `sdks/MacOSX10.4u.sdk`| Xcode 3 / SDK archive                         | Tiger universal SDK (ppc + ppc64 + i386 + x86_64 stubs) |
 | `sdks/MacOSX10.5.sdk` | Xcode 3 / SDK archive                         | Leopard SDK — source of the crt objects (7.2), and used by the optional `i686-leopard` target |
 
-Only the four first rows plus the 10.4u SDK are needed to build `g3 g4 g4e g5 x86`.
+Only the four first rows plus the 10.4u SDK are needed to build `g3 g4 g5 x86`.
 The `opt/gcc-ppc` / `opt/gcc-i686` (darwin9 / 10.5) pair is optional — see 7.7.
 
 Iain Sandoe's GCC branch is used rather than vanilla FSF GCC because it carries
@@ -691,7 +708,7 @@ make -j"$(sysctl -n hw.ncpu)"
 make install
 ```
 
-`--with-cpu=750` only sets the default; the AltiVec variants (`g4`, `g4e`, `g5`)
+`--with-cpu=750` only sets the default; the AltiVec variants (`g4`, `g5`)
 are produced by the `-mcpu=`/`-maltivec` flags `build.sh` passes per target, so
 **one** PowerPC compiler covers all four PowerPC slices.
 

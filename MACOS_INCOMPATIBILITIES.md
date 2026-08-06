@@ -24,7 +24,6 @@ Each target produces a distinct Mach-O slice. The **universal** binary merges up
 |---|---|---|---|---|---|---|---|
 | `buildg3` | ppc (ppc750) | **10.2** | 10.4u | FSF GCC 13 (Tiger) | — (`--disable-altivec`) | BE / 32-bit | legacy |
 | `buildg4` | ppc (ppc7400) | **10.2** | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
-| `buildg4e` | ppc (ppc7450) | **10.2** | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
 | `buildg5` | ppc (ppc970) | **10.2** | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
 | `buildx86` | i386 | 10.4 (10.4.4) | 10.4u | FSF GCC 13 (Tiger) | — (`--disable-mmx --disable-sse`) | LE / 32-bit | legacy |
 | `buildx64` | x86_64 | 10.5 *(see 1.2)* | modern Xcode | Apple clang | SSE2 | LE / 64-bit | modern + legacy |

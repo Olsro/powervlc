@@ -710,8 +710,20 @@ void VLCCrystalHDMaybePromptAtStartup(void)
  * ne s'applique PAS ici : les en-têtes AppKit/Foundation exigent Objective-C.
  * Contrôlé par extras/package/macosx/check-objc-modules.sh, que build.sh
  * exécute sur les cibles 10.0-10.2.
+ *
+ * Le nom porte un suffixe par greffon : ce fichier est compilé dans LES DEUX
+ * interfaces, et sur 10.7+ les deux greffons peuvent être résidents en même
+ * temps (le sélecteur d'interface). Sans ça le runtime Objective-C avertit que
+ * la classe est implémentée deux fois. Le tag vient des OBJCFLAGS du greffon.
  *****************************************************************************/
-@interface VLCCrystalHDObjCAnchor : NSObject
+#ifndef VLC_OBJC_ANCHOR_TAG
+# define VLC_OBJC_ANCHOR_TAG Shared
+#endif
+#define VLC_ANCHOR_JOIN_(a, b) a##b
+#define VLC_ANCHOR_JOIN(a, b) VLC_ANCHOR_JOIN_(a, b)
+#define VLC_ANCHOR_CLASS(base) VLC_ANCHOR_JOIN(base, VLC_OBJC_ANCHOR_TAG)
+
+@interface VLC_ANCHOR_CLASS(VLCCrystalHDObjCAnchor) : NSObject
 @end
-@implementation VLCCrystalHDObjCAnchor
+@implementation VLC_ANCHOR_CLASS(VLCCrystalHDObjCAnchor)
 @end

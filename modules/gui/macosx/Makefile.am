@@ -7,8 +7,16 @@ SUFFIXES += .xib
 # falls back to the lower-scored legacy_macosx interface; on 10.7+ this
 # interface wins by score. The -mmacosx-version-min appended here
 # overrides the global one (last flag wins), for compiling and linking.
+# VLC_OBJC_ANCHOR_TAG: gui/macosx_crystalhd.m and gui/macosx_browser_addon.m are
+# compiled into BOTH interfaces, and each carries an empty Objective-C class so
+# its module does not leave a NULL symtab (fatal on 10.2, see
+# extras/package/macosx/check-objc-modules.sh). Both plugins can be loaded in
+# the same process on 10.7+ -- the interface switcher needs that -- and the
+# runtime then warns that the class is implemented twice. The tag makes each
+# copy's class name its own.
 libmacosx_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -fobjc-exceptions -fobjc-arc \
-	-mmacosx-version-min=10.7 -Wno-partial-availability
+	-mmacosx-version-min=10.7 -Wno-partial-availability \
+	-DVLC_OBJC_ANCHOR_TAG=Modern
 libmacosx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -mmacosx-version-min=10.7 -rpath '$(guidir)' \
 	-Wl,-framework,Cocoa -Wl,-framework,CoreServices \
 	-Wl,-framework,AVFoundation -Wl,-framework,CoreMedia -Wl,-framework,IOKit \
