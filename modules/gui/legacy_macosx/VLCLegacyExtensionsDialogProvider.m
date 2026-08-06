@@ -60,6 +60,11 @@ static FILE *VLCLegacyGridTrace(void);
  * column sorts on a real value (a timestamp) rather than on its label. */
 #define VLC_DIALOG_SORTKEY_SEP @"\037"
 
+/* Fallback height of a column header, for the systems that leave the view
+ * flat rather than sizing it (see -installHeaderView:). The height AppKit
+ * itself gives one on 10.2-10.5. */
+#define VLC_LEGACY_HEADER_H 17.f
+
 /*****************************************************************************
  * widget-carrying controls
  *****************************************************************************/
@@ -133,6 +138,7 @@ static FILE *VLCLegacyGridTrace(void);
 - (void)setContentArray:(NSMutableArray *)array;
 - (NSMutableArray *)contentArray;
 - (void)setColumnHeaders:(NSArray *)headers;
+- (void)installHeaderView:(NSTableHeaderView *)header;
 - (int)sortColumn;
 - (void)sortByColumn:(int)index ascending:(BOOL)ascending;
 /* Show the first row, now and once more on the next turn of the run
@@ -281,22 +287,27 @@ VLC_LEGACY_WIDGET_ACCESSORS
     NSClipView *clip = [[self enclosingScrollView] contentView];
     if (!clip)
         return;
-    /* The column headers float over the top of the clip view rather than
-     * beside it, so scrolling to zero tucks the first row underneath them
-     * -- a list of episodes that opened on number 2. Its real top is one
-     * header higher, which is what AppKit itself settles on when the rows
-     * all fit. */
-    CGFloat header = [self headerView] ? [[self headerView] frame].size.height
-                                       : 0;
-    NSRect bounds = [clip bounds];
-    if ([clip isFlipped])
-        bounds.origin.y = -header;
-    else {
-        bounds.origin.y = NSMaxY([self frame]) - bounds.size.height;
-        if (bounds.origin.y < 0)
-            bounds.origin.y = 0;   /* a document shorter than the clip view */
-    }
-    [clip scrollToPoint:bounds.origin];
+
+    /* Where the top is, is the clip view's business, and asking is the
+     * only portable way to know it. The two systems do not agree: from
+     * 10.10 the column headers sit INSIDE the clip view, over the top of
+     * it, so its resting origin is one header above zero -- scrolling to
+     * zero there tucks the first row under the headers, which is a list
+     * of episodes that opens on number 2. On 10.2-10.5 the headers are
+     * beside the clip view, in one of their own, and the top is plain
+     * zero -- scrolling one header higher there leaves an empty strip
+     * under the headers, which is the blank first line the podcast
+     * results grew (measured on 10.2.8; it healed on any scroll, because
+     * AppKit then clamped the origin to what it should have been).
+     *
+     * -constrainScrollPoint: answers with the nearest origin it will
+     * actually hold, so an absurd value asks it for the end of its own
+     * travel: -28 on 10.14, 0 on Jaguar, both measured. Deprecated since
+     * 10.10 and still exact there; its replacement -constrainBoundsRect:
+     * is 10.9 and does not exist on the systems this interface is for. */
+    CGFloat far = [clip isFlipped] ? -100000.f : 100000.f;
+
+    [clip scrollToPoint:[clip constrainScrollPoint:NSMakePoint(0.f, far)]];
     [[self enclosingScrollView] reflectScrolledClipView:clip];
 }
 
@@ -521,10 +532,56 @@ VLC_LEGACY_WIDGET_ACCESSORS
     }
 
     if (headers && ![self headerView])
-        [self setHeaderView:
+        [self installHeaderView:
             [[[NSTableHeaderView alloc] init] autorelease]];
     else if (!headers && [self headerView])
-        [self setHeaderView:nil];
+        [self installHeaderView:nil];
+}
+
+/* Puts the column titles where the scroll view will actually draw them.
+ *
+ * Two things go wrong below 10.4, and both end the same way -- a table
+ * whose columns are named and whose header is nowhere to be seen (the
+ * podcast results and the episode list, measured on 10.2.8; 10.7 and
+ * later show it, which is why this only ever showed up on the old
+ * machines):
+ *
+ *  - AppKit takes the height of the header from the header view itself,
+ *    and -init gives that view no size at all. Later systems tile it into
+ *    shape; these leave it flat, so there is nothing to draw.
+ *  - the scroll view learns that its document view carries a header when
+ *    the document view is SET, and it never looks again. The columns of
+ *    an extension list are named well after that -- when the extension
+ *    fills it -- so the header was installed into a scroll view that had
+ *    already decided there was none.
+ *
+ * Both repairs are made only once the framework has plainly not made them
+ * itself, so that nothing moves on the systems that get it right. */
+- (void)installHeaderView:(NSTableHeaderView *)header
+{
+    NSScrollView *scroll = [self enclosingScrollView];
+
+    [self setHeaderView:header];
+    [scroll tile];
+
+    if (header != nil) {
+        if ([header frame].size.height <= 0.f)
+            [header setFrame:NSMakeRect(0, 0, [self bounds].size.width,
+                                        VLC_LEGACY_HEADER_H)];
+
+        if ([header superview] == nil && scroll != nil
+         && [scroll documentView] == self) {
+            /* the scroll view owns its document view: putting it back is
+             * what makes the header be picked up, and it must survive the
+             * moment in between */
+            [[self retain] autorelease];
+            [scroll setDocumentView:nil];
+            [scroll setDocumentView:self];
+            [scroll tile];
+        }
+    }
+
+    [scroll setNeedsDisplay:YES];
 }
 
 - (int)sortColumn { return sortColumn; }
@@ -1455,11 +1512,24 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
         (VLCLegacyExtensionsDialogProvider *)p_data;
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
+    /* The default run loop mode, and no other. Asked to perform without
+     * naming modes, Foundation queues the message in the COMMON modes --
+     * which AppKit has added event tracking to, so an update landed in
+     * the middle of a mouse-down: the widgets were torn down and rebuilt
+     * while -[NSWindow sendEvent:] was still working through that very
+     * click, and the click finished against a button cell that had been
+     * freed under it (crash in +[NSButtonCell _finishHitTracking:],
+     * measured on 10.2 while a slow login was answering). Naming the
+     * default mode holds the update until the click is over. The
+     * extension thread waits those few milliseconds longer; it holds no
+     * lock of ours while it does, so nothing else is held up. */
     if (provider)
         [provider performSelectorOnMainThread:@selector(updateExtensionDialog:)
                                    withObject:[NSValue valueWithPointer:
                                                    p_ext_dialog]
-                                waitUntilDone:YES];
+                                waitUntilDone:YES
+                                        modes:[NSArray arrayWithObject:
+                                                   NSDefaultRunLoopMode]];
     [pool release];
 }
 
@@ -1673,12 +1743,52 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
     return trimmed;
 }
 
+/* Names a font for every character that does not already carry one.
+ *
+ * A label is drawn twice by two different pieces of AppKit: by its own
+ * cell until it is clicked, and by the window's field editor from then on
+ * -- clicking a label selects its text, which is the point of making them
+ * selectable. The cell falls back to the CONTROL's font where the string
+ * names none; the field editor falls back to its own, which is smaller.
+ * So a plain label shrank the moment it was clicked and stayed shrunk
+ * (measured on 10.2.8, on the podcast description and the two headings
+ * above it). Saying which font the text is in leaves both with nothing to
+ * guess at. Text that already names its fonts -- anything that came
+ * through the HTML importer, the bold headings among it -- is untouched. */
+static NSAttributedString *VLCLegacyWithBaseFont(NSAttributedString *text,
+                                                 NSFont *font)
+{
+    NSMutableAttributedString *out = nil;
+    NSUInteger i = 0, length = [text length];
+
+    if (font == nil)
+        return text;
+
+    while (i < length) {
+        NSRange range;
+        id present = [text attribute:NSFontAttributeName atIndex:i
+                      effectiveRange:&range];
+
+        if (range.length == 0)
+            break;              /* never spin, whatever AppKit answers */
+        if (present == nil) {
+            if (out == nil)
+                out = [[text mutableCopy] autorelease];
+            [out addAttribute:NSFontAttributeName value:font range:range];
+        }
+        i = NSMaxRange(range);
+    }
+
+    return out != nil ? out : text;
+}
+
 - (void)updateControl:(NSView *)control forWidget:(extension_widget_t *)widget
 {
     switch (widget->type) {
     case EXTENSION_WIDGET_LABEL:
-        [(NSTextField *)control
-            setAttributedStringValue:VLCLegacyAttributedText(widget->psz_text)];
+        [(NSTextField *)control setAttributedStringValue:
+            VLCLegacyWithBaseFont(VLCLegacyAttributedText(widget->psz_text),
+                                  [(NSTextField *)control font])];
         break;
 
     case EXTENSION_WIDGET_HTML:
@@ -2044,6 +2154,24 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
  * dialog lifecycle -- all of this runs on the main thread
  *****************************************************************************/
 
+/* Lets go of a control the extension has withdrawn.
+ *
+ * Never a plain -release. A label is selectable, so clicking one hands it
+ * the window's field editor and the window goes on pointing at it; and
+ * AppKit holds bare pointers to the controls of the event it is in the
+ * middle of. Handing the field editor back first, then autoreleasing,
+ * leaves both of those pointing at something that is still there for the
+ * rest of this pass through the run loop. */
+static void VLCLegacyDropControl(NSView *control)
+{
+    NSWindow *window = [control window];
+
+    if (window != nil)
+        [window endEditingFor:control];
+    VLCLegacyForgetHiddenView(control);
+    [control autorelease];
+}
+
 /* Note: the caller holds p_dialog->lock. */
 - (void)updateWidgets:(extension_dialog_t *)p_dialog
 {
@@ -2066,7 +2194,7 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
                 [[NSNotificationCenter defaultCenter] removeObserver:self
                                                                 name:nil
                                                               object:control];
-                [control release];
+                VLCLegacyDropControl(control);
                 widget->p_sys_intf = NULL;
             }
             continue;
@@ -2207,7 +2335,7 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
             [[NSNotificationCenter defaultCenter] removeObserver:self
                                                             name:nil
                                                           object:control];
-            [control release];
+            VLCLegacyDropControl(control);
             widget->p_sys_intf = NULL;
         }
     }
@@ -2215,7 +2343,9 @@ static NSAttributedString *VLCLegacyAttributedText(const char *psz_text)
 
     [window setDelegate:nil];
     [window close];
-    [window release];
+    /* deferred for the same reason the controls are: the window is the
+     * object AppKit is dispatching the current event through */
+    [window autorelease];
     p_dialog->p_sys_intf = NULL;
 }
 

@@ -133,6 +133,10 @@ endif
 	## absent from the 10.4u SDK. No symbol from that header was ever used, and
 	## libaacs-powervlc-tiger-and-external-mmc.patch drops the include, so
 	## every slice has AACS now.
+	## The copy keeps the install name contrib gave it, which is contrib's own
+	## absolute path in this build tree; build.sh rewrites it (and libbdplus')
+	## to @executable_path/lib/ afterwards and refuses to ship a bundle that
+	## still names anything outside the OS. Nothing to do here.
 	@if ls $@/Contents/MacOS/plugins/*bluray_plugin.dylib >/dev/null 2>&1; then \
 		if test -f "$(CONTRIB_DIR)/lib/libaacs.dylib"; then \
 			cp -L "$(CONTRIB_DIR)/lib/libaacs.dylib" \

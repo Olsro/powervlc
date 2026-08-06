@@ -1,0 +1,1829 @@
+From: PowerVLC <powervlc@localhost>
+Date: Thu, 6 Aug 2026 18:25:00 +0200
+Subject: [PATCH] ppc/hevc: AltiVec SAO, inverse transform and motion compensation
+
+Measured on a 1.42 GHz 7447A (Mac mini G4, Leopard), single-threaded, with an
+isolated ffmpeg decode bench. Decoded output is bit-identical to the C
+reference on every sample, checked with a hash of all decoded planes:
+
+                          reference   +SAO+IDCT    +MC(luma)   +chroma/weighted
+  1080x1920 10-bit HEVC     3.17        4.18        4.79         5.26 fps  (+66 %)
+  1080x1920  8-bit HEVC     3.50        4.91        5.87         6.38 fps  (+82 %)
+   854x480  10-bit HEVC    16.8        22.2        24.2         24.9  fps  (+49 %)
+
+A profile of a 10-bit 1080x1920 decode attributed ~39 % of the time to motion
+compensation, ~20 % to SAO and ~19 % to the inverse transform. None of the
+three had a PowerPC path: ff_hevc_dsp_init_ppc only installed idct_4x4, which
+does not even show up in the profile.
+
+SAO: both filters are a small table lookup plus an add and a clip per pixel,
+which is one vec_perm plus a saturating add on sixteen (8-bit) or eight
+(10-bit) pixels at a time.
+
+IDCT: eight neighbouring columns are transformed in parallel so every lane
+wants the same constant and no horizontal reduction is needed; the second pass
+runs on the transposed block, as in the x86 SSE2 version. col_limit is ignored,
+also as in the x86 version -- it only promises that some coefficients are zero.
+
+MC: the 8-tap luma and 4-tap chroma FIRs, eight output samples at a time.
+Vertically the lanes are neighbouring columns so the taps are plain strided
+loads; horizontally they are the same vector shifted one sample at a time via
+vec_sld. Storing is the awkward part, because the uni and bi variants write
+pixels into the frame at whatever alignment the prediction unit sits at and
+AltiVec has no unaligned store (in 8-bit, eight pixels are only half a vector).
+It uses the same idiom as this fork's H.264 qpel8 kernels: rotate with
+vec_lvsr, then write with element stores, which touch exactly the bytes asked
+for and never a neighbour. The element width is chosen once per call from the
+alignment of the destination and its stride -- a word store needs a 4-byte
+aligned address and 8-bit chroma only guarantees 2. Covered: h, v and hv for
+put, uni, bi and uni_w, luma and chroma; bi_w and the whole-pel copies stay in
+C (the latter are already memcpy).
+
+Big-endian only: the code is written for the classic AltiVec load/permute
+idioms, and every target of this fork is big-endian.
+---
+--- a/libavcodec/ppc/hevcdsp.c
++++ b/libavcodec/ppc/hevcdsp.c
+@@ -24,6 +24,7 @@
+ #include "libavutil/attributes.h"
+ #include "libavutil/cpu.h"
+ #include "libavutil/ppc/cpu.h"
++#include "libavutil/mem_internal.h"
+ #include "libavutil/ppc/util_altivec.h"
+ 
+ #include "libavcodec/hevc/dsp.h"
+@@ -98,15 +99,65 @@
+ #define FUNCDECL(a, depth) a ## _ ## depth ## _altivec
+ #define FUNC(a, b) FUNCDECL(a, b)
+ 
++#if HAVE_BIGENDIAN
++#include "hevcdsp_idct_altivec.h"
++
++/* shift of the second pass is 20 - BIT_DEPTH; everything else is depth-agnostic */
++static void ff_hevc_idct_8x8_8_altivec  (int16_t *c, int l) { idct_altivec(c,  8, 12); }
++static void ff_hevc_idct_16x16_8_altivec(int16_t *c, int l) { idct_altivec(c, 16, 12); }
++static void ff_hevc_idct_32x32_8_altivec(int16_t *c, int l) { idct_altivec(c, 32, 12); }
++static void ff_hevc_idct_8x8_10_altivec  (int16_t *c, int l) { idct_altivec(c,  8, 10); }
++static void ff_hevc_idct_16x16_10_altivec(int16_t *c, int l) { idct_altivec(c, 16, 10); }
++static void ff_hevc_idct_32x32_10_altivec(int16_t *c, int l) { idct_altivec(c, 32, 10); }
++#endif
++
+ #define BIT_DEPTH 8
+ #include "hevcdsp_template.c"
++#if HAVE_BIGENDIAN
++#include "hevcdsp_sao_template.c"
++#include "hevcdsp_inter_template.c"
++#endif
+ #undef BIT_DEPTH
+ 
+ #define BIT_DEPTH 10
+ #include "hevcdsp_template.c"
++#if HAVE_BIGENDIAN
++#include "hevcdsp_sao_template.c"
++#include "hevcdsp_inter_template.c"
++#endif
+ #undef BIT_DEPTH
+ #endif /* HAVE_ALTIVEC */
+ 
++
++    /* Motion compensation: the dominant item of the profile once SAO and the
++     * transform are done. Only the sub-pel paths are replaced; whole-pel
++     * (pixels) copies are already memcpy in C. The five/ten entries of each
++     * array are width classes and every one of these handles any width. */
++#define MC_SET(depth)                                                          \
++    do {                                                                       \
++        int i;                                                                 \
++        for (i = 0; i < 10; i++) {                                             \
++            c->put_hevc_qpel[i][0][1]     = ff_hevc_put_qpel_h_ ## depth ## _altivec;      \
++            c->put_hevc_qpel[i][1][0]     = ff_hevc_put_qpel_v_ ## depth ## _altivec;      \
++            c->put_hevc_qpel[i][1][1]     = ff_hevc_put_qpel_hv_ ## depth ## _altivec;     \
++            c->put_hevc_qpel_uni[i][1][0] = ff_hevc_put_qpel_uni_v_ ## depth ## _altivec;  \
++            c->put_hevc_qpel_uni[i][1][1] = ff_hevc_put_qpel_uni_hv_ ## depth ## _altivec; \
++            c->put_hevc_qpel_bi[i][1][0]  = ff_hevc_put_qpel_bi_v_ ## depth ## _altivec;   \
++            c->put_hevc_qpel_bi[i][1][1]  = ff_hevc_put_qpel_bi_hv_ ## depth ## _altivec;  \
++            c->put_hevc_qpel_uni_w[i][1][0] = ff_hevc_put_qpel_uni_w_v_ ## depth ## _altivec;  \
++            c->put_hevc_qpel_uni_w[i][1][1] = ff_hevc_put_qpel_uni_w_hv_ ## depth ## _altivec; \
++            c->put_hevc_epel[i][0][1]     = ff_hevc_put_epel_h_ ## depth ## _altivec;      \
++            c->put_hevc_epel[i][1][0]     = ff_hevc_put_epel_v_ ## depth ## _altivec;      \
++            c->put_hevc_epel[i][1][1]     = ff_hevc_put_epel_hv_ ## depth ## _altivec;     \
++            c->put_hevc_epel_uni[i][1][0] = ff_hevc_put_epel_uni_v_ ## depth ## _altivec;  \
++            c->put_hevc_epel_uni[i][1][1] = ff_hevc_put_epel_uni_hv_ ## depth ## _altivec; \
++            c->put_hevc_epel_bi[i][1][0]  = ff_hevc_put_epel_bi_v_ ## depth ## _altivec;   \
++            c->put_hevc_epel_bi[i][1][1]  = ff_hevc_put_epel_bi_hv_ ## depth ## _altivec;  \
++            c->put_hevc_epel_uni_w[i][1][0] = ff_hevc_put_epel_uni_w_v_ ## depth ## _altivec;  \
++            c->put_hevc_epel_uni_w[i][1][1] = ff_hevc_put_epel_uni_w_hv_ ## depth ## _altivec; \
++        }                                                                      \
++    } while (0)
++
+ av_cold void ff_hevc_dsp_init_ppc(HEVCDSPContext *c, const int bit_depth)
+ {
+ #if HAVE_ALTIVEC
+@@ -117,5 +168,32 @@
+         c->idct[0] = ff_hevc_idct_4x4_8_altivec;
+     if (bit_depth == 10)
+         c->idct[0] = ff_hevc_idct_4x4_10_altivec;
++
++#if HAVE_BIGENDIAN
++    /* SAO is ~20 % of a 10-bit HEVC decode on a G4, second only to motion
++     * compensation, and had no PowerPC path at all. The five entries of each
++     * array are width classes; the code handles any width, so one function
++     * serves them all, exactly as the C reference does. */
++    if (bit_depth == 8) {
++        c->idct[1] = ff_hevc_idct_8x8_8_altivec;
++        c->idct[2] = ff_hevc_idct_16x16_8_altivec;
++        c->idct[3] = ff_hevc_idct_32x32_8_altivec;
++        c->sao_band_filter[0] = c->sao_band_filter[1] = c->sao_band_filter[2] =
++        c->sao_band_filter[3] = c->sao_band_filter[4] = ff_hevc_sao_band_filter_8_altivec;
++        c->sao_edge_filter[0] = c->sao_edge_filter[1] = c->sao_edge_filter[2] =
++        c->sao_edge_filter[3] = c->sao_edge_filter[4] = ff_hevc_sao_edge_filter_8_altivec;
++        MC_SET(8);
++    }
++    if (bit_depth == 10) {
++        c->idct[1] = ff_hevc_idct_8x8_10_altivec;
++        c->idct[2] = ff_hevc_idct_16x16_10_altivec;
++        c->idct[3] = ff_hevc_idct_32x32_10_altivec;
++        c->sao_band_filter[0] = c->sao_band_filter[1] = c->sao_band_filter[2] =
++        c->sao_band_filter[3] = c->sao_band_filter[4] = ff_hevc_sao_band_filter_10_altivec;
++        c->sao_edge_filter[0] = c->sao_edge_filter[1] = c->sao_edge_filter[2] =
++        c->sao_edge_filter[3] = c->sao_edge_filter[4] = ff_hevc_sao_edge_filter_10_altivec;
++        MC_SET(10);
++    }
++#endif
+ #endif /* HAVE_ALTIVEC */
+ }
+--- /dev/null
++++ b/libavcodec/ppc/hevcdsp_sao_template.c
+@@ -0,0 +1,305 @@
++/*
++ * AltiVec SAO (Sample Adaptive Offset) for HEVC
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++/*
++ * Both SAO filters are, per pixel: index a small table with something derived
++ * from the pixel, add the offset found there, clip. That is exactly what
++ * AltiVec is good at -- vec_perm is a 32-entry byte lookup in one instruction,
++ * and for 8 bits the clip is a free side effect of the saturating add/sub.
++ *
++ * Alignment: the source is the CTB scratch buffer (row stride
++ * 2*MAX_PB_SIZE + AV_INPUT_BUFFER_PADDING_SIZE = 192 bytes, a multiple of 16)
++ * but the destination is the frame plane, whose rows are only guaranteed
++ * 8-byte aligned for chroma. AltiVec has no unaligned store, so every row does
++ * a scalar head up to the first aligned destination vector, then the vector
++ * body, then a scalar tail. Loads stay unaligned, which costs only an lvsl.
++ *
++ * Included once per bit depth from hevcdsp.c; FUNC()/BIT_DEPTH come from there.
++ */
++
++#if BIT_DEPTH == 8
++#   define PIXEL     uint8_t
++#else
++#   define PIXEL     uint16_t
++#endif
++#define PIXEL_MAX    ((1 << BIT_DEPTH) - 1)
++
++static av_always_inline int FUNC(sao_clip, BIT_DEPTH)(int v)
++{
++    return v < 0 ? 0 : (v > PIXEL_MAX ? PIXEL_MAX : v);
++}
++
++#if BIT_DEPTH == 8
++/* src + offset clipped to [0,255]: split the signed offset into its positive
++ * and negative halves and let the saturating byte ops do the clipping. */
++static av_always_inline vec_u8 FUNC(sao_add, BIT_DEPTH)(vec_u8 s, vec_s8 off)
++{
++    const vec_s8 z = vec_splat_s8(0);
++    vec_u8 pos = (vec_u8)vec_max(off, z);
++    vec_u8 neg = (vec_u8)vec_sub(z, vec_min(off, z));
++    return vec_subs(vec_adds(s, pos), neg);
++}
++#else
++/* 10/12 bits: pixel <= 4095 and |offset| <= 31, so a 16-bit add cannot
++ * overflow and the clip is a plain min/max pair. */
++static av_always_inline vec_u16 FUNC(sao_add, BIT_DEPTH)(vec_u16 s, vec_s16 off)
++{
++    const vec_s16 z = vec_splat_s16(0);
++    const vec_s16 maxv = (vec_s16){ PIXEL_MAX, PIXEL_MAX, PIXEL_MAX, PIXEL_MAX,
++                                    PIXEL_MAX, PIXEL_MAX, PIXEL_MAX, PIXEL_MAX };
++    return (vec_u16)vec_min(vec_max(vec_add((vec_s16)s, off), z), maxv);
++}
++
++/* Byte permute indices that fetch 16-bit table entry idx into lane idx:
++ * lane i must read bytes (2*idx, 2*idx+1), i.e. the 16-bit value
++ * (2*idx << 8) | (2*idx + 1) = 514*idx + 1. */
++static av_always_inline vec_u8 FUNC(sao_perm16, BIT_DEPTH)(vec_s16 idx)
++{
++    const vec_s16 k514 = (vec_s16){ 514, 514, 514, 514, 514, 514, 514, 514 };
++    return (vec_u8)vec_mladd(idx, k514, vec_splat_s16(1));
++}
++#endif
++
++static void FUNC(ff_hevc_sao_band_filter, BIT_DEPTH)(uint8_t *_dst, const uint8_t *_src,
++                                                     ptrdiff_t stride_dst, ptrdiff_t stride_src,
++                                                     const int16_t *sao_offset_val,
++                                                     int sao_left_class,
++                                                     int width, int height)
++{
++    PIXEL *dst = (PIXEL *)_dst;
++    const PIXEL *src = (const PIXEL *)_src;
++    int offset_table[32] = { 0 };
++    int k, x, y;
++#if BIT_DEPTH == 8
++    int vectorise = 1;
++#endif
++
++    stride_dst /= sizeof(PIXEL);
++    stride_src /= sizeof(PIXEL);
++
++    for (k = 0; k < 4; k++)
++        offset_table[(k + sao_left_class) & 31] = sao_offset_val[k + 1];
++
++    /* (pixel >> (BIT_DEPTH-5)) is already 0..31, so the reference's & 31 is a
++     * no-op and is dropped below. */
++
++#if BIT_DEPTH == 8
++    {
++        /* The whole 32-entry table fits in a vec_perm pair. */
++        union { vec_s8 v; int8_t b[16]; } t0, t1;
++        for (k = 0; k < 16; k++) {
++            if (offset_table[k] < -128 || offset_table[k] > 127 ||
++                offset_table[k + 16] < -128 || offset_table[k + 16] > 127)
++                vectorise = 0;
++        }
++        if (vectorise) {
++            for (k = 0; k < 16; k++) {
++                t0.b[k] = (int8_t)offset_table[k];
++                t1.b[k] = (int8_t)offset_table[k + 16];
++            }
++            for (y = 0; y < height; y++) {
++                int head = (int)((-(uintptr_t)dst) & 15);
++                if (head > width)
++                    head = width;
++                for (x = 0; x < head; x++)
++                    dst[x] = FUNC(sao_clip, BIT_DEPTH)(src[x] + offset_table[src[x] >> (BIT_DEPTH - 5)]);
++                for (; x + 16 <= width; x += 16) {
++                    vec_u8 s = unaligned_load(0, src + x);
++                    vec_u8 band = vec_sr(s, vec_splat_u8(BIT_DEPTH - 5));
++                    vec_s8 off = (vec_s8)vec_perm((vec_u8)t0.v, (vec_u8)t1.v, band);
++                    vec_st(FUNC(sao_add, BIT_DEPTH)(s, off), 0, dst + x);
++                }
++                for (; x < width; x++)
++                    dst[x] = FUNC(sao_clip, BIT_DEPTH)(src[x] + offset_table[src[x] >> (BIT_DEPTH - 5)]);
++                dst += stride_dst;
++                src += stride_src;
++            }
++            return;
++        }
++    }
++#else
++    {
++        /* 16-bit lanes: a 32-entry table would need 64 bytes, too many for one
++         * vec_perm. Only the four bands starting at sao_left_class carry an
++         * offset, so index a 5-entry table by (band - left) & 31 saturated to
++         * 4, entry 4 being zero. */
++        union { vec_s16 v; int16_t h[8]; } t;
++        const vec_u16 v31 = (vec_u16){ 31, 31, 31, 31, 31, 31, 31, 31 };
++        const vec_s16 vfour = vec_splat_s16(4);
++        const vec_s16 vleft = (vec_s16){ sao_left_class, sao_left_class,
++                                         sao_left_class, sao_left_class,
++                                         sao_left_class, sao_left_class,
++                                         sao_left_class, sao_left_class };
++        for (k = 0; k < 4; k++)
++            t.h[k] = sao_offset_val[k + 1];
++        for (k = 4; k < 8; k++)
++            t.h[k] = 0;
++
++        for (y = 0; y < height; y++) {
++            int head = (int)(((-(uintptr_t)dst) & 15) >> 1);
++            if (head > width)
++                head = width;
++            for (x = 0; x < head; x++)
++                dst[x] = FUNC(sao_clip, BIT_DEPTH)(src[x] + offset_table[src[x] >> (BIT_DEPTH - 5)]);
++            for (; x + 8 <= width; x += 8) {
++                vec_u16 s = (vec_u16)unaligned_load(0, (const uint8_t *)(src + x));
++                vec_s16 band = (vec_s16)vec_sr(s, vec_splat_u16(BIT_DEPTH - 5));
++                vec_s16 d = vec_min((vec_s16)vec_and((vec_u16)vec_sub(band, vleft), v31), vfour);
++                vec_s16 off = (vec_s16)vec_perm((vec_u8)t.v, (vec_u8)t.v,
++                                                FUNC(sao_perm16, BIT_DEPTH)(d));
++                vec_st(FUNC(sao_add, BIT_DEPTH)(s, off), 0, (uint16_t *)(dst + x));
++            }
++            for (; x < width; x++)
++                dst[x] = FUNC(sao_clip, BIT_DEPTH)(src[x] + offset_table[src[x] >> (BIT_DEPTH - 5)]);
++            dst += stride_dst;
++            src += stride_src;
++        }
++        return;
++    }
++#endif
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x < width; x++)
++            dst[x] = FUNC(sao_clip, BIT_DEPTH)(src[x] + offset_table[src[x] >> (BIT_DEPTH - 5)]);
++        dst += stride_dst;
++        src += stride_src;
++    }
++}
++
++static void FUNC(ff_hevc_sao_edge_filter, BIT_DEPTH)(uint8_t *_dst, const uint8_t *_src,
++                                                     ptrdiff_t stride_dst,
++                                                     const int16_t *sao_offset_val,
++                                                     int eo, int width, int height)
++{
++    static const uint8_t edge_idx[] = { 1, 2, 0, 3, 4 };
++    static const int8_t pos[4][2][2] = {
++        { { -1,  0 }, {  1, 0 } }, // horizontal
++        { {  0, -1 }, {  0, 1 } }, // vertical
++        { { -1, -1 }, {  1, 1 } }, // 45 degree
++        { {  1, -1 }, { -1, 1 } }, // 135 degree
++    };
++    PIXEL *dst = (PIXEL *)_dst;
++    const PIXEL *src = (const PIXEL *)_src;
++    const ptrdiff_t stride_src =
++        (2 * MAX_PB_SIZE + AV_INPUT_BUFFER_PADDING_SIZE) / (ptrdiff_t)sizeof(PIXEL);
++    ptrdiff_t a_stride, b_stride;
++    int16_t tab[8];
++    int k, x, y;
++#if BIT_DEPTH == 8
++    int vectorise = 1;
++#endif
++
++    stride_dst /= sizeof(PIXEL);
++    a_stride = pos[eo][0][0] + pos[eo][0][1] * stride_src;
++    b_stride = pos[eo][1][0] + pos[eo][1][1] * stride_src;
++
++    /* Fold edge_idx into the offsets: tab[i] is what index i already resolves
++     * to, so the per-pixel path is a single table lookup. */
++    for (k = 0; k < 5; k++)
++        tab[k] = sao_offset_val[edge_idx[k]];
++    tab[5] = tab[6] = tab[7] = 0;
++
++#define EDGE_SCALAR_PIXEL()                                                     \
++    do {                                                                        \
++        int d0 = (src[x] > src[x + a_stride]) - (src[x] < src[x + a_stride]);   \
++        int d1 = (src[x] > src[x + b_stride]) - (src[x] < src[x + b_stride]);   \
++        dst[x] = FUNC(sao_clip, BIT_DEPTH)(src[x] + tab[2 + d0 + d1]);          \
++    } while (0)
++
++#if BIT_DEPTH == 8
++    {
++        union { vec_s8 v; int8_t b[16]; } t;
++        for (k = 0; k < 5; k++)
++            if (tab[k] < -128 || tab[k] > 127)
++                vectorise = 0;
++        if (vectorise) {
++            for (k = 0; k < 5; k++)
++                t.b[k] = (int8_t)tab[k];
++            for (k = 5; k < 16; k++)
++                t.b[k] = 0;
++
++            for (y = 0; y < height; y++) {
++                int head = (int)((-(uintptr_t)dst) & 15);
++                if (head > width)
++                    head = width;
++                for (x = 0; x < head; x++)
++                    EDGE_SCALAR_PIXEL();
++                for (; x + 16 <= width; x += 16) {
++                    vec_u8 s = unaligned_load(0, src + x);
++                    vec_u8 a = unaligned_load(0, src + x + a_stride);
++                    vec_u8 b = unaligned_load(0, src + x + b_stride);
++                    /* compare masks are 0 or -1, so (s>a)-(s<a) is lt-gt */
++                    vec_s8 d0 = vec_sub((vec_s8)vec_cmplt(s, a), (vec_s8)vec_cmpgt(s, a));
++                    vec_s8 d1 = vec_sub((vec_s8)vec_cmplt(s, b), (vec_s8)vec_cmpgt(s, b));
++                    vec_u8 idx = (vec_u8)vec_add(vec_splat_s8(2), vec_add(d0, d1));
++                    vec_s8 off = (vec_s8)vec_perm((vec_u8)t.v, (vec_u8)t.v, idx);
++                    vec_st(FUNC(sao_add, BIT_DEPTH)(s, off), 0, dst + x);
++                }
++                for (; x < width; x++)
++                    EDGE_SCALAR_PIXEL();
++                src += stride_src;
++                dst += stride_dst;
++            }
++            return;
++        }
++    }
++#else
++    {
++        union { vec_s16 v; int16_t h[8]; } t;
++        for (k = 0; k < 8; k++)
++            t.h[k] = tab[k];
++
++        for (y = 0; y < height; y++) {
++            int head = (int)(((-(uintptr_t)dst) & 15) >> 1);
++            if (head > width)
++                head = width;
++            for (x = 0; x < head; x++)
++                EDGE_SCALAR_PIXEL();
++            for (; x + 8 <= width; x += 8) {
++                vec_u16 s = (vec_u16)unaligned_load(0, (const uint8_t *)(src + x));
++                vec_u16 a = (vec_u16)unaligned_load(0, (const uint8_t *)(src + x + a_stride));
++                vec_u16 b = (vec_u16)unaligned_load(0, (const uint8_t *)(src + x + b_stride));
++                vec_s16 d0 = vec_sub((vec_s16)vec_cmplt(s, a), (vec_s16)vec_cmpgt(s, a));
++                vec_s16 d1 = vec_sub((vec_s16)vec_cmplt(s, b), (vec_s16)vec_cmpgt(s, b));
++                vec_s16 idx = vec_add(vec_splat_s16(2), vec_add(d0, d1));
++                vec_s16 off = (vec_s16)vec_perm((vec_u8)t.v, (vec_u8)t.v,
++                                                FUNC(sao_perm16, BIT_DEPTH)(idx));
++                vec_st(FUNC(sao_add, BIT_DEPTH)(s, off), 0, (uint16_t *)(dst + x));
++            }
++            for (; x < width; x++)
++                EDGE_SCALAR_PIXEL();
++            src += stride_src;
++            dst += stride_dst;
++        }
++        return;
++    }
++#endif
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x < width; x++)
++            EDGE_SCALAR_PIXEL();
++        src += stride_src;
++        dst += stride_dst;
++    }
++#undef EDGE_SCALAR_PIXEL
++}
++
++#undef PIXEL_MAX
++#undef PIXEL
+--- /dev/null
++++ b/libavcodec/ppc/hevcdsp_idct_altivec.h
+@@ -0,0 +1,252 @@
++/*
++ * AltiVec HEVC inverse transform (8x8, 16x16, 32x32)
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++/*
++ * Layout: eight lanes are eight *different columns* being transformed at once,
++ * so every lane wants the same constant and the whole thing is a plain
++ * multiply-accumulate -- no horizontal reductions anywhere. Loads are then
++ * contiguous (eight neighbouring columns of one row) and so are stores.
++ *
++ * Because that layout only works along one axis, the second pass runs on the
++ * transposed block and the block is transposed back afterwards, exactly as the
++ * x86 SSE2 version does.
++ *
++ * AltiVec has no 32-bit integer multiply, so int16 x int16 -> int32 goes
++ * through vec_mule/vec_mulo, which split the vector into even and odd source
++ * lanes. Accumulators therefore come in pairs (e, o) and the lane order is only
++ * restored by one vec_perm at store time.
++ *
++ * col_limit is ignored: it only promises that some coefficients are zero, and
++ * multiplying by them costs nothing here. The x86 assembly ignores it too.
++ *
++ * Bit-exact with the C reference: the butterfly is the same, all intermediates
++ * are exact int32, and the final av_clip_int16 is what vec_packs does.
++ */
++
++#include "hevcdsp_idct_tables.h"
++
++typedef struct {
++    vec_s32 e;   /* products of source lanes 0,2,4,6 */
++    vec_s32 o;   /* products of source lanes 1,3,5,7 */
++} idct_acc;
++
++#define ACC_ZERO()  ((idct_acc){ (vec_s32)vec_splat_u32(0), (vec_s32)vec_splat_u32(0) })
++
++#define ACC_MADD(acc, src, cst)                              \
++    do {                                                     \
++        vec_s16 s_ = (src);                                  \
++        vec_s16 c_ = (cst);                                  \
++        (acc).e = vec_add((acc).e, vec_mule(s_, c_));        \
++        (acc).o = vec_add((acc).o, vec_mulo(s_, c_));        \
++    } while (0)
++
++static av_always_inline idct_acc acc_add(idct_acc a, idct_acc b)
++{
++    idct_acc r;
++    r.e = vec_add(a.e, b.e);
++    r.o = vec_add(a.o, b.o);
++    return r;
++}
++
++static av_always_inline idct_acc acc_sub(idct_acc a, idct_acc b)
++{
++    idct_acc r;
++    r.e = vec_sub(a.e, b.e);
++    r.o = vec_sub(a.o, b.o);
++    return r;
++}
++
++static av_always_inline vec_s16 idct_splat16(int16_t v)
++{
++    union { vec_s16 v; int16_t h[8]; } u;
++    u.h[0] = u.h[1] = u.h[2] = u.h[3] = v;
++    u.h[4] = u.h[5] = u.h[6] = u.h[7] = v;
++    return u.v;
++}
++
++/* 4-point base case: the constants are the ones spelled out in TR_4. */
++static av_always_inline void idct_tr4(const int16_t *base, ptrdiff_t sstep,
++                                      idct_acc out[4])
++{
++    const vec_s16 c64  = idct_splat16(64);
++    const vec_s16 cm64 = idct_splat16(-64);
++    const vec_s16 c83  = idct_splat16(83);
++    const vec_s16 cm83 = idct_splat16(-83);
++    const vec_s16 c36  = idct_splat16(36);
++    vec_s16 s0 = vec_ld(0, base);
++    vec_s16 s1 = vec_ld(0, base + sstep);
++    vec_s16 s2 = vec_ld(0, base + 2 * sstep);
++    vec_s16 s3 = vec_ld(0, base + 3 * sstep);
++    idct_acc e0 = ACC_ZERO(), e1 = ACC_ZERO(), o0 = ACC_ZERO(), o1 = ACC_ZERO();
++
++    ACC_MADD(e0, s0, c64);
++    ACC_MADD(e0, s2, c64);
++    ACC_MADD(e1, s0, c64);
++    ACC_MADD(e1, s2, cm64);
++    ACC_MADD(o0, s1, c83);
++    ACC_MADD(o0, s3, c36);
++    ACC_MADD(o1, s1, c36);
++    ACC_MADD(o1, s3, cm83);
++
++    out[0] = acc_add(e0, o0);
++    out[1] = acc_add(e1, o1);
++    out[2] = acc_sub(e1, o1);
++    out[3] = acc_sub(e0, o0);
++}
++
++#define IDCT_TR(N, HALF, TAB, SUB)                                            \
++static av_always_inline void idct_tr##N(const int16_t *base, ptrdiff_t sstep, \
++                                        idct_acc out[N])                      \
++{                                                                             \
++    idct_acc e[HALF];                                                         \
++    int i, jj;                                                                \
++                                                                              \
++    SUB(base, 2 * sstep, e);                                                  \
++    for (i = 0; i < HALF; i++) {                                              \
++        idct_acc o = ACC_ZERO();                                              \
++        for (jj = 0; jj < HALF; jj++)                                         \
++            ACC_MADD(o, vec_ld(0, base + (2 * jj + 1) * sstep), TAB[jj][i]);  \
++        out[i]         = acc_add(e[i], o);                                    \
++        out[N - 1 - i] = acc_sub(e[i], o);                                    \
++    }                                                                         \
++}
++
++IDCT_TR( 8,  4, tr8_odd,  idct_tr4)
++IDCT_TR(16,  8, tr16_odd, idct_tr8)
++IDCT_TR(32, 16, tr32_odd, idct_tr16)
++
++/* vec_packs(e, o) yields source lanes 0,2,4,6,1,3,5,7; put them back in order */
++static const vec_u8 idct_unshuffle = {
++    0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15
++};
++
++static av_always_inline vec_s32 idct_splat32(int32_t v)
++{
++    union { vec_s32 v; int32_t w[4]; } u;
++    u.w[0] = u.w[1] = u.w[2] = u.w[3] = v;
++    return u.v;
++}
++
++static av_always_inline vec_u32 idct_usplat32(uint32_t v)
++{
++    union { vec_u32 v; uint32_t w[4]; } u;
++    u.w[0] = u.w[1] = u.w[2] = u.w[3] = v;
++    return u.v;
++}
++
++/* One separable pass: transform every column of the N x N block in place. */
++static void idct_pass(int16_t *coeffs, int N, int shift)
++{
++    const vec_s32 vadd = idct_splat32(1 << (shift - 1));
++    const vec_u32 vsh  = idct_usplat32(shift);
++    idct_acc out[32];
++    int x, k;
++
++    for (x = 0; x < N; x += 8) {
++        const int16_t *base = coeffs + x;
++
++        switch (N) {
++        case  8: idct_tr8 (base, N, out); break;
++        case 16: idct_tr16(base, N, out); break;
++        default: idct_tr32(base, N, out); break;
++        }
++
++        for (k = 0; k < N; k++) {
++            vec_s32 e = vec_sra(vec_add(out[k].e, vadd), vsh);
++            vec_s32 o = vec_sra(vec_add(out[k].o, vadd), vsh);
++            vec_s16 p = vec_packs(e, o);           /* av_clip_int16 for free */
++            vec_st(vec_perm(p, p, idct_unshuffle), 0, coeffs + k * N + x);
++        }
++    }
++}
++
++/* In-place transpose, 8x8 tiles. Every row start is 16-byte aligned because
++ * N >= 8 and the coefficient block itself is aligned. */
++static void idct_transpose(int16_t *c, int N)
++{
++    int i, j;
++
++    for (i = 0; i < N; i += 8) {
++        for (j = i; j < N; j += 8) {
++            vec_s16 a0, a1, a2, a3, a4, a5, a6, a7;
++            int16_t *pa = c + (ptrdiff_t)i * N + j;
++            int16_t *pb = c + (ptrdiff_t)j * N + i;
++
++            a0 = vec_ld(0, pa + 0 * N);
++            a1 = vec_ld(0, pa + 1 * N);
++            a2 = vec_ld(0, pa + 2 * N);
++            a3 = vec_ld(0, pa + 3 * N);
++            a4 = vec_ld(0, pa + 4 * N);
++            a5 = vec_ld(0, pa + 5 * N);
++            a6 = vec_ld(0, pa + 6 * N);
++            a7 = vec_ld(0, pa + 7 * N);
++            TRANSPOSE8(a0, a1, a2, a3, a4, a5, a6, a7);
++
++            if (i == j) {
++                vec_st(a0, 0, pa + 0 * N);
++                vec_st(a1, 0, pa + 1 * N);
++                vec_st(a2, 0, pa + 2 * N);
++                vec_st(a3, 0, pa + 3 * N);
++                vec_st(a4, 0, pa + 4 * N);
++                vec_st(a5, 0, pa + 5 * N);
++                vec_st(a6, 0, pa + 6 * N);
++                vec_st(a7, 0, pa + 7 * N);
++            } else {
++                vec_s16 b0, b1, b2, b3, b4, b5, b6, b7;
++
++                b0 = vec_ld(0, pb + 0 * N);
++                b1 = vec_ld(0, pb + 1 * N);
++                b2 = vec_ld(0, pb + 2 * N);
++                b3 = vec_ld(0, pb + 3 * N);
++                b4 = vec_ld(0, pb + 4 * N);
++                b5 = vec_ld(0, pb + 5 * N);
++                b6 = vec_ld(0, pb + 6 * N);
++                b7 = vec_ld(0, pb + 7 * N);
++                TRANSPOSE8(b0, b1, b2, b3, b4, b5, b6, b7);
++
++                vec_st(b0, 0, pa + 0 * N);
++                vec_st(b1, 0, pa + 1 * N);
++                vec_st(b2, 0, pa + 2 * N);
++                vec_st(b3, 0, pa + 3 * N);
++                vec_st(b4, 0, pa + 4 * N);
++                vec_st(b5, 0, pa + 5 * N);
++                vec_st(b6, 0, pa + 6 * N);
++                vec_st(b7, 0, pa + 7 * N);
++
++                vec_st(a0, 0, pb + 0 * N);
++                vec_st(a1, 0, pb + 1 * N);
++                vec_st(a2, 0, pb + 2 * N);
++                vec_st(a3, 0, pb + 3 * N);
++                vec_st(a4, 0, pb + 4 * N);
++                vec_st(a5, 0, pb + 5 * N);
++                vec_st(a6, 0, pb + 6 * N);
++                vec_st(a7, 0, pb + 7 * N);
++            }
++        }
++    }
++}
++
++static void idct_altivec(int16_t *coeffs, int N, int shift2)
++{
++    idct_pass(coeffs, N, 7);        /* columns, exactly as the C reference */
++    idct_transpose(coeffs, N);
++    idct_pass(coeffs, N, shift2);   /* rows, now laid out as columns */
++    idct_transpose(coeffs, N);
++}
+--- /dev/null
++++ b/libavcodec/ppc/hevcdsp_idct_tables.h
+@@ -0,0 +1,48 @@
++/*
++ * HEVC inverse-transform constants, pre-splatted for AltiVec.
++ *
++ * GENERATED from the transform[32][32] table of libavcodec/hevc/dsp.c -- do
++ * not edit by hand. Each entry is one coefficient broadcast over the eight
++ * int16 lanes, because the eight lanes are eight different columns (or rows)
++ * being transformed in parallel and they all need the same constant.
++ *
++ * trN_odd[jj][i] is the constant that multiplies input 2*jj+1 into odd output
++ * i of the N-point transform, i.e. transform[(32/N) * (2*jj+1)][i].
++ */
++
++static const vec_s16 tr8_odd[4][4] = {
++    { { 89, 89, 89, 89, 89, 89, 89, 89 }, { 75, 75, 75, 75, 75, 75, 75, 75 }, { 50, 50, 50, 50, 50, 50, 50, 50 }, { 18, 18, 18, 18, 18, 18, 18, 18 } },
++    { { 75, 75, 75, 75, 75, 75, 75, 75 }, { -18, -18, -18, -18, -18, -18, -18, -18 }, { -89, -89, -89, -89, -89, -89, -89, -89 }, { -50, -50, -50, -50, -50, -50, -50, -50 } },
++    { { 50, 50, 50, 50, 50, 50, 50, 50 }, { -89, -89, -89, -89, -89, -89, -89, -89 }, { 18, 18, 18, 18, 18, 18, 18, 18 }, { 75, 75, 75, 75, 75, 75, 75, 75 } },
++    { { 18, 18, 18, 18, 18, 18, 18, 18 }, { -50, -50, -50, -50, -50, -50, -50, -50 }, { 75, 75, 75, 75, 75, 75, 75, 75 }, { -89, -89, -89, -89, -89, -89, -89, -89 } },
++};
++
++static const vec_s16 tr16_odd[8][8] = {
++    { { 90, 90, 90, 90, 90, 90, 90, 90 }, { 87, 87, 87, 87, 87, 87, 87, 87 }, { 80, 80, 80, 80, 80, 80, 80, 80 }, { 70, 70, 70, 70, 70, 70, 70, 70 }, { 57, 57, 57, 57, 57, 57, 57, 57 }, { 43, 43, 43, 43, 43, 43, 43, 43 }, { 25, 25, 25, 25, 25, 25, 25, 25 }, { 9, 9, 9, 9, 9, 9, 9, 9 } },
++    { { 87, 87, 87, 87, 87, 87, 87, 87 }, { 57, 57, 57, 57, 57, 57, 57, 57 }, { 9, 9, 9, 9, 9, 9, 9, 9 }, { -43, -43, -43, -43, -43, -43, -43, -43 }, { -80, -80, -80, -80, -80, -80, -80, -80 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { -70, -70, -70, -70, -70, -70, -70, -70 }, { -25, -25, -25, -25, -25, -25, -25, -25 } },
++    { { 80, 80, 80, 80, 80, 80, 80, 80 }, { 9, 9, 9, 9, 9, 9, 9, 9 }, { -70, -70, -70, -70, -70, -70, -70, -70 }, { -87, -87, -87, -87, -87, -87, -87, -87 }, { -25, -25, -25, -25, -25, -25, -25, -25 }, { 57, 57, 57, 57, 57, 57, 57, 57 }, { 90, 90, 90, 90, 90, 90, 90, 90 }, { 43, 43, 43, 43, 43, 43, 43, 43 } },
++    { { 70, 70, 70, 70, 70, 70, 70, 70 }, { -43, -43, -43, -43, -43, -43, -43, -43 }, { -87, -87, -87, -87, -87, -87, -87, -87 }, { 9, 9, 9, 9, 9, 9, 9, 9 }, { 90, 90, 90, 90, 90, 90, 90, 90 }, { 25, 25, 25, 25, 25, 25, 25, 25 }, { -80, -80, -80, -80, -80, -80, -80, -80 }, { -57, -57, -57, -57, -57, -57, -57, -57 } },
++    { { 57, 57, 57, 57, 57, 57, 57, 57 }, { -80, -80, -80, -80, -80, -80, -80, -80 }, { -25, -25, -25, -25, -25, -25, -25, -25 }, { 90, 90, 90, 90, 90, 90, 90, 90 }, { -9, -9, -9, -9, -9, -9, -9, -9 }, { -87, -87, -87, -87, -87, -87, -87, -87 }, { 43, 43, 43, 43, 43, 43, 43, 43 }, { 70, 70, 70, 70, 70, 70, 70, 70 } },
++    { { 43, 43, 43, 43, 43, 43, 43, 43 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { 57, 57, 57, 57, 57, 57, 57, 57 }, { 25, 25, 25, 25, 25, 25, 25, 25 }, { -87, -87, -87, -87, -87, -87, -87, -87 }, { 70, 70, 70, 70, 70, 70, 70, 70 }, { 9, 9, 9, 9, 9, 9, 9, 9 }, { -80, -80, -80, -80, -80, -80, -80, -80 } },
++    { { 25, 25, 25, 25, 25, 25, 25, 25 }, { -70, -70, -70, -70, -70, -70, -70, -70 }, { 90, 90, 90, 90, 90, 90, 90, 90 }, { -80, -80, -80, -80, -80, -80, -80, -80 }, { 43, 43, 43, 43, 43, 43, 43, 43 }, { 9, 9, 9, 9, 9, 9, 9, 9 }, { -57, -57, -57, -57, -57, -57, -57, -57 }, { 87, 87, 87, 87, 87, 87, 87, 87 } },
++    { { 9, 9, 9, 9, 9, 9, 9, 9 }, { -25, -25, -25, -25, -25, -25, -25, -25 }, { 43, 43, 43, 43, 43, 43, 43, 43 }, { -57, -57, -57, -57, -57, -57, -57, -57 }, { 70, 70, 70, 70, 70, 70, 70, 70 }, { -80, -80, -80, -80, -80, -80, -80, -80 }, { 87, 87, 87, 87, 87, 87, 87, 87 }, { -90, -90, -90, -90, -90, -90, -90, -90 } },
++};
++
++static const vec_s16 tr32_odd[16][16] = {
++    { { 90, 90, 90, 90, 90, 90, 90, 90 }, { 90, 90, 90, 90, 90, 90, 90, 90 }, { 88, 88, 88, 88, 88, 88, 88, 88 }, { 85, 85, 85, 85, 85, 85, 85, 85 }, { 82, 82, 82, 82, 82, 82, 82, 82 }, { 78, 78, 78, 78, 78, 78, 78, 78 }, { 73, 73, 73, 73, 73, 73, 73, 73 }, { 67, 67, 67, 67, 67, 67, 67, 67 }, { 61, 61, 61, 61, 61, 61, 61, 61 }, { 54, 54, 54, 54, 54, 54, 54, 54 }, { 46, 46, 46, 46, 46, 46, 46, 46 }, { 38, 38, 38, 38, 38, 38, 38, 38 }, { 31, 31, 31, 31, 31, 31, 31, 31 }, { 22, 22, 22, 22, 22, 22, 22, 22 }, { 13, 13, 13, 13, 13, 13, 13, 13 }, { 4, 4, 4, 4, 4, 4, 4, 4 } },
++    { { 90, 90, 90, 90, 90, 90, 90, 90 }, { 82, 82, 82, 82, 82, 82, 82, 82 }, { 67, 67, 67, 67, 67, 67, 67, 67 }, { 46, 46, 46, 46, 46, 46, 46, 46 }, { 22, 22, 22, 22, 22, 22, 22, 22 }, { -4, -4, -4, -4, -4, -4, -4, -4 }, { -31, -31, -31, -31, -31, -31, -31, -31 }, { -54, -54, -54, -54, -54, -54, -54, -54 }, { -73, -73, -73, -73, -73, -73, -73, -73 }, { -85, -85, -85, -85, -85, -85, -85, -85 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { -88, -88, -88, -88, -88, -88, -88, -88 }, { -78, -78, -78, -78, -78, -78, -78, -78 }, { -61, -61, -61, -61, -61, -61, -61, -61 }, { -38, -38, -38, -38, -38, -38, -38, -38 }, { -13, -13, -13, -13, -13, -13, -13, -13 } },
++    { { 88, 88, 88, 88, 88, 88, 88, 88 }, { 67, 67, 67, 67, 67, 67, 67, 67 }, { 31, 31, 31, 31, 31, 31, 31, 31 }, { -13, -13, -13, -13, -13, -13, -13, -13 }, { -54, -54, -54, -54, -54, -54, -54, -54 }, { -82, -82, -82, -82, -82, -82, -82, -82 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { -78, -78, -78, -78, -78, -78, -78, -78 }, { -46, -46, -46, -46, -46, -46, -46, -46 }, { -4, -4, -4, -4, -4, -4, -4, -4 }, { 38, 38, 38, 38, 38, 38, 38, 38 }, { 73, 73, 73, 73, 73, 73, 73, 73 }, { 90, 90, 90, 90, 90, 90, 90, 90 }, { 85, 85, 85, 85, 85, 85, 85, 85 }, { 61, 61, 61, 61, 61, 61, 61, 61 }, { 22, 22, 22, 22, 22, 22, 22, 22 } },
++    { { 85, 85, 85, 85, 85, 85, 85, 85 }, { 46, 46, 46, 46, 46, 46, 46, 46 }, { -13, -13, -13, -13, -13, -13, -13, -13 }, { -67, -67, -67, -67, -67, -67, -67, -67 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { -73, -73, -73, -73, -73, -73, -73, -73 }, { -22, -22, -22, -22, -22, -22, -22, -22 }, { 38, 38, 38, 38, 38, 38, 38, 38 }, { 82, 82, 82, 82, 82, 82, 82, 82 }, { 88, 88, 88, 88, 88, 88, 88, 88 }, { 54, 54, 54, 54, 54, 54, 54, 54 }, { -4, -4, -4, -4, -4, -4, -4, -4 }, { -61, -61, -61, -61, -61, -61, -61, -61 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { -78, -78, -78, -78, -78, -78, -78, -78 }, { -31, -31, -31, -31, -31, -31, -31, -31 } },
++    { { 82, 82, 82, 82, 82, 82, 82, 82 }, { 22, 22, 22, 22, 22, 22, 22, 22 }, { -54, -54, -54, -54, -54, -54, -54, -54 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { -61, -61, -61, -61, -61, -61, -61, -61 }, { 13, 13, 13, 13, 13, 13, 13, 13 }, { 78, 78, 78, 78, 78, 78, 78, 78 }, { 85, 85, 85, 85, 85, 85, 85, 85 }, { 31, 31, 31, 31, 31, 31, 31, 31 }, { -46, -46, -46, -46, -46, -46, -46, -46 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { -67, -67, -67, -67, -67, -67, -67, -67 }, { 4, 4, 4, 4, 4, 4, 4, 4 }, { 73, 73, 73, 73, 73, 73, 73, 73 }, { 88, 88, 88, 88, 88, 88, 88, 88 }, { 38, 38, 38, 38, 38, 38, 38, 38 } },
++    { { 78, 78, 78, 78, 78, 78, 78, 78 }, { -4, -4, -4, -4, -4, -4, -4, -4 }, { -82, -82, -82, -82, -82, -82, -82, -82 }, { -73, -73, -73, -73, -73, -73, -73, -73 }, { 13, 13, 13, 13, 13, 13, 13, 13 }, { 85, 85, 85, 85, 85, 85, 85, 85 }, { 67, 67, 67, 67, 67, 67, 67, 67 }, { -22, -22, -22, -22, -22, -22, -22, -22 }, { -88, -88, -88, -88, -88, -88, -88, -88 }, { -61, -61, -61, -61, -61, -61, -61, -61 }, { 31, 31, 31, 31, 31, 31, 31, 31 }, { 90, 90, 90, 90, 90, 90, 90, 90 }, { 54, 54, 54, 54, 54, 54, 54, 54 }, { -38, -38, -38, -38, -38, -38, -38, -38 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { -46, -46, -46, -46, -46, -46, -46, -46 } },
++    { { 73, 73, 73, 73, 73, 73, 73, 73 }, { -31, -31, -31, -31, -31, -31, -31, -31 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { -22, -22, -22, -22, -22, -22, -22, -22 }, { 78, 78, 78, 78, 78, 78, 78, 78 }, { 67, 67, 67, 67, 67, 67, 67, 67 }, { -38, -38, -38, -38, -38, -38, -38, -38 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { -13, -13, -13, -13, -13, -13, -13, -13 }, { 82, 82, 82, 82, 82, 82, 82, 82 }, { 61, 61, 61, 61, 61, 61, 61, 61 }, { -46, -46, -46, -46, -46, -46, -46, -46 }, { -88, -88, -88, -88, -88, -88, -88, -88 }, { -4, -4, -4, -4, -4, -4, -4, -4 }, { 85, 85, 85, 85, 85, 85, 85, 85 }, { 54, 54, 54, 54, 54, 54, 54, 54 } },
++    { { 67, 67, 67, 67, 67, 67, 67, 67 }, { -54, -54, -54, -54, -54, -54, -54, -54 }, { -78, -78, -78, -78, -78, -78, -78, -78 }, { 38, 38, 38, 38, 38, 38, 38, 38 }, { 85, 85, 85, 85, 85, 85, 85, 85 }, { -22, -22, -22, -22, -22, -22, -22, -22 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { 4, 4, 4, 4, 4, 4, 4, 4 }, { 90, 90, 90, 90, 90, 90, 90, 90 }, { 13, 13, 13, 13, 13, 13, 13, 13 }, { -88, -88, -88, -88, -88, -88, -88, -88 }, { -31, -31, -31, -31, -31, -31, -31, -31 }, { 82, 82, 82, 82, 82, 82, 82, 82 }, { 46, 46, 46, 46, 46, 46, 46, 46 }, { -73, -73, -73, -73, -73, -73, -73, -73 }, { -61, -61, -61, -61, -61, -61, -61, -61 } },
++    { { 61, 61, 61, 61, 61, 61, 61, 61 }, { -73, -73, -73, -73, -73, -73, -73, -73 }, { -46, -46, -46, -46, -46, -46, -46, -46 }, { 82, 82, 82, 82, 82, 82, 82, 82 }, { 31, 31, 31, 31, 31, 31, 31, 31 }, { -88, -88, -88, -88, -88, -88, -88, -88 }, { -13, -13, -13, -13, -13, -13, -13, -13 }, { 90, 90, 90, 90, 90, 90, 90, 90 }, { -4, -4, -4, -4, -4, -4, -4, -4 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { 22, 22, 22, 22, 22, 22, 22, 22 }, { 85, 85, 85, 85, 85, 85, 85, 85 }, { -38, -38, -38, -38, -38, -38, -38, -38 }, { -78, -78, -78, -78, -78, -78, -78, -78 }, { 54, 54, 54, 54, 54, 54, 54, 54 }, { 67, 67, 67, 67, 67, 67, 67, 67 } },
++    { { 54, 54, 54, 54, 54, 54, 54, 54 }, { -85, -85, -85, -85, -85, -85, -85, -85 }, { -4, -4, -4, -4, -4, -4, -4, -4 }, { 88, 88, 88, 88, 88, 88, 88, 88 }, { -46, -46, -46, -46, -46, -46, -46, -46 }, { -61, -61, -61, -61, -61, -61, -61, -61 }, { 82, 82, 82, 82, 82, 82, 82, 82 }, { 13, 13, 13, 13, 13, 13, 13, 13 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { 38, 38, 38, 38, 38, 38, 38, 38 }, { 67, 67, 67, 67, 67, 67, 67, 67 }, { -78, -78, -78, -78, -78, -78, -78, -78 }, { -22, -22, -22, -22, -22, -22, -22, -22 }, { 90, 90, 90, 90, 90, 90, 90, 90 }, { -31, -31, -31, -31, -31, -31, -31, -31 }, { -73, -73, -73, -73, -73, -73, -73, -73 } },
++    { { 46, 46, 46, 46, 46, 46, 46, 46 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { 38, 38, 38, 38, 38, 38, 38, 38 }, { 54, 54, 54, 54, 54, 54, 54, 54 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { 31, 31, 31, 31, 31, 31, 31, 31 }, { 61, 61, 61, 61, 61, 61, 61, 61 }, { -88, -88, -88, -88, -88, -88, -88, -88 }, { 22, 22, 22, 22, 22, 22, 22, 22 }, { 67, 67, 67, 67, 67, 67, 67, 67 }, { -85, -85, -85, -85, -85, -85, -85, -85 }, { 13, 13, 13, 13, 13, 13, 13, 13 }, { 73, 73, 73, 73, 73, 73, 73, 73 }, { -82, -82, -82, -82, -82, -82, -82, -82 }, { 4, 4, 4, 4, 4, 4, 4, 4 }, { 78, 78, 78, 78, 78, 78, 78, 78 } },
++    { { 38, 38, 38, 38, 38, 38, 38, 38 }, { -88, -88, -88, -88, -88, -88, -88, -88 }, { 73, 73, 73, 73, 73, 73, 73, 73 }, { -4, -4, -4, -4, -4, -4, -4, -4 }, { -67, -67, -67, -67, -67, -67, -67, -67 }, { 90, 90, 90, 90, 90, 90, 90, 90 }, { -46, -46, -46, -46, -46, -46, -46, -46 }, { -31, -31, -31, -31, -31, -31, -31, -31 }, { 85, 85, 85, 85, 85, 85, 85, 85 }, { -78, -78, -78, -78, -78, -78, -78, -78 }, { 13, 13, 13, 13, 13, 13, 13, 13 }, { 61, 61, 61, 61, 61, 61, 61, 61 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { 54, 54, 54, 54, 54, 54, 54, 54 }, { 22, 22, 22, 22, 22, 22, 22, 22 }, { -82, -82, -82, -82, -82, -82, -82, -82 } },
++    { { 31, 31, 31, 31, 31, 31, 31, 31 }, { -78, -78, -78, -78, -78, -78, -78, -78 }, { 90, 90, 90, 90, 90, 90, 90, 90 }, { -61, -61, -61, -61, -61, -61, -61, -61 }, { 4, 4, 4, 4, 4, 4, 4, 4 }, { 54, 54, 54, 54, 54, 54, 54, 54 }, { -88, -88, -88, -88, -88, -88, -88, -88 }, { 82, 82, 82, 82, 82, 82, 82, 82 }, { -38, -38, -38, -38, -38, -38, -38, -38 }, { -22, -22, -22, -22, -22, -22, -22, -22 }, { 73, 73, 73, 73, 73, 73, 73, 73 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { 67, 67, 67, 67, 67, 67, 67, 67 }, { -13, -13, -13, -13, -13, -13, -13, -13 }, { -46, -46, -46, -46, -46, -46, -46, -46 }, { 85, 85, 85, 85, 85, 85, 85, 85 } },
++    { { 22, 22, 22, 22, 22, 22, 22, 22 }, { -61, -61, -61, -61, -61, -61, -61, -61 }, { 85, 85, 85, 85, 85, 85, 85, 85 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { 73, 73, 73, 73, 73, 73, 73, 73 }, { -38, -38, -38, -38, -38, -38, -38, -38 }, { -4, -4, -4, -4, -4, -4, -4, -4 }, { 46, 46, 46, 46, 46, 46, 46, 46 }, { -78, -78, -78, -78, -78, -78, -78, -78 }, { 90, 90, 90, 90, 90, 90, 90, 90 }, { -82, -82, -82, -82, -82, -82, -82, -82 }, { 54, 54, 54, 54, 54, 54, 54, 54 }, { -13, -13, -13, -13, -13, -13, -13, -13 }, { -31, -31, -31, -31, -31, -31, -31, -31 }, { 67, 67, 67, 67, 67, 67, 67, 67 }, { -88, -88, -88, -88, -88, -88, -88, -88 } },
++    { { 13, 13, 13, 13, 13, 13, 13, 13 }, { -38, -38, -38, -38, -38, -38, -38, -38 }, { 61, 61, 61, 61, 61, 61, 61, 61 }, { -78, -78, -78, -78, -78, -78, -78, -78 }, { 88, 88, 88, 88, 88, 88, 88, 88 }, { -90, -90, -90, -90, -90, -90, -90, -90 }, { 85, 85, 85, 85, 85, 85, 85, 85 }, { -73, -73, -73, -73, -73, -73, -73, -73 }, { 54, 54, 54, 54, 54, 54, 54, 54 }, { -31, -31, -31, -31, -31, -31, -31, -31 }, { 4, 4, 4, 4, 4, 4, 4, 4 }, { 22, 22, 22, 22, 22, 22, 22, 22 }, { -46, -46, -46, -46, -46, -46, -46, -46 }, { 67, 67, 67, 67, 67, 67, 67, 67 }, { -82, -82, -82, -82, -82, -82, -82, -82 }, { 90, 90, 90, 90, 90, 90, 90, 90 } },
++    { { 4, 4, 4, 4, 4, 4, 4, 4 }, { -13, -13, -13, -13, -13, -13, -13, -13 }, { 22, 22, 22, 22, 22, 22, 22, 22 }, { -31, -31, -31, -31, -31, -31, -31, -31 }, { 38, 38, 38, 38, 38, 38, 38, 38 }, { -46, -46, -46, -46, -46, -46, -46, -46 }, { 54, 54, 54, 54, 54, 54, 54, 54 }, { -61, -61, -61, -61, -61, -61, -61, -61 }, { 67, 67, 67, 67, 67, 67, 67, 67 }, { -73, -73, -73, -73, -73, -73, -73, -73 }, { 78, 78, 78, 78, 78, 78, 78, 78 }, { -82, -82, -82, -82, -82, -82, -82, -82 }, { 85, 85, 85, 85, 85, 85, 85, 85 }, { -88, -88, -88, -88, -88, -88, -88, -88 }, { 90, 90, 90, 90, 90, 90, 90, 90 }, { -90, -90, -90, -90, -90, -90, -90, -90 } },
++};
+--- /dev/null
++++ b/libavcodec/ppc/hevcdsp_inter_template.c
+@@ -0,0 +1,1059 @@
++/*
++ * AltiVec inter prediction (motion compensation) for HEVC
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++/*
++ * Motion compensation is ~39 % of a 10-bit HEVC decode on a G4 -- by far the
++ * largest item once SAO and the inverse transform are vectorised, and it had
++ * no PowerPC path at all.
++ *
++ * Every kernel here is the 8-tap luma FIR of the C reference, eight output
++ * samples at a time:
++ *
++ *   - vertically the eight lanes are eight neighbouring columns, so the taps
++ *     are eight loads at multiples of the stride and nothing is shuffled;
++ *   - horizontally the taps are the same vector shifted one sample at a time,
++ *     which vec_sld builds from two loads (hence the unrolled tap list --
++ *     vec_sld needs a literal byte count).
++ *
++ * AltiVec has no 32-bit integer multiply, so int16 x int16 -> int32 goes
++ * through vec_mule/vec_mulo; they split the vector into even and odd source
++ * lanes and vec_mergeh/vec_mergel put the halves back in natural order.
++ *
++ * Storing the result is the awkward part: the uni and bi variants write pixels
++ * straight into the frame, at whatever alignment the prediction unit happens
++ * to sit at, and AltiVec has no unaligned store. Worse, in 8-bit eight pixels
++ * are only half a vector. The answer is the idiom this fork already uses for
++ * the H.264 qpel8 kernels: rotate the vector with vec_lvsr so each byte lands
++ * in the lane the destination address selects, then write with element stores
++ * (stvewx/stvehx/stvebx), which touch exactly the bytes asked for and never a
++ * neighbour. The element size is chosen once per call from the alignment of
++ * the destination and its stride -- a word store needs a 4-byte aligned
++ * address, and chroma in 8-bit is only guaranteed 2.
++ *
++ * Bit-exact with the C reference: same taps, same intermediate widths (the hv
++ * variants keep the int16 temporary the reference uses), same rounding, and
++ * the final clip is what vec_packs/vec_packsu do.
++ *
++ * Widths below eight -- HEVC uses 2, 4 and 6-wide blocks, chroma especially --
++ * and the tail of any width take the scalar path, which is the reference
++ * expression itself.
++ */
++
++#if BIT_DEPTH == 8
++#   define PIXEL      uint8_t
++#else
++#   define PIXEL      uint16_t
++#endif
++#define MC_PIXMAX     ((1 << BIT_DEPTH) - 1)
++#define MC_DSHIFT     (BIT_DEPTH - 8)     /* the ">> (BIT_DEPTH - 8)" of the C */
++
++#ifndef HEVC_MC_ALTIVEC_COMMON
++#define HEVC_MC_ALTIVEC_COMMON
++/* Everything from here to the matching #endif is depth-independent and must
++ * only be seen once, although this file is included per bit depth. */
++
++/* how the eight output pixels of one iteration can be written */
++enum {
++    MC_ST_VEC,   /* 10-bit only: full 16-byte aligned vector */
++    MC_ST_WORD,  /* address 4-byte aligned  */
++    MC_ST_HALF,  /* address 2-byte aligned  */
++    MC_ST_BYTE   /* no alignment at all     */
++};
++
++static av_always_inline vec_s16 mc_splat16(int16_t v)
++{
++    union { vec_s16 v; int16_t h[8]; } u;
++    u.h[0] = u.h[1] = u.h[2] = u.h[3] = v;
++    u.h[4] = u.h[5] = u.h[6] = u.h[7] = v;
++    return u.v;
++}
++
++static av_always_inline vec_s32 mc_splat32(int32_t v)
++{
++    union { vec_s32 v; int32_t w[4]; } u;
++    u.w[0] = u.w[1] = u.w[2] = u.w[3] = v;
++    return u.v;
++}
++
++static av_always_inline vec_u32 mc_usplat32(uint32_t v)
++{
++    union { vec_u32 v; uint32_t w[4]; } u;
++    u.w[0] = u.w[1] = u.w[2] = u.w[3] = v;
++    return u.v;
++}
++
++/* Pick the widest element store the destination allows. Both the base address
++ * and the stride must qualify, so that the answer holds for every row; x only
++ * ever advances by whole vectors' worth of pixels, so it cannot change it. */
++static av_always_inline int mc_store_mode(const void *dst, ptrdiff_t byte_stride,
++                                          int want_vec)
++{
++    uintptr_t a = (uintptr_t)dst | (uintptr_t)byte_stride;
++    if (want_vec && !(a & 15))
++        return MC_ST_VEC;
++    if (!(a & 3))
++        return MC_ST_WORD;
++    if (!(a & 1))
++        return MC_ST_HALF;
++    return MC_ST_BYTE;
++}
++
++/* eight int16 starting at p (the hv temporary is int16 at every depth) */
++static av_always_inline vec_s16 mc_load16(const int16_t *p)
++{
++    return (vec_s16)unaligned_load(0, (const uint8_t *)p);
++}
++
++#define MC_MADD(e, o, s, c)                        \
++    do {                                           \
++        vec_s16 s_ = (s), c_ = (c);                \
++        e = vec_add(e, vec_mule(s_, c_));          \
++        o = vec_add(o, vec_mulo(s_, c_));          \
++    } while (0)
++
++/* eight taps of the same vector, shifted one sample at a time */
++#define MC_H8(A, B, cv, e, o)                      \
++    do {                                           \
++        MC_MADD(e, o, A,                 cv[0]);   \
++        MC_MADD(e, o, vec_sld(A, B,  2), cv[1]);   \
++        MC_MADD(e, o, vec_sld(A, B,  4), cv[2]);   \
++        MC_MADD(e, o, vec_sld(A, B,  6), cv[3]);   \
++        MC_MADD(e, o, vec_sld(A, B,  8), cv[4]);   \
++        MC_MADD(e, o, vec_sld(A, B, 10), cv[5]);   \
++        MC_MADD(e, o, vec_sld(A, B, 12), cv[6]);   \
++        MC_MADD(e, o, vec_sld(A, B, 14), cv[7]);   \
++    } while (0)
++
++#define MC_COEFFS8(cv, filter)                     \
++    do {                                           \
++        int t_;                                    \
++        for (t_ = 0; t_ < 8; t_++)                 \
++            cv[t_] = mc_splat16((filter)[t_]);     \
++    } while (0)
++
++/* four taps, for chroma */
++#define MC_H4(A, B, cv, e, o)                      \
++    do {                                           \
++        MC_MADD(e, o, A,                 cv[0]);   \
++        MC_MADD(e, o, vec_sld(A, B,  2), cv[1]);   \
++        MC_MADD(e, o, vec_sld(A, B,  4), cv[2]);   \
++        MC_MADD(e, o, vec_sld(A, B,  6), cv[3]);   \
++    } while (0)
++
++#define MC_COEFFS4(cv, filter)                     \
++    do {                                           \
++        int t_;                                    \
++        for (t_ = 0; t_ < 4; t_++)                 \
++            cv[t_] = mc_splat16((filter)[t_]);     \
++    } while (0)
++
++/* (e, o) hold lanes 0,2,4,6 and 1,3,5,7 -- give them back in natural order */
++#define MC_MERGE(e, o, lo, hi)                     \
++    do { lo = vec_mergeh(e, o); hi = vec_mergel(e, o); } while (0)
++
++/* weighted variants: v * wx with v already packed to int16 (it fits: the
++ * filter output is bounded by the reference's own int16 temporary), which is
++ * the only way to a 32-bit product -- AltiVec cannot multiply int32. */
++#define MC_WEIGHT(lo, hi, wxv)                     \
++    do {                                           \
++        vec_s16 p_ = vec_packs(lo, hi);            \
++        vec_s32 e_ = vec_mule(p_, wxv);            \
++        vec_s32 o_ = vec_mulo(p_, wxv);            \
++        MC_MERGE(e_, o_, lo, hi);                  \
++    } while (0)
++
++#endif /* HEVC_MC_ALTIVEC_COMMON */
++
++/* eight source samples starting at p, as int16 */
++static av_always_inline vec_s16 FUNC(mc_load8, BIT_DEPTH)(const PIXEL *p)
++{
++#if BIT_DEPTH == 8
++    vec_u8 v = unaligned_load(0, (const uint8_t *)p);
++    return (vec_s16)vec_mergeh(vec_splat_u8(0), v);
++#else
++    return (vec_s16)unaligned_load(0, (const uint8_t *)p);
++#endif
++}
++
++/*
++ * Write eight pixels at dst. The value is clipped here: vec_packsu saturates
++ * to [0,255] for 8-bit, and a min/max pair does it for the higher depths.
++ */
++#if BIT_DEPTH == 8
++static av_always_inline void FUNC(mc_store8, BIT_DEPTH)(PIXEL *dst, vec_s16 v, int mode)
++{
++    vec_u8 p = vec_packsu(v, v);                    /* av_clip_uint8 */
++    vec_u8 r = vec_perm(p, p, vec_lvsr(0, (const uint8_t *)dst));
++
++    switch (mode) {
++    case MC_ST_WORD:
++        vec_ste((vec_u32)r, 0, (unsigned int *)dst);
++        vec_ste((vec_u32)r, 4, (unsigned int *)dst);
++        break;
++    case MC_ST_HALF:
++        vec_ste((vec_u16)r, 0, (unsigned short *)dst);
++        vec_ste((vec_u16)r, 2, (unsigned short *)dst);
++        vec_ste((vec_u16)r, 4, (unsigned short *)dst);
++        vec_ste((vec_u16)r, 6, (unsigned short *)dst);
++        break;
++    default: {
++        int i;
++        for (i = 0; i < 8; i++)
++            vec_ste(r, i, dst);
++        break;
++    }
++    }
++}
++#else
++static av_always_inline void FUNC(mc_store8, BIT_DEPTH)(PIXEL *dst, vec_s16 v, int mode)
++{
++    const vec_s16 z  = vec_splat_s16(0);
++    const vec_s16 mx = mc_splat16(MC_PIXMAX);
++    vec_u8 p = (vec_u8)vec_min(vec_max(v, z), mx);  /* av_clip_uintp2 */
++    vec_u8 r;
++
++    if (mode == MC_ST_VEC) {
++        vec_st(p, 0, (unsigned char *)dst);
++        return;
++    }
++    r = vec_perm(p, p, vec_lvsr(0, (const uint8_t *)dst));
++    switch (mode) {
++    case MC_ST_WORD:
++        vec_ste((vec_u32)r,  0, (unsigned int *)dst);
++        vec_ste((vec_u32)r,  4, (unsigned int *)dst);
++        vec_ste((vec_u32)r,  8, (unsigned int *)dst);
++        vec_ste((vec_u32)r, 12, (unsigned int *)dst);
++        break;
++    default: {
++        int i;
++        for (i = 0; i < 16; i += 2)
++            vec_ste((vec_u16)r, i, (unsigned short *)dst);
++        break;
++    }
++    }
++}
++#endif
++
++#define CHROMA_SCALAR(SRC, STRIDE)                                            \
++    (filter[0] * (SRC)[x -     (STRIDE)] +                                    \
++     filter[1] * (SRC)[x               ] +                                    \
++     filter[2] * (SRC)[x +     (STRIDE)] +                                    \
++     filter[3] * (SRC)[x + 2 * (STRIDE)])
++
++#define LUMA_SCALAR(SRC, STRIDE)                                              \
++    (filter[0] * (SRC)[x - 3 * (STRIDE)] +                                    \
++     filter[1] * (SRC)[x - 2 * (STRIDE)] +                                    \
++     filter[2] * (SRC)[x -     (STRIDE)] +                                    \
++     filter[3] * (SRC)[x               ] +                                    \
++     filter[4] * (SRC)[x +     (STRIDE)] +                                    \
++     filter[5] * (SRC)[x + 2 * (STRIDE)] +                                    \
++     filter[6] * (SRC)[x + 3 * (STRIDE)] +                                    \
++     filter[7] * (SRC)[x + 4 * (STRIDE)])
++
++static av_always_inline int FUNC(mc_clip, BIT_DEPTH)(int v)
++{
++    return v < 0 ? 0 : (v > MC_PIXMAX ? MC_PIXMAX : v);
++}
++
++/* ======================================================================
++ * Horizontal 8-tap into the int16 temporary: the first pass of every hv
++ * variant, and the whole of put_hevc_qpel_h. The destination is always the
++ * decoder's aligned scratch, so it takes a plain vec_st.
++ * ====================================================================== */
++static void FUNC(mc_luma_h16, BIT_DEPTH)(int16_t *dst, const PIXEL *src,
++                                         ptrdiff_t src_stride, int height,
++                                         const int8_t *filter, int width)
++{
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 sh = mc_usplat32(MC_DSHIFT);
++    vec_s16 cv[8];
++    int x, y;
++
++    MC_COEFFS8(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            vec_s16 A = FUNC(mc_load8, BIT_DEPTH)(src + x - 3);
++            vec_s16 B = FUNC(mc_load8, BIT_DEPTH)(src + x + 5);
++            MC_H8(A, B, cv, e, o);
++            MC_MERGE(e, o, lo, hi);
++            vec_st(vec_packs(vec_sra(lo, sh), vec_sra(hi, sh)), 0, dst + x);
++        }
++        for (; x < width; x++)
++            dst[x] = LUMA_SCALAR(src, 1) >> MC_DSHIFT;
++        src += src_stride;
++        dst += MAX_PB_SIZE;
++    }
++}
++
++/* ======================================================================
++ * put_hevc_qpel_{h,v,hv}: int16 destination, no clipping, aligned.
++ * ====================================================================== */
++static void FUNC(ff_hevc_put_qpel_h, BIT_DEPTH)(int16_t *dst, const uint8_t *_src,
++                                                ptrdiff_t _src_stride, int height,
++                                                intptr_t mx, intptr_t my, int width)
++{
++    const PIXEL *src = (const PIXEL *)_src;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_qpel_filters[mx];
++
++    FUNC(mc_luma_h16, BIT_DEPTH)(dst, src, src_stride, height, filter, width);
++}
++
++static void FUNC(ff_hevc_put_qpel_v, BIT_DEPTH)(int16_t *dst, const uint8_t *_src,
++                                                ptrdiff_t _src_stride, int height,
++                                                intptr_t mx, intptr_t my, int width)
++{
++    const PIXEL *src = (const PIXEL *)_src;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_qpel_filters[my];
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 sh = mc_usplat32(MC_DSHIFT);
++    vec_s16 cv[8];
++    int x, y, t;
++
++    MC_COEFFS8(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            for (t = 0; t < 8; t++)
++                MC_MADD(e, o, FUNC(mc_load8, BIT_DEPTH)(src + x + (t - 3) * src_stride), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            vec_st(vec_packs(vec_sra(lo, sh), vec_sra(hi, sh)), 0, dst + x);
++        }
++        for (; x < width; x++)
++            dst[x] = LUMA_SCALAR(src, src_stride) >> MC_DSHIFT;
++        src += src_stride;
++        dst += MAX_PB_SIZE;
++    }
++}
++
++static void FUNC(ff_hevc_put_qpel_hv, BIT_DEPTH)(int16_t *dst, const uint8_t *_src,
++                                                 ptrdiff_t _src_stride, int height,
++                                                 intptr_t mx, intptr_t my, int width)
++{
++    DECLARE_ALIGNED(16, int16_t, tmp_array)[(MAX_PB_SIZE + 7) * MAX_PB_SIZE];
++    const PIXEL *src = (const PIXEL *)_src;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_qpel_filters[mx];
++    const int16_t *tmp;
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 six = mc_usplat32(6);
++    vec_s16 cv[8];
++    int x, y, t;
++
++    FUNC(mc_luma_h16, BIT_DEPTH)(tmp_array, src - 3 * src_stride, src_stride,
++                                 height + 7, filter, width);
++
++    tmp    = tmp_array + 3 * MAX_PB_SIZE;
++    filter = ff_hevc_qpel_filters[my];
++    MC_COEFFS8(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            for (t = 0; t < 8; t++)
++                MC_MADD(e, o, mc_load16(tmp + x + (t - 3) * MAX_PB_SIZE), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            vec_st(vec_packs(vec_sra(lo, six), vec_sra(hi, six)), 0, dst + x);
++        }
++        for (; x < width; x++)
++            dst[x] = LUMA_SCALAR(tmp, MAX_PB_SIZE) >> 6;
++        tmp += MAX_PB_SIZE;
++        dst += MAX_PB_SIZE;
++    }
++}
++
++/* ======================================================================
++ * put_hevc_qpel_uni_{v,hv} and put_hevc_qpel_bi_{v,hv}: pixel destination.
++ * ====================================================================== */
++static void FUNC(ff_hevc_put_qpel_uni_v, BIT_DEPTH)(uint8_t *_dst, ptrdiff_t _dst_stride,
++                                                    const uint8_t *_src, ptrdiff_t _src_stride,
++                                                    int height, intptr_t mx, intptr_t my, int width)
++{
++    const PIXEL *src = (const PIXEL *)_src;
++    PIXEL *dst = (PIXEL *)_dst;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const ptrdiff_t dst_stride = _dst_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_qpel_filters[my];
++    const int shift = 14 - BIT_DEPTH;
++    const int offset = 1 << (shift - 1);
++    const int mode = mc_store_mode(dst, _dst_stride, BIT_DEPTH > 8);
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 dsh = mc_usplat32(MC_DSHIFT);
++    const vec_u32 vsh = mc_usplat32(shift);
++    const vec_s32 voff = mc_splat32(offset);
++    vec_s16 cv[8];
++    int x, y, t;
++
++    MC_COEFFS8(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            for (t = 0; t < 8; t++)
++                MC_MADD(e, o, FUNC(mc_load8, BIT_DEPTH)(src + x + (t - 3) * src_stride), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            lo = vec_sra(vec_add(vec_sra(lo, dsh), voff), vsh);
++            hi = vec_sra(vec_add(vec_sra(hi, dsh), voff), vsh);
++            FUNC(mc_store8, BIT_DEPTH)(dst + x, vec_packs(lo, hi), mode);
++        }
++        for (; x < width; x++)
++            dst[x] = FUNC(mc_clip, BIT_DEPTH)(((LUMA_SCALAR(src, src_stride) >> MC_DSHIFT)
++                                               + offset) >> shift);
++        src += src_stride;
++        dst += dst_stride;
++    }
++}
++
++static void FUNC(ff_hevc_put_qpel_uni_hv, BIT_DEPTH)(uint8_t *_dst, ptrdiff_t _dst_stride,
++                                                     const uint8_t *_src, ptrdiff_t _src_stride,
++                                                     int height, intptr_t mx, intptr_t my, int width)
++{
++    DECLARE_ALIGNED(16, int16_t, tmp_array)[(MAX_PB_SIZE + 7) * MAX_PB_SIZE];
++    const PIXEL *src = (const PIXEL *)_src;
++    PIXEL *dst = (PIXEL *)_dst;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const ptrdiff_t dst_stride = _dst_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_qpel_filters[mx];
++    const int16_t *tmp;
++    const int shift = 14 - BIT_DEPTH;
++    const int offset = 1 << (shift - 1);
++    const int mode = mc_store_mode(dst, _dst_stride, BIT_DEPTH > 8);
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 six = mc_usplat32(6);
++    const vec_u32 vsh = mc_usplat32(shift);
++    const vec_s32 voff = mc_splat32(offset);
++    vec_s16 cv[8];
++    int x, y, t;
++
++    FUNC(mc_luma_h16, BIT_DEPTH)(tmp_array, src - 3 * src_stride, src_stride,
++                                 height + 7, filter, width);
++
++    tmp    = tmp_array + 3 * MAX_PB_SIZE;
++    filter = ff_hevc_qpel_filters[my];
++    MC_COEFFS8(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            for (t = 0; t < 8; t++)
++                MC_MADD(e, o, mc_load16(tmp + x + (t - 3) * MAX_PB_SIZE), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            lo = vec_sra(vec_add(vec_sra(lo, six), voff), vsh);
++            hi = vec_sra(vec_add(vec_sra(hi, six), voff), vsh);
++            FUNC(mc_store8, BIT_DEPTH)(dst + x, vec_packs(lo, hi), mode);
++        }
++        for (; x < width; x++)
++            dst[x] = FUNC(mc_clip, BIT_DEPTH)(((LUMA_SCALAR(tmp, MAX_PB_SIZE) >> 6)
++                                               + offset) >> shift);
++        tmp += MAX_PB_SIZE;
++        dst += dst_stride;
++    }
++}
++
++static void FUNC(ff_hevc_put_qpel_bi_v, BIT_DEPTH)(uint8_t *_dst, ptrdiff_t _dst_stride,
++                                                   const uint8_t *_src, ptrdiff_t _src_stride,
++                                                   const int16_t *src2, int height,
++                                                   intptr_t mx, intptr_t my, int width)
++{
++    const PIXEL *src = (const PIXEL *)_src;
++    PIXEL *dst = (PIXEL *)_dst;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const ptrdiff_t dst_stride = _dst_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_qpel_filters[my];
++    const int shift = 14 + 1 - BIT_DEPTH;
++    const int offset = 1 << (shift - 1);
++    const int mode = mc_store_mode(dst, _dst_stride, BIT_DEPTH > 8);
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 dsh = mc_usplat32(MC_DSHIFT);
++    const vec_u32 vsh = mc_usplat32(shift);
++    const vec_s32 voff = mc_splat32(offset);
++    vec_s16 cv[8];
++    int x, y, t;
++
++    MC_COEFFS8(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            vec_s16 s2;
++            for (t = 0; t < 8; t++)
++                MC_MADD(e, o, FUNC(mc_load8, BIT_DEPTH)(src + x + (t - 3) * src_stride), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            s2 = mc_load16(src2 + x);
++            lo = vec_add(vec_sra(lo, dsh), vec_unpackh(s2));
++            hi = vec_add(vec_sra(hi, dsh), vec_unpackl(s2));
++            lo = vec_sra(vec_add(lo, voff), vsh);
++            hi = vec_sra(vec_add(hi, voff), vsh);
++            FUNC(mc_store8, BIT_DEPTH)(dst + x, vec_packs(lo, hi), mode);
++        }
++        for (; x < width; x++)
++            dst[x] = FUNC(mc_clip, BIT_DEPTH)(((LUMA_SCALAR(src, src_stride) >> MC_DSHIFT)
++                                               + src2[x] + offset) >> shift);
++        src  += src_stride;
++        dst  += dst_stride;
++        src2 += MAX_PB_SIZE;
++    }
++}
++
++static void FUNC(ff_hevc_put_qpel_bi_hv, BIT_DEPTH)(uint8_t *_dst, ptrdiff_t _dst_stride,
++                                                    const uint8_t *_src, ptrdiff_t _src_stride,
++                                                    const int16_t *src2, int height,
++                                                    intptr_t mx, intptr_t my, int width)
++{
++    DECLARE_ALIGNED(16, int16_t, tmp_array)[(MAX_PB_SIZE + 7) * MAX_PB_SIZE];
++    const PIXEL *src = (const PIXEL *)_src;
++    PIXEL *dst = (PIXEL *)_dst;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const ptrdiff_t dst_stride = _dst_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_qpel_filters[mx];
++    const int16_t *tmp;
++    const int shift = 14 + 1 - BIT_DEPTH;
++    const int offset = 1 << (shift - 1);
++    const int mode = mc_store_mode(dst, _dst_stride, BIT_DEPTH > 8);
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 six = mc_usplat32(6);
++    const vec_u32 vsh = mc_usplat32(shift);
++    const vec_s32 voff = mc_splat32(offset);
++    vec_s16 cv[8];
++    int x, y, t;
++
++    FUNC(mc_luma_h16, BIT_DEPTH)(tmp_array, src - 3 * src_stride, src_stride,
++                                 height + 7, filter, width);
++
++    tmp    = tmp_array + 3 * MAX_PB_SIZE;
++    filter = ff_hevc_qpel_filters[my];
++    MC_COEFFS8(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            vec_s16 s2;
++            for (t = 0; t < 8; t++)
++                MC_MADD(e, o, mc_load16(tmp + x + (t - 3) * MAX_PB_SIZE), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            s2 = mc_load16(src2 + x);
++            lo = vec_add(vec_sra(lo, six), vec_unpackh(s2));
++            hi = vec_add(vec_sra(hi, six), vec_unpackl(s2));
++            lo = vec_sra(vec_add(lo, voff), vsh);
++            hi = vec_sra(vec_add(hi, voff), vsh);
++            FUNC(mc_store8, BIT_DEPTH)(dst + x, vec_packs(lo, hi), mode);
++        }
++        for (; x < width; x++)
++            dst[x] = FUNC(mc_clip, BIT_DEPTH)(((LUMA_SCALAR(tmp, MAX_PB_SIZE) >> 6)
++                                               + src2[x] + offset) >> shift);
++        tmp  += MAX_PB_SIZE;
++        dst  += dst_stride;
++        src2 += MAX_PB_SIZE;
++    }
++}
++
++
++/* ======================================================================
++ * Chroma: same shape, four taps, one row of context before instead of three.
++ * ====================================================================== */
++static void FUNC(mc_chroma_h16, BIT_DEPTH)(int16_t *dst, const PIXEL *src,
++                                           ptrdiff_t src_stride, int height,
++                                           const int8_t *filter, int width)
++{
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 sh = mc_usplat32(MC_DSHIFT);
++    vec_s16 cv[4];
++    int x, y;
++
++    MC_COEFFS4(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            vec_s16 A = FUNC(mc_load8, BIT_DEPTH)(src + x - 1);
++            vec_s16 B = FUNC(mc_load8, BIT_DEPTH)(src + x + 7);
++            MC_H4(A, B, cv, e, o);
++            MC_MERGE(e, o, lo, hi);
++            vec_st(vec_packs(vec_sra(lo, sh), vec_sra(hi, sh)), 0, dst + x);
++        }
++        for (; x < width; x++)
++            dst[x] = CHROMA_SCALAR(src, 1) >> MC_DSHIFT;
++        src += src_stride;
++        dst += MAX_PB_SIZE;
++    }
++}
++
++static void FUNC(ff_hevc_put_epel_h, BIT_DEPTH)(int16_t *dst, const uint8_t *_src,
++                                                ptrdiff_t _src_stride, int height,
++                                                intptr_t mx, intptr_t my, int width)
++{
++    FUNC(mc_chroma_h16, BIT_DEPTH)(dst, (const PIXEL *)_src,
++                                   _src_stride / sizeof(PIXEL), height,
++                                   ff_hevc_epel_filters[mx], width);
++}
++
++static void FUNC(ff_hevc_put_epel_v, BIT_DEPTH)(int16_t *dst, const uint8_t *_src,
++                                                ptrdiff_t _src_stride, int height,
++                                                intptr_t mx, intptr_t my, int width)
++{
++    const PIXEL *src = (const PIXEL *)_src;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_epel_filters[my];
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 sh = mc_usplat32(MC_DSHIFT);
++    vec_s16 cv[4];
++    int x, y, t;
++
++    MC_COEFFS4(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            for (t = 0; t < 4; t++)
++                MC_MADD(e, o, FUNC(mc_load8, BIT_DEPTH)(src + x + (t - 1) * src_stride), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            vec_st(vec_packs(vec_sra(lo, sh), vec_sra(hi, sh)), 0, dst + x);
++        }
++        for (; x < width; x++)
++            dst[x] = CHROMA_SCALAR(src, src_stride) >> MC_DSHIFT;
++        src += src_stride;
++        dst += MAX_PB_SIZE;
++    }
++}
++
++static void FUNC(ff_hevc_put_epel_hv, BIT_DEPTH)(int16_t *dst, const uint8_t *_src,
++                                                 ptrdiff_t _src_stride, int height,
++                                                 intptr_t mx, intptr_t my, int width)
++{
++    DECLARE_ALIGNED(16, int16_t, tmp_array)[(MAX_PB_SIZE + 3) * MAX_PB_SIZE];
++    const PIXEL *src = (const PIXEL *)_src;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_epel_filters[mx];
++    const int16_t *tmp;
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 six = mc_usplat32(6);
++    vec_s16 cv[4];
++    int x, y, t;
++
++    FUNC(mc_chroma_h16, BIT_DEPTH)(tmp_array, src - src_stride, src_stride,
++                                   height + 3, filter, width);
++
++    tmp    = tmp_array + MAX_PB_SIZE;
++    filter = ff_hevc_epel_filters[my];
++    MC_COEFFS4(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            for (t = 0; t < 4; t++)
++                MC_MADD(e, o, mc_load16(tmp + x + (t - 1) * MAX_PB_SIZE), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            vec_st(vec_packs(vec_sra(lo, six), vec_sra(hi, six)), 0, dst + x);
++        }
++        for (; x < width; x++)
++            dst[x] = CHROMA_SCALAR(tmp, MAX_PB_SIZE) >> 6;
++        tmp += MAX_PB_SIZE;
++        dst += MAX_PB_SIZE;
++    }
++}
++
++static void FUNC(ff_hevc_put_epel_uni_v, BIT_DEPTH)(uint8_t *_dst, ptrdiff_t _dst_stride,
++                                                    const uint8_t *_src, ptrdiff_t _src_stride,
++                                                    int height, intptr_t mx, intptr_t my, int width)
++{
++    const PIXEL *src = (const PIXEL *)_src;
++    PIXEL *dst = (PIXEL *)_dst;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const ptrdiff_t dst_stride = _dst_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_epel_filters[my];
++    const int shift = 14 - BIT_DEPTH;
++    const int offset = 1 << (shift - 1);
++    const int mode = mc_store_mode(dst, _dst_stride, BIT_DEPTH > 8);
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 dsh = mc_usplat32(MC_DSHIFT);
++    const vec_u32 vsh = mc_usplat32(shift);
++    const vec_s32 voff = mc_splat32(offset);
++    vec_s16 cv[4];
++    int x, y, t;
++
++    MC_COEFFS4(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            for (t = 0; t < 4; t++)
++                MC_MADD(e, o, FUNC(mc_load8, BIT_DEPTH)(src + x + (t - 1) * src_stride), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            lo = vec_sra(vec_add(vec_sra(lo, dsh), voff), vsh);
++            hi = vec_sra(vec_add(vec_sra(hi, dsh), voff), vsh);
++            FUNC(mc_store8, BIT_DEPTH)(dst + x, vec_packs(lo, hi), mode);
++        }
++        for (; x < width; x++)
++            dst[x] = FUNC(mc_clip, BIT_DEPTH)(((CHROMA_SCALAR(src, src_stride) >> MC_DSHIFT)
++                                               + offset) >> shift);
++        src += src_stride;
++        dst += dst_stride;
++    }
++}
++
++static void FUNC(ff_hevc_put_epel_uni_hv, BIT_DEPTH)(uint8_t *_dst, ptrdiff_t _dst_stride,
++                                                     const uint8_t *_src, ptrdiff_t _src_stride,
++                                                     int height, intptr_t mx, intptr_t my, int width)
++{
++    DECLARE_ALIGNED(16, int16_t, tmp_array)[(MAX_PB_SIZE + 3) * MAX_PB_SIZE];
++    const PIXEL *src = (const PIXEL *)_src;
++    PIXEL *dst = (PIXEL *)_dst;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const ptrdiff_t dst_stride = _dst_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_epel_filters[mx];
++    const int16_t *tmp;
++    const int shift = 14 - BIT_DEPTH;
++    const int offset = 1 << (shift - 1);
++    const int mode = mc_store_mode(dst, _dst_stride, BIT_DEPTH > 8);
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 six = mc_usplat32(6);
++    const vec_u32 vsh = mc_usplat32(shift);
++    const vec_s32 voff = mc_splat32(offset);
++    vec_s16 cv[4];
++    int x, y, t;
++
++    FUNC(mc_chroma_h16, BIT_DEPTH)(tmp_array, src - src_stride, src_stride,
++                                   height + 3, filter, width);
++
++    tmp    = tmp_array + MAX_PB_SIZE;
++    filter = ff_hevc_epel_filters[my];
++    MC_COEFFS4(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            for (t = 0; t < 4; t++)
++                MC_MADD(e, o, mc_load16(tmp + x + (t - 1) * MAX_PB_SIZE), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            lo = vec_sra(vec_add(vec_sra(lo, six), voff), vsh);
++            hi = vec_sra(vec_add(vec_sra(hi, six), voff), vsh);
++            FUNC(mc_store8, BIT_DEPTH)(dst + x, vec_packs(lo, hi), mode);
++        }
++        for (; x < width; x++)
++            dst[x] = FUNC(mc_clip, BIT_DEPTH)(((CHROMA_SCALAR(tmp, MAX_PB_SIZE) >> 6)
++                                               + offset) >> shift);
++        tmp += MAX_PB_SIZE;
++        dst += dst_stride;
++    }
++}
++
++static void FUNC(ff_hevc_put_epel_bi_v, BIT_DEPTH)(uint8_t *_dst, ptrdiff_t _dst_stride,
++                                                   const uint8_t *_src, ptrdiff_t _src_stride,
++                                                   const int16_t *src2, int height,
++                                                   intptr_t mx, intptr_t my, int width)
++{
++    const PIXEL *src = (const PIXEL *)_src;
++    PIXEL *dst = (PIXEL *)_dst;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const ptrdiff_t dst_stride = _dst_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_epel_filters[my];
++    const int shift = 14 + 1 - BIT_DEPTH;
++    const int offset = 1 << (shift - 1);
++    const int mode = mc_store_mode(dst, _dst_stride, BIT_DEPTH > 8);
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 dsh = mc_usplat32(MC_DSHIFT);
++    const vec_u32 vsh = mc_usplat32(shift);
++    const vec_s32 voff = mc_splat32(offset);
++    vec_s16 cv[4];
++    int x, y, t;
++
++    MC_COEFFS4(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            vec_s16 s2;
++            for (t = 0; t < 4; t++)
++                MC_MADD(e, o, FUNC(mc_load8, BIT_DEPTH)(src + x + (t - 1) * src_stride), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            s2 = mc_load16(src2 + x);
++            lo = vec_sra(vec_add(vec_add(vec_sra(lo, dsh), vec_unpackh(s2)), voff), vsh);
++            hi = vec_sra(vec_add(vec_add(vec_sra(hi, dsh), vec_unpackl(s2)), voff), vsh);
++            FUNC(mc_store8, BIT_DEPTH)(dst + x, vec_packs(lo, hi), mode);
++        }
++        for (; x < width; x++)
++            dst[x] = FUNC(mc_clip, BIT_DEPTH)(((CHROMA_SCALAR(src, src_stride) >> MC_DSHIFT)
++                                               + src2[x] + offset) >> shift);
++        src  += src_stride;
++        dst  += dst_stride;
++        src2 += MAX_PB_SIZE;
++    }
++}
++
++static void FUNC(ff_hevc_put_epel_bi_hv, BIT_DEPTH)(uint8_t *_dst, ptrdiff_t _dst_stride,
++                                                    const uint8_t *_src, ptrdiff_t _src_stride,
++                                                    const int16_t *src2, int height,
++                                                    intptr_t mx, intptr_t my, int width)
++{
++    DECLARE_ALIGNED(16, int16_t, tmp_array)[(MAX_PB_SIZE + 3) * MAX_PB_SIZE];
++    const PIXEL *src = (const PIXEL *)_src;
++    PIXEL *dst = (PIXEL *)_dst;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const ptrdiff_t dst_stride = _dst_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_epel_filters[mx];
++    const int16_t *tmp;
++    const int shift = 14 + 1 - BIT_DEPTH;
++    const int offset = 1 << (shift - 1);
++    const int mode = mc_store_mode(dst, _dst_stride, BIT_DEPTH > 8);
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 six = mc_usplat32(6);
++    const vec_u32 vsh = mc_usplat32(shift);
++    const vec_s32 voff = mc_splat32(offset);
++    vec_s16 cv[4];
++    int x, y, t;
++
++    FUNC(mc_chroma_h16, BIT_DEPTH)(tmp_array, src - src_stride, src_stride,
++                                   height + 3, filter, width);
++
++    tmp    = tmp_array + MAX_PB_SIZE;
++    filter = ff_hevc_epel_filters[my];
++    MC_COEFFS4(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            vec_s16 s2;
++            for (t = 0; t < 4; t++)
++                MC_MADD(e, o, mc_load16(tmp + x + (t - 1) * MAX_PB_SIZE), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            s2 = mc_load16(src2 + x);
++            lo = vec_sra(vec_add(vec_add(vec_sra(lo, six), vec_unpackh(s2)), voff), vsh);
++            hi = vec_sra(vec_add(vec_add(vec_sra(hi, six), vec_unpackl(s2)), voff), vsh);
++            FUNC(mc_store8, BIT_DEPTH)(dst + x, vec_packs(lo, hi), mode);
++        }
++        for (; x < width; x++)
++            dst[x] = FUNC(mc_clip, BIT_DEPTH)(((CHROMA_SCALAR(tmp, MAX_PB_SIZE) >> 6)
++                                               + src2[x] + offset) >> shift);
++        tmp  += MAX_PB_SIZE;
++        dst  += dst_stride;
++        src2 += MAX_PB_SIZE;
++    }
++}
++
++/* ======================================================================
++ * Weighted uni-prediction: (v * wx + offset) >> shift, then + ox.
++ * ====================================================================== */
++static void FUNC(ff_hevc_put_qpel_uni_w_v, BIT_DEPTH)(uint8_t *_dst, ptrdiff_t _dst_stride,
++                                                      const uint8_t *_src, ptrdiff_t _src_stride,
++                                                      int height, int denom, int wx, int _ox,
++                                                      intptr_t mx, intptr_t my, int width)
++{
++    const PIXEL *src = (const PIXEL *)_src;
++    PIXEL *dst = (PIXEL *)_dst;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const ptrdiff_t dst_stride = _dst_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_qpel_filters[my];
++    const int shift = denom + 14 - BIT_DEPTH;
++    const int offset = 1 << (shift - 1);
++    const int ox = _ox * (1 << (BIT_DEPTH - 8));
++    const int mode = mc_store_mode(dst, _dst_stride, BIT_DEPTH > 8);
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 dsh = mc_usplat32(MC_DSHIFT);
++    const vec_u32 vsh = mc_usplat32(shift);
++    const vec_s32 voff = mc_splat32(offset);
++    const vec_s32 vox = mc_splat32(ox);
++    const vec_s16 wxv = mc_splat16(wx);
++    vec_s16 cv[8];
++    int x, y, t;
++
++    MC_COEFFS8(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            for (t = 0; t < 8; t++)
++                MC_MADD(e, o, FUNC(mc_load8, BIT_DEPTH)(src + x + (t - 3) * src_stride), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            lo = vec_sra(lo, dsh);
++            hi = vec_sra(hi, dsh);
++            MC_WEIGHT(lo, hi, wxv);
++            lo = vec_add(vec_sra(vec_add(lo, voff), vsh), vox);
++            hi = vec_add(vec_sra(vec_add(hi, voff), vsh), vox);
++            FUNC(mc_store8, BIT_DEPTH)(dst + x, vec_packs(lo, hi), mode);
++        }
++        for (; x < width; x++)
++            dst[x] = FUNC(mc_clip, BIT_DEPTH)((((LUMA_SCALAR(src, src_stride) >> MC_DSHIFT)
++                                                * wx + offset) >> shift) + ox);
++        src += src_stride;
++        dst += dst_stride;
++    }
++}
++
++static void FUNC(ff_hevc_put_qpel_uni_w_hv, BIT_DEPTH)(uint8_t *_dst, ptrdiff_t _dst_stride,
++                                                       const uint8_t *_src, ptrdiff_t _src_stride,
++                                                       int height, int denom, int wx, int _ox,
++                                                       intptr_t mx, intptr_t my, int width)
++{
++    DECLARE_ALIGNED(16, int16_t, tmp_array)[(MAX_PB_SIZE + 7) * MAX_PB_SIZE];
++    const PIXEL *src = (const PIXEL *)_src;
++    PIXEL *dst = (PIXEL *)_dst;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const ptrdiff_t dst_stride = _dst_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_qpel_filters[mx];
++    const int16_t *tmp;
++    const int shift = denom + 14 - BIT_DEPTH;
++    const int offset = 1 << (shift - 1);
++    const int ox = _ox * (1 << (BIT_DEPTH - 8));
++    const int mode = mc_store_mode(dst, _dst_stride, BIT_DEPTH > 8);
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 six = mc_usplat32(6);
++    const vec_u32 vsh = mc_usplat32(shift);
++    const vec_s32 voff = mc_splat32(offset);
++    const vec_s32 vox = mc_splat32(ox);
++    const vec_s16 wxv = mc_splat16(wx);
++    vec_s16 cv[8];
++    int x, y, t;
++
++    FUNC(mc_luma_h16, BIT_DEPTH)(tmp_array, src - 3 * src_stride, src_stride,
++                                 height + 7, filter, width);
++
++    tmp    = tmp_array + 3 * MAX_PB_SIZE;
++    filter = ff_hevc_qpel_filters[my];
++    MC_COEFFS8(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            for (t = 0; t < 8; t++)
++                MC_MADD(e, o, mc_load16(tmp + x + (t - 3) * MAX_PB_SIZE), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            lo = vec_sra(lo, six);
++            hi = vec_sra(hi, six);
++            MC_WEIGHT(lo, hi, wxv);
++            lo = vec_add(vec_sra(vec_add(lo, voff), vsh), vox);
++            hi = vec_add(vec_sra(vec_add(hi, voff), vsh), vox);
++            FUNC(mc_store8, BIT_DEPTH)(dst + x, vec_packs(lo, hi), mode);
++        }
++        for (; x < width; x++)
++            dst[x] = FUNC(mc_clip, BIT_DEPTH)((((LUMA_SCALAR(tmp, MAX_PB_SIZE) >> 6)
++                                                * wx + offset) >> shift) + ox);
++        tmp += MAX_PB_SIZE;
++        dst += dst_stride;
++    }
++}
++
++static void FUNC(ff_hevc_put_epel_uni_w_v, BIT_DEPTH)(uint8_t *_dst, ptrdiff_t _dst_stride,
++                                                      const uint8_t *_src, ptrdiff_t _src_stride,
++                                                      int height, int denom, int wx, int _ox,
++                                                      intptr_t mx, intptr_t my, int width)
++{
++    const PIXEL *src = (const PIXEL *)_src;
++    PIXEL *dst = (PIXEL *)_dst;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const ptrdiff_t dst_stride = _dst_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_epel_filters[my];
++    const int shift = denom + 14 - BIT_DEPTH;
++    const int offset = 1 << (shift - 1);
++    const int ox = _ox * (1 << (BIT_DEPTH - 8));
++    const int mode = mc_store_mode(dst, _dst_stride, BIT_DEPTH > 8);
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 dsh = mc_usplat32(MC_DSHIFT);
++    const vec_u32 vsh = mc_usplat32(shift);
++    const vec_s32 voff = mc_splat32(offset);
++    const vec_s32 vox = mc_splat32(ox);
++    const vec_s16 wxv = mc_splat16(wx);
++    vec_s16 cv[4];
++    int x, y, t;
++
++    MC_COEFFS4(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            for (t = 0; t < 4; t++)
++                MC_MADD(e, o, FUNC(mc_load8, BIT_DEPTH)(src + x + (t - 1) * src_stride), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            lo = vec_sra(lo, dsh);
++            hi = vec_sra(hi, dsh);
++            MC_WEIGHT(lo, hi, wxv);
++            lo = vec_add(vec_sra(vec_add(lo, voff), vsh), vox);
++            hi = vec_add(vec_sra(vec_add(hi, voff), vsh), vox);
++            FUNC(mc_store8, BIT_DEPTH)(dst + x, vec_packs(lo, hi), mode);
++        }
++        for (; x < width; x++)
++            dst[x] = FUNC(mc_clip, BIT_DEPTH)((((CHROMA_SCALAR(src, src_stride) >> MC_DSHIFT)
++                                                * wx + offset) >> shift) + ox);
++        src += src_stride;
++        dst += dst_stride;
++    }
++}
++
++static void FUNC(ff_hevc_put_epel_uni_w_hv, BIT_DEPTH)(uint8_t *_dst, ptrdiff_t _dst_stride,
++                                                       const uint8_t *_src, ptrdiff_t _src_stride,
++                                                       int height, int denom, int wx, int _ox,
++                                                       intptr_t mx, intptr_t my, int width)
++{
++    DECLARE_ALIGNED(16, int16_t, tmp_array)[(MAX_PB_SIZE + 3) * MAX_PB_SIZE];
++    const PIXEL *src = (const PIXEL *)_src;
++    PIXEL *dst = (PIXEL *)_dst;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const ptrdiff_t dst_stride = _dst_stride / sizeof(PIXEL);
++    const int8_t *filter = ff_hevc_epel_filters[mx];
++    const int16_t *tmp;
++    const int shift = denom + 14 - BIT_DEPTH;
++    const int offset = 1 << (shift - 1);
++    const int ox = _ox * (1 << (BIT_DEPTH - 8));
++    const int mode = mc_store_mode(dst, _dst_stride, BIT_DEPTH > 8);
++    const vec_s32 z = mc_splat32(0);
++    const vec_u32 six = mc_usplat32(6);
++    const vec_u32 vsh = mc_usplat32(shift);
++    const vec_s32 voff = mc_splat32(offset);
++    const vec_s32 vox = mc_splat32(ox);
++    const vec_s16 wxv = mc_splat16(wx);
++    vec_s16 cv[4];
++    int x, y, t;
++
++    FUNC(mc_chroma_h16, BIT_DEPTH)(tmp_array, src - src_stride, src_stride,
++                                   height + 3, filter, width);
++
++    tmp    = tmp_array + MAX_PB_SIZE;
++    filter = ff_hevc_epel_filters[my];
++    MC_COEFFS4(cv, filter);
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s32 e = z, o = z, lo, hi;
++            for (t = 0; t < 4; t++)
++                MC_MADD(e, o, mc_load16(tmp + x + (t - 1) * MAX_PB_SIZE), cv[t]);
++            MC_MERGE(e, o, lo, hi);
++            lo = vec_sra(lo, six);
++            hi = vec_sra(hi, six);
++            MC_WEIGHT(lo, hi, wxv);
++            lo = vec_add(vec_sra(vec_add(lo, voff), vsh), vox);
++            hi = vec_add(vec_sra(vec_add(hi, voff), vsh), vox);
++            FUNC(mc_store8, BIT_DEPTH)(dst + x, vec_packs(lo, hi), mode);
++        }
++        for (; x < width; x++)
++            dst[x] = FUNC(mc_clip, BIT_DEPTH)((((CHROMA_SCALAR(tmp, MAX_PB_SIZE) >> 6)
++                                                * wx + offset) >> shift) + ox);
++        tmp += MAX_PB_SIZE;
++        dst += dst_stride;
++    }
++}
++
++#undef CHROMA_SCALAR
++#undef LUMA_SCALAR
++#undef MC_DSHIFT
++#undef MC_PIXMAX
++#undef PIXEL

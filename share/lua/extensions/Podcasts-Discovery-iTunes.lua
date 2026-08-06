@@ -720,11 +720,32 @@ local function itunes_search(term, kind, country, limit)
   if not obj then
     return nil, err
   end
-  local out = {}
+  -- The directory lists the same show more than once: one RSS feed
+  -- submitted twice to the store gets two collection ids, and both come
+  -- back. Nothing tells them apart on screen -- same name, same author,
+  -- same artwork -- so they read as a plain bug ("La dernière", measured
+  -- 06/08: 6 rows of 74 were a repeat of another). What the two entries
+  -- share is the feed they point at, which is the podcast itself; for
+  -- episodes it is the audio file. First one wins: the store returns
+  -- them in relevance order and that is the one to keep.
+  local out, seen = {}, {}
   for _, r in ipairs(obj.results or {}) do
     local e = normalize(r)
     if e then
-      table.insert(out, e)
+      local key
+      if e.kind == "episode" then
+        key = e.media
+      elseif e.feed then
+        key = string.lower((string.gsub(e.feed, "/+$", "")))
+      end
+      -- an entry with nothing to compare on is kept: better a repeat
+      -- than a show silently dropped
+      if not key then
+        table.insert(out, e)
+      elseif not seen[key] then
+        seen[key] = true
+        table.insert(out, e)
+      end
     end
   end
   return out

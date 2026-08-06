@@ -126,9 +126,11 @@ vlc_module_begin ()
     add_obsolete_bool( "ffmpeg-fast" ) /* removed since 2.1.0 */
     add_bool( "avcodec-fast", false, FAST_TEXT, FAST_LONGTEXT, false )
     add_obsolete_integer ( "ffmpeg-skiploopfilter" ) /* removed since 2.1.0 */
-#if defined (__powerpc__) || defined (__POWERPC__)
-    /* Every saved cycle counts on PowerPC: skip the in-loop deblocking on
-     * non-reference frames only. Those frames are never used for prediction,
+#if defined (__powerpc__) || defined (__POWERPC__) || defined (__i386__)
+    /* Every saved cycle counts on the machines these two slices run on -- the
+     * PowerPC slice and the 32-bit Intel one, whose whole population is
+     * 1999-2009 hardware. Skip the in-loop deblocking on non-reference frames
+     * only. Those frames are never used for prediction,
      * so the (slight) extra blockiness cannot propagate -- reference frames
      * stay bit-exact by construction (h264_slice.c evaluates the level per
      * slice against nal_ref_idc).
@@ -139,7 +141,21 @@ vlc_module_begin ()
      * 14.5 to 16.7 fps (+15 %), 720p from 28.4 to 30.1 (+6 %). Deblocking is
      * the largest single cost the decoder can be told not to pay, and on
      * non-reference frames it costs nothing but a little blockiness on frames
-     * that are shown once and thrown away. */
+     * that are shown once and thrown away.
+     *
+     * ⚠ In HEVC this level does more than in H.264: ff_hevc_hls_filter() uses
+     * the same test to skip SAO as well as deblocking, so the saving is larger
+     * -- measured on the same machine, 10-bit HEVC gains 14 % at 854x480 and
+     * 11 % at 1080x1920 -- and so is what is given up on those frames (SAO is
+     * what removes ringing and banding). Still non-reference frames only, so
+     * still no drift.
+     *
+     * Deliberately NOT the default on the 64-bit Intel and arm64 slices: those
+     * span everything from a 2006 Core 2 Duo to an Apple Silicon machine that
+     * decodes this in its sleep, and giving up picture quality by default on
+     * hardware that does not need it would be the wrong trade. Those slices
+     * get the late-frame escalation in video.c instead, which is free until
+     * the decoder is actually behind. */
     add_integer ( "avcodec-skiploopfilter", 1, SKIPLOOPF_TEXT,
                   SKIPLOOPF_LONGTEXT, false)
 #else

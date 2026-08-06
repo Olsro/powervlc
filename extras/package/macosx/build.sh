@@ -941,6 +941,101 @@ if [ "$NEEDS_EXECUTABLE_PATH" = "yes" ] && [ -n "$LEGACY_GCC" ] && [ -d VLC.app/
     done
 fi
 
+# The two loops above only ever knew about libpowervlc* and the GCC runtime,
+# and they only run for the legacy slices. Everything else copied into
+# Contents/MacOS/lib by package.mak kept whatever install name its build gave
+# it -- which for libaacs and libbdplus (the only contribs built shared,
+# because libbluray dlopen()s them instead of linking them) is the contrib
+# prefix *inside this build tree*: a path that exists on no machine but this
+# one. It was there on all seven slices.
+#
+# The bundle still worked: libbluray asks dyld for "libaacs.dylib" prefixed
+# with each of its search paths in turn, and the fifth of them,
+# "@executable_path/lib/", is an explicit path that resolves whatever the
+# id says (verified with dlopen() on the arm64 slice). But the id is what dyld
+# registers the image under, what every otool/codesign/notarisation audit
+# reports, and what would be used verbatim by any future library that *links*
+# one of these rather than dlopen()ing it -- which would then fail on the
+# user's machine, silently, with the build machine's path in the error.
+#
+# So normalise generically instead of naming the two files: any bundled dylib
+# whose id is still an absolute non-system path gets @executable_path/lib/,
+# and every Mach-O that referenced the old id follows.
+#
+# Not with install_name_tool: it cannot run on the x86_64 slice at all. That
+# slice deploys to 10.5, and the __LINKEDIT order ld produces for so old a
+# target is the one cctools refuses -- "function starts data out of place",
+# the same wall the -Wl,-S comment above hits for strip, reproduced there in
+# three lines and reproducible here on the stock contrib libaacs. Doing that
+# one slice differently is how this bug would come back on the slice nobody
+# re-checks, so all seven go through set-dylib-name.py, which overwrites the
+# name inside its load command and moves nothing.
+SETNAME="python3 ${vlcroot}/extras/package/macosx/set-dylib-name.py"
+OT="${XT:+$XT/}otool"
+
+# Editing a Mach-O invalidates whatever code signature it carried, and an
+# invalid signature is fatal on Apple Silicon (an absent one is not). Restore
+# the state the file was in and nothing more: the PowerPC and Intel-32 slices
+# are unsigned, and so are the x86_64 dylibs (the 10.5 deployment target means
+# the linker adds no ad-hoc signature, and the strip that would have added one
+# is skipped on that slice -- see -Wl,-S above). Signing them here would be a
+# change of its own, on the slices that boot the OSes this can least be tested
+# on. Never the bundle seal or Contents/MacOS/PowerVLC either: the app's
+# ad-hoc identity is what Keychain binds the saved Subsonic/Jellyfin secrets
+# to, and re-sealing it makes the keystore ask the user again.
+resign()
+{
+    _rs_file="$1"; shift
+    if codesign -d "$_rs_file" >/dev/null 2>&1; then _rs_was=yes; else _rs_was=no; fi
+    chmod u+w "$_rs_file"
+    "$@" || return 1
+    if [ "$_rs_was" = "yes" ]; then
+        codesign -f -s - "$_rs_file" >/dev/null 2>&1 || \
+            echo "  could not re-sign ${_rs_file#VLC.app/} after renaming" >&2
+    fi
+}
+
+if [ -d VLC.app/Contents/MacOS/lib ]; then
+    info "Normalising the bundled libraries' install names"
+    for real in VLC.app/Contents/MacOS/lib/*.dylib; do
+        [ -f "$real" ] || continue
+        old=`"$OT" -D "$real" | tail -1`
+        # @executable_path/@rpath/@loader_path are already relocatable, and
+        # /usr/lib + /System are the OS's own, which must stay absolute.
+        case "$old" in
+            ""|@*|/usr/lib/*|/System/*) continue ;;
+        esac
+        new="@executable_path/lib/`basename "$real"`"
+        if [ "$old" = "$new" ]; then continue; fi
+        resign "$real" $SETNAME --id "$new" "$real"
+        # Follow the old id into whatever named it. Nothing does today (both
+        # libraries are dlopen()ed, never linked), which is precisely why the
+        # id was never noticed; a linked one would land here.
+        find VLC.app/Contents/MacOS \( -name "PowerVLC" -o -name "*.dylib" \) -type f \
+            -print | while read -r macho; do
+            "$OT" -L "$macho" | grep -Fq "	$old (" || continue
+            resign "$macho" $SETNAME --change "$old" "$new" "$macho"
+        done
+    done
+
+    # And refuse to ship a bundle that still points anywhere outside the OS.
+    # This is the check that would have caught libaacs/libbdplus years ago:
+    # nothing here fails at build time, and on the user's machine the failure
+    # is a plug-in that quietly does less than it should.
+    leftover=`find VLC.app/Contents/MacOS -type f \( -name "PowerVLC" -o -name "*.dylib" \) -print0 \
+        | xargs -0 -n1 "$OT" -L 2>/dev/null \
+        | sed -n 's/^	\(\/[^ ]*\) (compatibility version.*/\1/p' \
+        | grep -v -e '^/usr/lib/' -e '^/System/' | sort -u` || true
+    if [ -n "$leftover" ]; then
+        echo "ERROR: the bundle still references paths outside the OS:" >&2
+        echo "$leftover" | sed 's/^/       /' >&2
+        echo "       They exist on this build machine only. Bundle them into" >&2
+        echo "       Contents/MacOS/lib (extras/package/macosx/package.mak)," >&2
+        echo "       or drop whatever pulls them in." >&2
+        exit 1
+    fi
+fi
+
 # Everything is compiled with -g, which leaves a debug *map* in each Mach-O:
 # ~100k STABS entries per plugin (SO/OSO/FUN -- source file names and pointers
 # to the .o files of THIS build tree). None of it is usable on the target

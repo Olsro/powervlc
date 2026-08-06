@@ -246,6 +246,30 @@ static char *Transact( vlc_object_t *p_this, const vlc_url_t *p_url,
     return p_reply;
 }
 
+static char *HeaderGet( const char *psz_hdr, const char *psz_name );
+
+/* True when the header block announces chunked framing.
+ *
+ * Read as a header rather than looked for as one literal string. The value
+ * is free to be spelled "Chunked", to be pushed away from the colon by any
+ * amount of space, or to name other codings alongside -- and getting it
+ * wrong is silent and total: the chunk sizes stay in the body and the
+ * script is handed "229b\r\n[[..." where it expected a document. */
+static bool ReplyIsChunked( const char *psz_hdr )
+{
+    char *psz_te = HeaderGet( psz_hdr, "Transfer-Encoding" );
+    bool b_chunked = false;
+
+    if( psz_te != NULL )
+    {
+        for( char *p = psz_te; *p; p++ )
+            *p = tolower( (unsigned char)*p );
+        b_chunked = strstr( psz_te, "chunked" ) != NULL;
+        free( psz_te );
+    }
+    return b_chunked;
+}
+
 /* Splits a reply into its status, its header block and its body. The header
  * block is nul-terminated in place; the body keeps its own length, so it
  * may hold nul bytes. */
@@ -254,6 +278,33 @@ static bool SplitReply( char *p_reply, size_t i_reply, int *pi_status,
 {
     if( i_reply < 13 || memcmp( p_reply, "HTTP/", 5 ) )
         return false;
+
+    /* An interim answer -- "100 Continue" and its kind -- is a whole
+     * header block of its own, ending in the very blank line the real one
+     * is looked for by. Stepping over it keeps the search below from
+     * stopping on the wrong reply and taking the real headers for the
+     * body. */
+    for( ;; )
+    {
+        int i_interim = atoi( p_reply + 9 );
+        if( i_interim < 100 || i_interim >= 200 )
+            break;
+
+        char *p_next = NULL;
+        for( size_t i = 0; i + 3 < i_reply; i++ )
+            if( !memcmp( p_reply + i, "\r\n\r\n", 4 ) )
+            {
+                p_next = p_reply + i + 4;
+                break;
+            }
+        if( p_next == NULL )
+            return false;
+
+        i_reply -= (size_t)(p_next - p_reply);
+        p_reply = p_next;
+        if( i_reply < 13 || memcmp( p_reply, "HTTP/", 5 ) )
+            return false;
+    }
 
     char *p_body = NULL;
     for( size_t i = 0; i + 3 < i_reply; i++ )
@@ -271,18 +322,11 @@ static bool SplitReply( char *p_reply, size_t i_reply, int *pi_status,
 
     size_t i_len = i_reply - (size_t)(p_body - p_reply);
 
-    /* the search is case-insensitive, but the headers must be handed back
-     * untouched: a Set-Cookie value is case-sensitive */
+    /* nul-terminates the header block, which is handed back untouched:
+     * a Set-Cookie value is case-sensitive */
     p_body[-2] = '\0';
-    char *psz_lower = strdup( p_reply );
-    if( psz_lower != NULL )
-    {
-        for( char *p = psz_lower; *p; p++ )
-            *p = tolower( (unsigned char)*p );
-        if( strstr( psz_lower, "transfer-encoding: chunked" ) != NULL )
-            i_len = Dechunk( p_body, i_len );
-        free( psz_lower );
-    }
+    if( ReplyIsChunked( p_reply ) )
+        i_len = Dechunk( p_body, i_len );
 
     *pp_hdr = p_reply;
     *pp_body = p_body;
@@ -512,8 +556,20 @@ static int vlclua_http_get( lua_State *L )
         }
         /* keep the failure test on SplitReply itself: i_status carries the
          * previous hop's value, so it says nothing about this one */
-        if( !SplitReply( p_reply, i_reply, &i_status, &p_hdr, &p_body,
-                         &i_body ) )
+        bool b_split = SplitReply( p_reply, i_reply, &i_status, &p_hdr,
+                                   &p_body, &i_body );
+
+        /* One line per hop. A body that reaches a script in the wrong shape
+         * is otherwise indistinguishable from a site that answered badly,
+         * and the script only ever reports what it made of it. No %zu here:
+         * Jaguar's printf does not know it. */
+        msg_Dbg( p_this, "http: %s -> %s, status %d, %lu byte(s) read, "
+                 "%lu of body, transfer-encoding %s", psz_url,
+                 b_split ? "ok" : "malformed", i_status,
+                 (unsigned long)i_reply, (unsigned long)i_body,
+                 b_split && ReplyIsChunked( p_hdr ) ? "chunked" : "none" );
+
+        if( !b_split )
         {
             vlc_UrlClean( &url );
             psz_err = "malformed response";

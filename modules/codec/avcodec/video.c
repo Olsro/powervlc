@@ -51,6 +51,25 @@
 #include "../../packetizer/av1.h"
 #include "../codec/cc.h"
 
+/* Keyframe-slideshow hysteresis, see decoder_sys_t::b_slideshow. Only the
+ * PowerPC build ever enters the slideshow, but the constants and the fields
+ * stay unconditional so nothing reads uninitialised memory elsewhere. */
+/* Machines whose ENTIRE population is too slow for modern codecs: every Mac
+ * that can run the PowerPC or the 32-bit Intel slice of this fork is a
+ * 1999-2009 machine (the i386 slice targets 10.4-10.6 on Core Solo / Core Duo
+ * / Core 2 Duo). Both get the behaviours that trade a little picture quality
+ * for frames that actually reach the screen. The 64-bit Intel slice is NOT in
+ * this list -- it spans a 2006 Core 2 Duo and a 2019 Mac Pro, so it relies on
+ * the late-frame escalation instead, which only costs anything when the
+ * machine is already behind. */
+#if defined (__powerpc__) || defined (__POWERPC__) || defined (__i386__)
+# define POWERVLC_LEGACY_CPU 1
+#endif
+
+#define SLIDESHOW_HOLD_MIN  (3  * CLOCK_FREQ)  /* first stay in slideshow     */
+#define SLIDESHOW_HOLD_MAX  (60 * CLOCK_FREQ)  /* ceiling after doublings     */
+#define SLIDESHOW_RELAPSE   (10 * CLOCK_FREQ)  /* "fell behind again at once" */
+
 /*****************************************************************************
  * decoder_sys_t : decoder descriptor
  *****************************************************************************/
@@ -91,6 +110,16 @@ struct decoder_sys_t
      * the display of keyframes only — a slideshow beats a black screen on
      * the old Macs this port targets. */
     bool b_slideshow;
+    /* Hysteresis for the above. Leaving the slideshow on the first on-time
+     * frame is a trap: keyframe-only decoding always catches up, so the
+     * decoder immediately goes back to full frames, falls behind, and has to
+     * burn another 5 s of black screen before the slideshow returns. Hold the
+     * slideshow for a minimum time, and double that hold every time we relapse
+     * right after leaving, so hopeless content settles into a steady slideshow
+     * while a one-off hiccup still recovers in seconds. */
+    vlc_tick_t i_slideshow_entered;
+    vlc_tick_t i_slideshow_left;
+    vlc_tick_t i_slideshow_hold;
 
     bool b_draining;
 
@@ -613,6 +642,12 @@ static int InitVideoDecCommon( decoder_t *p_dec )
     p_sys->i_late_frames = 0;
     p_sys->b_from_preroll = false;
     p_sys->b_draining = false;
+#ifdef POWERVLC_LEGACY_CPU
+    p_sys->b_slideshow = false;
+    p_sys->i_slideshow_entered = VLC_TICK_INVALID;
+    p_sys->i_slideshow_left = VLC_TICK_INVALID;
+    p_sys->i_slideshow_hold = SLIDESHOW_HOLD_MIN;
+#endif
 
     /* Set output properties */
     if( GetVlcChroma( &p_dec->fmt_out.video, p_context->pix_fmt ) != VLC_SUCCESS )
@@ -930,7 +965,7 @@ static bool check_block_being_late( decoder_sys_t *p_sys, block_t *block, vlc_ti
 
     if( current_time - p_sys->i_late_frames_start > (5*CLOCK_FREQ))
     {
-#if defined (__powerpc__) || defined (__POWERPC__)
+#ifdef POWERVLC_LEGACY_CPU
         /* Keep the block: DecodeBlock turns this into a keyframe slideshow
          * (skip_frame saturated at NONKEY) instead of trashing the blocks
          * unparsed, which leaves sound over a black screen. */
@@ -947,27 +982,50 @@ static bool check_block_being_late( decoder_sys_t *p_sys, block_t *block, vlc_ti
 
 static bool check_frame_should_be_dropped( decoder_sys_t *p_sys, AVCodecContext *p_context, bool *b_need_output_picture )
 {
-#if defined (__powerpc__) || defined (__POWERPC__)
-    /* Deblocking is the biggest cost the decoder can be told to drop, and the
-     * only one whose damage is bounded: measured on a 1.42 GHz 7447A, turning
-     * it off entirely is worth +32 % on 1080p24 and +19 % on 720p. Spend that
-     * before dropping whole frames -- a couple of seconds of slightly blocky
-     * picture beats a couple of seconds of stutter, and unlike a dropped
-     * reference frame the artefact stops propagating at the next IDR either
-     * way.
+    /* The in-loop filters are the biggest cost the decoder can be told to
+     * drop, and the only one whose damage is bounded: measured on a 1.42 GHz
+     * 7447A, turning them off entirely is worth +32 % on 1080p24 H.264 and
+     * +19 % on 720p; on HEVC, where skip_loop_filter disables SAO as well as
+     * deblocking (hevc/filter.c), +28 % on 1080x1920 10-bit and +32 % on
+     * 854x480 10-bit. Spend that before dropping whole frames -- a couple of
+     * seconds of slightly blocky picture beats a couple of seconds of stutter,
+     * and unlike a dropped reference frame the artefact stops propagating at
+     * the next IDR either way.
+     *
+     * Climb there in two steps rather than one. BIDIR only gives up filtering
+     * on B slices, whose drift is confined to the B mini-pyramid and is
+     * refreshed at every mini-GOP, and it already recovers two thirds of the
+     * gain (measured on HEVC 10-bit: NONREF 4.60, BIDIR 4.92, ALL 5.33 fps).
+     * A brief hiccup therefore costs almost no picture quality, and only a
+     * sustained overload pays the full price.
+     *
+     * This one is deliberately NOT restricted to the old architectures: it
+     * costs exactly nothing on a machine that is keeping up, because it only
+     * fires once the decoder is already several frames behind -- and at that
+     * point the alternative, a few lines below, is to throw whole frames away.
+     * A 2007 Core 2 Duo hitting a 1080p stream benefits from it for the same
+     * reason a G4 does.
      *
      * Only in the single-threaded configuration: with frame threading the new
      * level reaches the worker a whole pipeline behind, so the escalation
      * would land after the moment it was meant to rescue. */
-    if( p_context->active_thread_type == 0 && p_sys->i_late_frames > 2 &&
-        p_sys->i_skip_loopfilter < AVDISCARD_ALL )
-        p_context->skip_loop_filter = AVDISCARD_ALL;
-#endif
+    if( p_context->active_thread_type == 0 )
+    {
+        enum AVDiscard i_want = p_sys->i_skip_loopfilter;
+
+        if( p_sys->i_late_frames > 4 )
+            i_want = AVDISCARD_ALL;
+        else if( p_sys->i_late_frames > 2 )
+            i_want = AVDISCARD_BIDIR;
+
+        if( i_want > p_context->skip_loop_filter )
+            p_context->skip_loop_filter = i_want;
+    }
 
     if( p_sys->i_late_frames <= 4)
         return false;
 
-#if defined (__powerpc__) || defined (__POWERPC__)
+#ifdef POWERVLC_LEGACY_CPU
     /* In slideshow mode the decoder already skips everything but keyframes
      * (NONKEY), and those must reach the display: never drop the block nor
      * clear the output request here. */
@@ -1198,7 +1256,7 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block, bool *error
     current_time = mdate();
     if( p_dec->b_frame_drop_allowed &&  check_block_being_late( p_sys, p_block, current_time) )
     {
-#if defined (__powerpc__) || defined (__POWERPC__)
+#ifdef POWERVLC_LEGACY_CPU
         /* "A good idea could be to decode all I pictures" (below): on the
          * PowerPC Macs this port targets, content way past the CPU budget
          * (1080p h264...) otherwise plays as sound over a black screen.
@@ -1208,8 +1266,22 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block, bool *error
          * (mp4 never does) — and force-display what comes out. */
         if( !p_sys->b_slideshow )
         {
-            msg_Warn( p_dec, "hopelessly late video: "
-                      "switching to keyframe slideshow" );
+            /* Relapsing right after leaving means the content really is out
+             * of budget, not that we hit a hiccup: hold the slideshow twice
+             * as long each time, so it converges to a steady slideshow
+             * instead of alternating a burst of frames with 5 s of black. */
+            if( p_sys->i_slideshow_left != VLC_TICK_INVALID &&
+                current_time - p_sys->i_slideshow_left < SLIDESHOW_RELAPSE )
+                p_sys->i_slideshow_hold = __MIN( p_sys->i_slideshow_hold * 2,
+                                                 SLIDESHOW_HOLD_MAX );
+            else
+                p_sys->i_slideshow_hold = SLIDESHOW_HOLD_MIN;
+            p_sys->i_slideshow_entered = current_time;
+            /* plain %d: the 64-bit length modifiers are a minefield on the
+             * oldest targets, see the Jaguar printf notes */
+            msg_Warn( p_dec, "hopelessly late video: switching to keyframe "
+                      "slideshow for at least %d s",
+                      (int)(p_sys->i_slideshow_hold / CLOCK_FREQ) );
             p_sys->b_slideshow = true;
         }
 #else
@@ -1218,10 +1290,14 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block, bool *error
         return NULL;
 #endif
     }
-    else if( p_sys->b_slideshow && p_sys->i_late_frames <= 0 )
+    else if( p_sys->b_slideshow && p_sys->i_late_frames <= 0 &&
+             current_time - p_sys->i_slideshow_entered >= p_sys->i_slideshow_hold )
     {
+        /* Being on time proves nothing while only keyframes are decoded --
+         * that is why the hold above has to expire first. */
         msg_Warn( p_dec, "video caught up: leaving keyframe slideshow" );
         p_sys->b_slideshow = false;
+        p_sys->i_slideshow_left = current_time;
         p_context->skip_frame = p_sys->i_skip_frame;
     }
 
@@ -1273,7 +1349,7 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block, bool *error
                                               AVDISCARD_NONREF );
     }
 
-#if defined (__powerpc__) || defined (__POWERPC__)
+#ifdef POWERVLC_LEGACY_CPU
     /* Keyframe slideshow (see check_block_being_late): let the decoder
      * do the skipping, it knows the frame types even when the demux
      * does not flag them. */

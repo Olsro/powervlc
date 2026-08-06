@@ -728,6 +728,17 @@ void VLCLegacySetViewHidden(NSView *view, BOOL hidden)
     }
 }
 
+void VLCLegacyForgetHiddenView(NSView *view)
+{
+    if (view == nil)
+        return;
+
+    /* The record is what keeps a detached view alive, so the view may well
+     * go away with this call: nothing below may touch it. */
+    [pendingHides removeObject:view];
+    [detachedViews removeObjectForKey:[NSValue valueWithPointer:view]];
+}
+
 NSView *VLCLegacyViewWithTag(NSView *root, NSInteger tag)
 {
     NSView *found = [root viewWithTag:tag];

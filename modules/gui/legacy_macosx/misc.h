@@ -149,6 +149,13 @@ BOOL VLCLegacyMenuDelegatesAvailable(void);
 void VLCLegacySetViewHidden(NSView *view, BOOL hidden);
 BOOL VLCLegacyViewIsHidden(NSView *view);
 
+/* Drops what the two functions above remember about a view, which they key by
+ * its ADDRESS. A view they detached outlives its owner otherwise, and the next
+ * allocation that lands on the freed address inherits its record: the widget
+ * an extension dialog builds there is then taken for one already hidden and
+ * never detaches again. Call this before letting go of a view for good. */
+void VLCLegacyForgetHiddenView(NSView *view);
+
 /* -[NSTableView setColumnAutoresizingStyle:] is 10.4, and its 10.0 ancestor
  * is the reverse switch: -setAutoresizesAllColumnsToFit:NO gives exactly the
  * "last column only" behaviour. It matters more than it sounds -- with all
