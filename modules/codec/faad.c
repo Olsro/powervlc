@@ -58,9 +58,28 @@
 static int  Open( vlc_object_t * );
 static void Close( vlc_object_t * );
 
+/* On the 1999-2009 machines this fork targets, libfaad2's inverse filterbank
+ * is what AAC playback actually costs: its fftpack-derived complex FFT is
+ * markedly slower than the one libavcodec uses. Measured on a 700 MHz iBook G3
+ * (ppc750, no AltiVec) on a 48 kHz stereo 256 kb/s AAC stream, audio-only, two
+ * alternated runs each: the whole audio path costs 17.0 s of CPU per 60 s of
+ * media through faad2 and 15.2 s through libavcodec. That is 3 % of the machine
+ * handed back, and on a CPU already oversubscribed by the video decoder it is
+ * 3 % that goes straight into frames reaching the screen.
+ *
+ * Rank faad2 just below the libavcodec audio decoder (70) rather than above it,
+ * so it becomes the fallback for the streams libavcodec turns down instead of
+ * always winning. The modern slices keep the historic order: they have CPU to
+ * spare, and faad2 still covers a few AAC variants libavcodec does not. */
+#if defined (__powerpc__) || defined (__POWERPC__) || defined (__i386__)
+# define FAAD_PRIORITY 60
+#else
+# define FAAD_PRIORITY 100
+#endif
+
 vlc_module_begin ()
     set_description( N_("AAC audio decoder (using libfaad2)") )
-    set_capability( "audio decoder", 100 )
+    set_capability( "audio decoder", FAAD_PRIORITY )
     set_category( CAT_INPUT )
     set_subcategory( SUBCAT_INPUT_ACODEC )
     set_callbacks( Open, Close )

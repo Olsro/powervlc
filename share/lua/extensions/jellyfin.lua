@@ -94,6 +94,23 @@ local QUALITY_KEYS = { "low", "medium", "high", "veryhigh" }
 local AUDIO_BITRATES = { 128000, 192000, 256000 }
 local DEFAULT_AUDIO_BITRATE = 256000
 
+-- Sample rate always asked of the server, deliberately not a setting.
+--
+-- The built-in output of the Macs this fork exists for runs at 44 100 Hz
+-- (measured on a 700 MHz iBook G3 under Mac OS X 10.2: "audio output: VLC is
+-- looking for f32b 44100 Hz Stereo"), while a film's soundtrack is almost
+-- always 48 000 Hz. Left alone, VLC therefore resamples every frame on the
+-- CPU with its cubic interpolator -- about 1.3 % of that machine, on a CPU
+-- with none to spare, plus roughly 8 % more AAC to decode for the extra
+-- samples. Asking the server for CD rate deletes that stage outright, and
+-- ffmpeg's resampler on the server is better than the one it replaces.
+--
+-- No control for it: the right value follows from the sound card, not from
+-- taste, so there is nothing for the user to arbitrate -- and where it is
+-- not needed (a machine genuinely running at 48 kHz) the cost is one
+-- resample on hardware fast enough not to feel it.
+local AUDIO_SAMPLE_RATE = 44100
+
 -- Maximum bit rate per H.264 level (Annex A, table A-1), in bit/s, for
 -- the baseline and main profiles; the high profile raises the ceiling by
 -- a quarter. Beyond it the encoder clamps anyway, so the field does too.
@@ -1659,6 +1676,7 @@ local function hls_url()
       .. "&subtitleMethod=Encode"
       .. "&maxAudioChannels=2"
       .. "&audioBitRate=" .. selected_audio_bitrate()
+      .. "&AudioSampleRate=" .. string.format("%d", AUDIO_SAMPLE_RATE)
       .. "&enableAudioVbrEncoding=false"
       .. "&maxVideoBitDepth=8"
       .. "&maxRefFrames=" .. preset.refs

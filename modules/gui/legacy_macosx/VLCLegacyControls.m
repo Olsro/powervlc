@@ -247,18 +247,41 @@ NSButton *VLCLegacyImageButton(NSView *parent, NSString *imageName,
         return;
     }
 
-    /* Light gradient, top (lighter) to bottom, like VLCBottomBarView */
+    /* Light gradient, top (lighter) to bottom, like VLCBottomBarView.
+     *
+     * Les bornes des tranches sont arrondies au pixel. 24 tranches sur une
+     * barre d'environ 38 px donnent 1,58 px chacune : les bords tombaient au
+     * MILIEU d'un pixel, et un NSRectFill à bord fractionnaire ne prend pas le
+     * blit entier — il part dans le rastériseur anti-aliasé. Arrondies, les
+     * tranches pavent exactement la barre (1 ou 2 px, plus de recouvrement
+     * d'1 px à départager) et chaque remplissage retombe sur le chemin entier.
+     *
+     * ⚠⚠ NE PAS EN ATTENDRE PLUS QUE ÇA — mesuré, ce n'est PAS un levier de
+     * performance. Le profil `sample` du thread principal sur l'iBook G3
+     * (ppc750 700 MHz) pendant une lecture H.264 accusait `aa_render` à 4 522
+     * échantillons sur 12 000, ce qui laissait croire au poste le plus lourd
+     * de l'interface. C'était du TEMPS MURAL sur un fil préempté, pas du temps
+     * CPU : l'A/B au chronomètre (2 runs par branche, 140 s de lecture, cache
+     * de greffons chaud) donne 108,1 s de CPU avant et 107,5 s après, soit
+     * 0,6 % — l'écart entre les deux runs de référence est déjà de 0,4 %.
+     * C'est cohérent : la barre n'est redessinée qu'une fois par seconde sous
+     * ≤10.3 (voir le timer dans VLCLegacyMainWindow), donc même un redessin
+     * coûteux ne peut pas peser. Conservé parce que c'est gratuit et que
+     * l'aspect est identique (relevé colonne par colonne : au plus 1/255
+     * d'écart sur 3 rangées de 35), pas parce que ça rapporte. */
     const float topWhite = 0.965f, bottomWhite = 0.835f;
     const int steps = 24;
+    const float base = floorf(NSMinY(bounds) + 0.5f);
+    const float span = bounds.size.height;
     int i;
     for (i = 0; i < steps; i++) {
-        /* view is not flipped: slice 0 is at the bottom; slices overlap
-         * by 1 px and later slices win, an order the intersection keeps */
-        r = NSIntersectionRect(NSMakeRect(bounds.origin.x,
-                                          bounds.origin.y
-                                              + bounds.size.height * i / steps,
-                                          bounds.size.width,
-                                          bounds.size.height / steps + 1.0f),
+        /* view is not flipped: slice 0 is at the bottom */
+        float y0 = floorf(span * i / steps + 0.5f);
+        float y1 = floorf(span * (i + 1) / steps + 0.5f);
+        if (y1 <= y0)
+            continue;           /* tranche plus fine qu'un pixel */
+        r = NSIntersectionRect(NSMakeRect(bounds.origin.x, base + y0,
+                                          bounds.size.width, y1 - y0),
                                dirtyRect);
         if (NSIsEmptyRect(r))
             continue;
@@ -269,7 +292,8 @@ NSButton *VLCLegacyImageButton(NSView *parent, NSString *imageName,
     }
 
     /* hairline separator on top */
-    r = NSIntersectionRect(NSMakeRect(bounds.origin.x, NSMaxY(bounds) - 1.0f,
+    r = NSIntersectionRect(NSMakeRect(bounds.origin.x,
+                                      floorf(NSMaxY(bounds) + 0.5f) - 1.0f,
                                       bounds.size.width, 1.0f),
                            dirtyRect);
     if (!NSIsEmptyRect(r)) {
