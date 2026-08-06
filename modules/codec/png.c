@@ -264,8 +264,19 @@ static int DecodeBlock( decoder_t *p_dec, block_t *p_block )
     if( i_color_type == PNG_COLOR_TYPE_GRAY ||
         i_color_type == PNG_COLOR_TYPE_GRAY_ALPHA )
           png_set_gray_to_rgb( p_png );
+    /* Unassociated alpha, which is what the file holds and what everything
+     * downstream reads it as: the software blender composites
+     * dst*(255-a) + src*a, and both GL vouts ask for
+     * GL_SRC_ALPHA/GL_ONE_MINUS_SRC_ALPHA. PNG_ALPHA_OPTIMIZED hands back
+     * colour components already multiplied by the alpha -- libpng's own
+     * header says the caller then owes it a png_composite() -- so every
+     * consumer here multiplied a second time and semi-transparent pixels
+     * came out too dark (a cover at alpha 128 over white landed on 191
+     * instead of 255, measured on both PowerPC and arm64). The second
+     * argument still asks for sRGB, which is what that call was reached
+     * for; only the association changes. */
     if( i_color_type & PNG_COLOR_MASK_ALPHA )
-        png_set_alpha_mode( p_png, PNG_ALPHA_OPTIMIZED, PNG_DEFAULT_sRGB );
+        png_set_alpha_mode( p_png, PNG_ALPHA_PNG, PNG_DEFAULT_sRGB );
 
     /* Strip to 8 bits per channel */
     if( i_bit_depth == 16 )
