@@ -6,10 +6,10 @@ Measured on a 1.42 GHz 7447A (Mac mini G4, Leopard), single-threaded, with an
 isolated ffmpeg decode bench. Decoded output is bit-identical to the C
 reference on every sample, checked with a hash of all decoded planes:
 
-                          reference   +SAO+IDCT    +MC(luma)   +chroma/weighted
-  1080x1920 10-bit HEVC     3.17        4.18        4.79         5.26 fps  (+66 %)
-  1080x1920  8-bit HEVC     3.50        4.91        5.87         6.38 fps  (+82 %)
-   854x480  10-bit HEVC    16.8        22.2        24.2         24.9  fps  (+49 %)
+                          reference   +SAO+IDCT   +MC   +chroma/w   +whole-pel
+   854x480  10-bit HEVC    16.8        22.2       24.2    24.9        26.9 fps (+60 %)
+  1080x1920 10-bit HEVC     3.17        4.18       4.79    5.26           -- fps
+  1080x1920  8-bit HEVC     3.50        4.91       5.87    6.38           -- fps
 
 A profile of a 10-bit 1080x1920 decode attributed ~39 % of the time to motion
 compensation, ~20 % to SAO and ~19 % to the inverse transform. None of the
@@ -52,7 +52,7 @@ idioms, and every target of this fork is big-endian.
  #include "libavutil/ppc/util_altivec.h"
  
  #include "libavcodec/hevc/dsp.h"
-@@ -98,15 +99,65 @@
+@@ -98,15 +99,73 @@
  #define FUNCDECL(a, depth) a ## _ ## depth ## _altivec
  #define FUNC(a, b) FUNCDECL(a, b)
  
@@ -112,13 +112,21 @@ idioms, and every target of this fork is big-endian.
 +            c->put_hevc_epel_bi[i][1][1]  = ff_hevc_put_epel_bi_hv_ ## depth ## _altivec;  \
 +            c->put_hevc_epel_uni_w[i][1][0] = ff_hevc_put_epel_uni_w_v_ ## depth ## _altivec;  \
 +            c->put_hevc_epel_uni_w[i][1][1] = ff_hevc_put_epel_uni_w_hv_ ## depth ## _altivec; \
++            /* whole-pel: put shifts, bi adds, uni_w weights -- only         \
++             * put_uni_pixels is a real memcpy and stays in C */             \
++            c->put_hevc_qpel[i][0][0]       = ff_hevc_put_pel_pixels_ ## depth ## _altivec;      \
++            c->put_hevc_epel[i][0][0]       = ff_hevc_put_pel_pixels_ ## depth ## _altivec;      \
++            c->put_hevc_qpel_bi[i][0][0]    = ff_hevc_put_pel_bi_pixels_ ## depth ## _altivec;   \
++            c->put_hevc_epel_bi[i][0][0]    = ff_hevc_put_pel_bi_pixels_ ## depth ## _altivec;   \
++            c->put_hevc_qpel_uni_w[i][0][0] = ff_hevc_put_pel_uni_w_pixels_ ## depth ## _altivec;\
++            c->put_hevc_epel_uni_w[i][0][0] = ff_hevc_put_pel_uni_w_pixels_ ## depth ## _altivec;\
 +        }                                                                      \
 +    } while (0)
 +
  av_cold void ff_hevc_dsp_init_ppc(HEVCDSPContext *c, const int bit_depth)
  {
  #if HAVE_ALTIVEC
-@@ -117,5 +168,32 @@
+@@ -117,5 +176,38 @@
          c->idct[0] = ff_hevc_idct_4x4_8_altivec;
      if (bit_depth == 10)
          c->idct[0] = ff_hevc_idct_4x4_10_altivec;
@@ -129,6 +137,9 @@ idioms, and every target of this fork is big-endian.
 +     * array are width classes; the code handles any width, so one function
 +     * serves them all, exactly as the C reference does. */
 +    if (bit_depth == 8) {
++        c->add_residual[1] = ff_hevc_add_residual8x8_8_altivec;
++        c->add_residual[2] = ff_hevc_add_residual16x16_8_altivec;
++        c->add_residual[3] = ff_hevc_add_residual32x32_8_altivec;
 +        c->idct[1] = ff_hevc_idct_8x8_8_altivec;
 +        c->idct[2] = ff_hevc_idct_16x16_8_altivec;
 +        c->idct[3] = ff_hevc_idct_32x32_8_altivec;
@@ -139,6 +150,9 @@ idioms, and every target of this fork is big-endian.
 +        MC_SET(8);
 +    }
 +    if (bit_depth == 10) {
++        c->add_residual[1] = ff_hevc_add_residual8x8_10_altivec;
++        c->add_residual[2] = ff_hevc_add_residual16x16_10_altivec;
++        c->add_residual[3] = ff_hevc_add_residual32x32_10_altivec;
 +        c->idct[1] = ff_hevc_idct_8x8_10_altivec;
 +        c->idct[2] = ff_hevc_idct_16x16_10_altivec;
 +        c->idct[3] = ff_hevc_idct_32x32_10_altivec;
@@ -767,7 +781,7 @@ idioms, and every target of this fork is big-endian.
 +};
 --- /dev/null
 +++ b/libavcodec/ppc/hevcdsp_inter_template.c
-@@ -0,0 +1,1059 @@
+@@ -0,0 +1,1189 @@
 +/*
 + * AltiVec inter prediction (motion compensation) for HEVC
 + *
@@ -1821,6 +1835,136 @@ idioms, and every target of this fork is big-endian.
 +        dst += dst_stride;
 +    }
 +}
++
++
++/* ======================================================================
++ * Whole-pel: no filter at all, but not a memcpy either -- put shifts into
++ * the 14-bit intermediate, bi adds the other prediction, uni_w weights.
++ * Only put_uni_pixels is a real memcpy, and it stays in C.
++ * ====================================================================== */
++static void FUNC(ff_hevc_put_pel_pixels, BIT_DEPTH)(int16_t *dst, const uint8_t *_src,
++                                                    ptrdiff_t _src_stride, int height,
++                                                    intptr_t mx, intptr_t my, int width)
++{
++    const PIXEL *src = (const PIXEL *)_src;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const vec_u16 sh = (vec_u16){ 14 - BIT_DEPTH, 14 - BIT_DEPTH, 14 - BIT_DEPTH, 14 - BIT_DEPTH,
++                                  14 - BIT_DEPTH, 14 - BIT_DEPTH, 14 - BIT_DEPTH, 14 - BIT_DEPTH };
++    int x, y;
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8)
++            vec_st(vec_sl(FUNC(mc_load8, BIT_DEPTH)(src + x), (vec_u16)sh), 0, dst + x);
++        for (; x < width; x++)
++            dst[x] = src[x] << (14 - BIT_DEPTH);
++        src += src_stride;
++        dst += MAX_PB_SIZE;
++    }
++}
++
++static void FUNC(ff_hevc_put_pel_bi_pixels, BIT_DEPTH)(uint8_t *_dst, ptrdiff_t _dst_stride,
++                                                       const uint8_t *_src, ptrdiff_t _src_stride,
++                                                       const int16_t *src2, int height,
++                                                       intptr_t mx, intptr_t my, int width)
++{
++    const PIXEL *src = (const PIXEL *)_src;
++    PIXEL *dst = (PIXEL *)_dst;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const ptrdiff_t dst_stride = _dst_stride / sizeof(PIXEL);
++    const int shift = 14 + 1 - BIT_DEPTH;
++    const int offset = 1 << (shift - 1);
++    const int mode = mc_store_mode(dst, _dst_stride, BIT_DEPTH > 8);
++    const vec_u16 up = (vec_u16){ 14 - BIT_DEPTH, 14 - BIT_DEPTH, 14 - BIT_DEPTH, 14 - BIT_DEPTH,
++                                  14 - BIT_DEPTH, 14 - BIT_DEPTH, 14 - BIT_DEPTH, 14 - BIT_DEPTH };
++    const vec_u32 vsh = mc_usplat32(shift);
++    const vec_s32 voff = mc_splat32(offset);
++    int x, y;
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s16 v = vec_sl(FUNC(mc_load8, BIT_DEPTH)(src + x), (vec_u16)up);
++            vec_s16 s2 = mc_load16(src2 + x);
++            vec_s32 lo = vec_add(vec_add(vec_unpackh(v), vec_unpackh(s2)), voff);
++            vec_s32 hi = vec_add(vec_add(vec_unpackl(v), vec_unpackl(s2)), voff);
++            FUNC(mc_store8, BIT_DEPTH)(dst + x,
++                vec_packs(vec_sra(lo, vsh), vec_sra(hi, vsh)), mode);
++        }
++        for (; x < width; x++)
++            dst[x] = FUNC(mc_clip, BIT_DEPTH)(((src[x] << (14 - BIT_DEPTH))
++                                               + src2[x] + offset) >> shift);
++        src  += src_stride;
++        dst  += dst_stride;
++        src2 += MAX_PB_SIZE;
++    }
++}
++
++static void FUNC(ff_hevc_put_pel_uni_w_pixels, BIT_DEPTH)(uint8_t *_dst, ptrdiff_t _dst_stride,
++                                                          const uint8_t *_src, ptrdiff_t _src_stride,
++                                                          int height, int denom, int wx, int _ox,
++                                                          intptr_t mx, intptr_t my, int width)
++{
++    const PIXEL *src = (const PIXEL *)_src;
++    PIXEL *dst = (PIXEL *)_dst;
++    const ptrdiff_t src_stride = _src_stride / sizeof(PIXEL);
++    const ptrdiff_t dst_stride = _dst_stride / sizeof(PIXEL);
++    const int shift = denom + 14 - BIT_DEPTH;
++    const int offset = 1 << (shift - 1);
++    const int ox = _ox * (1 << (BIT_DEPTH - 8));
++    const int mode = mc_store_mode(dst, _dst_stride, BIT_DEPTH > 8);
++    const vec_u16 up = (vec_u16){ 14 - BIT_DEPTH, 14 - BIT_DEPTH, 14 - BIT_DEPTH, 14 - BIT_DEPTH,
++                                  14 - BIT_DEPTH, 14 - BIT_DEPTH, 14 - BIT_DEPTH, 14 - BIT_DEPTH };
++    const vec_u32 vsh = mc_usplat32(shift);
++    const vec_s32 voff = mc_splat32(offset);
++    const vec_s32 vox = mc_splat32(ox);
++    const vec_s16 wxv = mc_splat16(wx);
++    int x, y;
++
++    for (y = 0; y < height; y++) {
++        for (x = 0; x + 8 <= width; x += 8) {
++            vec_s16 v = vec_sl(FUNC(mc_load8, BIT_DEPTH)(src + x), (vec_u16)up);
++            vec_s32 lo = vec_mule(v, wxv), hi = vec_mulo(v, wxv), l2, h2;
++            MC_MERGE(lo, hi, l2, h2);
++            l2 = vec_add(vec_sra(vec_add(l2, voff), vsh), vox);
++            h2 = vec_add(vec_sra(vec_add(h2, voff), vsh), vox);
++            FUNC(mc_store8, BIT_DEPTH)(dst + x, vec_packs(l2, h2), mode);
++        }
++        for (; x < width; x++)
++            dst[x] = FUNC(mc_clip, BIT_DEPTH)((((src[x] << (14 - BIT_DEPTH)) * wx
++                                                + offset) >> shift) + ox);
++        src += src_stride;
++        dst += dst_stride;
++    }
++}
++
++/* ======================================================================
++ * add_residual: dst = clip(dst + residual). No PowerPC path existed.
++ * ====================================================================== */
++static av_always_inline void FUNC(mc_add_residual, BIT_DEPTH)(uint8_t *_dst, const int16_t *res,
++                                                              ptrdiff_t stride, int size)
++{
++    PIXEL *dst = (PIXEL *)_dst;
++    const int mode = mc_store_mode(dst, stride, BIT_DEPTH > 8);
++    int x, y;
++
++    stride /= sizeof(PIXEL);
++
++    for (y = 0; y < size; y++) {
++        for (x = 0; x + 8 <= size; x += 8)
++            FUNC(mc_store8, BIT_DEPTH)(dst + x,
++                vec_add(FUNC(mc_load8, BIT_DEPTH)(dst + x), mc_load16(res + x)), mode);
++        for (; x < size; x++)
++            dst[x] = FUNC(mc_clip, BIT_DEPTH)(dst[x] + res[x]);
++        res += size;
++        dst += stride;
++    }
++}
++
++static void FUNC(ff_hevc_add_residual8x8, BIT_DEPTH)(uint8_t *dst, const int16_t *res, ptrdiff_t stride)
++{ FUNC(mc_add_residual, BIT_DEPTH)(dst, res, stride, 8); }
++static void FUNC(ff_hevc_add_residual16x16, BIT_DEPTH)(uint8_t *dst, const int16_t *res, ptrdiff_t stride)
++{ FUNC(mc_add_residual, BIT_DEPTH)(dst, res, stride, 16); }
++static void FUNC(ff_hevc_add_residual32x32, BIT_DEPTH)(uint8_t *dst, const int16_t *res, ptrdiff_t stride)
++{ FUNC(mc_add_residual, BIT_DEPTH)(dst, res, stride, 32); }
 +
 +#undef CHROMA_SCALAR
 +#undef LUMA_SCALAR
