@@ -400,7 +400,8 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
     if ([typeString isEqualToString: @"dialog-extension"]) {
         [self performSelectorOnMainThread:@selector(updateExtensionDialog:)
                                withObject:objectValue
-                            waitUntilDone:YES];
+                            waitUntilDone:YES
+                                    modes:@[NSDefaultRunLoopMode]];
 
     }
     else
@@ -827,6 +828,15 @@ static id VLCDialogCornerKey(extension_dialog_t *p_dialog)
         if (!p_dialog->b_kill && !dialogWindow) {
             dialogWindow = [self createExtensionDialog:p_dialog];
 
+            /* Give it its real size before deciding where it goes. The
+             * window is born one point wide and is only fitted to its
+             * content on the next turn of the run loop, so both branches
+             * below -- the remembered corner and -center -- were placing
+             * a 1x1 window, and whatever it grew into afterwards ended up
+             * somewhere else entirely. */
+            [(VLCDialogGridView *)[dialogWindow contentView]
+                recomputeWindowSize];
+
             BOOL visible = !p_dialog->b_hide;
             if (visible) {
                 /* Where this extension's last window stood, if it had
@@ -897,9 +907,19 @@ static id VLCDialogCornerKey(extension_dialog_t *p_dialog)
     assert(p_dialog);
 
     NSValue *o_value = [NSValue valueWithPointer:p_dialog];
+    /* The default run loop mode, and no other. Without naming modes,
+     * Foundation queues this in the COMMON modes, which AppKit has added
+     * event tracking to -- so a dialog rebuilt in answer to a click ran
+     * in the middle of that very click, tearing the window down while
+     * -[NSTableView mouseDown:] was still tracking inside it. The legacy
+     * interface crashed outright on that (a freed button cell, caught in
+     * a 10.2 crash report); here it is the same re-entrancy. Holding the
+     * update until the click is over costs the extension thread a few
+     * milliseconds and it holds no lock of ours meanwhile. */
     [self performSelectorOnMainThread:@selector(updateExtensionDialog:)
                            withObject:o_value
-                        waitUntilDone:YES];
+                        waitUntilDone:YES
+                                modes:@[NSDefaultRunLoopMode]];
 }
 
 @end

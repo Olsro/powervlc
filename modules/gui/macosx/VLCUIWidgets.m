@@ -569,8 +569,18 @@
      * so every update used to grow the window by its height */
     contentRect.size = [self flexSize:contentRect.size];
     NSRect newFrame = [window frameRectForContentRect:contentRect];
+    /* Anchor the top-LEFT corner: the window grows down and to the right,
+     * and stays where the user put it.
+     *
+     * The width used to be re-centred on the old one, which walked the
+     * window across the screen. A script that shows another screen builds
+     * a whole new window for it, and that window is one point wide until
+     * this runs: it was placed at the corner the previous one was left at,
+     * then re-centred on a width of 1, so it landed half its own width to
+     * the left of where it belonged. Every view change moved it again,
+     * until it fetched up against the left edge of the screen. Growing
+     * from a fixed corner is also what the saved corner means. */
     newFrame.origin.y -= newFrame.size.height - frame.size.height;
-    newFrame.origin.x -= (newFrame.size.width - frame.size.width) / 2;
 
     /* A dialog grows downwards from its title bar, so unfolding a long
      * section pushed its whole body under the bottom of the screen --

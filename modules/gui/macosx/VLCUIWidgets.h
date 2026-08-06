@@ -98,6 +98,12 @@
               rowSpan:(NSUInteger)rowSpan
               colSpan:(NSUInteger)colSpan;
 - (void)removeSubview:(NSView *)view;
+/// Fit the window to the grid at once. Adding a widget only schedules this
+/// for the next turn of the run loop, so that building a whole dialog
+/// resizes once rather than per widget; call it directly when the window
+/// has to be the right size NOW -- placing it, for one, since where it goes
+/// depends on how big it is.
+- (void)recomputeWindowSize;
 
 @property (readonly) NSUInteger numViews;
 
