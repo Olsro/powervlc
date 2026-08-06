@@ -32,7 +32,7 @@ AC_SUBST(PKGDIR)
 CONFIGURE_LINE="`echo "$0 $ac_configure_args" | sed -e 's/\\\/\\\\\\\/g'`"
 CODENAME="Vetinari"
 dnl PowerVLC product version, distinct from the VLC core version above
-POWERVLC_VERSION="1.1.0"
+POWERVLC_VERSION="1.2.0"
 AC_SUBST(POWERVLC_VERSION)
 COPYRIGHT_YEARS="1996-2026"
 
