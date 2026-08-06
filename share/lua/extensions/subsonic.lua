@@ -57,7 +57,19 @@ local SEARCH_SONGS = 500
 -- one, is not free on the machines this fork exists for. English sits
 -- underneath, string by string, so an untranslated key shows in English
 -- rather than as a hole.
-local lang = require("pvlc_i18n").load("subsonic")
+-- ⚠ Le catalogue ne peut PAS être chargé ici. Le scanner charge ce fichier
+-- dans un état Lua nu pour y lire descriptor() : aucune bibliothèque de base,
+-- et require() y est un bouchon qui rend nil (vlclua_dummy_require, dans
+-- modules/lua/extension.c). Tout appel de bibliothèque au niveau du fichier
+-- tue donc l'extension avant même qu'elle soit listée -- « attempt to index a
+-- nil value » au scan, extension absente du menu. La table reste vide ici et
+-- se remplit dans activate(), qui tourne dans un état complet : tous les
+-- lang.x du fichier sont inchangés, ils lisent à travers __index.
+local lang = {}
+
+local function load_lang()
+  setmetatable(lang, { __index = require("pvlc_i18n").load("subsonic") })
+end
 
             --[[ Transcoding choices ]]--
 
@@ -157,6 +169,7 @@ function descriptor()
 end
 
 function activate()
+  load_lang()
   vlc.msg.dbg("[Subsonic] Welcome")
   json = require("dkjson")
   math.randomseed(os.time())

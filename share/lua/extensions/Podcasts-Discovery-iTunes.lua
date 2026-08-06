@@ -157,7 +157,19 @@ local EXT_NAMES = {
 -- one, is not free on the machines this fork exists for. English sits
 -- underneath, string by string, so an untranslated key shows in English
 -- rather than as a hole.
-local lang = require("pvlc_i18n").load("podcasts")
+-- ⚠ Le catalogue ne peut PAS être chargé ici. Le scanner charge ce fichier
+-- dans un état Lua nu pour y lire descriptor() : aucune bibliothèque de base,
+-- et require() y est un bouchon qui rend nil (vlclua_dummy_require, dans
+-- modules/lua/extension.c). Tout appel de bibliothèque au niveau du fichier
+-- tue donc l'extension avant même qu'elle soit listée -- « attempt to index a
+-- nil value » au scan, extension absente du menu. La table reste vide ici et
+-- se remplit dans activate(), qui tourne dans un état complet : tous les
+-- lang.x du fichier sont inchangés, ils lisent à travers __index.
+local lang = {}
+
+local function load_lang()
+  setmetatable(lang, { __index = require("pvlc_i18n").load("podcasts") })
+end
 
 -- Worked out as the file loads rather than in activate(): descriptor()
 -- is what names the menu entry, and the core asks for it long before the
@@ -1893,12 +1905,17 @@ function descriptor()
     author = "PowerVLC",
     url = "https://podcasts.apple.com/",
     shortdesc = EXT_NAME,
-    description = lang.ext_description,
+    -- descriptor() tourne au scan, où le catalogue est encore vide :
+    -- littéral anglais, comme dans les trois autres extensions.
+    description = "Search the Apple podcast directory, read what a "
+               .. "show is about and subscribe to it without leaving "
+               .. "PowerVLC.",
     capabilities = {}
   }
 end
 
 function activate()
+  load_lang()
   vlc.msg.dbg("[Podcasts] Welcome")
   json = require("dkjson")
 
