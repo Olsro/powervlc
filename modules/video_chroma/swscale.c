@@ -263,16 +263,25 @@ static void FixParameters( int *pi_fmt, bool *pb_has_a, bool *pb_swap_uv, vlc_fo
         *pi_fmt = AV_PIX_FMT_YUV444P;
         *pb_has_a = true;
         break;
+    /* RGBA/ARGB/BGRA name an order of BYTES -- that is what the rest of
+     * this file assumes when it reaches into a picture for the alpha
+     * (OFFSET_A is 3, and ARGB's is 0). AV_PIX_FMT_BGR32 and friends
+     * name an order of BITS in a native word, so they mean one thing on
+     * a little-endian machine and the reverse on a big-endian one: they
+     * happen to line up below on x86 and ARM, and told libav exactly the
+     * wrong byte order on PowerPC. Naming the byte-order ids says what
+     * was meant, and resolves to the same numbers where it already
+     * worked. */
     case VLC_CODEC_RGBA:
-        *pi_fmt = AV_PIX_FMT_BGR32;
+        *pi_fmt = AV_PIX_FMT_RGBA;
         *pb_has_a = true;
         break;
     case VLC_CODEC_ARGB:
-        *pi_fmt = AV_PIX_FMT_BGR32_1;
+        *pi_fmt = AV_PIX_FMT_ARGB;
         *pb_has_a = true;
         break;
     case VLC_CODEC_BGRA:
-        *pi_fmt = AV_PIX_FMT_RGB32;
+        *pi_fmt = AV_PIX_FMT_BGRA;
         *pb_has_a = true;
         break;
     case VLC_CODEC_YV12:

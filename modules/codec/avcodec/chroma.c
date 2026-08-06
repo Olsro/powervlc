@@ -37,18 +37,22 @@
 /*****************************************************************************
  * Chroma fourcc -> libavutil pixfmt mapping
  *****************************************************************************/
-#if defined(WORDS_BIGENDIAN)
-#   define VLC_RGB_ES( fcc, leid, beid ) \
-    { fcc, beid, 0, 0, 0 },
-#else
-#   define VLC_RGB_ES( fcc, leid, beid ) \
-    { fcc, leid, 0, 0, 0 },
-#endif
-
+/* The last row of each RGB family answers a format that carries NO mask
+ * at all -- a decoder that only filled in i_chroma, as libpng's and
+ * libjpeg's do. What that means is not open: video_format_FixRgb() says
+ * so, and its defaults (R in 0xff0000 for RV24 and RV32, 0x7c00 for
+ * RV15...) are the same on every machine. So the mask-less row has to
+ * answer what the first, R-first row answers -- on every machine too.
+ *
+ * It used to hand back the byte-swapped id on a big-endian build, which
+ * told libav the picture was BGR when the decoder had just written RGB:
+ * every cover an extension downloaded came out of the JPEG writer with
+ * red and blue traded (seen on the iBook G3, 2026-08-06). Little-endian
+ * builds never went down that branch, which is why it went unnoticed. */
 #define VLC_RGB( fcc, leid, beid, rmask, gmask, bmask ) \
     { fcc, leid, rmask, gmask, bmask }, \
     { fcc, beid, bmask, gmask, rmask }, \
-    VLC_RGB_ES( fcc, leid, beid )
+    { fcc, leid, 0, 0, 0 },
 
 
 static const struct
