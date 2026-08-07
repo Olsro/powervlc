@@ -1424,7 +1424,35 @@ local function selected_episodes()
       table.insert(out, entry)
     end
   end
+  -- Nothing picked, but this page was opened FROM an episode: that episode
+  -- is what the user came for, so play and enqueue act on it rather than
+  -- telling them to select something they already selected once.
+  if #out == 0 and app.opened_episode then
+    table.insert(out, app.opened_episode)
+  end
   return out
+end
+
+-- Make sure the episode that opened this page is in the list.
+--
+-- The directory hands back a show's LATEST episodes and the feed read stops
+-- at a ceiling, so an episode a few months old is very often in neither: the
+-- page opened on a list that did not contain what had just been clicked, with
+-- no way to scroll to it because it was never there. Its own search row
+-- carries everything a row needs -- title, date, length and the audio URL --
+-- so it is put in when it is missing.
+local function ensure_opened_episode()
+  local want = app.opened_episode
+  if not want then
+    return
+  end
+  for _, ep in ipairs(app.episodes) do
+    if (want.media and ep.media == want.media)
+    or (want.title and ep.title == want.title) then
+      return
+    end
+  end
+  table.insert(app.episodes, 1, want)
 end
 
             --[[ Actions ]]--
@@ -1470,6 +1498,12 @@ end
 -- an episode names the collection it belongs to, and one lookup on that
 -- id brings back the show in full together with its latest episodes.
 function open_entry(entry)
+  -- Opening an episode opens the show it belongs to, which is the page worth
+  -- reading -- but the episode itself must not be lost on the way there.
+  -- See ensure_opened_episode() and selected_episodes().
+  app.opened_episode = ( entry.kind == "episode" and entry.media )
+                       and entry or nil
+
   local id = entry.collection_id or entry.id
   if not id then
     set_message(lang.msg_no_feed)
@@ -1533,6 +1567,7 @@ function open_entry(entry)
   end
   -- No made-up stand-in when the feed says nothing: an episode's own
   -- summary would read as the show's, and it is not.
+  ensure_opened_episode()
   show_podcast()
 end
 

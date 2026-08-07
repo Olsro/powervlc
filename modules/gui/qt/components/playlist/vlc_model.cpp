@@ -51,13 +51,17 @@ int VLCModelSubInterface::columnFromMeta( int meta_col )
 VLCModel::VLCModel( intf_thread_t *_p_intf, QObject *parent )
     : QAbstractItemModel( parent ), VLCModelSubInterface(), p_intf(_p_intf)
 {
-    /* Icons initialization */
+    /* Icons initialization.
+       Item icons keep the original orange accent instead of the PowerVLC red
+       used elsewhere, so that the list matches the source selector shown next
+       to it. The disc and capture-card icons are shared with the menus and the
+       Open dialog, which stay red, hence the dedicated orange variants. */
 #define ADD_ICON(type, x) icons[ITEM_TYPE_##type] = QIcon( x )
     ADD_ICON( UNKNOWN , QPixmap( type_unknown_xpm ) );
     ADD_ICON( FILE, ":/type/file.svg" );
     ADD_ICON( DIRECTORY, ":/type/directory.svg" );
-    ADD_ICON( DISC, ":/type/disc.svg" );
-    ADD_ICON( CARD, ":/type/capture-card.svg" );
+    ADD_ICON( DISC, ":/type/disc-orange.svg" );
+    ADD_ICON( CARD, ":/type/capture-card-orange.svg" );
     ADD_ICON( STREAM, ":/type/stream.svg" );
     ADD_ICON( PLAYLIST, ":/type/playlist.svg" );
     ADD_ICON( NODE, ":/type/node.svg" );

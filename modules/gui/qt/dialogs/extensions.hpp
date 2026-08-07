@@ -35,7 +35,7 @@ class QGridLayout;
 class QSignalMapper;
 class QCloseEvent;
 class QKeyEvent;
-class QListWidget;
+class QTreeWidget;
 
 class ExtensionsDialogProvider;
 class ExtensionDialog;
@@ -122,8 +122,14 @@ private slots:
     void parentDestroyed();
 
 private:
-    void ListContextMenu( QListWidget *list, extension_widget_t *p_widget,
+    void ListContextMenu( QTreeWidget *list, extension_widget_t *p_widget,
                           const QPoint &pos );
+    /* (Re)build a list's columns and rows from the widget's values. Shared by
+     * creation and update: both had the same loop, and columns made it long
+     * enough that two copies would have drifted apart. */
+    void FillList( QTreeWidget *list, extension_widget_t *p_widget );
+    /* resize() to sizeHint(), with the width kept within reason */
+    void ResizeToHint();
 
 signals:
     void destroyDialog( extension_dialog_t *p_dialog );

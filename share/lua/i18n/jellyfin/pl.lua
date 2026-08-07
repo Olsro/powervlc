@@ -5,6 +5,7 @@
 return {
   title_connect = "Jellyfin — Połączenie",
   title_library = "Jellyfin — Biblioteka",
+  title_live = "Jellyfin — Telewizja na żywo",
   title_seasons = "Jellyfin — Sezony",
   title_episodes = "Jellyfin — Odcinki",
   title_play = "Jellyfin — Odtwarzanie",
@@ -42,6 +43,7 @@ return {
               .. "ponownie",
   btn_movies = "Filmy",
   btn_series = "Seriale",
+  btn_live = "TV na żywo",
   lbl_search = "Szukaj:",
   lbl_genre = "Gatunek:",
   all_genres = "Wszystkie gatunki",
@@ -52,6 +54,14 @@ return {
   btn_change_server = "< Połączenie",
   msg_count = "%d / %d pozycji — kliknij dwukrotnie, aby otworzyć",
   msg_select_first = "Najpierw wybierz pozycję z listy",
+  col_channel = "Kanał",
+  col_now = "Teraz",
+  msg_loading_channels = "Pobieranie kanałów…",
+  msg_live_fail = "Nie udało się wczytać kanałów: ",
+  msg_no_live = "Ten serwer nie ma telewizji na żywo",
+  msg_live_open_fail = "Serwer nie otworzył tego kanału: ",
+  msg_channel_count = "%d / %d kanałów — kliknij dwukrotnie, aby oglądać",
+
   col_season = "Sezon",
   col_number = "Nr",
   col_episode = "Odcinek",
@@ -65,13 +75,21 @@ return {
   episode_abbrev = "O",
   lbl_movie = "Film",
   lbl_series = "Serial",
+  lbl_live = "TV na żywo",
   sec_desc = "Opis",
   sec_direct = "Odtwarzanie bezpośrednie — oryginalny plik",
   hint_direct = "Bez konwersji, wszystkie ścieżki zachowane — ale ta maszyna "
               .. "dekoduje oryginalny format.",
+  sec_direct_live = "Odtwarzanie bezpośrednie — kanał tak, jak jest "
+                  .. "nadawany",
+  hint_direct_live = "Bez konwersji: kanał przychodzi tak, jak jest "
+                   .. "nadawany — ale dekoduje go ta maszyna.",
   sec_transcode = "Transkodowanie — strumień H.264/AAC (m3u8)",
   hint_transcode = "Serwer przekształca zgodnie z ustawieniami poniżej. Obniż "
                  .. "je, jeśli strumień wolno rusza.",
+  hint_transcode_live = "Tu serwer zostawia jedną ścieżkę audio i żadnych "
+                      .. "napisów — odtwarzanie bezpośrednie zostawia "
+                      .. "wszystko.",
   lbl_audio = "Dźwięk:",
   lbl_subtitles = "Napisy:",
   no_subtitle = "Brak",
@@ -89,9 +107,11 @@ return {
   q_high = "Wysoka jakość",
   q_veryhigh = "Bardzo wysoka jakość",
   lbl_original = "Plik: ",
+  lbl_stream = "Strumień: ",
   btn_play_hls = "Odtwórz strumień",
   btn_copy_hls = "Kopiuj odnośnik do strumienia",
   btn_play_direct = "Odtwórz oryginał",
+  btn_play_direct_live = "Oglądaj kanał",
   btn_copy_direct = "Kopiuj odnośnik bezpośredni",
   btn_back = "< Wstecz",
   msg_loading_info = "Pobieranie informacji o materiale…",

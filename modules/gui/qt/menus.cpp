@@ -46,6 +46,7 @@
 #include "extensions_manager.hpp"                 /* Extensions menu */
 #include "util/qmenuview.hpp"                     /* Simple Playlist menu */
 #include "util/powervlc_disclibs.hpp"             /* libaacs/libbdplus folders */
+#include "util/powervlc_browser_addon.hpp"        /* the browser half of PowerVLC */
 #include "components/playlist/playlist_model.hpp" /* PLModel getter */
 #include "components/playlist/standardpanel.hpp"  /* PLView getter */
 #include "components/extended_panels.hpp"
@@ -810,6 +811,24 @@ QMenu *VLCMenuBar::HelpMenu( QWidget *parent )
     addDPStaticEntry( menu, qtr( "Check for &Updates..." ) , "",
                       SLOT( updateDialog() ) );
 #endif
+
+    /* The browser half of PowerVLC: it hands what the browser is playing over
+     * to the player, and lets the player read pages the user has opened --
+     * the only way in on a browser older than Firefox 69, since those refuse
+     * to run a bookmarklet on a page carrying a security policy. The macOS
+     * interfaces have offered this from the start; the Qt one had not, which
+     * left every Windows and Linux user of those same retro browsers with no
+     * way to install it. Only shown when this build ships the add-on. */
+    if( !PowerVLCBrowserAddonPath().isEmpty() )
+    {
+        menu->addSeparator();
+
+        QAction *addon = menu->addAction(
+            qtr( "Install the PowerVLC add-on in your browser..." ) );
+        QObject::connect( addon, &QAction::triggered, menu, [parent]() {
+            PowerVLCInstallBrowserAddon( parent );
+        } );
+    }
 
     /* Neither library can decrypt anything until the user drops their own
      * files in these folders, and both folders are hidden away where nobody

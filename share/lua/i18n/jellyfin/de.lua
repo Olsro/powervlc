@@ -5,6 +5,7 @@
 return {
   title_connect = "Jellyfin — Verbindung",
   title_library = "Jellyfin — Bibliothek",
+  title_live = "Jellyfin — Live-TV",
   title_seasons = "Jellyfin — Staffeln",
   title_episodes = "Jellyfin — Folgen",
   title_play = "Jellyfin — Wiedergabe",
@@ -45,6 +46,7 @@ return {
               .. "abgelaufen, melden Sie sich erneut an",
   btn_movies = "Filme",
   btn_series = "Serien",
+  btn_live = "Live-TV",
   lbl_search = "Suche:",
   lbl_genre = "Genre:",
   all_genres = "Alle Genres",
@@ -55,6 +57,14 @@ return {
   btn_change_server = "< Verbindung",
   msg_count = "%d / %d Einträge — Doppelklick öffnet einen",
   msg_select_first = "Wählen Sie zuerst einen Eintrag in der Liste",
+  col_channel = "Sender",
+  col_now = "Jetzt",
+  msg_loading_channels = "Sender werden abgerufen …",
+  msg_live_fail = "Die Sender konnten nicht geladen werden: ",
+  msg_no_live = "Dieser Server hat kein Live-TV",
+  msg_live_open_fail = "Der Server hat diesen Sender nicht geöffnet: ",
+  msg_channel_count = "%d / %d Sender — Doppelklick startet einen",
+
   col_season = "Staffel",
   col_number = "Nr.",
   col_episode = "Folge",
@@ -68,13 +78,21 @@ return {
   episode_abbrev = "F",
   lbl_movie = "Film",
   lbl_series = "Serie",
+  lbl_live = "Live-TV",
   sec_desc = "Beschreibung",
   sec_direct = "Direktwiedergabe — die Originaldatei",
   hint_direct = "Keine Umwandlung, alle Spuren bleiben — dafür dekodiert diese "
               .. "Maschine das Originalformat.",
+  sec_direct_live = "Direktwiedergabe — der Sender, wie er ausgestrahlt "
+                  .. "wird",
+  hint_direct_live = "Keine Umwandlung: der Sender kommt so, wie er "
+                   .. "ausgestrahlt wird — dafür dekodiert diese Maschine "
+                   .. "ihn.",
   sec_transcode = "Transkodierung — H.264/AAC-Stream (m3u8)",
   hint_transcode = "Der Server wandelt in die Einstellungen unten um. "
                  .. "Verringern Sie sie, wenn der Stream langsam startet.",
+  hint_transcode_live = "Hier bleibt nur eine Tonspur und keine Untertitel "
+                      .. "— die Direktwiedergabe behält alles.",
   lbl_audio = "Ton:",
   lbl_subtitles = "Untertitel:",
   no_subtitle = "Keine",
@@ -93,9 +111,11 @@ return {
   q_high = "Hohe Qualität",
   q_veryhigh = "Sehr hohe Qualität",
   lbl_original = "Datei: ",
+  lbl_stream = "Stream: ",
   btn_play_hls = "Stream wiedergeben",
   btn_copy_hls = "Streamlink kopieren",
   btn_play_direct = "Original wiedergeben",
+  btn_play_direct_live = "Sender ansehen",
   btn_copy_direct = "Direktlink kopieren",
   btn_back = "< Zurück",
   msg_loading_info = "Medieninformationen werden abgerufen …",

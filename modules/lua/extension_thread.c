@@ -114,32 +114,101 @@ int Activate( extensions_manager_t *p_mgr, extension_t *p_ext )
     return VLC_SUCCESS;
 }
 
+/** Free a single command and whatever payload it owns. */
+static void FreeCommand( struct command_t *command )
+{
+    switch( command->i_command )
+    {
+        case CMD_ACTIVATE:
+        case CMD_DEACTIVATE:
+        case CMD_CLICK:
+        case CMD_SELECT:
+            /* No extra memory to free */
+            break;
+        case CMD_TRIGGERMENU:
+        case CMD_PLAYING_CHANGED:
+            free( command->data[0] ); // free allocated data
+            break;
+        case CMD_WIDGET_MENU:
+        case CMD_WIDGET_DROP:
+            free( command->data[1] ); // arg 0 is the widget, not owned
+            break;
+        default:
+            break;
+    }
+    free(command);
+}
+
 static void FreeCommands( struct command_t *command )
 {
     while (command) {
         struct command_t *next = command->next;
-        switch( command->i_command )
-        {
-            case CMD_ACTIVATE:
-            case CMD_DEACTIVATE:
-            case CMD_CLICK:
-            case CMD_SELECT:
-                /* No extra memory to free */
-                break;
-            case CMD_TRIGGERMENU:
-            case CMD_PLAYING_CHANGED:
-                free( command->data[0] ); // free allocated data
-                break;
-            case CMD_WIDGET_MENU:
-            case CMD_WIDGET_DROP:
-                free( command->data[1] ); // arg 0 is the widget, not owned
-                break;
-            default:
-                break;
-        }
-        free(command);
+        FreeCommand( command );
         command = next;
     }
+}
+
+/**
+ * Drop every queued command that names a widget which is about to be freed.
+ *
+ * A widget event travels as a raw extension_widget_t* (see PushCommandUnique
+ * in extension.c), and a script is free to tear its widgets down while such
+ * an event is still waiting: rebuilding the view is the ordinary way to show
+ * a new listing. Whoever dequeued the event next then dereferenced freed
+ * memory. That is the Windows crash of 2026-08-07 -- an odd, unmapped pointer
+ * read as p_widget->psz_text in the "Clicking '%s': '%s'" trace of CMD_CLICK,
+ * out of a heap block the listing had already recycled.
+ *
+ * The widget dies from Lua, so the caller IS the extension thread. The one
+ * command that can name this widget without being in the queue is therefore
+ * the one running right now -- Run() unlinks a command before executing it --
+ * and every widget case in Run() is done with its pointer by the time control
+ * can reach Lua's del_widget.
+ *
+ * @note Callers hold the dialog lock; this takes command_lock underneath it,
+ *       which is the order the interface threads already use when they post
+ *       an event (dialog lock held, then PushCommand).
+ */
+void KillWidgetCommands( extension_t *p_ext, extension_widget_t *p_widget )
+{
+    assert( p_widget != NULL );
+    if( p_ext == NULL || p_ext->p_sys == NULL )
+        return;
+
+    struct extension_sys_t *p_sys = p_ext->p_sys;
+
+    vlc_mutex_lock( &p_sys->command_lock );
+    struct command_t **pp_cmd = &p_sys->command;
+    while( *pp_cmd != NULL )
+    {
+        struct command_t *cmd = *pp_cmd;
+        bool b_names_widget;
+
+        switch( cmd->i_command )
+        {
+            case CMD_CLICK:
+            case CMD_SELECT:
+            case CMD_WIDGET_MENU:
+            case CMD_WIDGET_DROP:
+                /* data[0] is the widget for all four; the extra payload of
+                 * the last two is owned by the command and freed with it */
+                b_names_widget = ( cmd->data[0] == p_widget );
+                break;
+            default:
+                b_names_widget = false;
+                break;
+        }
+
+        if( !b_names_widget )
+        {
+            pp_cmd = &cmd->next;
+            continue;
+        }
+
+        *pp_cmd = cmd->next;
+        FreeCommand( cmd );
+    }
+    vlc_mutex_unlock( &p_sys->command_lock );
 }
 
 bool QueueDeactivateCommand( extension_t *p_ext )

@@ -58,8 +58,22 @@ static void LogText(void *opaque, int type, const vlc_log_t *meta,
     if (sys->verbosity < type)
         return;
 
+    /* Elapsed milliseconds since the first line.
+     *
+     * Without this, a log has no time axis at all: the only way to date an
+     * event was to count the lines another subsystem happened to be emitting
+     * around it, and when that subsystem went quiet -- an HTTP download
+     * finishing, say -- two adjacent lines could be seconds apart with
+     * nothing to say so. That has cost several wrong readings already, and
+     * a monotonic stamp costs one subtraction. */
+    static vlc_tick_t origin = VLC_TICK_INVALID;
+    const vlc_tick_t now = mdate();
+
     flockfile(stream);
-    fprintf(stream, "%s%s: ", meta->psz_module, msg_type[type]);
+    if (origin == VLC_TICK_INVALID)
+        origin = now;
+    fprintf(stream, "[%9.3f] %s%s: ", (double)(now - origin) / CLOCK_FREQ,
+            meta->psz_module, msg_type[type]);
     vfprintf(stream, format, ap);
     putc_unlocked('\n', stream);
     funlockfile(stream);
@@ -173,7 +187,19 @@ static vlc_log_cb Open(vlc_object_t *obj, void **restrict sysp)
     }
     free(path);
 
+#ifdef _WIN32
+    /* Windows has no line buffering: the CRT documents _IOLBF as behaving
+     * exactly like _IOFBF, so a "line buffered" log file is really fully
+     * buffered there and a crash takes the last few kilobytes with it --
+     * precisely the part worth reading afterwards. Unbuffered costs a write
+     * per stdio call, which is a fair price for a log the user had to switch
+     * on with --file-logging. _IONBF is C89, so this is as portable as what
+     * it replaces and holds on the Windows XP build too.
+     * Everywhere else _IOLBF already flushes on the newline: leave it. */
+    setvbuf(sys->stream, NULL, _IONBF, 0);
+#else
     setvbuf(sys->stream, NULL, _IOLBF, 0);
+#endif
     fputs(header, sys->stream);
 
     *sysp = sys;

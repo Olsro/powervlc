@@ -405,16 +405,25 @@ static int aout_update_format( decoder_t *p_dec )
             if( p_dec->fmt_out.i_codec == VLC_CODEC_DTS )
                 var_SetBool( p_aout, "dtshd", p_dec->fmt_out.i_profile > 0 );
 
-            /* Gapless: only a plain audio playback input may adopt a parked
-             * output stream (no streaming out, no video anywhere). */
-            bool b_gapless_ok = p_owner->p_input != NULL
+            /* "gapless-eligible" is only ever cleared when a video ES is
+             * added to the input, so it really means "no video anywhere".
+             * With no video and no stream output, nothing is slaved to the
+             * audio clock and an offset in it cannot be seen by anyone --
+             * which is what lets the output correct drift inaudibly instead
+             * of punching a hole in the sound. Both uses want the same three
+             * conditions, hence the one flag.
+             *
+             * Read once, when the output is created: an input that only
+             * grows a video ES later (MPEG-TS) would keep the audio-only
+             * verdict. Rare, and "aout-drift-silence=always" overrides it. */
+            bool b_audio_only = p_owner->p_input != NULL
                              && p_owner->p_sout == NULL
                              && var_GetBool( p_owner->p_input,
                                              "gapless-eligible" );
 
             if( aout_DecNew( p_aout, &format,
                              &p_dec->fmt_out.audio_replay_gain,
-                             &request_vout, b_gapless_ok ) )
+                             &request_vout, b_audio_only ) )
             {
                 input_resource_PutAout( p_owner->p_resource, p_aout );
                 p_aout = NULL;

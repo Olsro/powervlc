@@ -33,8 +33,6 @@ $(TARBALLS)/crystalhd-osx-$(CRYSTALHD_OSX_VERSION).tar.xz:
 
 CRYSTAL_SOURCES := crystalhd-osx-$(CRYSTALHD_OSX_VERSION).tar.xz
 
-.sum-crystalhd: $(CRYSTAL_SOURCES)
-
 libcrystalhd: $(CRYSTAL_SOURCES) .sum-crystalhd
 	$(UNPACK)
 	$(APPLY) $(SRC)/crystalhd/0001-relocatable-firmware-path.patch
@@ -84,8 +82,6 @@ $(TARBALLS)/crystalhd_lgpl_includes_v1.zip:
 
 CRYSTAL_SOURCES := crystalhd_lgpl_includes_v1.zip
 
-.sum-crystalhd: $(CRYSTAL_SOURCES)
-
 libcrystalhd: $(CRYSTAL_SOURCES) .sum-crystalhd
 	$(RM) -R $(UNPACK_DIR) && unzip -o $< -d $(UNPACK_DIR)
 	chmod -R u+w $(UNPACK_DIR)
@@ -101,3 +97,19 @@ endif
 	touch $@
 
 endif
+
+# This package is the one contrib whose SHA512SUMS lists two MUTUALLY
+# EXCLUSIVE tarballs: the Windows LGPL header zip and the macOS sources. The
+# stock .sum-% recipe in main.mak checks the tarball it was asked for and then
+# runs the checksummer over the WHOLE SUMS file, so a Windows build -- which
+# has no reason to ever download the macOS tarball, its download rule being
+# inside the HAVE_MACOSX branch -- died on "crystalhd-osx-*.tar.xz: FAILED
+# open or read". Same the other way round on macOS. So check exactly the
+# tarballs this platform pulled in, by feeding the checksummer only their
+# lines. (The other multi-entry SUMS -- d3d11, d3d9, libcxx-legacy -- list
+# files that are all fetched together, and stay on the stock recipe.)
+.sum-crystalhd: $(CRYSTAL_SOURCES)
+	$(foreach f,$(filter $(TARBALLS)/%,$^), \
+		grep -- " $(f:$(TARBALLS)/%=%)$$" "$(SRC)/crystalhd/SHA512SUMS" \
+		| (cd $(TARBALLS) && $(SHA512SUM) /dev/stdin) &&) \
+	touch $@

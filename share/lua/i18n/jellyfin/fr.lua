@@ -6,6 +6,7 @@ return {
 
     title_connect = "Jellyfin — Connexion",
     title_library = "Jellyfin — Bibliothèque",
+    title_live = "Jellyfin — TV en direct",
     title_seasons = "Jellyfin — Saisons",
     title_episodes = "Jellyfin — Épisodes",
     title_play = "Jellyfin — Lecture",
@@ -45,6 +46,7 @@ return {
 
     btn_movies = "Films",
     btn_series = "Séries",
+    btn_live = "TV en direct",
     lbl_search = "Recherche :",
     lbl_genre = "Genre :",
     all_genres = "Tous les genres",
@@ -55,6 +57,14 @@ return {
     btn_change_server = "< Connexion",
     msg_count = "%d / %d éléments — double-cliquez pour ouvrir",
     msg_select_first = "Sélectionnez d'abord un élément dans la liste",
+
+    col_channel = "Chaîne",
+    col_now = "En ce moment",
+    msg_loading_channels = "Récupération des chaînes...",
+    msg_live_fail = "Impossible de charger les chaînes : ",
+    msg_no_live = "Ce serveur n'a pas de TV en direct",
+    msg_live_open_fail = "Le serveur n'a pas ouvert cette chaîne : ",
+    msg_channel_count = "%d / %d chaînes — double-cliquez pour regarder",
 
     col_season = "Saison",
     col_number = "N°",
@@ -70,13 +80,19 @@ return {
 
     lbl_movie = "Film",
     lbl_series = "Série",
+    lbl_live = "TV en direct",
     sec_desc = "Description",
     sec_direct = "Direct play — le fichier d'origine",
     hint_direct = "Aucune conversion, toutes les pistes — mais cette "
                .. "machine décode le format d'origine.",
+    sec_direct_live = "Direct play — la chaîne telle qu'elle est diffusée",
+    hint_direct_live = "Aucune conversion : la chaîne est envoyée telle "
+                    .. "qu'elle est diffusée — mais cette machine la décode.",
     sec_transcode = "Transcodage — flux H.264/AAC (m3u8)",
     hint_transcode = "Le serveur convertit selon les réglages ci-dessous. "
                   .. "Baissez-les si le flux tarde à démarrer.",
+    hint_transcode_live = "Ici le serveur ne garde qu'une piste audio et "
+                      .. "aucun sous-titre ; le direct les garde.",
     lbl_audio = "Audio :",
     lbl_subtitles = "Sous-titres :",
     no_subtitle = "Aucun",
@@ -94,9 +110,11 @@ return {
     q_high = "Haute qualité",
     q_veryhigh = "Très haute qualité",
     lbl_original = "Fichier : ",
+    lbl_stream = "Flux : ",
     btn_play_hls = "Lire le flux",
     btn_copy_hls = "Copier le lien du flux",
     btn_play_direct = "Lire l'original",
+    btn_play_direct_live = "Regarder la chaîne",
     btn_copy_direct = "Copier le lien direct",
     btn_back = "< Retour",
     msg_loading_info = "Récupération des informations du média...",

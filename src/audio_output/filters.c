@@ -103,14 +103,19 @@ static filter_t *FindResampler (vlc_object_t *obj,
 {
     char *name = var_InheritString (obj, "audio-resampler");
 
-    /* PowerVLC: when no resampler is explicitly requested, default the
-     * adaptive (clock-drift) resampler to the light, band-limited Speex
-     * resampler rather than libsamplerate's SINC. The drift ratio stays
-     * ~1.0, so SINC's cost (several % of a core on old Macs) buys no
-     * audible quality; Speex is as cheap as nearest-neighbour yet
-     * artefact-free. This only touches drift correction -- fixed-rate
-     * conversion (e.g. 44.1->48 kHz for music) uses the separate "audio
-     * converter" and is left alone. Toggle via "audio-efficient-resampler". */
+    /* PowerVLC: on targets where libsamplerate's SINC costs real CPU, prefer
+     * the light band-limited Speex resampler. Toggled by
+     * "audio-efficient-resampler", whose default is set per architecture in
+     * libvlc-module.c.
+     *
+     * NOTE: this governs the fixed-rate conversion too, not only the drift
+     * correction. There is exactly ONE resampler in the chain and it does
+     * both jobs -- aout_FiltersNew() pins the converter pipeline's output
+     * rate to its input rate, so 44.1->48 kHz for music goes through this
+     * very filter. An earlier comment here claimed the opposite; it was
+     * wrong, and the mistake mattered, because it made the option look
+     * harmless on machines where it was in fact choosing the resampler for
+     * all playback. */
     if (name == NULL && var_InheritBool (obj, "audio-efficient-resampler"))
     {
         filter_t *f = CreateFilter (obj, "audio resampler", "speex", NULL,
@@ -703,6 +708,11 @@ void aout_FiltersDelete (vlc_object_t *obj, aout_filters_t *filters)
 bool aout_FiltersCanResample (aout_filters_t *filters)
 {
     return (filters->resampler != NULL);
+}
+
+int aout_FiltersGetResampling (aout_filters_t *filters)
+{
+    return (filters->resampler != NULL) ? filters->resampling : 0;
 }
 
 bool aout_FiltersAdjustResampling (aout_filters_t *filters, int adjust)

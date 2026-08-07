@@ -1,9 +1,10 @@
 --[[
  jellyfin.lua : Jellyfin browser extension for PowerVLC
 
- Browse a Jellyfin server (movies, series, seasons, episodes), then
- play either the original file (direct play) or an HLS stream
- transcoded at the chosen quality, without ever leaving VLC.
+ Browse a Jellyfin server (movies, series, seasons, episodes, and the
+ live TV line-up), then play either the original file (direct play) or
+ an HLS stream transcoded at the chosen quality, without ever leaving
+ VLC.
 
  The user flow follows the JellyDinosaur front-end
  (https://github.com/Olsro/jellydinosaur): server, then API key OR
@@ -167,6 +168,12 @@ local app = {
   shown = {},          -- list row id -> item currently displayed
   genres = {},         -- genre dropdown id -> genre name
 
+  channels = nil,      -- live TV line-up, fetched on the first visit
+  channels_shown = {}, -- live list row id -> channel
+  channels_epg = false, -- a channel says what is on right now: guide column
+  live_source_id = nil, -- media source the tuner was opened on
+  live_stream_id = nil, -- what keeps that tuner tuned
+
   series = nil,        -- item of the series being browsed
   seasons = {},        -- season list row id -> season item
   season = nil,        -- season being browsed
@@ -198,9 +205,9 @@ function descriptor()
     author = "PowerVLC",
     url = "https://jellyfin.org/",
     shortdesc = "Jellyfin",
-    description = "Browse a Jellyfin server and play its movies and "
-               .. "series, either as-is or transcoded at the chosen "
-               .. "quality (HLS).",
+    description = "Browse a Jellyfin server and play its movies, "
+               .. "series and live TV channels, either as-is or "
+               .. "transcoded at the chosen quality (HLS).",
     capabilities = {}
   }
 end
@@ -293,6 +300,35 @@ local function api_get(path, params)
   end
   local obj, _, jerr = json.decode(body)
   if obj == nil then
+    return nil, tostring(jerr or "invalid JSON")
+  end
+  return obj
+end
+
+-- POST an API endpoint the same way, for the few calls that are not a
+-- GET. Everything goes in the query string and the body stays empty:
+-- the endpoints used here take their arguments either way, and it saves
+-- encoding a JSON document to say one word.
+local function api_post(path, params)
+  if not (vlc.http and vlc.http.post) then
+    -- technical, and left in English on purpose: it names the binding
+    -- that is missing, which is not something to translate
+    return nil, "no vlc.http"
+  end
+  local url = app.server .. path .. "?ApiKey=" .. esc(app.token)
+  for _, p in ipairs(params or {}) do
+    url = url .. "&" .. p
+  end
+  vlc.msg.dbg("[Jellyfin] POST " .. url)
+  local status, answer = vlc.http.post(url, "", "application/json")
+  if not status then
+    return nil, tostring(answer)
+  end
+  if status ~= 200 then
+    return nil, "HTTP " .. status
+  end
+  local obj, _, jerr = json.decode(answer or "")
+  if type(obj) ~= "table" then
     return nil, tostring(jerr or "invalid JSON")
   end
   return obj
@@ -888,6 +924,8 @@ function connect(key, account)
   end
 
   app.all_items = obj.Items
+  -- another server has another line-up: fetched again on the first visit
+  app.channels = nil
   save_settings()
   app.category = "Movie"
   show_library()
@@ -982,9 +1020,12 @@ function show_library()
   close_dlg()
   dlg = vlc.dialog(lang.title_library)
   dlg:set_size(DIALOG_WIDTH, DIALOG_HEIGHT)
-  -- the two categories work like JellyDinosaur's Movies/Series entries
+  -- the two categories work like JellyDinosaur's Movies/Series entries;
+  -- live TV sits beside them but is a view of its own -- a channel has
+  -- no year and no genre, and what it shows is what is on right now
   dlg:add_button(lang.btn_movies, click_movies, 1, 1, 1, 1)
   dlg:add_button(lang.btn_series, click_series, 2, 1, 1, 1)
+  dlg:add_button(lang.btn_live, click_live, 3, 1, 1, 1)
   dlg:add_label(lang.lbl_search, 1, 2, 1, 1)
   -- filters as the user types, no button to press: bursts of keystrokes
   -- are folded into a single pass by the command queue
@@ -995,6 +1036,11 @@ function show_library()
   ui.items = dlg:add_list(1, 4, 3, 1, click_open_item)
   ui.items:set_text(lang.col_title .. "\t" .. lang.col_year
                     .. "\t" .. lang.col_genres)
+  -- the order is stated rather than inherited from the server: a library
+  -- should read the same way every time it is opened, whatever the API
+  -- happened to return first. Survives a refill, so saying it once is
+  -- enough; the user can still re-sort by clicking a column header.
+  ui.items:set_sort(1, true)
   dlg:add_button(lang.btn_open, click_open_item, 1, 5, 1, 1)
   dlg:add_button(lang.btn_change_server, show_connect, 2, 5, 1, 1)
   ui.message = dlg:add_label("", 1, 6, 3, 1)
@@ -1044,6 +1090,234 @@ function click_open_item()
   end
 end
 
+            --[[ View 2b: live TV ]]--
+
+-- A channel is not a file: no duration, no track list, no year, and its
+-- own two ways of being played. Everything that has to tell them apart
+-- asks the item itself rather than carrying a flag along.
+local function is_live(media)
+  return media ~= nil and media.Type == "TvChannel"
+end
+
+-- Channel numbers are strings, and "10" sorts before "9" as text. The
+-- rows carry the number as their sort key so the column reads the way a
+-- remote control does; a channel without one goes to the end.
+local function channel_number_key(ch)
+  return tonumber(ch.Number or ch.ChannelNumber or "") or 999999
+end
+
+-- "2026-08-07T18:47:48.0000000Z" -> "18:47" in the machine's own time.
+-- The epoch is worked out here rather than handed to os.time, which
+-- reads its fields as local time and would need the offset guessed back;
+-- os.date then does the one conversion that is left, with the zone rules
+-- of the platform. Jellyfin dates the guide in UTC, always.
+local function iso_to_clock(iso)
+  local y, mo, d, h, mi = string.match(tostring(iso or ""),
+                                       "^(%d+)-(%d+)-(%d+)T(%d+):(%d+)")
+  if not y then
+    return nil
+  end
+  y, mo, d = tonumber(y), tonumber(mo), tonumber(d)
+  -- days since 1970-01-01, by the civil-calendar algorithm: March-based
+  -- years make the leap day the last of them, so no month table is needed
+  local year = y - ((mo <= 2) and 1 or 0)
+  local era = math.floor(year / 400)
+  local yoe = year - era * 400
+  local doy = math.floor((153 * (mo + ((mo > 2) and -3 or 9)) + 2) / 5) + d - 1
+  local doe = yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy
+  local days = era * 146097 + doe - 719468
+  return os.date("%H:%M",
+                 days * 86400 + tonumber(h) * 3600 + tonumber(mi) * 60)
+end
+
+-- What is on the channel right now, when the server has a guide at all.
+local function now_on_air(ch)
+  local p = ch.CurrentProgram
+  if type(p) ~= "table" then
+    return ""
+  end
+  local text = p.Name or ""
+  if p.EpisodeTitle and p.EpisodeTitle ~= "" then
+    text = text .. " — " .. p.EpisodeTitle
+  end
+  local from, to = iso_to_clock(p.StartDate), iso_to_clock(p.EndDate)
+  if from and to then
+    text = text .. " (" .. from .. "–" .. to .. ")"
+  end
+  return text
+end
+
+-- Fetched once per connection: a tuner line-up does not change while a
+-- window is open, and several hundred channels are enough JSON that
+-- parsing them again on every visit would be felt.
+local function fetch_channels()
+  if app.channels then
+    return true
+  end
+  set_message(lang.msg_loading_channels)
+  local obj, err = api_get("/LiveTv/Channels", {
+    "SortBy=SortName",
+    "SortOrder=Ascending",
+    -- what is on right now, and nothing else: a guide the server does
+    -- not have costs nothing, and every other field is JSON this machine
+    -- would have to parse for all of the line-up
+    "AddCurrentProgram=true",
+    "EnableUserData=false",
+    "EnableImageTypes=Primary",
+    "ImageTypeLimit=1",
+  })
+  if not obj or type(obj.Items) ~= "table" then
+    set_message(lang.msg_live_fail .. tostring(err or "?"))
+    return false
+  end
+  app.channels = obj.Items
+  -- A server without a guide answers with channels and no programme at
+  -- all; the column is then a column of blanks, so it is not shown.
+  app.channels_epg = false
+  for _, ch in ipairs(obj.Items) do
+    if type(ch.CurrentProgram) == "table" then
+      app.channels_epg = true
+      break
+    end
+  end
+  return true
+end
+
+local function fill_channels()
+  app.channels_shown = {}
+  ui.channels:clear()
+  local query = fold_accents(trim(ui.live_search:get_text()))
+  local shown, seen = 0, 0
+  for _, ch in ipairs(app.channels or {}) do
+    -- a line-up runs to several hundred entries: same watchdog courtesy
+    -- as the library list
+    seen = seen + 1
+    if seen % 500 == 0 then
+      still_alive()
+    end
+    local ok = true
+    if query ~= "" then
+      ok = string.find(fold_accents(ch.Name or ""), query, 1, true) ~= nil
+    end
+    if ok then
+      shown = shown + 1
+      app.channels_shown[shown] = ch
+      local row = sortable(ch.Number or ch.ChannelNumber or "",
+                           channel_number_key(ch))
+              .. "\t" .. cell(ch.Name)
+      if app.channels_epg then
+        row = row .. "\t" .. cell(now_on_air(ch))
+      end
+      ui.channels:add_value(row, shown)
+    end
+  end
+  set_message(string.format(lang.msg_channel_count, shown,
+                            #(app.channels or {})))
+end
+
+function click_live()
+  if not fetch_channels() then
+    return
+  end
+  -- Nothing to open a window on: a server with no tuner says so where
+  -- the button was pressed rather than in an empty list.
+  if #app.channels == 0 then
+    set_message(lang.msg_no_live)
+    return
+  end
+  show_live()
+end
+
+function show_live()
+  close_dlg()
+  dlg = vlc.dialog(lang.title_live)
+  dlg:set_size(DIALOG_WIDTH, DIALOG_HEIGHT)
+  dlg:add_label(lang.lbl_search, 1, 1, 1, 1)
+  ui.live_search = dlg:add_text_input("", 2, 1, 2, 1,
+                                      fill_channels, fill_channels)
+  ui.channels = dlg:add_list(1, 2, 3, 1, click_open_channel)
+  local head = lang.col_number .. "\t" .. lang.col_channel
+  if app.channels_epg then
+    head = head .. "\t" .. lang.col_now
+  end
+  ui.channels:set_text(head)
+  -- by channel number, through the sort key: 2 before 10
+  ui.channels:set_sort(1, true)
+  dlg:add_button(lang.btn_open, click_open_channel, 1, 3, 1, 1)
+  dlg:add_button(lang.btn_back_library, show_library, 2, 3, 1, 1)
+  ui.message = dlg:add_label("", 1, 4, 3, 1)
+  fill_channels()
+  dlg:show()
+end
+
+function click_open_channel()
+  local ch = selected_row(ui.channels, app.channels_shown)
+  if not ch then
+    set_message(lang.msg_select_first)
+    return
+  end
+  open_playback(ch, nil)
+end
+
+-- A tuner has to be told to tune before anything can be asked of it:
+-- PlaybackInfo hands out an OpenToken, LiveStreams/Open turns it into a
+-- live stream id, and both URLs then carry that id and the media source
+-- it names -- not the channel's own.
+--
+-- ⚠⚠⚠ This is not paperwork. On a tuner that pulls from the local
+-- network (udpxy relaying multicast, measured) the server answers
+-- NOTHING without it: the direct stream gives 0 byte in 40 s and
+-- live.m3u8 is cut off by the reverse proxy after 60 s (504). The same
+-- URLs, opened first, serve a real TS in 6 s. What made this look
+-- unnecessary is that another tuner -- an m3u playlist of remote HLS --
+-- did serve both with no opening at all, cold channels included.
+--
+-- The stream is never closed: the extension is not told when playback
+-- stops, and closing one the player is still reading would kill it. The
+-- server reaps an idle live stream on its own (and this one's
+-- LiveStreams/Close answers 400 anyway).
+local function open_live_stream(channel)
+  app.live_source_id, app.live_stream_id, app.live_container = nil, nil, nil
+  local info, err = api_get("/Items/" .. channel.Id .. "/PlaybackInfo", {})
+  local source = info and type(info.MediaSources) == "table"
+                 and info.MediaSources[1] or nil
+  if not source then
+    return nil, tostring(err or "?")
+  end
+  -- a source that hands out no token is used as it stands
+  if type(source.OpenToken) ~= "string" then
+    return source, nil
+  end
+  still_alive()
+  local obj, perr = api_post("/LiveStreams/Open",
+                             { "openToken=" .. esc(source.OpenToken) })
+  if not obj or type(obj.MediaSource) ~= "table" then
+    -- Say so: the fallback below only works on the tuners that never
+    -- needed this, and elsewhere playback would simply never start.
+    return source, tostring(perr or "?")
+  end
+  app.live_source_id = obj.MediaSource.Id
+  app.live_stream_id = obj.MediaSource.LiveStreamId
+  -- What the tuner actually hands over, which decides how it can be
+  -- played untouched (see direct_play_url). Only known once opened: the
+  -- item says nothing, and PlaybackInfo alone answers null.
+  app.live_container = string.lower(tostring(obj.MediaSource.Container or ""))
+  -- Opening probes the source, so this is also the only description of
+  -- the channel there is: codec and size, where the item had none.
+  return obj.MediaSource, nil
+end
+
+-- What the URLs must name: the media source the tuner was opened on,
+-- and the stream that keeps it open. A channel that needed no opening
+-- falls back to its own id, which is what an m3u tuner answers to.
+local function live_source_params()
+  local params = "&mediaSourceId=" .. esc(app.live_source_id or app.media.Id)
+  if app.live_stream_id then
+    params = params .. "&liveStreamId=" .. esc(app.live_stream_id)
+  end
+  return params
+end
+
             --[[ View 3: seasons and episodes ]]--
 
 local function season_label(season)
@@ -1085,6 +1359,9 @@ function show_seasons()
   dlg:add_label(cell(app.series.Name), 1, 1, 3, 1)
   ui.seasons = dlg:add_list(1, 2, 3, 1, click_open_season)
   ui.seasons:set_text(lang.col_season)
+  -- by season number: the rows carry it as their sort key, so this orders
+  -- them 1, 2, ... 10 and not 1, 10, 2
+  ui.seasons:set_sort(1, true)
   for i, season in ipairs(app.seasons) do
     ui.seasons:add_value(
       sortable(season_label(season), season.IndexNumber or i), i)
@@ -1129,6 +1406,9 @@ function show_episodes()
   ui.episodes = dlg:add_list(1, 2, 3, 1, click_open_episode)
   ui.episodes:set_text(lang.col_number .. "\t" .. lang.col_episode
                        .. "\t" .. lang.col_duration)
+  -- in broadcast order, which is the only order an episode list should
+  -- ever open in; numeric through the sort key, so 2 comes before 10
+  ui.episodes:set_sort(1, true)
   for i, ep in ipairs(app.episodes) do
     ui.episodes:add_value(
       sortable(ep.IndexNumber or "", ep.IndexNumber or 0) .. "\t"
@@ -1169,7 +1449,7 @@ end
 -- One compact line about the original file, out of PlaybackInfo: what
 -- JellyDinosaur spreads over its "Fichier"/"Vidéo" blocks, boiled down
 -- to what matters when choosing between direct play and transcoding.
-local function media_source_summary(source)
+local function media_source_summary(source, label)
   if not source then
     return nil
   end
@@ -1198,7 +1478,7 @@ local function media_source_summary(source)
   if #parts == 0 then
     return nil
   end
-  return lang.lbl_original .. table.concat(parts, " — ")
+  return (label or lang.lbl_original) .. table.concat(parts, " — ")
 end
 
 -- The poster, saved next to the other user data because the image widget
@@ -1287,20 +1567,30 @@ function open_playback(media, series)
   set_message(lang.msg_loading_info)
 
   -- the real audio/subtitle tracks of this very file
+  --
+  -- A channel has none to give -- its streams come numbered -1, which is
+  -- not an index anything may be asked for -- so this opens the tuner
+  -- instead, which is what makes a channel playable at all.
   local audio, subs = {}, {}
   local source = nil
-  local obj = api_get("/Items/" .. media.Id .. "/PlaybackInfo", {})
-  if obj and type(obj.MediaSources) == "table" and obj.MediaSources[1] then
-    source = obj.MediaSources[1]
-    for _, s in ipairs(source.MediaStreams or {}) do
-      local label = s.DisplayTitle
-      if not label or label == "" then
-        label = (s.Language or "?") .. " (" .. (s.Codec or "?") .. ")"
-      end
-      if s.Type == "Audio" then
-        table.insert(audio, { index = s.Index, label = label })
-      elseif s.Type == "Subtitle" then
-        table.insert(subs, { index = s.Index, label = label })
+  app.live_warning = nil
+  app.live_source_id, app.live_stream_id = nil, nil
+  if is_live(media) then
+    source, app.live_warning = open_live_stream(media)
+  else
+    local obj = api_get("/Items/" .. media.Id .. "/PlaybackInfo", {})
+    if obj and type(obj.MediaSources) == "table" and obj.MediaSources[1] then
+      source = obj.MediaSources[1]
+      for _, s in ipairs(source.MediaStreams or {}) do
+        local label = s.DisplayTitle
+        if not label or label == "" then
+          label = (s.Language or "?") .. " (" .. (s.Codec or "?") .. ")"
+        end
+        if s.Type == "Audio" then
+          table.insert(audio, { index = s.Index, label = label })
+        elseif s.Type == "Subtitle" then
+          table.insert(subs, { index = s.Index, label = label })
+        end
       end
     end
   end
@@ -1496,7 +1786,15 @@ function show_playback(audio, subs)
   dlg:add_label(playback_title(), 1, row, 4, 1) row = row + 1
 
   local meta = {}
-  table.insert(meta, app.media_series and lang.lbl_series or lang.lbl_movie)
+  if is_live(media) then
+    table.insert(meta, lang.lbl_live)
+    if media.Number or media.ChannelNumber then
+      table.insert(meta, lang.col_number .. " "
+                   .. cell(media.Number or media.ChannelNumber))
+    end
+  else
+    table.insert(meta, app.media_series and lang.lbl_series or lang.lbl_movie)
+  end
   local dur = format_ticks(app.runtime_ticks)
   if dur then
     table.insert(meta, dur)
@@ -1526,17 +1824,26 @@ function show_playback(audio, subs)
   end
 
   -- Direct play: none of the settings below apply to it, the file
-  -- leaves the server untouched.
-  dlg:add_button(section_title(lang.sec_direct, app.show_direct),
+  -- leaves the server untouched. For a channel it is the broadcast as
+  -- it arrives, which the server only puts back into one container.
+  local live = is_live(media)
+  dlg:add_button(section_title(live and lang.sec_direct_live
+                                     or lang.sec_direct, app.show_direct),
                  click_toggle_direct, 1, row, 4, 1)
   row = row + 1
   if app.show_direct then
-    local summary = media_source_summary(app.media_source)
+    -- On a channel the summary is what opening the tuner probed --
+    -- codec and picture size -- so it is worth as much there as the
+    -- file line is on a film, under its own label.
+    local summary = media_source_summary(app.media_source,
+                                         live and lang.lbl_stream or nil)
     if summary then
       dlg:add_label(cell(summary), 1, row, 4, 1) row = row + 1
     end
-    dlg:add_label(lang.hint_direct, 1, row, 4, 1) row = row + 1
-    dlg:add_button(lang.btn_play_direct, click_play_direct, 1, row, 2, 1)
+    dlg:add_label(live and lang.hint_direct_live or lang.hint_direct,
+                  1, row, 4, 1) row = row + 1
+    dlg:add_button(live and lang.btn_play_direct_live or lang.btn_play_direct,
+                   click_play_direct, 1, row, 2, 1)
     dlg:add_button(lang.btn_copy_direct, click_copy_direct, 3, row, 2, 1)
     row = row + 1
   end
@@ -1553,26 +1860,38 @@ function show_playback(audio, subs)
     ui.message = dlg:add_label("", 1, row, 4, 1)
     place_artwork(row)
     dlg:show()
+    show_live_warning()
     return
   end
-  dlg:add_label(lang.hint_transcode, 1, row, 4, 1) row = row + 1
+  -- Said where the choice is made: transcoding a channel gives one
+  -- audio track and no subtitles, and no setting here changes that. The
+  -- server's own view of a live source is a single placeholder stream
+  -- numbered -1, so it writes its ffmpeg line without any -map and with
+  -- -sn (read from its transcode log): ffmpeg then takes the broadcast's
+  -- first audio track and drops the rest, whatever index is asked for.
+  dlg:add_label(live and lang.hint_transcode_live or lang.hint_transcode,
+                1, row, 4, 1) row = row + 1
 
-  dlg:add_label(lang.lbl_audio, 1, row, 1, 1)
-  ui.audio = dlg:add_dropdown(2, row, 1, 1)
-  app.audio_tracks = {}
-  for i, t in ipairs(audio) do
-    app.audio_tracks[i] = t.index
-    ui.audio:add_value(cell(t.label), i)
+  -- Two empty pickers would be worse than none: a channel carries no
+  -- track list, so the row is left out and the server picks the tracks.
+  if not live then
+    dlg:add_label(lang.lbl_audio, 1, row, 1, 1)
+    ui.audio = dlg:add_dropdown(2, row, 1, 1)
+    app.audio_tracks = {}
+    for i, t in ipairs(audio) do
+      app.audio_tracks[i] = t.index
+      ui.audio:add_value(cell(t.label), i)
+    end
+    dlg:add_label(lang.lbl_subtitles, 3, row, 1, 1)
+    ui.subs = dlg:add_dropdown(4, row, 1, 1)
+    app.sub_tracks = {}
+    ui.subs:add_value(lang.no_subtitle, 1)
+    for i, t in ipairs(subs) do
+      app.sub_tracks[i + 1] = t.index
+      ui.subs:add_value(cell(t.label), i + 1)
+    end
+    row = row + 1
   end
-  dlg:add_label(lang.lbl_subtitles, 3, row, 1, 1)
-  ui.subs = dlg:add_dropdown(4, row, 1, 1)
-  app.sub_tracks = {}
-  ui.subs:add_value(lang.no_subtitle, 1)
-  for i, t in ipairs(subs) do
-    app.sub_tracks[i + 1] = t.index
-    ui.subs:add_value(cell(t.label), i + 1)
-  end
-  row = row + 1
 
   -- Changing either of these refills the bitrate from the preset and
   -- refreshes the estimate on the spot.
@@ -1631,19 +1950,68 @@ function show_playback(audio, subs)
 
   update_estimate()
   dlg:show()
+  show_live_warning()
+end
+
+-- A tuner that would not open is worth saying out loud: the URLs below
+-- fall back to the channel's own id, which only some tuners answer to,
+-- and the alternative is a play button that does nothing for a minute.
+-- Said on the view the failure lands on, and only once.
+function show_live_warning()
+  if app.live_warning then
+    set_message(lang.msg_live_open_fail .. app.live_warning)
+    app.live_warning = nil
+  end
 end
 
 function click_playback_back()
-  if app.media_series then
+  if is_live(app.media) then
+    show_live()
+  elseif app.media_series then
     show_episodes()
   else
     show_library()
   end
 end
 
+-- Told to the server so it can name the session, and stop the transcode
+-- that belongs to it.
+local function play_session()
+  return "powervlc" .. os.time() .. math.random(999999)
+end
+
 -- Direct play: the original file as it sits on the server (Static),
 -- VLC handles the tracks itself.
+--
+-- A channel is served the same way whenever the tuner hands over a
+-- transport stream: Static passes it through untouched, so ALL of it
+-- arrives -- Arte's four audio tracks (French, German, original, audio
+-- description) and its teletext subtitles, which VLC then switches
+-- between on its own. Measured on the multicast tuner: 4 audio + 1
+-- subtitle through Static, against 1 audio and no subtitle through
+-- anything else.
+--
+-- "Anything else" is the fallback, and it exists because a tuner whose
+-- source is itself a playlist (Container "hls") cannot be passed
+-- through: Static then relays the tuner's own m3u8, whose segment names
+-- are relative to the tuner and answer 404 under the server's address
+-- (measured). There, asking for a TS with both codecs copied is the only
+-- thing VLC can open -- and Jellyfin's remux carries a single audio
+-- track and drops the subtitles, because ffmpeg is told to map one of
+-- each. Nothing to be done about it from this side.
 local function direct_play_url()
+  if is_live(app.media) then
+    local passthrough = app.live_container ~= nil
+                    and app.live_container ~= ""
+                    and app.live_container ~= "hls"
+    return app.server .. "/Videos/" .. app.media.Id .. "/stream.ts?"
+        .. "ApiKey=" .. esc(app.token)
+        .. (passthrough and "&Static=true"
+                        or "&Container=ts&VideoCodec=copy&AudioCodec=copy")
+        .. live_source_params()
+        .. "&deviceId=" .. DEVICE_ID
+        .. "&playSessionId=" .. play_session()
+  end
   return app.server .. "/Videos/" .. app.media.Id .. "/stream?"
       .. "Static=true"
       .. "&mediaSourceId=" .. app.media.Id
@@ -1655,6 +2023,10 @@ end
 -- master.m3u8, exactly like JellyDinosaur — the master's CODECS
 -- attribute misleads some players and there is only one quality
 -- anyway; VLC accepts a media playlist as-is.
+-- A channel goes through live.m3u8 instead, the live-TV media playlist:
+-- main.m3u8 is the one for a file, and asked of a channel the server
+-- answers 500 (measured). Neither the master playlist nor an opened live
+-- stream is needed -- the server opens the tuner on this very request.
 local function hls_url()
   local res = selected_resolution()
   local preset = preset_of_selection()
@@ -1662,9 +2034,9 @@ local function hls_url()
   if complaint then
     set_message(complaint)
   end
-  local a, s = selected_streams()
-  local session = "powervlc" .. os.time() .. math.random(999999)
-  return app.server .. "/Videos/" .. app.media.Id .. "/main.m3u8?"
+  local live = is_live(app.media)
+  local url = app.server .. "/Videos/" .. app.media.Id
+      .. (live and "/live.m3u8?" or "/main.m3u8?")
       .. "ApiKey=" .. esc(app.token)
       .. "&VideoCodec=h264"
       .. "&AudioCodec=aac"
@@ -1673,7 +2045,6 @@ local function hls_url()
       .. "&profile=" .. preset.profile
       .. "&level=" .. preset.level
       .. "&videoBitRate=" .. bitrate
-      .. "&subtitleMethod=Encode"
       .. "&maxAudioChannels=2"
       .. "&audioBitRate=" .. selected_audio_bitrate()
       .. "&AudioSampleRate=" .. string.format("%d", AUDIO_SAMPLE_RATE)
@@ -1681,11 +2052,19 @@ local function hls_url()
       .. "&maxVideoBitDepth=8"
       .. "&maxRefFrames=" .. preset.refs
       .. "&maxFramerate=30"
-      .. "&audioStreamIndex=" .. a
-      .. "&subtitleStreamIndex=" .. s
+  -- Tracks are only named on a file; on a channel there is nothing to
+  -- number yet, and an index the server cannot match is worse than none.
+  if not live then
+    local a, s = selected_streams()
+    url = url .. "&subtitleMethod=Encode"
+              .. "&audioStreamIndex=" .. a
+              .. "&subtitleStreamIndex=" .. s
+  end
+  return url
       .. "&deviceId=" .. DEVICE_ID
-      .. "&playSessionId=" .. session
-      .. "&mediaSourceId=" .. app.media.Id
+      .. "&playSessionId=" .. play_session()
+      .. (live and live_source_params()
+              or ("&mediaSourceId=" .. app.media.Id))
       .. "&transcodeReasons=" .. esc(TRANSCODE_REASON)
 end
 

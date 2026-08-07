@@ -72,6 +72,14 @@ package-win-common: package-win-install package-win-sdk
 	cp "$(srcdir)/COPYING" "$(win32_destdir)/COPYING.txt"
 
 	cp $(srcdir)/share/icons/powervlc.ico $(win32_destdir)
+
+# The browser add-on. It goes to the root of the install because that is
+# where config_GetDataDir() points on Windows (src/win32/dirs.c hands back
+# the executable's own directory), and that is where the Help menu entry
+# looks for it. Without this the file was simply not in the Windows package,
+# so there was no way to install the add-on on Basilisk and the other retro
+# browsers -- the very ones it exists for.
+	cp $(srcdir)/share/powervlc.xpi $(win32_destdir)
 	for plugindir in $(prefix)/lib/vlc/plugins/*/; do \
 		plugin_destdir="$(win32_destdir)/plugins/`basename $$plugindir`"; \
 		mkdir -p "$$plugin_destdir"; \

@@ -333,6 +333,12 @@ static int vlclua_dialog_delete( lua_State *L )
     {
         if( !p_widget )
             continue;
+
+        /* Same reason as in DeleteWidget: dlg:delete() frees the widgets
+         * outright, without going through it, so the queue has to be cleared
+         * of the events naming them here too. */
+        KillWidgetCommands( p_ext, p_widget );
+
         free( p_widget->psz_text );
 
         /* Free data */
@@ -1453,6 +1459,12 @@ static int DeleteWidget( extension_dialog_t *p_dialog,
         return VLC_EGENERIC;
 
     ARRAY_REMOVE( p_dialog->widgets, pos );
+
+    /* A click, a selection, a menu choice or a drop may already be sitting in
+     * the extension's queue naming this widget, and those events carry the
+     * raw pointer. Drop them before the memory goes, or the next command the
+     * thread picks up reads a freed widget. */
+    KillWidgetCommands( (extension_t *) p_dialog->p_sys, p_widget );
 
     /* Now free the data */
     free( p_widget->p_sys );

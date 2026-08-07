@@ -5,6 +5,7 @@
 return {
   title_connect = "Jellyfin — Подключение",
   title_library = "Jellyfin — Библиотека",
+  title_live = "Jellyfin — Эфирное ТВ",
   title_seasons = "Jellyfin — Сезоны",
   title_episodes = "Jellyfin — Серии",
   title_play = "Jellyfin — Воспроизведение",
@@ -42,6 +43,7 @@ return {
               .. "истёк, войдите снова",
   btn_movies = "Фильмы",
   btn_series = "Сериалы",
+  btn_live = "Эфирное ТВ",
   lbl_search = "Поиск:",
   lbl_genre = "Жанр:",
   all_genres = "Все жанры",
@@ -52,6 +54,14 @@ return {
   btn_change_server = "< Подключение",
   msg_count = "%d / %d элементов — двойной щелчок открывает",
   msg_select_first = "Сначала выберите элемент в списке",
+  col_channel = "Канал",
+  col_now = "Сейчас",
+  msg_loading_channels = "Получение каналов…",
+  msg_live_fail = "Не удалось загрузить каналы: ",
+  msg_no_live = "На этом сервере нет эфирного ТВ",
+  msg_live_open_fail = "Сервер не открыл этот канал: ",
+  msg_channel_count = "%d / %d каналов — двойной щелчок начинает просмотр",
+
   col_season = "Сезон",
   col_number = "№",
   col_episode = "Серия",
@@ -65,13 +75,20 @@ return {
   episode_abbrev = "С",
   lbl_movie = "Фильм",
   lbl_series = "Сериал",
+  lbl_live = "Эфирное ТВ",
   sec_desc = "Описание",
   sec_direct = "Прямое воспроизведение — исходный файл",
   hint_direct = "Без преобразования, все дорожки сохраняются — но эта машина "
               .. "декодирует исходный формат.",
+  sec_direct_live = "Прямое воспроизведение — канал таким, каким он "
+                  .. "вещается",
+  hint_direct_live = "Без преобразования: канал приходит таким, каким он "
+                   .. "вещается — но декодирует его эта машина.",
   sec_transcode = "Перекодирование — поток H.264/AAC (m3u8)",
   hint_transcode = "Сервер преобразует согласно настройкам ниже. Уменьшите их, "
                  .. "если поток запускается медленно.",
+  hint_transcode_live = "Здесь сервер оставляет одну звуковую дорожку и "
+                      .. "никаких субтитров — прямой поток оставляет всё.",
   lbl_audio = "Звук:",
   lbl_subtitles = "Субтитры:",
   no_subtitle = "Нет",
@@ -89,9 +106,11 @@ return {
   q_high = "Высокое качество",
   q_veryhigh = "Очень высокое качество",
   lbl_original = "Файл: ",
+  lbl_stream = "Поток: ",
   btn_play_hls = "Воспроизвести поток",
   btn_copy_hls = "Скопировать ссылку на поток",
   btn_play_direct = "Воспроизвести оригинал",
+  btn_play_direct_live = "Смотреть канал",
   btn_copy_direct = "Скопировать прямую ссылку",
   btn_back = "< Назад",
   msg_loading_info = "Получение сведений о медиафайле…",

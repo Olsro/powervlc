@@ -53,6 +53,8 @@
 #include "item.h"
 
 #include "../stream_output/stream_output.h"
+#include "../audio_output/aout_internal.h"
+#include "resource.h"
 #include "../video_output/vout_control.h"
 
 #include <vlc_iso_lang.h>
@@ -2479,9 +2481,25 @@ static es_out_id_t *EsOutAddSlave( es_out_t *out, const es_format_t *fmt, es_out
     }
 
     /* Gapless (PowerVLC): as soon as this input carries video, it may neither
-     * park nor adopt an audio output stream (2 s of A/V desync otherwise). */
-    if( fmt->i_cat == VIDEO_ES )
+     * park nor adopt an audio output stream (2 s of A/V desync otherwise).
+     *
+     * The same verdict decides how the audio output corrects drift, and an
+     * audio output may already exist and be playing by the time a programme
+     * declares its video (MPEG-TS). Tell it, rather than leaving it with the
+     * answer it read when it was created. */
+    if( fmt->i_cat == VIDEO_ES
+     && var_GetBool( p_input, "gapless-eligible" ) )
+    {
         var_SetBool( p_input, "gapless-eligible", false );
+
+        audio_output_t *p_aout =
+            input_resource_HoldAout( input_priv(p_input)->p_resource );
+        if( p_aout != NULL )
+        {
+            aout_DecChangeAudioOnly( p_aout, false );
+            vlc_object_release( p_aout );
+        }
+    }
 
     es_out_id_t   *es = malloc( sizeof( *es ) );
     es_out_pgrm_t *p_pgrm;

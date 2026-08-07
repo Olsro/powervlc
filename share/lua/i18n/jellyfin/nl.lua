@@ -5,6 +5,7 @@
 return {
   title_connect = "Jellyfin — Verbinding",
   title_library = "Jellyfin — Bibliotheek",
+  title_live = "Jellyfin — Live tv",
   title_seasons = "Jellyfin — Seizoenen",
   title_episodes = "Jellyfin — Afleveringen",
   title_play = "Jellyfin — Afspelen",
@@ -43,6 +44,7 @@ return {
               .. "u opnieuw aan",
   btn_movies = "Films",
   btn_series = "Series",
+  btn_live = "Live tv",
   lbl_search = "Zoeken:",
   lbl_genre = "Genre:",
   all_genres = "Alle genres",
@@ -53,6 +55,14 @@ return {
   btn_change_server = "< Verbinding",
   msg_count = "%d / %d items — dubbelklik om er een te openen",
   msg_select_first = "Selecteer eerst een item in de lijst",
+  col_channel = "Zender",
+  col_now = "Nu te zien",
+  msg_loading_channels = "Zenders ophalen…",
+  msg_live_fail = "Kon de zenders niet laden: ",
+  msg_no_live = "Deze server heeft geen live tv",
+  msg_live_open_fail = "De server heeft deze zender niet geopend: ",
+  msg_channel_count = "%d / %d zenders — dubbelklik om er een te bekijken",
+
   col_season = "Seizoen",
   col_number = "Nr.",
   col_episode = "Aflevering",
@@ -66,13 +76,20 @@ return {
   episode_abbrev = "A",
   lbl_movie = "Film",
   lbl_series = "Serie",
+  lbl_live = "Live tv",
   sec_desc = "Beschrijving",
   sec_direct = "Direct afspelen — het oorspronkelijke bestand",
   hint_direct = "Geen omzetting, alle sporen blijven — maar deze machine "
               .. "decodeert het oorspronkelijke formaat.",
+  sec_direct_live = "Direct afspelen — de zender zoals hij wordt "
+                  .. "uitgezonden",
+  hint_direct_live = "Geen omzetting: de zender komt zoals hij wordt "
+                   .. "uitgezonden — maar deze machine decodeert hem.",
   sec_transcode = "Transcoderen — H.264/AAC-stream (m3u8)",
   hint_transcode = "De server zet om naar de instellingen hieronder. Verlaag "
                  .. "ze als de stream traag start.",
+  hint_transcode_live = "Hier houdt de server één audiospoor en geen "
+                      .. "ondertiteling — direct houdt alles.",
   lbl_audio = "Geluid:",
   lbl_subtitles = "Ondertitels:",
   no_subtitle = "Geen",
@@ -91,9 +108,11 @@ return {
   q_high = "Hoge kwaliteit",
   q_veryhigh = "Zeer hoge kwaliteit",
   lbl_original = "Bestand: ",
+  lbl_stream = "Stream: ",
   btn_play_hls = "De stream afspelen",
   btn_copy_hls = "Streamkoppeling kopiëren",
   btn_play_direct = "Het origineel afspelen",
+  btn_play_direct_live = "De zender bekijken",
   btn_copy_direct = "Directe koppeling kopiëren",
   btn_back = "< Terug",
   msg_loading_info = "Media-informatie ophalen…",

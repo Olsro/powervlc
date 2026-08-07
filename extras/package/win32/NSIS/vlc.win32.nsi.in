@@ -324,6 +324,11 @@ skip_uninstall32_cleanup:
   ; Text files
   !insertmacro InstallFile *.txt
 
+  ; The browser add-on, which the Help menu hands to the user's browser.
+  ; It sits at the root because that is where config_GetDataDir() looks on
+  ; Windows. Not covered by any wildcard above, so it needs saying.
+  !insertmacro InstallFile powervlc.xpi
+
   ; Subfolders
   !insertmacro InstallFolder plugins
   !insertmacro InstallFolderOptional locale

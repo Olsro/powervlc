@@ -41,6 +41,12 @@ Deliberately left orange:
 
 * the **sidebar icons** — both `macosx/Resources/sidebar-icons/` and
   `qt/pixmaps/playlist/sidebar-icons/` — kept as upstream by preference;
+* the **playlist item type icons** the Qt list draws next to each entry
+  (`qt/pixmaps/types/type_stream.svg`, `type_playlist.svg`, and the
+  `*_orange.svg` variants of `disc_16px`/`capture-card_16px`) — the list and the
+  source selector sit side by side, so they have to read as one colour. The
+  plain `disc_16px.svg`/`capture-card_16px.svg` stay red: those are the menu and
+  Open-dialog copies, and the menus are not part of that glance;
 * the macOS titlebar traffic lights (yellow is a system semantic — red means
   close);
 * the `addons/addon_*.svg` set (a per-category colour code in which red already
@@ -49,6 +55,15 @@ Deliberately left orange:
   `qt/pixmaps/playlist/sidebar-icons/sd/`, the bundled skins2 skin and its
   author's logo, and the stock jQuery UI theme under
   `share/lua/http/css/ui-lightness/`.
+
+The Inkscape master sheet `qt/pixmaps/svg/pixmap_source.svg` holds all of these
+in one canvas and **agrees with the shipped SVGs cell by cell**: the sidebar row
+(Inkscape area y 384..432), the service-discovery row (y 480..528) and the
+`type_playlist`/`type_stream` cells of the types row (y 768..816, x 576..672)
+carry the original orange, everything else the red. It was recoloured wholesale
+once and put back in line afterwards, so if you edit it, re-check those rows
+before re-running `svg2png4vlc.sh` — that script rasterises the sheet back over
+`qt/pixmaps/`, orange rows included.
 
 ## What the pipeline produces
 

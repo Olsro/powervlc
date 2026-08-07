@@ -113,6 +113,9 @@ int Activate( extensions_manager_t *p_mgr, extension_t * );
 int Deactivate( extensions_manager_t *p_mgr, extension_t * );
 bool QueueDeactivateCommand( extension_t *p_ext );
 void KillExtension( extensions_manager_t *p_mgr, extension_t *p_ext );
+/* Drop queued events naming a widget that is being freed (see the definition
+ * in extension_thread.c: the events carry the widget as a raw pointer) */
+void KillWidgetCommands( extension_t *p_ext, extension_widget_t *p_widget );
 int PushCommand__( extension_t *ext, bool unique, command_type_e cmd, va_list options );
 static inline int PushCommand( extension_t *ext, int cmd, ... )
 {

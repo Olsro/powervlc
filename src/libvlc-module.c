@@ -249,6 +249,30 @@ static const char *const ppsz_stereo_mode_texts[] = { N_("Unset"),
 #define AUDIO_REPLAY_GAIN_PEAK_PROTECTION_LONGTEXT N_( \
     "Protect against sound clipping" )
 
+#define AUDIO_DRIFT_CONFIRM_TEXT N_( \
+    "Drift readings needed before correcting audibly" )
+#define AUDIO_DRIFT_CONFIRM_LONGTEXT N_( \
+    "Flushing the audio output or padding it with silence is audible, and " \
+    "a single late measurement -- one scheduling hiccup -- used to be enough " \
+    "to trigger it. Require this many consecutive measurements instead. " \
+    "Set to 1 for the historical behaviour." )
+
+#define AUDIO_DRIFT_SILENCE_TEXT N_( \
+    "Correct audio drift by inserting silence" )
+#define AUDIO_DRIFT_SILENCE_LONGTEXT N_( \
+    "When the audio output has drifted ahead of the input clock, it can be " \
+    "padded with silence to realign. That keeps audio in step with video, at " \
+    "the cost of an audible gap; letting the resampler absorb the offset " \
+    "instead is inaudible but slow, and leaves audio slightly ahead until it " \
+    "catches up. By default this is decided per stream: padding is used only " \
+    "when there is video or a stream output to stay in step with." )
+
+static const int drift_silence_values[] = { 0, 1, 2 };
+static const char *const drift_silence_texts[] = {
+    N_("Never (resample instead)"), N_("Only when there is video"),
+    N_("Always"),
+};
+
 #define AUDIO_TIME_STRETCH_TEXT N_( \
     "Enable time stretching audio" )
 #define AUDIO_TIME_STRETCH_LONGTEXT N_( \
@@ -1587,6 +1611,18 @@ vlc_module_begin ()
     add_bool( "audio-replay-gain-peak-protection", true,
               AUDIO_REPLAY_GAIN_PEAK_PROTECTION_TEXT, AUDIO_REPLAY_GAIN_PEAK_PROTECTION_LONGTEXT, true )
 
+    /* Diagnostics / tuning: how many consecutive drift measurements must call
+     * for flushing the output or padding it with silence before either is
+     * done. 1 restores the historical behaviour of acting on a single
+     * reading, which a one-block scheduling hiccup is enough to trigger. */
+    add_integer( "aout-drift-confirm", 3,
+                 AUDIO_DRIFT_CONFIRM_TEXT, AUDIO_DRIFT_CONFIRM_LONGTEXT, true )
+        change_integer_range( 1, 16 )
+
+    add_integer( "aout-drift-silence", 1,
+                 AUDIO_DRIFT_SILENCE_TEXT, AUDIO_DRIFT_SILENCE_LONGTEXT, true )
+        change_integer_list( drift_silence_values, drift_silence_texts )
+
     add_bool( "audio-time-stretch", true,
               AUDIO_TIME_STRETCH_TEXT, AUDIO_TIME_STRETCH_LONGTEXT, false )
 
@@ -1607,7 +1643,18 @@ vlc_module_begin ()
     set_subcategory( SUBCAT_AUDIO_RESAMPLER )
     add_module( "audio-resampler", "audio resampler", NULL,
                 AUDIO_RESAMPLER_TEXT, AUDIO_RESAMPLER_LONGTEXT, true )
-    add_bool( "audio-efficient-resampler", true,
+    /* The cheap resampler is worth its lower stopband only where SINC costs
+     * real CPU. Measured on a Mac mini G4 1.42 GHz, 44.1->48 kHz: 4 s of
+     * extra work per 115 s of audio, about 3.5 points of a core. Modern
+     * targets pay nothing for libsamplerate, so they get VLC's own ranking.
+     * The 32-bit x86 slice is here for the same reason as PowerPC: it exists
+     * to serve 2006-era Macs and Windows XP machines. */
+#if defined( __powerpc__ ) || defined( __POWERPC__ ) || defined( __i386__ )
+# define AUDIO_EFFICIENT_RESAMPLER_DEFAULT true
+#else
+# define AUDIO_EFFICIENT_RESAMPLER_DEFAULT false
+#endif
+    add_bool( "audio-efficient-resampler", AUDIO_EFFICIENT_RESAMPLER_DEFAULT,
               AUDIO_EFFICIENT_RESAMPLER_TEXT, AUDIO_EFFICIENT_RESAMPLER_LONGTEXT,
               true )
     /* Même critère de plateforme que le rééchantillonneur ci-dessus : les

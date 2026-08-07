@@ -6,6 +6,7 @@ return {
 
     title_connect = "Jellyfin — Connection",
     title_library = "Jellyfin — Library",
+    title_live = "Jellyfin — Live TV",
     title_seasons = "Jellyfin — Seasons",
     title_episodes = "Jellyfin — Episodes",
     title_play = "Jellyfin — Playback",
@@ -45,6 +46,7 @@ return {
 
     btn_movies = "Movies",
     btn_series = "Series",
+    btn_live = "Live TV",
     lbl_search = "Search:",
     lbl_genre = "Genre:",
     all_genres = "All genres",
@@ -55,6 +57,14 @@ return {
     btn_change_server = "< Connection",
     msg_count = "%d / %d items — double-click one to open it",
     msg_select_first = "Select an item in the list first",
+
+    col_channel = "Channel",
+    col_now = "On now",
+    msg_loading_channels = "Fetching the channels...",
+    msg_live_fail = "Could not load the channels: ",
+    msg_no_live = "This server has no live TV",
+    msg_live_open_fail = "The server would not open this channel: ",
+    msg_channel_count = "%d / %d channels — double-click one to watch it",
 
     col_season = "Season",
     col_number = "#",
@@ -70,13 +80,19 @@ return {
 
     lbl_movie = "Movie",
     lbl_series = "Series",
+    lbl_live = "Live TV",
     sec_desc = "Description",
     sec_direct = "Direct play — the original file",
     hint_direct = "No conversion, every track kept — but this machine "
                .. "decodes the original format.",
+    sec_direct_live = "Direct play — the channel as broadcast",
+    hint_direct_live = "No conversion: the channel is sent as it is "
+                    .. "broadcast — but this machine decodes it.",
     sec_transcode = "Transcoding — H.264/AAC stream (m3u8)",
     hint_transcode = "The server converts to the settings below. Lower "
                   .. "them if the stream is slow to start.",
+    hint_transcode_live = "The server keeps one audio track and no "
+                      .. "subtitles here — direct play keeps them all.",
     lbl_audio = "Audio:",
     lbl_subtitles = "Subtitles:",
     no_subtitle = "None",
@@ -94,9 +110,11 @@ return {
     q_high = "High quality",
     q_veryhigh = "Very high quality",
     lbl_original = "File: ",
+    lbl_stream = "Stream: ",
     btn_play_hls = "Play the stream",
     btn_copy_hls = "Copy the stream link",
     btn_play_direct = "Play the original",
+    btn_play_direct_live = "Watch the channel",
     btn_copy_direct = "Copy the direct link",
     btn_back = "< Back",
     msg_loading_info = "Fetching media info...",

@@ -60,6 +60,9 @@
 #include <vlc_httpd.h>
 #include <vlc_rand.h>
 #include <vlc_url.h>
+/* ToWide(), for the ShellExecuteW() call below. Win32-only in practice, but
+ * included unconditionally: the header guards its own Windows section. */
+#include <vlc_charset.h>
 
 #include "../vlc.h"
 #include "../libs.h"

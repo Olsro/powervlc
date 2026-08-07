@@ -107,6 +107,9 @@
     inkscape pixmap_source.svg -a 576:576:661:602   -e ../toolbar/volume-slider-inside.png
     inkscape pixmap_source.svg -a 672:576:757:602   -e ../toolbar/volume-slider-outside.png
 
+    # The disc and capture-card cells hold the red menu/Open-dialog copies.  The
+    # playlist list draws its own orange variants (../types/*_orange.svg), which
+    # are hand-kept, not exported from here -- see extras/package/branding/README.md.
     inkscape pixmap_source.svg -a 0:768:48:816     -e ../types/capture-card_16px.png
     inkscape pixmap_source.svg -a 48:768:96:816    -e ../types/disc_16px.png
     inkscape pixmap_source.svg -a 96:768:144:816   -e ../types/file-asym_16px.png

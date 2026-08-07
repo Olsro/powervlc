@@ -73,7 +73,9 @@
     </qresource>
     <qresource prefix="/type">
         <file alias="capture-card.svg">pixmaps/types/capture-card_16px.svg</file>
+        <file alias="capture-card-orange.svg">pixmaps/types/capture-card_16px_orange.svg</file>
         <file alias="disc.svg">pixmaps/types/disc_16px.svg</file>
+        <file alias="disc-orange.svg">pixmaps/types/disc_16px_orange.svg</file>
         <file alias="file-asym.svg">pixmaps/types/file-asym_16px.svg</file>
         <file alias="file-wide.svg">pixmaps/types/file-wide_16px.svg</file>
         <file alias="folder-grey.svg">pixmaps/types/folder-grey_16px.svg</file>

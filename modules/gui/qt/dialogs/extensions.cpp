@@ -34,16 +34,72 @@
 #include <QLineEdit>
 #include <QTextBrowser>
 #include <QCheckBox>
-#include <QListWidget>
+#include <QTreeWidget>
+#include <QHeaderView>
 #include <QComboBox>
 #include <QCloseEvent>
 #include <QKeyEvent>
 #include <QMenu>
-#include <QRegularExpression>
 #include <QTimer>
+#include <QHash>
+#include <QScreen>
+#include <QGuiApplication>
 #include "util/customwidgets.hpp"
 
 ExtensionsDialogProvider *ExtensionsDialogProvider::instance = NULL;
+
+/**
+ * Where each extension's dialog last stood.
+ *
+ * Changing view inside an extension deletes its dialog and builds the next
+ * one, so what the user sees as a single window is really a succession of
+ * them -- and Qt centres every new one. Moving the window therefore meant
+ * nothing: the next view snapped it back to the middle of the screen.
+ *
+ * Keyed by the EXTENSION (p_dialog->p_sys) and not by the dialog, because
+ * carrying the position across a dialog being replaced is the entire point.
+ * The macOS provider keeps the same map, for the same reason.
+ */
+static QHash<const void *, QPoint> & DialogCorners()
+{
+    static QHash<const void *, QPoint> corners;
+    return corners;
+}
+
+/** Remember where a dialog stands, just before it goes away. */
+static void SaveDialogCorner( const QWidget *dialog,
+                              const extension_dialog_t *p_dialog )
+{
+    if( dialog->isVisible() )
+        DialogCorners().insert( p_dialog->p_sys,
+                                dialog->frameGeometry().topLeft() );
+}
+
+/** Put a freshly built dialog back where its predecessor stood. */
+static void RestoreDialogCorner( QWidget *dialog,
+                                 const extension_dialog_t *p_dialog )
+{
+    if( !DialogCorners().contains( p_dialog->p_sys ) )
+        return;
+
+    dialog->move( DialogCorners().value( p_dialog->p_sys ) );
+
+    /* A screen that went away, a resolution that changed, or a window that
+     * grew since must not put it out of reach: if the remembered spot leaves
+     * it on no screen at all, let it be centred as a new dialog would be. */
+    const QRect frame = dialog->frameGeometry();
+    foreach( const QScreen *screen, QGuiApplication::screens() )
+        if( screen->availableGeometry().intersects( frame ) )
+            return;
+
+    const QScreen *primary = QGuiApplication::primaryScreen();
+    if( primary != NULL )
+    {
+        const QRect avail = primary->availableGeometry();
+        dialog->move( avail.center()
+                      - QPoint( dialog->width() / 2, dialog->height() / 2 ) );
+    }
+}
 
 static void DialogCallback( extension_dialog_t *p_ext_dialog,
                             void *p_data );
@@ -87,6 +143,9 @@ int ExtensionsDialogProvider::DestroyExtDialog( extension_dialog_t *p_dialog )
     ExtensionDialog *dialog = ( ExtensionDialog* ) p_dialog->p_sys_intf;
     if( !dialog )
         return VLC_EGENERIC;
+    /* Before it goes: the next view this extension shows is a brand new
+     * window, and it should come up where the user left this one. */
+    SaveDialogCorner( dialog, p_dialog );
     delete dialog;
     p_dialog->p_sys_intf = NULL;
     vlc_cond_signal( &p_dialog->cond );
@@ -113,6 +172,10 @@ ExtensionDialog* ExtensionsDialogProvider::UpdateExtDialog(
     if( !p_dialog->b_kill && !dialog )
     {
         dialog = CreateExtDialog( p_dialog );
+        /* Positioned before it is shown, so it does not appear centred and
+         * then jump. The dialog already has its real size here: its
+         * constructor runs UpdateWidgets(), which resizes it. */
+        RestoreDialogCorner( dialog, p_dialog );
         dialog->setVisible( !p_dialog->b_hide );
         dialog->has_lock = false;
     }
@@ -203,6 +266,217 @@ ExtensionDialog::~ExtensionDialog()
     msg_Dbg( p_intf, "Deleting extension dialog '%s'", qtu(windowTitle()) );
 }
 
+/* Column separator inside a list cell, and inside the widget text that
+ * carries the headers. Same convention as the macOS providers. */
+static const QChar kCellSep = QLatin1Char( '\t' );
+/* US (0x1F) separates what a cell SHOWS from what it is ORDERED ON. A script
+ * needs it as soon as the readable form and the real order disagree: a
+ * localised date, or "565,000 subscribers". */
+static const QChar kSortKeySep = QLatin1Char( '\x1f' );
+
+/**
+ * Split one tab-separated string into its cells, and each cell into its
+ * displayed text and its optional sort key.
+ */
+static void SplitCells( const QString &raw, QStringList &texts,
+                        QStringList &keys )
+{
+    const QStringList cells = raw.split( kCellSep );
+    for( const QString &cell : cells )
+    {
+        const int us = cell.indexOf( kSortKeySep );
+        if( us < 0 )
+        {
+            texts << cell;
+            keys << QString();
+        }
+        else
+        {
+            texts << cell.left( us );
+            keys << cell.mid( us + 1 );
+        }
+    }
+}
+
+/**
+ * A row of an extension list.
+ *
+ * Exists only to sort on the key rather than on the label, and to compare
+ * numerically when both keys are numbers -- otherwise "10" sorts before "9"
+ * and a column of sizes or counts is worse than useless. Falls back to the
+ * displayed text when a cell carries no key, and to a locale-aware compare,
+ * which is what the macOS side gets from NSNumericSearch.
+ */
+class ExtensionListItem : public QTreeWidgetItem
+{
+public:
+    ExtensionListItem() : QTreeWidgetItem() {}
+
+    bool operator<( const QTreeWidgetItem &other ) const override
+    {
+        const QTreeWidget *tree = treeWidget();
+        const int col = tree ? tree->sortColumn() : 0;
+        const QString a = key( this, col );
+        const QString b = key( &other, col );
+
+        bool aNum = false, bNum = false;
+        const double da = a.toDouble( &aNum );
+        const double db = b.toDouble( &bNum );
+        if( aNum && bNum )
+            return da < db;
+
+        return QString::localeAwareCompare( a, b ) < 0;
+    }
+
+private:
+    static QString key( const QTreeWidgetItem *item, int col )
+    {
+        const QString k = item->data( col, Qt::UserRole + 1 ).toString();
+        return k.isEmpty() ? item->text( col ) : k;
+    }
+};
+
+/**
+ * (Re)build a list widget from the values the extension put in it.
+ *
+ * Cells are tab-separated and become real columns, with the widget's own text
+ * carrying the header labels under the same convention -- which is what the
+ * macOS providers have always done. A script that never sets a header text
+ * gets one nameless column, i.e. exactly the plain list it had before.
+ */
+void ExtensionDialog::FillList( QTreeWidget *list,
+                                extension_widget_t *p_widget )
+{
+    struct extension_widget_t::extension_widget_value_t *p_value;
+
+    QStringList headers, headerKeys;
+    if( p_widget->psz_text != NULL && *p_widget->psz_text != '\0' )
+        SplitCells( qfu( p_widget->psz_text ), headers, headerKeys );
+
+    /* A row may carry more cells than there are headers (and the other way
+     * round); the widest wins, so nothing a script wrote is ever dropped. */
+    int columns = headers.count();
+    for( p_value = p_widget->p_values; p_value != NULL;
+         p_value = p_value->p_next )
+    {
+        const int n = qfu( p_value->psz_text ).count( kCellSep ) + 1;
+        if( n > columns )
+            columns = n;
+    }
+    if( columns < 1 )
+        columns = 1;
+
+    /* Was this view already sorting -- because the script asked for an order,
+     * or because the user clicked a header? Refilling must undo neither. */
+    const bool wasSorting = list->isSortingEnabled();
+
+    /* Sorting off while filling: with it on, every insertion re-sorts the
+     * whole tree, which a few thousand rows would make painful. */
+    list->setSortingEnabled( false );
+    list->clear();
+    list->setColumnCount( columns );
+
+    if( headers.isEmpty() )
+    {
+        list->setHeaderHidden( true );
+    }
+    else
+    {
+        while( headers.count() < columns )
+            headers << QString();
+        list->setHeaderLabels( headers );
+        list->setHeaderHidden( false );
+    }
+
+    for( p_value = p_widget->p_values; p_value != NULL;
+         p_value = p_value->p_next )
+    {
+        QStringList texts, keys;
+        SplitCells( qfu( p_value->psz_text ), texts, keys );
+
+        ExtensionListItem *item = new ExtensionListItem();
+        for( int c = 0; c < columns; c++ )
+        {
+            item->setText( c, texts.value( c ) );
+            if( !keys.value( c ).isEmpty() )
+                item->setData( c, Qt::UserRole + 1, keys.value( c ) );
+        }
+        /* ⚠ The row is identified by its i_id and never by its position:
+         * sorting reorders the view, not p_values. Selection is mapped back
+         * through this, the same lesson the macOS side learned the hard way. */
+        item->setData( 0, Qt::UserRole, p_value->i_id );
+        list->addTopLevelItem( item );
+    }
+
+    /* The order the script asked for (1-based, 0 = leave as added).
+     *
+     * ⚠⚠ Never just switch sorting on and leave the column to Qt.
+     * QTreeView::setSortingEnabled(true) sorts straight away by whatever the
+     * header's indicator currently says, and a fresh QHeaderView says column
+     * 0, Qt::DescendingOrder -- so arming it here handed every list back
+     * reversed, Z to A. The indicator has to be set first, or sorting has to
+     * stay off. */
+    if( p_widget->i_sort_column > 0 && p_widget->i_sort_column <= columns )
+    {
+        /* sortByColumn() sets the indicator AND sorts even while sorting is
+         * disabled, so the order is right before it is armed. */
+        list->sortByColumn( p_widget->i_sort_column - 1,
+                            p_widget->b_sort_ascending ? Qt::AscendingOrder
+                                                       : Qt::DescendingOrder );
+        list->setSortingEnabled( true );
+    }
+    else if( wasSorting )
+    {
+        /* The user picked a column earlier: refilling keeps their choice,
+         * since the header still carries that indicator. */
+        list->setSortingEnabled( true );
+    }
+    else
+    {
+        /* Nothing asked, nothing picked: keep the order the script added its
+         * rows in -- which is what i_sort_column == 0 means, and what the
+         * macOS providers do. Sorting is armed by the first header click
+         * instead (see the connection made in CreateWidget). */
+        list->setSortingEnabled( false );
+    }
+
+    /* Last: setSortingEnabled() also drives this, and a list whose header is
+     * shown should stay clickable whether or not it is sorting yet. */
+    list->header()->setSectionsClickable( !headers.isEmpty() );
+
+    for( int c = 0; c < columns; c++ )
+        list->resizeColumnToContents( c );
+}
+
+/**
+ * resize() to the layout's wish, with the width kept within reason.
+ *
+ * A dialog grows to whatever its widgets ask for, and an unwrapped label asks
+ * for the width of its longest line: one paragraph of description made the
+ * window several times wider than the screen. Labels now wrap, but a wrapped
+ * label still reports a single-line sizeHint until something bounds its width
+ * -- so bound it here. 720 is the cap the macOS providers already use, for
+ * this very reason. A script that asked for a wider dialog still gets it:
+ * its own request wins over the cap.
+ */
+void ExtensionDialog::ResizeToHint()
+{
+    QSize hint = sizeHint();
+    const int cap = qMax( 720, p_dialog->i_width );
+
+    if( hint.width() > cap )
+    {
+        hint.setWidth( cap );
+        /* a label can only say how tall it is once it knows how wide it
+         * may be */
+        if( layout != NULL && layout->hasHeightForWidth() )
+            hint.setHeight( qMax( hint.height(),
+                                  layout->heightForWidth( cap ) ) );
+    }
+
+    resize( hint );
+}
+
 QWidget* ExtensionDialog::CreateWidget( extension_widget_t *p_widget )
 {
     QLabel *label = NULL;
@@ -211,7 +485,7 @@ QWidget* ExtensionDialog::CreateWidget( extension_widget_t *p_widget )
     QLineEdit *textInput = NULL;
     QCheckBox *checkBox = NULL;
     QComboBox *comboBox = NULL;
-    QListWidget *list = NULL;
+    QTreeWidget *list = NULL;
     SpinningIcon *spinIcon = NULL;
     struct extension_widget_t::extension_widget_value_t *p_value = NULL;
 
@@ -224,6 +498,11 @@ QWidget* ExtensionDialog::CreateWidget( extension_widget_t *p_widget )
             p_widget->p_sys_intf = label;
             label->setTextFormat( Qt::RichText );
             label->setOpenExternalLinks( true );
+            /* Without this a paragraph is laid out as one endless line and
+             * drags the whole dialog out with it -- a film synopsis made the
+             * window wider than the screen. See also ResizeToHint(), which
+             * bounds the width a wrapped label is first measured at. */
+            label->setWordWrap( true );
             return label;
 
         case EXTENSION_WIDGET_BUTTON:
@@ -308,12 +587,26 @@ QWidget* ExtensionDialog::CreateWidget( extension_widget_t *p_widget )
             {
                 comboBox->addItem( qfu( p_value->psz_text ), p_value->i_id );
             }
-            /* Set current item */
-            if( p_widget->psz_text )
+            /* Set current item.
+             *
+             * ⚠ By the selected VALUE, not by the widget's text: set_value()
+             * only ever sets b_selected on the value it matches (dialog.c) and
+             * never touches psz_text, so looking the text up here could not
+             * work. It found nothing, the box kept item 0, and a script that
+             * had carefully picked an entry got whatever sorted first -- the
+             * Podcasts extension opened on the South African store on a French
+             * system, simply because "Afrique du Sud" comes first in French.
+             * UpdateWidget() has always done it this way; creation had not. */
+            for( p_value = p_widget->p_values;
+                 p_value != NULL;
+                 p_value = p_value->p_next )
             {
-                int idx = comboBox->findText( qfu( p_widget->psz_text ) );
+                if( !p_value->b_selected )
+                    continue;
+                int idx = comboBox->findData( p_value->i_id );
                 if( idx >= 0 )
                     comboBox->setCurrentIndex( idx );
+                break;
             }
             selectMapper->setMapping( comboBox, new WidgetMapper( comboBox, p_widget ) );
             connect( comboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -321,38 +614,42 @@ QWidget* ExtensionDialog::CreateWidget( extension_widget_t *p_widget )
             return comboBox;
 
         case EXTENSION_WIDGET_LIST:
-            list = new QListWidget( this );
+            list = new QTreeWidget( this );
             list->setSelectionMode( QAbstractItemView::ExtendedSelection );
-            for( p_value = p_widget->p_values;
-                 p_value != NULL;
-                 p_value = p_value->p_next )
-            {
-                /* the macOS providers render tab-separated cells as native
-                 * columns; this widget renders them as plain spacing */
-                /* the macOS providers render tab-separated cells as native
-                 * columns and use "\037sortkey" suffixes; this widget shows
-                 * plain text, so drop the keys and space the columns out */
-                QString text = qfu( p_value->psz_text );
-                text.remove( QRegularExpression(
-                    QStringLiteral( "\037[^\t]*" ) ) );
-                text.replace( QLatin1Char( '\t' ), QStringLiteral( "    " ) );
-                QListWidgetItem *item = new QListWidgetItem( text );
-                item->setData( Qt::UserRole, p_value->i_id );
-                list->addItem( item );
-            }
+            /* a flat list of rows, not a tree: no expanders, no indent */
+            list->setRootIsDecorated( false );
+            list->setUniformRowHeights( true );
+            list->setAllColumnsShowFocus( true );
+            /* the header may need dragging when a column is wider than the
+             * dialog, which is common for URLs */
+            list->header()->setStretchLastSection( true );
+            /* Sorting is armed by the first header click, not up front: see
+             * FillList(). QHeaderView flips its indicator on a click as long
+             * as the sections are clickable, even with sorting still off, and
+             * a click on a column that was not the sorted one starts
+             * ASCENDING -- which is the order a first click should give.
+             * (No recursion here: setSortingEnabled() re-applies the very
+             * same indicator, and QHeaderView::setSortIndicator() returns
+             * early when nothing changed.) */
+            connect( list->header(), &QHeaderView::sortIndicatorChanged,
+                     list, [list]( int, Qt::SortOrder ) {
+                         if( !list->isSortingEnabled() )
+                             list->setSortingEnabled( true );
+                     } );
+            FillList( list, p_widget );
             selectMapper->setMapping( list, new WidgetMapper( list, p_widget ) );
-            connect( list, &QListWidget::itemSelectionChanged,
+            connect( list, &QTreeWidget::itemSelectionChanged,
                      selectMapper, QOverload<>::of(&QSignalMapper::map) );
             /* double-click forwards to the optional Lua list callback */
             clickMapper->setMapping( list, new WidgetMapper( list, p_widget ) );
-            connect( list, &QListWidget::itemDoubleClicked,
+            connect( list, &QTreeWidget::itemDoubleClicked,
                      clickMapper, QOverload<>::of(&QSignalMapper::map) );
             /* right-click: the context menu the extension attached with
              * set_menu. set_drag (drag-out with a file promise) has no
              * Qt wiring yet: downloads go through the button and this
              * menu instead. */
             list->setContextMenuPolicy( Qt::CustomContextMenu );
-            connect( list, &QListWidget::customContextMenuRequested,
+            connect( list, &QTreeWidget::customContextMenuRequested,
                      this, [this, list, p_widget]( const QPoint &pos ) {
                          ListContextMenu( list, p_widget, pos );
                      } );
@@ -435,11 +732,11 @@ int ExtensionDialog::TriggerClick( QObject *object )
  * with set_menu and forward the picked entry (1-based); the clicked row
  * becomes the selection the extension reads.
  **/
-void ExtensionDialog::ListContextMenu( QListWidget *list,
+void ExtensionDialog::ListContextMenu( QTreeWidget *list,
                                        extension_widget_t *p_widget,
                                        const QPoint &pos )
 {
-    QListWidgetItem *item = list->itemAt( pos );
+    QTreeWidgetItem *item = list->itemAt( pos );
     if( item == NULL )
         return;
 
@@ -577,17 +874,17 @@ void ExtensionDialog::SyncSelection( QObject *object )
     }
     else if( p_widget->type == EXTENSION_WIDGET_LIST )
     {
-        QListWidget *list = static_cast<QListWidget*>( p_widget->p_sys_intf );
-        QList<QListWidgetItem *> selection = list->selectedItems();
+        QTreeWidget *list = static_cast<QTreeWidget*>( p_widget->p_sys_intf );
+        QList<QTreeWidgetItem *> selection = list->selectedItems();
         for( p_value = p_widget->p_values;
              p_value != NULL;
              p_value = p_value->p_next )
         {
             bool b_selected = false;
-            foreach( const QListWidgetItem *item, selection )
+            foreach( const QTreeWidgetItem *item, selection )
             {
-//                 if( !qstrcmp( qtu( item->text() ), p_value->psz_text ) )
-                if( item->data( Qt::UserRole ).toInt() == p_value->i_id )
+                /* by id, never by row: sorting reorders the view only */
+                if( item->data( 0, Qt::UserRole ).toInt() == p_value->i_id )
                 {
                     b_selected = true;
                     break;
@@ -643,7 +940,7 @@ void ExtensionDialog::UpdateWidgets()
             if( ( p_widget->i_width > 0 ) && ( p_widget->i_height > 0 ) )
                 widget->resize( p_widget->i_width, p_widget->i_height );
             p_widget->p_sys_intf = widget;
-            this->resize( sizeHint() );
+            ResizeToHint();
             /* If an update was required, cancel it as we just created the widget */
             p_widget->b_update = false;
         }
@@ -662,7 +959,7 @@ void ExtensionDialog::UpdateWidgets()
             if( ( p_widget->i_width > 0 ) && ( p_widget->i_height > 0 ) )
                 widget->resize( p_widget->i_width, p_widget->i_height );
             p_widget->p_sys_intf = widget;
-            this->resize( sizeHint() );
+            ResizeToHint();
 
             /* Do not update again */
             p_widget->b_update = false;
@@ -671,7 +968,7 @@ void ExtensionDialog::UpdateWidgets()
         {
             DestroyWidget( p_widget );
             p_widget->p_sys_intf = NULL;
-            this->resize( sizeHint() );
+            ResizeToHint();
         }
     }
     FOREACH_END()
@@ -691,7 +988,7 @@ QWidget* ExtensionDialog::UpdateWidget( extension_widget_t *p_widget )
     QLineEdit *textInput = NULL;
     QCheckBox *checkBox = NULL;
     QComboBox *comboBox = NULL;
-    QListWidget *list = NULL;
+    QTreeWidget *list = NULL;
     SpinningIcon *spinIcon = NULL;
     struct extension_widget_t::extension_widget_value_t *p_value = NULL;
 
@@ -771,23 +1068,8 @@ QWidget* ExtensionDialog::UpdateWidget( extension_widget_t *p_widget )
             return comboBox;
 
         case EXTENSION_WIDGET_LIST:
-            list = static_cast< QListWidget* >( p_widget->p_sys_intf );
-            list->clear();
-            for( p_value = p_widget->p_values;
-                 p_value != NULL;
-                 p_value = p_value->p_next )
-            {
-                /* the macOS providers render tab-separated cells as native
-                 * columns and use "\037sortkey" suffixes; this widget shows
-                 * plain text, so drop the keys and space the columns out */
-                QString text = qfu( p_value->psz_text );
-                text.remove( QRegularExpression(
-                    QStringLiteral( "\037[^\t]*" ) ) );
-                text.replace( QLatin1Char( '\t' ), QStringLiteral( "    " ) );
-                QListWidgetItem *item = new QListWidgetItem( text );
-                item->setData( Qt::UserRole, p_value->i_id );
-                list->addItem( item );
-            }
+            list = static_cast< QTreeWidget* >( p_widget->p_sys_intf );
+            FillList( list, p_widget );
             return list;
 
         case EXTENSION_WIDGET_SPIN_ICON:
@@ -839,6 +1121,23 @@ void ExtensionDialog::keyPressEvent( QKeyEvent *event )
     {
     case Qt::Key_Escape:
         close();
+        return;
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+        /* Enter belongs to whatever holds the focus, and to nothing else.
+         *
+         * A QLineEdit emits returnPressed() -- which is how the extension
+         * hears about it -- and then IGNORES the key, so it bubbles up to
+         * QDialog::keyPressEvent(), which clicks the first autoDefault
+         * QPushButton it can find. In Subsonic that meant typing a search and
+         * pressing Enter also pressed "back to the connection page", a button
+         * the user never aimed at and which threw the session away.
+         *
+         * Swallowing it here rather than clearing autoDefault on every button
+         * keeps the case that does make sense: a button that HAS the focus
+         * still acts on Enter, because QPushButton handles the key itself and
+         * it never reaches us. */
+        event->accept();
         return;
     default:
         QDialog::keyPressEvent( event );

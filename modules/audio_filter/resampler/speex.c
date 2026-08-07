@@ -44,12 +44,8 @@ vlc_module_begin ()
     set_category (CAT_AUDIO)
     set_subcategory (SUBCAT_AUDIO_RESAMPLER)
 #if defined (__powerpc__) || defined (__POWERPC__)
-    /* On PowerPC, libsamplerate's fastest SINC eats a large share of the
-     * CPU for the permanent 48->44.1 kHz DVD conversion (these Macs'
-     * codecs only run at 44.1 kHz) and it has no AltiVec path anyway.
-     * Speex with a short filter costs a fraction of that. On SIMD-less
-     * G3, quality 1 (16 taps) also keeps the filter-rebuild triggered by
-     * aout drift adjustments cheap (update_filter was profiled at half a
+    /* On SIMD-less G3, quality 1 (16 taps) keeps the filter rebuild triggered
+     * by aout drift adjustments cheap (update_filter was profiled at half a
      * core at quality 3); G4/G5 can afford quality 3. */
 # ifdef __ALTIVEC__
     add_integer ("speex-resampler-quality", 3,
@@ -58,22 +54,25 @@ vlc_module_begin ()
     add_integer ("speex-resampler-quality", 1,
                  QUALITY_TEXT, QUALITY_LONGTEXT, true)
 # endif
-        change_integer_range (0, 10)
-    set_capability ("audio converter", 60)
-    set_callbacks (Open, Close)
-
-    add_submodule ()
-    set_capability ("audio resampler", 60)
 #else
     add_integer ("speex-resampler-quality", 4,
                  QUALITY_TEXT, QUALITY_LONGTEXT, true)
+#endif
         change_integer_range (0, 10)
+
+    /* Never selected on priority anywhere: whether this resampler is
+     * preferred to libsamplerate's SINC is a policy question, and it is
+     * settled once, by "audio-efficient-resampler" (see FindResampler() in
+     * src/audio_output/filters.c). Ranking it above libsamplerate here as
+     * well used to say the same thing twice -- and the two disagreed: the
+     * priority only spoke on PowerPC, where the option was consequently
+     * inert, while the option spoke everywhere else, where the priority
+     * was silent. One mechanism, one place. */
     set_capability ("audio converter", 0)
     set_callbacks (Open, Close)
 
     add_submodule ()
     set_capability ("audio resampler", 0)
-#endif
     set_callbacks (OpenResampler, Close)
     add_shortcut ("speex")
 vlc_module_end ()

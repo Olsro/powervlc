@@ -33,9 +33,11 @@
 #define NONEWWAVE
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <assert.h>
 
 #include <vlc_common.h>
+#include <vlc_fs.h>
 #include <vlc_codecs.h>
 #include <vlc_aout.h>
 #include <vlc_plugin.h>
@@ -104,6 +106,30 @@ typedef struct aout_stream_sys
     unsigned block_align;
     UINT64 written; /**< Frames written to the buffer */
     UINT32 frames; /**< Total buffer size (frames) */
+
+    /* Instrumentation: is the device playing at the rate it says it does?
+     *
+     * The core's drift is delay + now - pts, which folds the device clock and
+     * how much audio the filter chain handed over into one number; a queue
+     * that drains 2.5 % faster than it fills looks identical either way. The
+     * device's own position counter against QPC answers the first half on its
+     * own, and the frames written against QPC answer the second. */
+    UINT64 dbg_qpc;     /**< QPC at the last report, in 100 ns units */
+    UINT64 dbg_pos;     /**< Device position at the last report */
+    UINT64 dbg_written; /**< Frames written at the last report */
+
+    /* Raw copy of every frame handed to the device, when --wasapi-dump-file
+     * is set.
+     *
+     * The one thing no amount of logging can settle is what the output
+     * actually sounds like: a report saying the drift stayed under 40 ms is
+     * consistent both with clean audio and with a click every tenth of a
+     * second. This writes exactly the bytes the device is given -- after the
+     * filters, after the drift correction, after any inserted silence -- so
+     * the waveform can be examined off the machine. It taps the buffer on its
+     * way into WASAPI rather than recording the endpoint, so the device under
+     * test is not replaced by a virtual one. */
+    FILE *dump;
 } aout_stream_sys_t;
 
 
@@ -139,10 +165,49 @@ static HRESULT TimeGet(aout_stream_t *s, vlc_tick_t *restrict delay)
 
     static_assert((10000000 % CLOCK_FREQ) == 0, "Frequency conversion broken");
 
+    const UINT64 qpc = GetQPC();
+
     *delay = ((w.quot - r.quot) * CLOCK_FREQ)
            + ((w.rem * CLOCK_FREQ) / sys->rate)
            - ((r.rem * CLOCK_FREQ) / freq)
-           - ((GetQPC() - qpcpos) / (10000000 / CLOCK_FREQ));
+           - ((qpc - qpcpos) / (10000000 / CLOCK_FREQ));
+
+    /* Once a second, both halves of the question, measured against the same
+     * wall clock: how fast the device is actually consuming, and how fast we
+     * are actually feeding it. Either ratio departing from 1.000 names the
+     * culprit outright; the drift on its own never could. */
+    if (sys->dbg_qpc == 0)
+    {
+        sys->dbg_qpc = qpc;
+        sys->dbg_pos = pos;
+        sys->dbg_written = sys->written;
+    }
+    else if (qpc - sys->dbg_qpc >= 10000000)
+    {
+        /* 100 ns units of wall clock, and of audio, over the same span */
+        const UINT64 elapsed = qpc - sys->dbg_qpc;
+        const UINT64 played = ((pos - sys->dbg_pos) * 10000000) / freq;
+        const UINT64 fed = ((sys->written - sys->dbg_written) * 10000000)
+                           / sys->rate;
+
+        /* The endpoint's own occupancy, which owes nothing to the position
+         * counter: it is just how many frames the engine still holds. If the
+         * two disagree, the position counter is the one to distrust. */
+        UINT32 padding = 0;
+        vlc_tick_t queued = -1;
+        if (SUCCEEDED(IAudioClient_GetCurrentPadding(sys->client, &padding)))
+            queued = (vlc_tick_t)padding * CLOCK_FREQ / sys->rate;
+
+        msg_Dbg(s, "clock report: wall %"PRIu64" us, device played %"PRIu64
+                " us (%.4f x), fed %"PRIu64" us (%.4f x), delay %"PRId64" us, "
+                "queued %"PRId64" us", elapsed / 10, played / 10,
+                (double)played / (double)elapsed, fed / 10,
+                (double)fed / (double)elapsed, *delay, queued);
+
+        sys->dbg_qpc = qpc;
+        sys->dbg_pos = pos;
+        sys->dbg_written = sys->written;
+    }
 
     return hr;
 }
@@ -191,6 +256,8 @@ static HRESULT Play(aout_stream_t *s, block_t *block)
         const size_t copy = frames * sys->block_align;
 
         memcpy(dst, block->p_buffer, copy);
+        if (sys->dump != NULL && copy > 0)
+            fwrite(block->p_buffer, 1, copy, sys->dump);
         hr = IAudioRenderClient_ReleaseBuffer(render, frames, 0);
         if (FAILED(hr))
         {
@@ -243,6 +310,9 @@ static HRESULT Flush(aout_stream_t *s)
     {
         msg_Dbg(s, "reset");
         sys->written = 0;
+        /* Both counters restart, so a report spanning the reset would
+         * compare a fresh "written" against a stale baseline. */
+        sys->dbg_qpc = 0;
     }
     else
         msg_Warn(s, "cannot reset stream (error 0x%lX)", hr);
@@ -652,6 +722,23 @@ static HRESULT Start(aout_stream_t *s, audio_sample_format_t *restrict pfmt,
     CoTaskMemFree(pwf_mix);
     *pfmt = fmt;
     sys->written = 0;
+    sys->dbg_qpc = 0;
+
+    sys->dump = NULL;
+    char *dump_path = var_InheritString(s, "wasapi-dump-file");
+    if (dump_path != NULL)
+    {
+        sys->dump = vlc_fopen(dump_path, "wb");
+        if (sys->dump == NULL)
+            msg_Err(s, "cannot open dump file \"%s\"", dump_path);
+        else
+            msg_Dbg(s, "dumping raw output to \"%s\": %s %u Hz, %u channels, "
+                    "%u bytes per frame", dump_path,
+                    (const char *)&(vlc_fourcc_t){ fmt.i_format },
+                    fmt.i_rate, fmt.i_channels, sys->block_align);
+        free(dump_path);
+    }
+
     s->sys = sys;
     s->time_get = TimeGet;
     s->play = Play;
@@ -673,6 +760,9 @@ static HRESULT Stop(aout_stream_t *s)
     IAudioClient_Stop(sys->client); /* should not be needed */
     IAudioClient_Release(sys->client);
 
+    if (sys->dump != NULL)
+        fclose(sys->dump);
+
     free(sys);
     return S_OK;
 }
@@ -683,5 +773,10 @@ vlc_module_begin()
     set_capability("aout stream", 50)
     set_category(CAT_AUDIO)
     set_subcategory(SUBCAT_AUDIO_AOUT)
+    /* Diagnostics: headless capture of what the device is actually given.
+     * Raw PCM, no header -- the format is printed in the log when it opens. */
+    add_savefile("wasapi-dump-file", NULL, N_("Dump raw output to file"),
+                 N_("Write every frame handed to the audio device into this "
+                    "file, for offline analysis. Diagnostics only."), true)
     set_callbacks(Start, Stop)
 vlc_module_end()

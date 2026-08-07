@@ -35,6 +35,10 @@
 #include <locale.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+#ifdef _WIN32
+# include <windows.h>   /* GetUserDefaultUILanguage(), GetLocaleInfoA() */
+#endif
 
 #include <vlc_common.h>
 
@@ -184,7 +188,20 @@ static int vlclua_datadir_list( lua_State *L )
  * thing left. */
 static int vlclua_language( lua_State *L )
 {
+#if defined(LC_MESSAGES) && !defined(_WIN32)
     const char *psz_locale = setlocale( LC_MESSAGES, NULL );
+#else
+    /* Windows has no LC_MESSAGES: the CRT's locale categories stop at
+     * LC_TIME, and none of them answers "which language is the UI in".
+     * (gettext's libintl.h does define the name, but as the token 1729 for
+     * bindtextdomain() -- handing that to setlocale() is an invalid category,
+     * which the UCRT answers with its invalid-parameter handler. Hence the
+     * explicit _WIN32 exclusion rather than a bare #ifdef.) Nothing is lost
+     * by going straight to the environment: winvlc.c puts the user's choice
+     * -- command line, else the Lang registry value -- into LANG itself
+     * before libvlc even starts. */
+    const char *psz_locale = NULL;
+#endif
 
     if( psz_locale == NULL || !strcmp( psz_locale, "C" )
      || !strcmp( psz_locale, "POSIX" ) )
@@ -204,6 +221,45 @@ static int vlclua_language( lua_State *L )
             }
         }
     }
+
+#ifdef _WIN32
+    /* Still nothing, and on Windows that is the ORDINARY case, not an edge
+     * one: winvlc.c only writes LANG when a language was picked explicitly,
+     * so a default install -- language left on "auto" -- reaches here with a
+     * bare environment. Answering "" then told every script the player had no
+     * language at all, and the Podcasts extension fell back to the American
+     * store on a French machine.
+     *
+     * The user interface language is the right answer, not the regional
+     * format: it is also what GNU libintl reads on Windows when LANG is
+     * unset, so what a script is told matches what the user is reading.
+     *
+     * GetUserDefaultUILanguage() and the two ISO locale fields all date from
+     * Windows 2000, so this holds on the XP build as well. */
+    if( psz_locale == NULL )
+    {
+        char psz_lang[9], psz_ctry[9];
+        LCID lcid = MAKELCID( GetUserDefaultUILanguage(), SORT_DEFAULT );
+
+        if( GetLocaleInfoA( lcid, LOCALE_SISO639LANGNAME,
+                            psz_lang, sizeof( psz_lang ) ) > 0 )
+        {
+            /* pushed from a local buffer rather than parked in a static one:
+             * extensions each run on their own thread */
+            char psz_win[20];
+
+            if( GetLocaleInfoA( lcid, LOCALE_SISO3166CTRYNAME,
+                                psz_ctry, sizeof( psz_ctry ) ) > 0 )
+                snprintf( psz_win, sizeof( psz_win ), "%s_%s",
+                          psz_lang, psz_ctry );
+            else
+                snprintf( psz_win, sizeof( psz_win ), "%s", psz_lang );
+
+            lua_pushstring( L, psz_win );
+            return 1;
+        }
+    }
+#endif
 
     lua_pushstring( L, psz_locale != NULL ? psz_locale : "" );
     return 1;

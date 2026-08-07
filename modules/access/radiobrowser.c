@@ -85,6 +85,10 @@
  * the generous count: a rejection costs one round-trip, not a timeout. */
 #define ATTEMPTS 6
 
+/* Floor, in milliseconds, on how long a drawn station is given to answer
+ * before it is written off and another one is drawn. See StationResponds(). */
+#define PROBE_TIMEOUT_MS 5000
+
 static int Open(vlc_object_t *);
 
 vlc_module_begin()
@@ -107,6 +111,44 @@ vlc_module_end()
  * read.  vlc_stream_Read() copes with a filterless access by itself, both
  * for pf_read and for the pf_block that the HTTP access provides.
  *****************************************************************************/
+/*****************************************************************************
+ * Does the drawn station actually answer?
+ *
+ * "hidebroken=true" only reflects the API's own last sweep, which can be days
+ * old, so a station it hands out may well be gone. Left alone, the core opens
+ * the redirection target, fails, and takes that for the end of this playlist
+ * entry -- it then moves on to the NEXT entry. But the user asked for *a*
+ * random station and rightly expects to get one: the draw has to be retried,
+ * not abandoned. Probing here is what turns bad luck into another draw.
+ *
+ * Opening is the entire test: the HTTP access performs the request and returns
+ * the response headers, so a refused connection, a timeout, a 404 or a failed
+ * TLS handshake all fail right here. Nothing is read -- a radio stream never
+ * ends, and the first byte would cost another round trip for no more certainty.
+ *****************************************************************************/
+static bool StationResponds(vlc_object_t *obj, const char *url)
+{
+    /* Give the station a fair five seconds before writing it off: a webradio
+     * on a slow or distant host can take that long to answer, and drawing
+     * another one merely because we were impatient would be its own bug. The
+     * core default for "ipv4-timeout" is already 5 s, so this only matters
+     * when the user configured something shorter -- it raises the floor for
+     * the probe and never lowers what they asked for. The variable lives on
+     * the access object, the probe's parent, which is where the
+     * var_InheritInteger() inside the TCP and TLS connect paths looks. */
+    var_Create(obj, "ipv4-timeout", VLC_VAR_INTEGER | VLC_VAR_DOINHERIT);
+    if (var_GetInteger(obj, "ipv4-timeout") < PROBE_TIMEOUT_MS)
+        var_SetInteger(obj, "ipv4-timeout", PROBE_TIMEOUT_MS);
+
+    stream_t *probe = vlc_access_NewMRL(obj, url);
+
+    if (probe != NULL)
+        vlc_stream_Delete(probe);
+    var_Destroy(obj, "ipv4-timeout");
+
+    return probe != NULL;
+}
+
 static char *Fetch(vlc_object_t *obj, const char *url)
 {
     stream_t *s = vlc_access_NewMRL(obj, url);
@@ -457,6 +499,17 @@ static int Open(vlc_object_t *obj)
         }
 
         msg_Dbg(access, "random station: %s", station);
+
+        /* Only a station that answers is worth handing to the core: a dead
+         * one would end this playlist entry and skip to the next. */
+        if (!StationResponds(obj, station))
+        {
+            msg_Dbg(access, "station does not answer, drawing another one");
+            free(station);
+            free(xml);
+            continue;
+        }
+
         Publish(access, xml, station);
         free(xml);
 

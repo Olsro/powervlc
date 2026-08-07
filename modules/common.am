@@ -31,8 +31,17 @@ AM_LDFLAGS = \
 	-export-symbols-regex ^vlc_entry \
 	-shrext $(LIBEXT) \
 	-no-undefined \
-	-Wl,-dead_strip \
-	$(top_builddir)/compat/libcompat.la $(LTLIBVLCCORE) 
+	$(top_builddir)/compat/libcompat.la $(LTLIBVLCCORE)
+# PowerVLC: -dead_strip is Apple ld64 spelling, and it is what takes the macOS
+# bundle from 623 MB down to 520 MB. It was set unconditionally, which no other
+# linker accepts: GNU ld calls it an unrecognized option and lld (the llvm-mingw
+# arm64 target) fails every plugin with "unknown argument: -dead_strip". The
+# GNU-side equivalent would be --gc-sections, but that only pays off with
+# -ffunction-sections/-fdata-sections at compile time, so it is a size change to
+# make on purpose rather than a drop-in substitute here.
+if HAVE_DARWIN
+AM_LDFLAGS += -Wl,-dead_strip
+endif
 if HAVE_WIN32
 AM_LDFLAGS += $(top_builddir)/modules/module.rc.lo -Wc,-static
 endif

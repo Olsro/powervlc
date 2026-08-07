@@ -30,7 +30,10 @@ if HAVE_XCB
 libqt_plugin_la_CXXFLAGS += -DQT5_HAS_XCB
 endif
 if HAVE_WIN32
-libqt_plugin_la_LIBADD += $(LIBCOM) -lcomctl32 -luuid
+
+# -lshlwapi: AssocQueryStringW(), to find the browser the add-on goes to
+# (util/powervlc_browser_addon.cpp). -lshell32 for ShellExecuteW().
+libqt_plugin_la_LIBADD += $(LIBCOM) -lcomctl32 -luuid -lshlwapi -lshell32
 endif
 if UPDATE_CHECK
 libqt_plugin_la_CPPFLAGS += -DUPDATE_CHECK
@@ -145,6 +148,7 @@ libqt_plugin_la_SOURCES = \
 	gui/qt/util/imagehelper.cpp gui/qt/util/imagehelper.hpp \
 	gui/qt/util/powervlc_links.cpp gui/qt/util/powervlc_links.hpp \
 	gui/qt/util/powervlc_disclibs.cpp gui/qt/util/powervlc_disclibs.hpp \
+	gui/qt/util/powervlc_browser_addon.cpp gui/qt/util/powervlc_browser_addon.hpp \
 	gui/qt/styles/seekstyle.cpp gui/qt/styles/seekstyle.hpp
 if HAVE_WIN32
 libqt_plugin_la_SOURCES += \
@@ -429,7 +433,9 @@ libqt_plugin_la_RES = \
 	gui/qt/pixmaps/toolbar/volume-slider-inside.svg \
 	gui/qt/pixmaps/toolbar/volume-slider-outside.svg \
 	gui/qt/pixmaps/types/capture-card_16px.svg \
+	gui/qt/pixmaps/types/capture-card_16px_orange.svg \
 	gui/qt/pixmaps/types/disc_16px.svg \
+	gui/qt/pixmaps/types/disc_16px_orange.svg \
 	gui/qt/pixmaps/types/file-asym_16px.svg \
 	gui/qt/pixmaps/types/file-wide_16px.svg \
 	gui/qt/pixmaps/types/folder-blue_16px.svg \
