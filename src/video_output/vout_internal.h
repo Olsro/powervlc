@@ -128,6 +128,25 @@ struct vout_thread_sys_t
         vlc_tick_t  last_report;
     } punctuality;
 
+    /* The other end of the same question (debug verbosity only): how much
+     * time a picture still had in front of it when the decoder handed it
+     * over. Punctuality alone cannot tell "the display is slow" from "the
+     * picture was already late when it arrived": measured on an iBook G3,
+     * pictures reached the swap 85 to 129 ms past their date while the
+     * processor kept a quarter of itself idle and the display path cost
+     * two milliseconds a frame -- so the delay had to come from upstream,
+     * and nothing was measuring upstream.
+     *
+     * Written from the decoder thread, which is the only caller of
+     * vout_PutPicture(), and read nowhere else: telemetry, not state. */
+    struct {
+        unsigned    count;
+        unsigned    late;       /* already past their date on arrival */
+        vlc_tick_t  worst;      /* least lead seen (may be negative) */
+        vlc_tick_t  sum;
+        vlc_tick_t  last_report;
+    } handoff;
+
     /* OSD title configuration */
     struct {
         bool        show;

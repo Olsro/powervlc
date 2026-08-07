@@ -1,0 +1,117 @@
+From 82aa9bf85970f44c21aa68860dedc64bf1fd577a Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Thu, 30 Jul 2026 06:53:08 +0000
+Subject: [PATCH 30/31] avcodec/ppc: tuning pass 2 from the 2026-07-30 G5
+ re-bench
+
+Registration-level changes only; every kernel stays compiled (av_unused
+where a gate removes the last reference) so other CPUs / future
+re-tuning can restore any of them by deleting one line.
+
+- hpeldsp avg_pixels8 + h264qpel avg 8-wide mc00 (same kernel): now
+  unregistered on BOTH CPUs.  7447A measured 0.80x vs C (stock kernel,
+  so the stock-build bench applies); the 970 re-bench shows 0.51-0.58x
+  on two independent entries (hpeldsp and qpel mc00), not reproducing
+  the earlier 2.46x reading.
+- aacps hybrid_analysis: off on the 970 (0.46x vs C); 7447A pending.
+- vp9 TX_4X4 itxfm family (all four txtype combos + lossless WHT): off
+  on the 970 - the full transforms are a wash (0.97-1.05x) while the
+  common eob==1 DC path is 0.26x and the WHT 0.66x; 7447A pending.
+
+Validated: qemu -cpu 7400 full checkasm suite 587/587 (G4 shape is
+behaviour-identical by construction); -D_ARCH_PWR4 compile of all four
+files warning-free.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HcoCJhZQdwZvDdC836fitg
+
+PowerVLC: hunks touching libavcodec/ppc/h264dsp.c, h264qpel.c and
+hpeldsp_altivec.c were dropped from this patch.  Those three files carry
+PowerVLC's own AltiVec kernels (contrib/src/ffmpeg/0001..0007-ppc-h264-*
+and ffmpeg-ppc-hpeldsp-altivec.patch), so the registration verdicts above,
+measured against the stock upstream kernels, do not transfer to them.  The
+kept hunks cover only files PowerVLC does not modify.  Re-benching our own
+H.264/hpeldsp registrations against C on real hardware is separate work.
+
+---
+ libavcodec/ppc/aacpsdsp.c        | 12 ++++++++----
+ libavcodec/ppc/h264qpel.c        | 12 ++++++------
+ libavcodec/ppc/hpeldsp_altivec.c |  7 ++++---
+ libavcodec/ppc/vp9dsp_altivec.c  | 12 +++++++++---
+ 4 files changed, 27 insertions(+), 16 deletions(-)
+
+diff --git a/libavcodec/ppc/aacpsdsp.c b/libavcodec/ppc/aacpsdsp.c
+index 2c8479b..35063ba 100644
+--- a/libavcodec/ppc/aacpsdsp.c
++++ b/libavcodec/ppc/aacpsdsp.c
+@@ -62,10 +62,10 @@ static void ps_add_squares_altivec(float *restrict dst,
+         dst[i] += s[0] * s[0] + s[1] * s[1];
+ }
+ 
+-static void ps_hybrid_analysis_altivec(float (*restrict out)[2],
+-                                       float (*in)[2],
+-                                       const float (*filter)[8][2],
+-                                       ptrdiff_t stride, int n)
++static av_unused void ps_hybrid_analysis_altivec(float (*restrict out)[2],
++                                                 float (*in)[2],
++                                                 const float (*filter)[8][2],
++                                                 ptrdiff_t stride, int n)
+ {
+     DECLARE_ALIGNED(16, float, inre0)[6];
+     DECLARE_ALIGNED(16, float, inre1)[6];
+@@ -129,6 +129,10 @@ av_cold void ff_psdsp_init_ppc(PSDSPContext *s)
+         return;
+ 
+     s->add_squares     = ps_add_squares_altivec;
++#ifndef _ARCH_PWR4 /* 970: 0.46x vs C (strong scalar FPU, and the kernel
++                    * gathers its filter taps element-wise); 7447A data
++                    * pending */
+     s->hybrid_analysis = ps_hybrid_analysis_altivec;
+ #endif
++#endif
+ }
+diff --git a/libavcodec/ppc/vp9dsp_altivec.c b/libavcodec/ppc/vp9dsp_altivec.c
+index a05cf87..2f31b36 100644
+--- a/libavcodec/ppc/vp9dsp_altivec.c
++++ b/libavcodec/ppc/vp9dsp_altivec.c
+@@ -1908,7 +1908,8 @@ static av_cold void vp9dsp_mc_init_ppc(VP9DSPContext *dsp)
+  * transpose between; results are round-shifted by `bits` and added to dst.
+  * This mirrors itxfm_wrapper() exactly. */
+ #define ITXFM4_ADD(name, PA_CALL, PB_CALL, bits)                          \
+-static void name(uint8_t *dst, ptrdiff_t stride, int16_t *block, int eob) \
++static av_unused void name(uint8_t *dst, ptrdiff_t stride,                \
++                           int16_t *block, int eob)                       \
+ {                                                                         \
+     vec_s16 c0, c1, c2, c3;                                               \
+     load_block4(block, &c0, &c1, &c2, &c3);                              \
+@@ -1923,8 +1924,8 @@ static void name(uint8_t *dst, ptrdiff_t stride, int16_t *block, int eob) \
+ }
+ 
+ /* idct_idct also handles eob==1 (DC only). */
+-static void idct_idct_4x4_add_altivec(uint8_t *dst, ptrdiff_t stride,
+-                                      int16_t *block, int eob)
++static av_unused void idct_idct_4x4_add_altivec(uint8_t *dst, ptrdiff_t stride,
++                                                int16_t *block, int eob)
+ {
+     vec_s16 c0, c1, c2, c3;
+ 
+@@ -2291,11 +2292,16 @@ static void idct_idct_8x8_add_altivec(uint8_t *dst, ptrdiff_t stride,
+ 
+ static av_cold void vp9dsp_itxfm_init_ppc(VP9DSPContext *dsp)
+ {
++#ifndef _ARCH_PWR4 /* 970: the full 4x4 transforms are a wash (0.97-1.05x)
++                    * while the common eob==1 DC path is 0.26x and the WHT
++                    * 0.66x, so the whole TX_4X4 family stays C there;
++                    * 7447A data pending */
+     dsp->itxfm_add[TX_4X4][DCT_DCT]   = idct_idct_4x4_add_altivec;
+     dsp->itxfm_add[TX_4X4][ADST_DCT]  = idct_iadst_4x4_add_altivec;
+     dsp->itxfm_add[TX_4X4][DCT_ADST]  = iadst_idct_4x4_add_altivec;
+     dsp->itxfm_add[TX_4X4][ADST_ADST] = iadst_iadst_4x4_add_altivec;
+     dsp->itxfm_add[4 /* lossless */][DCT_DCT] = iwht_iwht_4x4_add_altivec;
++#endif
+ 
+     dsp->itxfm_add[TX_8X8][DCT_DCT]   = idct_idct_8x8_add_altivec;
+     dsp->itxfm_add[TX_8X8][ADST_DCT]  = idct_iadst_8x8_add_altivec;
+-- 
+2.43.0
+

@@ -1,0 +1,388 @@
+From e3ee11ccfd1e5a838f8104f99773448bcaf24557 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Thu, 30 Jul 2026 03:47:28 +0000
+Subject: [PATCH] avcodec/ppc: add AltiVec VP9 8x8 inverse transforms (O2)
+
+Add all four TX_8X8 itxfm_add kernels (idct_idct incl. the eob==1 DC
+fast path, idct_iadst, iadst_idct, iadst_iadst), bit-exact against
+vp9dsp_template.c's idct8_1d/iadst8_1d under itxfm_wrapper. 8-bit only,
+same int16 inter-pass contract as the 4x4 kernels (dctcoef == int16_t,
+so everything that flows between the two passes fits int16 for any
+input the C reference handles).
+
+Unlike the 4x4 (which parks four transforms in lanes 0..3), all 8
+int16 lanes are live: vector k holds IN(k) of eight parallel column
+transforms. Multiplies split into even/odd int32 lanes via
+vec_mule/vec_mulo and the whole pass runs on the halves separately
+(every op is lane-independent); pack_eo() reassembles true lane order
+only when narrowing to int16. Products and butterflies stay int32
+within a pass - the only int16 narrowings are the ones the C also
+has (inter-pass stores) plus the second-stage multiply operands,
+the same points the aarch64 NEON version narrows with rshrn. The
+iadst8 negations are applied in int32 before the int16 store, exactly
+where the C negates.
+
+New 8x8 s16 transpose: 3-level vec_mergeh/mergel network (an
+involution), verified by index simulation. Stores use the qpel8_store
+idiom (lvsr-rotate + two vec_ste words, byte-wise fallback): dst is
+8-byte aligned in every caller, and nothing outside the 8 payload
+bytes is touched (no RMW, so safe at tile edges).
+
+Validated with the qemu cross-harness (-cpu 7400): all 7 new named
+checks (sub1/2/4/8 dct_dct + the three adst combos) dispatch as
+ALTIVEC and pass bit-exact, seeds 1/2/7/42/777/12345; full suite
+584/584 (was 577, +7 exactly). Also compiles warning-free with
+-D_ARCH_PWR4 (G5 shape). Registered unconditionally: no per-CPU
+bench data yet; the 4x4 family won on the 970 and this halves the
+per-coefficient pass count, but real-hardware numbers decide any
+future gating.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016PpTqZd4mMkQFMFRSf7k8c
+---
+ libavcodec/ppc/vp9dsp_altivec.c | 325 ++++++++++++++++++++++++++++++++
+ 1 file changed, 325 insertions(+)
+
+diff --git a/libavcodec/ppc/vp9dsp_altivec.c b/libavcodec/ppc/vp9dsp_altivec.c
+index bfdb485..a05cf87 100644
+--- a/libavcodec/ppc/vp9dsp_altivec.c
++++ b/libavcodec/ppc/vp9dsp_altivec.c
+@@ -1969,6 +1969,326 @@ ITXFM4_ADD(iwht_iwht_4x4_add_altivec,
+            iwht4_1d_altivec(&c0, &c1, &c2, &c3, 0),
+            iwht4_1d_altivec(&c0, &c1, &c2, &c3, 1), 0)
+ 
++/* ---- 8x8 inverse transforms (idct8/iadst8, all txtp combos) ----
++ *
++ * Same contract as the 4x4 block above: bit-for-bit the C reference
++ * (idct8_1d / iadst8_1d under itxfm_wrapper), 8-bit only, with the
++ * inter-pass tmp[]/out[] values stored as int16 exactly like the C
++ * (dctcoef == int16_t).  All 8 int16 lanes are live here: vector k
++ * holds IN(k) of the eight parallel column transforms (lane j ==
++ * column j).  vec_mule/vec_mulo split each int16 multiply into
++ * even/odd int32 lanes; since every operation is lane-independent,
++ * the whole pass runs on the even and odd halves separately (s32x8
++ * below), and pack_eo() reassembles the true lane order only when
++ * narrowing back to int16.  Products and butterflies stay in int32
++ * within a pass (32767 * max-coeff-sum < 2^31 for every stage), so
++ * the only int16 narrowings are the ones the C reference also has:
++ * the inter-pass/out stores and the operands of second-stage
++ * multiplies (same points where the aarch64 NEON version narrows
++ * with rshrn). */
++
++/* 8 int32 lanes held as even/odd halves (lanes 0,2,4,6 / 1,3,5,7). */
++typedef struct {
++    vec_s32 e, o;
++} s32x8;
++
++/* Reassemble true lane order when narrowing: vec_packs gives int16
++ * lanes [e0..e3, o0..o3]; the constant picks [e0,o0,e1,o1,...]. */
++static av_always_inline vec_s16 pack_eo(s32x8 a)
++{
++    const vec_u8 eo_perm = { 0, 1,  8,  9, 2, 3, 10, 11,
++                             4, 5, 12, 13, 6, 7, 14, 15 };
++    vec_s16 p = vec_packs(a.e, a.o);
++
++    return (vec_s16)vec_perm((vec_u8)p, (vec_u8)p, eo_perm);
++}
++
++static av_always_inline s32x8 mul8(vec_s16 v, vec_s16 c)
++{
++    s32x8 r = { vec_mule(v, c), vec_mulo(v, c) };
++    return r;
++}
++
++static av_always_inline s32x8 add8(s32x8 a, s32x8 b)
++{
++    s32x8 r = { vec_add(a.e, b.e), vec_add(a.o, b.o) };
++    return r;
++}
++
++static av_always_inline s32x8 sub8(s32x8 a, s32x8 b)
++{
++    s32x8 r = { vec_sub(a.e, b.e), vec_sub(a.o, b.o) };
++    return r;
++}
++
++static av_always_inline s32x8 neg8(s32x8 a)
++{
++    const vec_s32 zero = vec_splat_s32(0);
++    s32x8 r = { vec_sub(zero, a.e), vec_sub(zero, a.o) };
++    return r;
++}
++
++static av_always_inline s32x8 rnd14x8(s32x8 a)
++{
++    s32x8 r = { rnd14(a.e), rnd14(a.o) };
++    return r;
++}
++
++/* Transpose the 8x8 int16 matrix held in r0..r7 (3-level merge
++ * network, an involution; verified by index simulation). */
++static av_always_inline void transpose8x8_s16(vec_s16 *r0, vec_s16 *r1,
++                                              vec_s16 *r2, vec_s16 *r3,
++                                              vec_s16 *r4, vec_s16 *r5,
++                                              vec_s16 *r6, vec_s16 *r7)
++{
++    vec_s16 s0 = vec_mergeh(*r0, *r4), s1 = vec_mergel(*r0, *r4);
++    vec_s16 s2 = vec_mergeh(*r1, *r5), s3 = vec_mergel(*r1, *r5);
++    vec_s16 s4 = vec_mergeh(*r2, *r6), s5 = vec_mergel(*r2, *r6);
++    vec_s16 s6 = vec_mergeh(*r3, *r7), s7 = vec_mergel(*r3, *r7);
++
++    vec_s16 t0 = vec_mergeh(s0, s4), t1 = vec_mergel(s0, s4);
++    vec_s16 t2 = vec_mergeh(s1, s5), t3 = vec_mergel(s1, s5);
++    vec_s16 t4 = vec_mergeh(s2, s6), t5 = vec_mergel(s2, s6);
++    vec_s16 t6 = vec_mergeh(s3, s7), t7 = vec_mergel(s3, s7);
++
++    *r0 = vec_mergeh(t0, t4); *r1 = vec_mergel(t0, t4);
++    *r2 = vec_mergeh(t1, t5); *r3 = vec_mergel(t1, t5);
++    *r4 = vec_mergeh(t2, t6); *r5 = vec_mergel(t2, t6);
++    *r6 = vec_mergeh(t3, t7); *r7 = vec_mergel(t3, t7);
++}
++
++/* One idct8 1D pass on the eight columns held lane-wise in c0..c7.
++ * Mirrors idct8_1d() exactly; all t values stay int32 through the
++ * butterflies, only the (t6a +/- t5a) operands of the second-stage
++ * 11585 multiply are narrowed to int16 first (they fit int16 for any
++ * input the C reference handles, as its own int16 out[] store shows). */
++static av_always_inline void idct8_1d_altivec(vec_s16 *c0, vec_s16 *c1,
++                                              vec_s16 *c2, vec_s16 *c3,
++                                              vec_s16 *c4, vec_s16 *c5,
++                                              vec_s16 *c6, vec_s16 *c7)
++{
++    const vec_s16 k11585 = VSPLAT16(11585);
++    const vec_s16 k6270  = VSPLAT16(6270);
++    const vec_s16 k15137 = VSPLAT16(15137);
++    const vec_s16 k3196  = VSPLAT16(3196);
++    const vec_s16 k16069 = VSPLAT16(16069);
++    const vec_s16 k13623 = VSPLAT16(13623);
++    const vec_s16 k9102  = VSPLAT16(9102);
++
++    s32x8 m0  = mul8(*c0, k11585);
++    s32x8 m4  = mul8(*c4, k11585);
++    s32x8 t0a = rnd14x8(add8(m0, m4));
++    s32x8 t1a = rnd14x8(sub8(m0, m4));
++    s32x8 t2a = rnd14x8(sub8(mul8(*c2, k6270),  mul8(*c6, k15137)));
++    s32x8 t3a = rnd14x8(add8(mul8(*c2, k15137), mul8(*c6, k6270)));
++    s32x8 t4a = rnd14x8(sub8(mul8(*c1, k3196),  mul8(*c7, k16069)));
++    s32x8 t5a = rnd14x8(sub8(mul8(*c5, k13623), mul8(*c3, k9102)));
++    s32x8 t6a = rnd14x8(add8(mul8(*c5, k9102),  mul8(*c3, k13623)));
++    s32x8 t7a = rnd14x8(add8(mul8(*c1, k16069), mul8(*c7, k3196)));
++
++    s32x8 t0 = add8(t0a, t3a);
++    s32x8 t1 = add8(t1a, t2a);
++    s32x8 t2 = sub8(t1a, t2a);
++    s32x8 t3 = sub8(t0a, t3a);
++    s32x8 t4 = add8(t4a, t5a);
++    s32x8 u5 = sub8(t4a, t5a);          /* C reuses t5a */
++    s32x8 t7 = add8(t7a, t6a);
++    s32x8 u6 = sub8(t7a, t6a);          /* C reuses t6a */
++
++    vec_s16 d56 = pack_eo(sub8(u6, u5));
++    vec_s16 s56 = pack_eo(add8(u6, u5));
++    s32x8 t5 = rnd14x8(mul8(d56, k11585));
++    s32x8 t6 = rnd14x8(mul8(s56, k11585));
++
++    *c0 = pack_eo(add8(t0, t7));
++    *c1 = pack_eo(add8(t1, t6));
++    *c2 = pack_eo(add8(t2, t5));
++    *c3 = pack_eo(add8(t3, t4));
++    *c4 = pack_eo(sub8(t3, t4));
++    *c5 = pack_eo(sub8(t2, t5));
++    *c6 = pack_eo(sub8(t1, t6));
++    *c7 = pack_eo(sub8(t0, t7));
++}
++
++/* One iadst8 1D pass. Mirrors iadst8_1d() exactly: the first-stage
++ * products stay unrounded int32; negations happen before the int16
++ * store exactly where the C negates; the second-stage multiplies
++ * take int16 operands (t4..t7 and t2/t3 after their >>14, which fit
++ * int16 for any input the C reference handles). */
++static av_always_inline void iadst8_1d_altivec(vec_s16 *c0, vec_s16 *c1,
++                                               vec_s16 *c2, vec_s16 *c3,
++                                               vec_s16 *c4, vec_s16 *c5,
++                                               vec_s16 *c6, vec_s16 *c7)
++{
++    const vec_s16 k16305 = VSPLAT16(16305);
++    const vec_s16 k1606  = VSPLAT16(1606);
++    const vec_s16 k14449 = VSPLAT16(14449);
++    const vec_s16 k7723  = VSPLAT16(7723);
++    const vec_s16 k10394 = VSPLAT16(10394);
++    const vec_s16 k12665 = VSPLAT16(12665);
++    const vec_s16 k4756  = VSPLAT16(4756);
++    const vec_s16 k15679 = VSPLAT16(15679);
++    const vec_s16 k15137 = VSPLAT16(15137);
++    const vec_s16 k6270  = VSPLAT16(6270);
++    const vec_s16 k11585 = VSPLAT16(11585);
++
++    s32x8 t0a = add8(mul8(*c7, k16305), mul8(*c0, k1606));
++    s32x8 t1a = sub8(mul8(*c7, k1606),  mul8(*c0, k16305));
++    s32x8 t2a = add8(mul8(*c5, k14449), mul8(*c2, k7723));
++    s32x8 t3a = sub8(mul8(*c5, k7723),  mul8(*c2, k14449));
++    s32x8 t4a = add8(mul8(*c3, k10394), mul8(*c4, k12665));
++    s32x8 t5a = sub8(mul8(*c3, k12665), mul8(*c4, k10394));
++    s32x8 t6a = add8(mul8(*c1, k4756),  mul8(*c6, k15679));
++    s32x8 t7a = sub8(mul8(*c1, k15679), mul8(*c6, k4756));
++
++    s32x8 t0 = rnd14x8(add8(t0a, t4a));
++    s32x8 t1 = rnd14x8(add8(t1a, t5a));
++    s32x8 t2 = rnd14x8(add8(t2a, t6a));
++    s32x8 t3 = rnd14x8(add8(t3a, t7a));
++    s32x8 t4 = rnd14x8(sub8(t0a, t4a));
++    s32x8 t5 = rnd14x8(sub8(t1a, t5a));
++    s32x8 t6 = rnd14x8(sub8(t2a, t6a));
++    s32x8 t7 = rnd14x8(sub8(t3a, t7a));
++
++    vec_s16 t4s = pack_eo(t4);
++    vec_s16 t5s = pack_eo(t5);
++    vec_s16 t6s = pack_eo(t6);
++    vec_s16 t7s = pack_eo(t7);
++
++    s32x8 u4a = add8(mul8(t4s, k15137), mul8(t5s, k6270));  /* C t4a */
++    s32x8 u5a = sub8(mul8(t4s, k6270),  mul8(t5s, k15137)); /* C t5a */
++    s32x8 u6a = sub8(mul8(t7s, k15137), mul8(t6s, k6270));  /* C t6a */
++    s32x8 u7a = add8(mul8(t7s, k6270),  mul8(t6s, k15137)); /* C t7a */
++
++    {
++        vec_s16 out0 = pack_eo(add8(t0, t2));
++        vec_s16 out7 = pack_eo(neg8(add8(t1, t3)));
++        s32x8   u2   = sub8(t0, t2);                        /* C t2 */
++        s32x8   u3   = sub8(t1, t3);                        /* C t3 */
++
++        vec_s16 out1 = pack_eo(neg8(rnd14x8(add8(u4a, u6a))));
++        vec_s16 out6 = pack_eo(rnd14x8(add8(u5a, u7a)));
++        s32x8   u6   = rnd14x8(sub8(u4a, u6a));             /* C t6 */
++        s32x8   u7   = rnd14x8(sub8(u5a, u7a));             /* C t7 */
++
++        vec_s16 s23 = pack_eo(add8(u2, u3));
++        vec_s16 d23 = pack_eo(sub8(u2, u3));
++        vec_s16 s67 = pack_eo(add8(u6, u7));
++        vec_s16 d67 = pack_eo(sub8(u6, u7));
++
++        *c0 = out0;
++        *c1 = out1;
++        *c2 = pack_eo(rnd14x8(mul8(s67, k11585)));
++        *c3 = pack_eo(neg8(rnd14x8(mul8(s23, k11585))));
++        *c4 = pack_eo(rnd14x8(mul8(d23, k11585)));
++        *c5 = pack_eo(neg8(rnd14x8(mul8(d67, k11585))));
++        *c6 = out6;
++        *c7 = out7;
++    }
++}
++
++/* Load the 8x8 int16 block, row k into all 8 lanes of ck.  The block
++ * buffer is 16-byte aligned (checkasm and real decode). */
++static av_always_inline void load_block8(const int16_t *block,
++                                         vec_s16 *c0, vec_s16 *c1,
++                                         vec_s16 *c2, vec_s16 *c3,
++                                         vec_s16 *c4, vec_s16 *c5,
++                                         vec_s16 *c6, vec_s16 *c7)
++{
++    *c0 = vec_ld(0,   block);
++    *c1 = vec_ld(16,  block);
++    *c2 = vec_ld(32,  block);
++    *c3 = vec_ld(48,  block);
++    *c4 = vec_ld(64,  block);
++    *c5 = vec_ld(80,  block);
++    *c6 = vec_ld(96,  block);
++    *c7 = vec_ld(112, block);
++}
++
++/* Store lanes 0..7 of res to dst[0..7] without touching any other byte
++ * (the h264qpel qpel8_store idiom; no RMW, so safe at tile edges).
++ * dst is 8-byte aligned in every caller (8x8 blocks sit at 8-aligned x
++ * on an aligned plane; checkasm uses an aligned dst with stride 8), so
++ * the two-word path is the one taken; the byte loop is a fallback. */
++static av_always_inline void store8_row(vec_u8 res, uint8_t *dst)
++{
++    const vec_u8 vs = vec_perm(res, res, vec_lvsr(0, dst));
++
++    if (!((uintptr_t)dst & 3)) {
++        vec_ste((vec_u32)vs, 0, (uint32_t *)dst);
++        vec_ste((vec_u32)vs, 4, (uint32_t *)dst);
++    } else {
++        int j;
++        for (j = 0; j < 8; j++)
++            vec_ste(vs, j, dst);
++    }
++}
++
++/* dst[j] += (row[j] + 16) >> 5, clipped, for one 8-pixel row (bits==5
++ * as in itxfm_wrap(8, 5); the rounding add happens in int32 because
++ * row[j] + 16 can exceed int16). */
++static av_always_inline void add_store8_row(uint8_t *dst, vec_s16 row)
++{
++    const vec_u8  zero = vec_splat_u8(0);
++    const vec_s32 rnd  = vec_sl(vec_splat_s32(1), vec_splat_u32(4));
++    vec_s32 hi = vec_sra(vec_add(vec_unpackh(row), rnd), vec_splat_u32(5));
++    vec_s32 lo = vec_sra(vec_add(vec_unpackl(row), rnd), vec_splat_u32(5));
++    vec_s16 add = vec_packs(hi, lo);
++    vec_u8  pix = unaligned_load(0, dst);
++    vec_s16 p16 = (vec_s16)vec_mergeh(zero, pix);
++    vec_s16 sum = vec_adds(add, p16);
++
++    store8_row(vec_packsu(sum, sum), dst);
++}
++
++/* Two-pass 8x8 add, mirroring itxfm_wrapper(): pass a per column,
++ * transpose, pass b per row, round-shift by 5 and add to dst. */
++#define ITXFM8_ADD(name, PA, PB)                                          \
++static void name(uint8_t *dst, ptrdiff_t stride, int16_t *block, int eob) \
++{                                                                         \
++    vec_s16 c0, c1, c2, c3, c4, c5, c6, c7;                               \
++    load_block8(block, &c0, &c1, &c2, &c3, &c4, &c5, &c6, &c7);           \
++    PA(&c0, &c1, &c2, &c3, &c4, &c5, &c6, &c7);                           \
++    transpose8x8_s16(&c0, &c1, &c2, &c3, &c4, &c5, &c6, &c7);             \
++    PB(&c0, &c1, &c2, &c3, &c4, &c5, &c6, &c7);                           \
++    memset(block, 0, 8 * 8 * sizeof(int16_t));                            \
++    add_store8_row(dst + 0 * stride, c0);                                 \
++    add_store8_row(dst + 1 * stride, c1);                                 \
++    add_store8_row(dst + 2 * stride, c2);                                 \
++    add_store8_row(dst + 3 * stride, c3);                                 \
++    add_store8_row(dst + 4 * stride, c4);                                 \
++    add_store8_row(dst + 5 * stride, c5);                                 \
++    add_store8_row(dst + 6 * stride, c6);                                 \
++    add_store8_row(dst + 7 * stride, c7);                                 \
++}
++
++ITXFM8_ADD(idct_idct_8x8_core_altivec,  idct8_1d_altivec,  idct8_1d_altivec)
++ITXFM8_ADD(iadst_idct_8x8_add_altivec,  iadst8_1d_altivec, idct8_1d_altivec)
++ITXFM8_ADD(idct_iadst_8x8_add_altivec,  idct8_1d_altivec,  iadst8_1d_altivec)
++ITXFM8_ADD(iadst_iadst_8x8_add_altivec, iadst8_1d_altivec, iadst8_1d_altivec)
++
++/* idct_idct also handles eob==1 (DC only). */
++static void idct_idct_8x8_add_altivec(uint8_t *dst, ptrdiff_t stride,
++                                      int16_t *block, int eob)
++{
++    if (eob == 1) {
++        const vec_u8 zero = vec_splat_u8(0);
++        vec_s16 dc = vec_splats((short)dc_only_idct_addend(block, 5));
++        int y;
++
++        for (y = 0; y < 8; y++) {
++            vec_u8  pix = unaligned_load(0, dst + y * stride);
++            vec_s16 p16 = (vec_s16)vec_mergeh(zero, pix);
++            vec_s16 sum = vec_adds(dc, p16);
++
++            store8_row(vec_packsu(sum, sum), dst + y * stride);
++        }
++        return;
++    }
++
++    idct_idct_8x8_core_altivec(dst, stride, block, eob);
++}
++
+ static av_cold void vp9dsp_itxfm_init_ppc(VP9DSPContext *dsp)
+ {
+     dsp->itxfm_add[TX_4X4][DCT_DCT]   = idct_idct_4x4_add_altivec;
+@@ -1977,6 +2297,11 @@ static av_cold void vp9dsp_itxfm_init_ppc(VP9DSPContext *dsp)
+     dsp->itxfm_add[TX_4X4][ADST_ADST] = iadst_iadst_4x4_add_altivec;
+     dsp->itxfm_add[4 /* lossless */][DCT_DCT] = iwht_iwht_4x4_add_altivec;
+ 
++    dsp->itxfm_add[TX_8X8][DCT_DCT]   = idct_idct_8x8_add_altivec;
++    dsp->itxfm_add[TX_8X8][ADST_DCT]  = idct_iadst_8x8_add_altivec;
++    dsp->itxfm_add[TX_8X8][DCT_ADST]  = iadst_idct_8x8_add_altivec;
++    dsp->itxfm_add[TX_8X8][ADST_ADST] = iadst_iadst_8x8_add_altivec;
++
+     if (dsp->itxfm_add[TX_16X16][DCT_DCT] &&
+         dsp->itxfm_add[TX_16X16][DCT_DCT] != idct_idct_16x16_add_altivec) {
+         idct_idct_16x16_add_c = dsp->itxfm_add[TX_16X16][DCT_DCT];

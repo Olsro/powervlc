@@ -1,0 +1,358 @@
+From e780c38282f46b68c29ddc19ad9d03700099df60 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Thu, 30 Jul 2026 04:18:22 +0000
+Subject: [PATCH] swresample/ppc: add AltiVec resample_linear float + S16P
+ common/linear kernels
+
+Extend the PPC resample DSP (previously FLTP resample_common only) with three
+more kernels, all bit-for-bit faithful to resample_template.c:
+
+  * resample_common int16 (S16P): 8 s16 taps/iteration via vec_msum (modular,
+    NOT the saturating vec_msums) into 4 s32 lanes, horizontal-summed in int64;
+    FOFFSET added once, av_clip_int16(sum >> 15). The template widens to int64
+    only at the final combine, so with realistic filter banks no int32 partial
+    ever wraps and the reassociated 8-tap dot is bit-exact vs. the C even/odd
+    split (checkasm's int oracle is exact memcmp).
+
+  * resample_linear int16 (S16P): two filter rows (phase index and index+1)
+    against one src window; accumulate in uint32 (FELEM2U, mod 2^32, fully
+    associative -> bit-exact unconditionally). Interpolation term copied
+    verbatim from the template, including the signed reinterpretation:
+    val += (int32)(v2 - val) * (int64)frac / c->src_incr.
+
+  * resample_linear float (FLTP): two vec_madd accumulator sets, then the
+    FILTER_SHIFT==0 branch with inv_src_incr = 1.0/src_incr hoisted out of the
+    loop; interpolation expression copied verbatim (float->double->float).
+
+Same alignment discipline as the existing FLTP common kernel: filter rows are
+16-byte aligned (plain vec_ld), src is arbitrary so the vec_lvsl splice is
+recomputed every iteration, and the vector loop stops at filter_length & ~7
+(s16) / & ~3 (float) with a scalar tail -- never running into the zero padding,
+which would read src[] past the C reference's window.
+
+S32P (FELEM2 = int64, no 32x32 or s64 in classic AltiVec) and DBLP (no double
+vector pre-VSX) stay on C on this target and are not attempted.
+
+Registered unconditionally (no per-CPU _ARCH_PWR4 gating -- no real-hardware
+bench data for these yet). checkasm swr_resample: all three new kernels
+dispatch to AltiVec (s32p/dblp correctly stay on C), pass seeds 1/42/777;
+full suite 587/587 (was 584, +3).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017TAQsLz1uCu9jURTT9xdzM
+---
+ libswresample/ppc/resample.c | 280 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 280 insertions(+)
+
+diff --git a/libswresample/ppc/resample.c b/libswresample/ppc/resample.c
+index 8ed4a6f..0724e9a 100644
+--- a/libswresample/ppc/resample.c
++++ b/libswresample/ppc/resample.c
+@@ -22,6 +22,7 @@
+ #include "config.h"
+ 
+ #include "libavutil/attributes.h"
++#include "libavutil/common.h"
+ #include "libavutil/cpu.h"
+ #include "libavutil/mem_internal.h"
+ #include "libavutil/ppc/cpu.h"
+@@ -67,6 +68,108 @@ static float apply_filter_x4_float_altivec(const float *src, const float *filter
+     return sums[0] + sums[1] + sums[2] + sums[3];
+ }
+ 
++/*
++ * Same as above but drives TWO filter rows (the interpolation phase and the
++ * next one, filter and filter + filter_alloc, both 16-aligned) against the one
++ * unaligned src window in a single pass: resample_linear needs both dot
++ * products for every output sample. The horizontal sums are returned via *out0
++ * / *out1.
++ */
++static void apply_filter_x4_float_dual_altivec(const float *src,
++                                               const float *filter0,
++                                               const float *filter1,
++                                               int length,
++                                               float *out0, float *out1)
++{
++    DECLARE_ALIGNED(16, float, sums0)[4];
++    DECLARE_ALIGNED(16, float, sums1)[4];
++    vec_f acc0 = (vec_f)vec_splat_u32(0);
++    vec_f acc1 = (vec_f)vec_splat_u32(0);
++    int off;
++
++    for (off = 0; off < length * 4; off += 16) {
++        vec_f s = vec_perm(vec_ld(off, src), vec_ld(off + 15, src),
++                           vec_lvsl(off, src));
++        acc0 = vec_madd(s, vec_ld(off, filter0), acc0);
++        acc1 = vec_madd(s, vec_ld(off, filter1), acc1);
++    }
++
++    vec_st(acc0, 0, sums0);
++    vec_st(acc1, 0, sums1);
++    *out0 = sums0[0] + sums0[1] + sums0[2] + sums0[3];
++    *out1 = sums1[0] + sums1[1] + sums1[2] + sums1[3];
++}
++
++/*
++ * int16 leaf: 8 s16 taps per iteration via vec_msum (s16 x s16 -> pairs summed
++ * into 4 s32 lanes). The C reference keeps the tap products in int32 and only
++ * widens to int64 at the final val + (int64)val2 combine, so this leaf returns
++ * the four lanes summed in int64 -- with realistic filter banks (coefficient
++ * magnitudes summing to ~2^15 times small ripple) no int32 partial ever wraps,
++ * so the different association vs. the C even/odd split is still bit-exact
++ * (checkasm's int oracle is exact memcmp, which proves it).
++ *
++ * vec_msum is the MODULAR multiply-sum; do NOT use vec_msums, which saturates
++ * -- the template semantics are plain modular int32 arithmetic.
++ *
++ * filter row is 16-aligned (see the float note above; filter_alloc*2 bytes is a
++ * multiple of 16 for s16 too). src (int16) is arbitrarily aligned, so the same
++ * per-iteration vec_lvsl splice as the float leaf brings in 8 int16s; off
++ * advances 16 bytes = 8 samples, changing alignment mod 16 every step, so the
++ * permute is recomputed each iteration (never reused across steps).
++ */
++static int64_t apply_filter_x8_s16_altivec(const int16_t *src,
++                                           const int16_t *filter, int length)
++{
++    DECLARE_ALIGNED(16, int32_t, sums)[4];
++    vec_s32 acc = vec_splat_s32(0);
++    int off;
++
++    for (off = 0; off < length * 2; off += 16) {
++        vec_s16 s = vec_perm(vec_ld(off, src), vec_ld(off + 15, src),
++                             vec_lvsl(off, src));
++        vec_s16 f = vec_ld(off, filter);   /* filter row is 16-aligned */
++        acc = vec_msum(s, f, acc);
++    }
++
++    vec_st(acc, 0, sums);
++    return (int64_t)sums[0] + sums[1] + sums[2] + sums[3];
++}
++
++/*
++ * int16 linear leaf: two filter rows against one src window, accumulating in
++ * uint32 lanes. resample_linear's C reference accumulates in FELEM2U (uint32,
++ * i.e. mod 2^32) which is fully associative, so the 4-lane msum reduction plus
++ * a wrapping (uint32) horizontal sum is bit-exact UNCONDITIONALLY here --
++ * regardless of coefficient magnitudes. vec_msum on s16 lanes produces signed
++ * int32 products summed with two's-complement wraparound; reinterpreting those
++ * lanes as uint32 and summing mod 2^32 matches the C exactly.
++ */
++static void apply_filter_x8_s16_dual_altivec(const int16_t *src,
++                                             const int16_t *filter0,
++                                             const int16_t *filter1,
++                                             int length,
++                                             uint32_t *out0, uint32_t *out1)
++{
++    DECLARE_ALIGNED(16, int32_t, sums0)[4];
++    DECLARE_ALIGNED(16, int32_t, sums1)[4];
++    vec_s32 acc0 = vec_splat_s32(0);
++    vec_s32 acc1 = vec_splat_s32(0);
++    int off;
++
++    for (off = 0; off < length * 2; off += 16) {
++        vec_s16 s = vec_perm(vec_ld(off, src), vec_ld(off + 15, src),
++                             vec_lvsl(off, src));
++        acc0 = vec_msum(s, vec_ld(off, filter0), acc0);
++        acc1 = vec_msum(s, vec_ld(off, filter1), acc1);
++    }
++
++    vec_st(acc0, 0, sums0);
++    vec_st(acc1, 0, sums1);
++    *out0 = (uint32_t)sums0[0] + sums0[1] + sums0[2] + sums0[3];
++    *out1 = (uint32_t)sums1[0] + sums1[1] + sums1[2] + sums1[3];
++}
++
+ static int resample_common_float_altivec(ResampleContext *c, void *dest,
+                                          const void *source, int n, int update_ctx)
+ {
+@@ -119,6 +222,178 @@ static int resample_common_float_altivec(ResampleContext *c, void *dest,
+     return sample_index;
+ }
+ 
++static int resample_linear_float_altivec(ResampleContext *c, void *dest,
++                                         const void *source, int n, int update_ctx)
++{
++    float *dst = dest;
++    const float *src = source;
++    int dst_index;
++    int index = c->index;
++    int frac  = c->frac;
++    int sample_index = 0;
++    int x4_len = c->filter_length & ~3;
++    double inv_src_incr = 1.0 / c->src_incr;
++
++    while (index >= c->phase_count) {
++        sample_index++;
++        index -= c->phase_count;
++    }
++
++    for (dst_index = 0; dst_index < n; dst_index++) {
++        const float *filter = ((const float *)c->filter_bank)
++                            + c->filter_alloc * index;
++        float val = 0, v2 = 0;
++        int i = 0;
++
++        if (x4_len >= 4) {
++            apply_filter_x4_float_dual_altivec(&src[sample_index], filter,
++                                               filter + c->filter_alloc,
++                                               x4_len, &val, &v2);
++            i = x4_len;
++        }
++        for (; i < c->filter_length; i++) {
++            val += src[sample_index + i] * filter[i];
++            v2  += src[sample_index + i] * filter[i + c->filter_alloc];
++        }
++
++        val += (v2 - val) * inv_src_incr * frac;
++        dst[dst_index] = val;
++
++        frac  += c->dst_incr_mod;
++        index += c->dst_incr_div;
++        if (frac >= c->src_incr) {
++            frac -= c->src_incr;
++            index++;
++        }
++
++        while (index >= c->phase_count) {
++            sample_index++;
++            index -= c->phase_count;
++        }
++    }
++
++    if (update_ctx) {
++        c->frac  = frac;
++        c->index = index;
++    }
++
++    return sample_index;
++}
++
++static int resample_common_int16_altivec(ResampleContext *c, void *dest,
++                                         const void *source, int n, int update_ctx)
++{
++    int16_t *dst = dest;
++    const int16_t *src = source;
++    int dst_index;
++    int index = c->index;
++    int frac  = c->frac;
++    int sample_index = 0;
++    int x8_len = c->filter_length & ~7;
++
++    while (index >= c->phase_count) {
++        sample_index++;
++        index -= c->phase_count;
++    }
++
++    for (dst_index = 0; dst_index < n; dst_index++) {
++        const int16_t *filter = ((const int16_t *)c->filter_bank)
++                              + c->filter_alloc * index;
++        int64_t val = 0;
++        int i = 0;
++
++        if (x8_len >= 8) {
++            val = apply_filter_x8_s16_altivec(&src[sample_index], filter, x8_len);
++            i   = x8_len;
++        }
++        for (; i < c->filter_length; i++)
++            val += src[sample_index + i] * (int32_t)filter[i];
++
++        val += 1 << 14; /* FOFFSET */
++        dst[dst_index] = av_clip_int16(val >> 15);
++
++        frac  += c->dst_incr_mod;
++        index += c->dst_incr_div;
++        if (frac >= c->src_incr) {
++            frac -= c->src_incr;
++            index++;
++        }
++
++        while (index >= c->phase_count) {
++            sample_index++;
++            index -= c->phase_count;
++        }
++    }
++
++    if (update_ctx) {
++        c->frac  = frac;
++        c->index = index;
++    }
++
++    return sample_index;
++}
++
++static int resample_linear_int16_altivec(ResampleContext *c, void *dest,
++                                         const void *source, int n, int update_ctx)
++{
++    int16_t *dst = dest;
++    const int16_t *src = source;
++    int dst_index;
++    int index = c->index;
++    int frac  = c->frac;
++    int sample_index = 0;
++    int x8_len = c->filter_length & ~7;
++
++    while (index >= c->phase_count) {
++        sample_index++;
++        index -= c->phase_count;
++    }
++
++    for (dst_index = 0; dst_index < n; dst_index++) {
++        const int16_t *filter = ((const int16_t *)c->filter_bank)
++                              + c->filter_alloc * index;
++        /* uint32, mod 2^32 -- matches the template's FELEM2U accumulators. */
++        uint32_t val = 1 << 14, v2 = 1 << 14; /* FOFFSET */
++        int i = 0;
++
++        if (x8_len >= 8) {
++            uint32_t a0, a1;
++            apply_filter_x8_s16_dual_altivec(&src[sample_index], filter,
++                                             filter + c->filter_alloc,
++                                             x8_len, &a0, &a1);
++            val += a0;
++            v2  += a1;
++            i    = x8_len;
++        }
++        for (; i < c->filter_length; i++) {
++            val += src[sample_index + i] * (int32_t)filter[i];
++            v2  += src[sample_index + i] * (int32_t)filter[i + c->filter_alloc];
++        }
++
++        val += (int32_t)(v2 - val) * (int64_t)frac / c->src_incr;
++        dst[dst_index] = av_clip_int16((int32_t)val >> 15);
++
++        frac  += c->dst_incr_mod;
++        index += c->dst_incr_div;
++        if (frac >= c->src_incr) {
++            frac -= c->src_incr;
++            index++;
++        }
++
++        while (index >= c->phase_count) {
++            sample_index++;
++            index -= c->phase_count;
++        }
++    }
++
++    if (update_ctx) {
++        c->frac  = frac;
++        c->index = index;
++    }
++
++    return sample_index;
++}
++
+ #endif /* HAVE_ALTIVEC && HAVE_BIGENDIAN */
+ 
+ av_cold void swri_resample_dsp_ppc_init(ResampleContext *c)
+@@ -130,6 +405,11 @@ av_cold void swri_resample_dsp_ppc_init(ResampleContext *c)
+     switch (c->format) {
+     case AV_SAMPLE_FMT_FLTP:
+         c->dsp.resample_common = resample_common_float_altivec;
++        c->dsp.resample_linear = resample_linear_float_altivec;
++        break;
++    case AV_SAMPLE_FMT_S16P:
++        c->dsp.resample_common = resample_common_int16_altivec;
++        c->dsp.resample_linear = resample_linear_int16_altivec;
+         break;
+     }
+ #endif

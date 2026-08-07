@@ -481,8 +481,13 @@ function onReady(win) {
     if (readPlayerPage(win)) return;
   }
   if (!gOrigin || originOf(href) !== gOrigin) return;
-  if (!gScript) { fetchScript(function () { inject(win); }); return; }
-  inject(win);
+  /* Ask the player for the script again rather than reuse the copy in
+   * hand. It costs one loopback request of a few kilobytes per page, and
+   * it is what keeps a restarted player from being talked to at its old
+   * address: a player that is gone answers nothing, fetchScript() drops
+   * the stale base, and this tab is left alone instead of being handed a
+   * script that knocks at a dead door. */
+  fetchScript(function () { inject(win); });
 }
 
 var observer = {

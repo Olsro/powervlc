@@ -1,0 +1,77 @@
+From: PowerVLC
+Subject: [PATCH] ppc: drop two AltiVec registrations measured slower than C on a 7447A
+
+Two kernels from the macos-powerpc AltiVec series lose to their C
+reference on the Mac mini G4 (7447A, 1.42 GHz) and are unregistered here.
+
+Upstream gates both on `#ifndef _ARCH_PWR4`, i.e. it disables them for
+the 970 only, because MacPorts builds one ffmpeg per CPU variant. The
+PowerVLC contribs are SHARED between the g4 and g5 slices and built with
+-mcpu=7400 (extras/package/macosx/build.sh), so _ARCH_PWR4 is never
+defined and that gate never fires. Both kernels also lose on the 7447A,
+so the exclusion becomes unconditional.
+
+Measured with ffmpeg's own checkasm --bench, cross-built for ppc7400 and
+run on the machine (2026-08-07, seed 42):
+
+  vp8_put_pixels16_c              7.8 ticks
+  vp8_put_pixels16_altivec       12.1 ticks   0.64x   (970: 0.46x)
+  ps_hybrid_analysis_c           80.6 ticks
+  ps_hybrid_analysis_altivec    127.6 ticks   0.63x   (970: 0.46x)
+
+The VP8 one is what upstream's own comment predicted: patch mpp-0012
+made the unaligned destination store byte-precise (a correctness fix,
+kept), which pushed this plain 16-wide copy under the C version. End to
+end it cost +4.3% CPU on a 480p VP8 decode (7.478 s -> 7.803 s, 4 runs
+each in alternating order) before this change. Every other VP8 AltiVec
+kernel wins 5-10x on the same bench and stays registered.
+
+NOT changed, deliberately: the VP9 TX_4X4 itxfm family, which upstream
+mpp-0030 disables on the 970 (full transforms a wash at 0.97-1.05x, DC
+path 0.26x). On the 7447A the same family is a WIN - adst_adst 1.35x,
+dct_adst 1.26x, dct_dct sub2/sub4 1.18x, only the eob==1 DC path losing
+at 0.82x - and the family is registered as a block. This is a genuine
+G4/G5 divergence; the G4-tuned choice is the right one for a shared
+contrib.
+
+Both kernels stay compiled (upstream already marks them av_unused), so
+restoring either is a one-line revert.
+
+--- a/libavcodec/ppc/vp8dsp_altivec.c	2026-08-07 09:41:10
++++ b/libavcodec/ppc/vp8dsp_altivec.c	2026-08-07 09:41:10
+@@ -363,8 +363,15 @@
+     if (!PPC_ALTIVEC(av_get_cpu_flags()))
+         return;
+ 
+-#ifndef _ARCH_PWR4 /* 970: 0.46x vs C (with the byte-precise unaligned store;
+-                    * an aligned-dst fast path could win it back — future work) */
++#if 0 /* PowerVLC: not registered on ANY CPU. Upstream gates this on
++       * !_ARCH_PWR4 (off on the 970 only, 0.46x vs C), but the PowerVLC
++       * contribs are shared between the g4 and g5 slices and built with
++       * -mcpu=7400, so that gate never fires here. Benched on the real
++       * 7447A (Mac mini G4 1.42 GHz, checkasm --bench, 2026-08-07):
++       * vp8_put_pixels16_altivec 12.1 ticks vs 7.8 for C = 0.64x. It is
++       * a loss on both target CPUs, so it goes unconditionally. Measured
++       * end to end at +4.3%% CPU on a 480p VP8 decode before this change.
++       * Every other VP8 AltiVec kernel wins 5-10x and stays. */
+     c->put_vp8_epel_pixels_tab[0][0][0] = put_vp8_pixels16_altivec;
+ #endif
+     c->put_vp8_epel_pixels_tab[0][0][2] = put_vp8_epel16_h6_altivec;
+--- a/libavcodec/ppc/aacpsdsp.c	2026-08-07 09:41:10
++++ b/libavcodec/ppc/aacpsdsp.c	2026-08-07 09:41:10
+@@ -129,9 +129,12 @@
+         return;
+ 
+     s->add_squares     = ps_add_squares_altivec;
+-#ifndef _ARCH_PWR4 /* 970: 0.46x vs C (strong scalar FPU, and the kernel
+-                    * gathers its filter taps element-wise); 7447A data
+-                    * pending */
++#if 0 /* PowerVLC: not registered on ANY CPU. Upstream had this off on the
++       * 970 only (0.46x vs C) with the 7447A left "pending"; that data
++       * point now exists - checkasm --bench on a Mac mini G4 1.42 GHz
++       * (2026-08-07) gives ps_hybrid_analysis_altivec 127.6 ticks vs
++       * 80.6 for C = 0.63x. A loss on both, so it goes unconditionally.
++       * ps_add_squares stays: 2.17x on the same run. */
+     s->hybrid_analysis = ps_hybrid_analysis_altivec;
+ #endif
+ #endif

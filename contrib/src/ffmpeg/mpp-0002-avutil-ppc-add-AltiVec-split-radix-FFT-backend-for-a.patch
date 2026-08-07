@@ -1,0 +1,465 @@
+From 9b967262ee98bfd427469a64b7e4551ace95646a Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 24 Jul 2026 03:07:37 +0000
+Subject: [PATCH 02/20] avutil/ppc: add AltiVec split-radix FFT backend for
+ av_tx
+
+Adds ff_tx_codelet_list_float_ppc (libavutil/ppc/tx_float_altivec.c),
+mirroring tx_template.c's split-radix recursion exactly: same
+ff_tx_tab_* twiddle tables, same ff_tx_gen_ptwo_revtab input permute,
+same in-register interleaved re/im layout, so every intermediate value
+matches the scalar TRANSFORM/BUTTERFLIES macros lane for lane. Covers
+power-of-two fft_float sizes 4..131072. Registered in tx.c's
+codelet_list under ARCH_PPC.
+
+This is the highest-leverage item in the barracuda PPC plan: av_tx
+(FFT/MDCT) currently has no PPC SIMD, and it backs AAC/AC3/Opus/Vorbis/
+DCA/WMA decode.
+
+NOT YET VALIDATED: no checkasm run performed. AltiVec-only (no VSX),
+32-bit big-endian, G4 (7400) primary target per HAVE_ALTIVEC &&
+HAVE_BIGENDIAN guard.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0194bzLUrg6cVCQ7u4NNDpaB
+---
+ libavutil/ppc/Makefile           |   1 +
+ libavutil/ppc/tx_float_altivec.c | 387 +++++++++++++++++++++++++++++++
+ libavutil/tx.c                   |   3 +
+ libavutil/tx_priv.h              |   1 +
+ 4 files changed, 392 insertions(+)
+ create mode 100644 libavutil/ppc/tx_float_altivec.c
+
+diff --git a/libavutil/ppc/Makefile b/libavutil/ppc/Makefile
+index a0febf8..2294d56 100644
+--- a/libavutil/ppc/Makefile
++++ b/libavutil/ppc/Makefile
+@@ -1,5 +1,6 @@
+ OBJS += ppc/cpu.o                                                       \
+         ppc/float_dsp_init.o                                            \
++        ppc/tx_float_altivec.o                                          \
+ 
+ ALTIVEC-OBJS += ppc/float_dsp_altivec.o                                 \
+ 
+diff --git a/libavutil/ppc/tx_float_altivec.c b/libavutil/ppc/tx_float_altivec.c
+new file mode 100644
+index 0000000..d3801e0
+--- /dev/null
++++ b/libavutil/ppc/tx_float_altivec.c
+@@ -0,0 +1,387 @@
++/*
++ * AltiVec-optimized power-of-two FFT codelets for libavutil/tx
++ * Copyright (c) 2026
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "config.h"
++
++#define TX_FLOAT
++#include "libavutil/tx_priv.h"
++#include "libavutil/attributes.h"
++#include "libavutil/cpu.h"
++#include "libavutil/internal.h"
++
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++
++#include "libavutil/ppc/util_altivec.h"
++
++/* The kernels below mirror the split-radix recursion of tx_template.c
++ * exactly: same ff_tx_tab_* twiddle tables, same ff_tx_gen_ptwo_revtab
++ * input permute, same in-register data layout (interleaved re,im pairs,
++ * two complex numbers per 128-bit vector). Only the arithmetic is
++ * vectorized; every intermediate value matches the scalar TRANSFORM /
++ * BUTTERFLIES macros lane for lane. */
++
++#define SR_TABLE(len) \
++    extern DECLARE_ALIGNED(32, float, ff_tx_tab_ ##len## _float)[len/4 + 1];
++SR_TABLE(32)
++SR_TABLE(64)
++SR_TABLE(128)
++SR_TABLE(256)
++SR_TABLE(512)
++SR_TABLE(1024)
++SR_TABLE(2048)
++SR_TABLE(4096)
++SR_TABLE(8192)
++SR_TABLE(16384)
++SR_TABLE(32768)
++SR_TABLE(65536)
++SR_TABLE(131072)
++#undef SR_TABLE
++
++typedef vector float          vf;
++typedef vector unsigned char  vuc;
++typedef vector unsigned int   vui;
++
++/* Swap re/im within each complex number */
++static const vuc swap_ri = {  4,  5,  6,  7,  0,  1,  2,  3,
++                             12, 13, 14, 15,  8,  9, 10, 11 };
++/* Duplicate complex 0 / complex 1 across the vector */
++static const vuc dup_c0  = {  0,  1,  2,  3,  4,  5,  6,  7,
++                              0,  1,  2,  3,  4,  5,  6,  7 };
++static const vuc dup_c1  = {  8,  9, 10, 11, 12, 13, 14, 15,
++                              8,  9, 10, 11, 12, 13, 14, 15 };
++/* {b[0], a[3], a[2], a[1]} - reversed-sine gather for the combine pass */
++static const vuc srev    = { 16, 17, 18, 19, 12, 13, 14, 15,
++                              8,  9, 10, 11,  4,  5,  6,  7 };
++/* fft4 mid-vector pair selects: {r3,i2,i2,r3} and {r2,i3,i3,r2}, so that
++ * H + L gives {t6,t5} and H - L gives {t7,t8} in the right lane order */
++static const vuc sel_hi  = { 12, 13, 14, 15,  4,  5,  6,  7,
++                              4,  5,  6,  7, 12, 13, 14, 15 };
++static const vuc sel_lo  = {  0,  1,  2,  3, 12, 13, 14, 15,
++                             12, 13, 14, 15,  0,  1,  2,  3 };
++
++/* Flips the sign of the imaginary (odd) lanes */
++static const vui sign_odd = { 0x00000000, 0x80000000,
++                              0x00000000, 0x80000000 };
++
++#define VZERO ((vf) { 0.0f, 0.0f, 0.0f, 0.0f })
++/* +-1 multiplier producing {a+b, a+b, a-b, a-b} lane patterns */
++#define VPM   ((vf) { 1.0f, 1.0f, -1.0f, -1.0f })
++
++/* cos(2pi/8*1), cos(2pi/16*{1,2,3}); bit-identical to the runtime tables
++ * up to correctly-rounded float, checkasm tolerance covers the rest */
++#define COS8_1  0.70710678118654752438f
++#define COS16_1 0.92387953251128675613f
++#define COS16_2 0.70710678118654752438f
++#define COS16_3 0.38268343236508977173f
++
++#define XORS(v, m) ((vf) vec_xor((vui) (v), (m)))
++
++/* One split-radix butterfly step on two chains at once (two complex
++ * numbers per vector). Twiddles: wre = {c0,c0,c1,c1},
++ * wima = {s0,-s0,s1,-s1}. Equivalent to the scalar
++ * TRANSFORM(*a0,*a1,*a2,*a3, c, s) done for both lane pairs. */
++static av_always_inline void bf_transform(vf *a0, vf *a1, vf *a2, vf *a3,
++                                          vf wre, vf wima)
++{
++    vf s2  = vec_perm(*a2, *a2, swap_ri);
++    vf s3  = vec_perm(*a3, *a3, swap_ri);
++    vf t12 = vec_madd(*a2, wre, vec_madd (s2, wima, VZERO));
++    vf t56 = vec_madd(*a3, wre, vec_nmsub(s3, wima, VZERO));
++    vf sum = vec_add(t12, t56);                    /* { t1+t5, t2+t6 } */
++    vf dif = vec_sub(t12, t56);                    /* { t1-t5, t2-t6 } */
++    vf g   = XORS(vec_perm(dif, dif, swap_ri), sign_odd); /* { t4, t3 } */
++
++    *a2 = vec_sub(*a0, sum);
++    *a0 = vec_add(*a0, sum);
++    *a3 = vec_sub(*a1, g);
++    *a1 = vec_add(*a1, g);
++}
++
++/* 4-point FFT on preshuffled input, fully in registers */
++static av_always_inline void fft4_vec(vf *z01, vf *z23)
++{
++    vf s01 = *z01, s23 = *z23;
++    /* ta = { r0+r1, i0+i1, r0-r1, i0-i1 } = { t1, t2, t3, t4 } */
++    vf ta = vec_madd(vec_perm(s01, s01, dup_c1), VPM,
++                     vec_perm(s01, s01, dup_c0));
++    /* tb = { r3+r2, i2+i3, i2-i3, r3-r2 } = { t6, t5, t7, t8 } */
++    vf tb = vec_madd(vec_perm(s23, s23, sel_lo), VPM,
++                     vec_perm(s23, s23, sel_hi));
++
++    *z01 = vec_add(ta, tb);
++    *z23 = vec_sub(ta, tb);
++}
++
++/* 8-point FFT on preshuffled input, fully in registers */
++static av_always_inline void fft8_vec(vf *z01, vf *z23, vf *z45, vf *z67)
++{
++    vf s45 = *z45, s67 = *z67;
++    vf u, v, su, sv, t12, t56, sum, dif, g;
++
++    fft4_vec(z01, z23);
++
++    /* u = { r4+r5, i4+i5, r4-r5, i4-i5 }, v likewise from s67 */
++    u = vec_madd(vec_perm(s45, s45, dup_c1), VPM, vec_perm(s45, s45, dup_c0));
++    v = vec_madd(vec_perm(s67, s67, dup_c1), VPM, vec_perm(s67, s67, dup_c0));
++    su = vec_perm(u, u, swap_ri);
++    sv = vec_perm(v, v, swap_ri);
++
++    /* Even chain (w=1) in lanes 0-1, odd chain (w=(c,c)) in lanes 2-3 */
++    t12 = vec_madd(u, ((vf) { 1.0f, 1.0f,  COS8_1,  COS8_1 }),
++          vec_madd(su, ((vf) { 0.0f, 0.0f,  COS8_1, -COS8_1 }), VZERO));
++    t56 = vec_madd(v, ((vf) { 1.0f, 1.0f,  COS8_1,  COS8_1 }),
++          vec_madd(sv, ((vf) { 0.0f, 0.0f, -COS8_1,  COS8_1 }), VZERO));
++
++    sum = vec_add(t12, t56);
++    dif = vec_sub(t12, t56);
++    g   = XORS(vec_perm(dif, dif, swap_ri), sign_odd);
++
++    *z45 = vec_sub(*z01, sum);
++    *z01 = vec_add(*z01, sum);
++    *z67 = vec_sub(*z23, g);
++    *z23 = vec_add(*z23, g);
++}
++
++/* 16-point FFT on preshuffled input, fully in registers */
++static av_always_inline void fft16_vec(vf *z01, vf *z23, vf *z45, vf *z67,
++                                       vf *z89, vf *zab, vf *zcd, vf *zef)
++{
++    fft8_vec(z01, z23, z45, z67);
++    fft4_vec(z89, zab);
++    fft4_vec(zcd, zef);
++
++    /* chains 0 (w=1) and 1 (w=(c1,c3)) */
++    bf_transform(z01, z45, z89, zcd,
++                 (vf) { 1.0f, 1.0f,  COS16_1,  COS16_1 },
++                 (vf) { 0.0f, 0.0f,  COS16_3, -COS16_3 });
++    /* chains 2 (w=(c2,c2)) and 3 (w=(c3,c1)) */
++    bf_transform(z23, z67, zab, zef,
++                 (vf) { COS16_2,  COS16_2,  COS16_3,  COS16_3 },
++                 (vf) { COS16_2, -COS16_2,  COS16_1, -COS16_1 });
++}
++
++/* Split-radix combine pass; len is in units of the C version
++ * (ff_tx_fft_sr_combine), i.e. N/8 for an N-point transform. */
++static void sr_combine(TXComplex *z, const float *cos_tab, int len)
++{
++    const int o1 = 2 * len;
++    const int o2 = 4 * len;
++    const int o3 = 6 * len;
++    const float *wt = cos_tab + o1 - 8;
++    vf v2 = VZERO; /* sines wrap: first lane of the first group is sin(0) */
++
++    for (int i = 0; i < len; i += 4) {
++        float *f0 = (float *) z;
++        float *f1 = (float *)(z + o1);
++        float *f2 = (float *)(z + o2);
++        float *f3 = (float *)(z + o3);
++        vf c03 = vec_ld( 0, cos_tab);   /* cos[k .. k+3]           */
++        vf c47 = vec_ld(16, cos_tab);   /* cos[k+4 .. k+7]         */
++        vf v0  = vec_ld( 0, wt);
++        vf v1  = vec_ld(16, wt);
++        vf g03 = vec_perm(v1, v2, srev); /* sin[k .. k+3]          */
++        vf g47 = vec_perm(v0, v1, srev); /* sin[k+4 .. k+7]        */
++
++        for (int p = 0; p < 4; p++) {
++            vf c   = p & 2 ? c47 : c03;
++            vf g   = p & 2 ? g47 : g03;
++            vf wre, wima;
++            vf a0, a1, a2, a3;
++
++            if (p & 1) {
++                wre  = vec_mergel(c, c);
++                wima = vec_mergel(g, g);
++            } else {
++                wre  = vec_mergeh(c, c);
++                wima = vec_mergeh(g, g);
++            }
++            wima = XORS(wima, sign_odd);
++
++            a0 = vec_ld(16 * p, f0);
++            a1 = vec_ld(16 * p, f1);
++            a2 = vec_ld(16 * p, f2);
++            a3 = vec_ld(16 * p, f3);
++            bf_transform(&a0, &a1, &a2, &a3, wre, wima);
++            vec_st(a0, 16 * p, f0);
++            vec_st(a1, 16 * p, f1);
++            vec_st(a2, 16 * p, f2);
++            vec_st(a3, 16 * p, f3);
++        }
++
++        z       += 8;
++        cos_tab += 8;
++        v2       = v0;
++        wt      -= 8;
++    }
++}
++
++static void fft4_av(TXComplex *dst, const TXComplex *src)
++{
++    const float *s = (const float *) src;
++    float       *d = (float *) dst;
++    vf z01 = vec_ld( 0, s);
++    vf z23 = vec_ld(16, s);
++
++    fft4_vec(&z01, &z23);
++
++    vec_st(z01,  0, d);
++    vec_st(z23, 16, d);
++}
++
++static void fft8_av(TXComplex *dst, const TXComplex *src)
++{
++    const float *s = (const float *) src;
++    float       *d = (float *) dst;
++    vf z01 = vec_ld( 0, s);
++    vf z23 = vec_ld(16, s);
++    vf z45 = vec_ld(32, s);
++    vf z67 = vec_ld(48, s);
++
++    fft8_vec(&z01, &z23, &z45, &z67);
++
++    vec_st(z01,  0, d);
++    vec_st(z23, 16, d);
++    vec_st(z45, 32, d);
++    vec_st(z67, 48, d);
++}
++
++static void fft16_av(TXComplex *dst, const TXComplex *src)
++{
++    const float *s = (const float *) src;
++    float       *d = (float *) dst;
++    vf z01 = vec_ld(  0, s);
++    vf z23 = vec_ld( 16, s);
++    vf z45 = vec_ld( 32, s);
++    vf z67 = vec_ld( 48, s);
++    vf z89 = vec_ld( 64, s);
++    vf zab = vec_ld( 80, s);
++    vf zcd = vec_ld( 96, s);
++    vf zef = vec_ld(112, s);
++
++    fft16_vec(&z01, &z23, &z45, &z67, &z89, &zab, &zcd, &zef);
++
++    vec_st(z01,   0, d);
++    vec_st(z23,  16, d);
++    vec_st(z45,  32, d);
++    vec_st(z67,  48, d);
++    vec_st(z89,  64, d);
++    vec_st(zab,  80, d);
++    vec_st(zcd,  96, d);
++    vec_st(zef, 112, d);
++}
++
++#define DECL_SR_FFT(n, n2, n4)                                          \
++static void fft##n##_av(TXComplex *dst, const TXComplex *src)           \
++{                                                                       \
++    fft##n2##_av(dst, src);                                             \
++    fft##n4##_av(dst + n4 * 2, src + n4 * 2);                           \
++    fft##n4##_av(dst + n4 * 3, src + n4 * 3);                           \
++    sr_combine(dst, ff_tx_tab_##n##_float, n4 >> 1);                    \
++}
++
++DECL_SR_FFT(    32,    16,     8)
++DECL_SR_FFT(    64,    32,    16)
++DECL_SR_FFT(   128,    64,    32)
++DECL_SR_FFT(   256,   128,    64)
++DECL_SR_FFT(   512,   256,   128)
++DECL_SR_FFT(  1024,   512,   256)
++DECL_SR_FFT(  2048,  1024,   512)
++DECL_SR_FFT(  4096,  2048,  1024)
++DECL_SR_FFT(  8192,  4096,  2048)
++DECL_SR_FFT( 16384,  8192,  4096)
++DECL_SR_FFT( 32768, 16384,  8192)
++DECL_SR_FFT( 65536, 32768, 16384)
++DECL_SR_FFT(131072, 65536, 32768)
++
++static av_cold int sr_codelet_init(AVTXContext *s, const FFTXCodelet *cd,
++                                   uint64_t flags, FFTXCodeletOptions *opts,
++                                   int len, int inv, const void *scale)
++{
++    ff_tx_init_tabs_float(len);
++    return ff_tx_gen_ptwo_revtab(s, opts);
++}
++
++#define DECL_SR_CODELET(n)                                              \
++static void ff_tx_fft##n##_ns_altivec(AVTXContext *s, void *dst,        \
++                                      void *src, ptrdiff_t stride)      \
++{                                                                       \
++    fft##n##_av(dst, src);                                              \
++}                                                                       \
++                                                                        \
++static const FFTXCodelet ff_tx_fft##n##_ns_def_altivec = {              \
++    .name       = NULL_IF_CONFIG_SMALL("fft" #n "_ns_altivec"),         \
++    .function   = ff_tx_fft##n##_ns_altivec,                            \
++    .type       = AV_TX_FLOAT_FFT,                                      \
++    .flags      = FF_TX_OUT_OF_PLACE | AV_TX_INPLACE |                  \
++                  FF_TX_ALIGNED | FF_TX_PRESHUFFLE,                     \
++    .factors[0] = 2,                                                    \
++    .nb_factors = 1,                                                    \
++    .min_len    = n,                                                    \
++    .max_len    = n,                                                    \
++    .init       = sr_codelet_init,                                      \
++    .cpu_flags  = AV_CPU_FLAG_ALTIVEC,                                  \
++    .prio       = FF_TX_PRIO_BASE + 128,                                \
++};
++
++DECL_SR_CODELET(4)
++DECL_SR_CODELET(8)
++DECL_SR_CODELET(16)
++DECL_SR_CODELET(32)
++DECL_SR_CODELET(64)
++DECL_SR_CODELET(128)
++DECL_SR_CODELET(256)
++DECL_SR_CODELET(512)
++DECL_SR_CODELET(1024)
++DECL_SR_CODELET(2048)
++DECL_SR_CODELET(4096)
++DECL_SR_CODELET(8192)
++DECL_SR_CODELET(16384)
++DECL_SR_CODELET(32768)
++DECL_SR_CODELET(65536)
++DECL_SR_CODELET(131072)
++
++const FFTXCodelet * const ff_tx_codelet_list_float_ppc[] = {
++    &ff_tx_fft4_ns_def_altivec,
++    &ff_tx_fft8_ns_def_altivec,
++    &ff_tx_fft16_ns_def_altivec,
++    &ff_tx_fft32_ns_def_altivec,
++    &ff_tx_fft64_ns_def_altivec,
++    &ff_tx_fft128_ns_def_altivec,
++    &ff_tx_fft256_ns_def_altivec,
++    &ff_tx_fft512_ns_def_altivec,
++    &ff_tx_fft1024_ns_def_altivec,
++    &ff_tx_fft2048_ns_def_altivec,
++    &ff_tx_fft4096_ns_def_altivec,
++    &ff_tx_fft8192_ns_def_altivec,
++    &ff_tx_fft16384_ns_def_altivec,
++    &ff_tx_fft32768_ns_def_altivec,
++    &ff_tx_fft65536_ns_def_altivec,
++    &ff_tx_fft131072_ns_def_altivec,
++    NULL,
++};
++
++#else /* HAVE_ALTIVEC && HAVE_BIGENDIAN */
++
++const FFTXCodelet * const ff_tx_codelet_list_float_ppc[] = {
++    NULL,
++};
++
++#endif /* HAVE_ALTIVEC && HAVE_BIGENDIAN */
+diff --git a/libavutil/tx.c b/libavutil/tx.c
+index 05c132a..416146e 100644
+--- a/libavutil/tx.c
++++ b/libavutil/tx.c
+@@ -348,6 +348,9 @@ static const FFTXCodelet * const * const codelet_list[] = {
+ #if ARCH_AARCH64
+     ff_tx_codelet_list_float_aarch64,
+ #endif
++#if ARCH_PPC
++    ff_tx_codelet_list_float_ppc,
++#endif
+ };
+ static const int codelet_list_num = FF_ARRAY_ELEMS(codelet_list);
+ 
+diff --git a/libavutil/tx_priv.h b/libavutil/tx_priv.h
+index d3fcdbf..2aff0e0 100644
+--- a/libavutil/tx_priv.h
++++ b/libavutil/tx_priv.h
+@@ -384,6 +384,7 @@ int ff_tx_mdct_gen_exp_int32 (AVTXContext *s, int *pre_tab);
+ extern const FFTXCodelet * const ff_tx_codelet_list_float_c       [];
+ extern const FFTXCodelet * const ff_tx_codelet_list_float_x86     [];
+ extern const FFTXCodelet * const ff_tx_codelet_list_float_aarch64 [];
++extern const FFTXCodelet * const ff_tx_codelet_list_float_ppc     [];
+ 
+ extern const FFTXCodelet * const ff_tx_codelet_list_double_c      [];
+ 
+-- 
+2.43.0
+

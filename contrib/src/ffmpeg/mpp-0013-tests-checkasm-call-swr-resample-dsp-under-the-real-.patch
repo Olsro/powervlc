@@ -1,0 +1,55 @@
+From cf7502805d7ac8b8abcd2c360b0e8015fb72a491 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 24 Jul 2026 05:07:55 +0000
+Subject: [PATCH 13/20] tests/checkasm: call swr resample dsp under the real
+ caller's contract
+
+resample_init() leaves c->index negative (centering the filter history);
+real callers never invoke the dsp functions in that state -- swresample.c
+runs invert_initial_buffer() first, which folds c->index up into
+[0, phase_count). Calling resample_common/resample_linear directly with
+the fresh negative index makes the templates compute
+filter_bank + filter_alloc * index with index < 0, reading far before
+the allocation for the first ~16 output samples. The comparison still
+"passed" (ref and new read the same garbage back to back), but it
+violates the dsp contract, would trip ASan/valgrind, and makes the
+first output samples a meaningless oracle for future SIMD kernels.
+
+Set c->index = 0 (steady state) and randomize c->frac within its valid
+[0, src_incr) domain instead -- the latter also exercises
+resample_linear's interpolation term from the first sample onward.
+
+Found in review of the original test commit (4ef6735). VALIDATED:
+checkasm --bench --test=swr_resample drives all 8 format/mode combos
+through the C reference cleanly under the cross-PPC/qemu harness
+(qemu-ppc-static -cpu 7400); full checkasm suite passes 515/515.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FunJH2jiYy7zMJikwK4jRh
+---
+ tests/checkasm/swr_resample.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/tests/checkasm/swr_resample.c b/tests/checkasm/swr_resample.c
+index abb701f..e692765 100644
+--- a/tests/checkasm/swr_resample.c
++++ b/tests/checkasm/swr_resample.c
+@@ -101,6 +101,15 @@ static void check_one(enum AVSampleFormat fmt, const char *fmt_name,
+     if (!c)
+         return;
+ 
++    /* swresample never calls the dsp functions with a fresh context's
++     * negative index: invert_initial_buffer() consumes the initial history
++     * first and leaves index in [0, phase_count). A negative index makes
++     * the templates read filter_bank far out of bounds. Test the
++     * steady-state contract instead, with a random in-range frac so
++     * resample_linear's interpolation is exercised from the first sample. */
++    c->index = 0;
++    c->frac  = rnd() % c->src_incr;
++
+     switch (fmt) {
+     case AV_SAMPLE_FMT_S16P: RANDOMIZE(int16_t, INT16_MAX); break;
+     case AV_SAMPLE_FMT_S32P: RANDOMIZE(int32_t, INT32_MAX); break;
+-- 
+2.43.0
+

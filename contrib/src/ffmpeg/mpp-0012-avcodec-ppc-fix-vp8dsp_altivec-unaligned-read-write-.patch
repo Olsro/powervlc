@@ -1,0 +1,212 @@
+From e34797f097aa4de75a4422f5f930192a98dd7ff8 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 24 Jul 2026 04:39:56 +0000
+Subject: [PATCH 12/20] avcodec/ppc: fix vp8dsp_altivec unaligned read/write in
+ pixels16/epel16
+
+Two distinct alignment bugs, both surfaced by checkasm's
+put_vp8_pixels16_altivec/put_vp8_epel16_h6/v6/h6v6 failures:
+
+1. Unaligned load, same class as the vp9dsp_altivec.c fix in this
+   branch: put_vp8_pixels16_altivec computed one vec_lvsl-derived perm
+   from src's address and reused it across 4 stride-separated rows via
+   load_with_perm_vec -- wrong whenever sstride % 16 != 0. Switched to
+   unaligned_load(), which recomputes the shift per call.
+
+2. Unaligned STORE -- a distinct bug, not present in the vp9 file:
+   put_vp8_pixels16_altivec, put_vp8_epel_h_altivec_core, and
+   put_vp8_epel_v_altivec_core all did a plain vec_st(v, 0, dst) for
+   the w==16 case. vec_st truncates its address down to the 16-byte
+   boundary; checkasm's BUF_RECT only guarantees CHECKASM_ALIGNMENT
+   (8) for dst, not 16 (tests/checkasm/ext/include/checkasm/
+   platform.h), so a plain vec_st on an 8-mod-16 dst silently clobbers
+   the 8 bytes before the intended row and never writes the row's last
+   8 bytes. Added unaligned_store16() (the same vec_lvsl/vec_lvsr
+   read-modify-write splice as put_unligned_store in h264qpel.c) and
+   routed all three w==16 write sites through it.
+   put_vp8_epel_v_altivec_core's LOAD_HL/perm_vec construction (a
+   vec_mergeh of two shifted alignment vectors, used to set up the
+   vec_mule/vec_mulo even/odd split in FILTER_V) had the same
+   src-address-reuse problem as (1); rewrote it as load_hl(), deriving
+   the interleave permute from each row's own address.
+
+Reproduced and verified the store-truncation bug in isolation with a
+standalone qemu-ppc harness before touching this file, specifically to
+confirm it was a real bug and not a checkasm quirk: a plain vec_st at
+an 8-mod-16 dst address produces the exact "8 bytes clobbered before
+the row, last 8 bytes of the row never written" pattern checkasm's
+--verbose hexdump showed, and the fixed store produces zero mismatches
+against a C reference across the full row + 8px padding on all sides.
+
+VALIDATED: checkasm vp8dsp passes 20/20 under the cross-PPC/qemu
+harness (qemu-ppc-static -cpu 7400) across 7 random seeds; full
+checkasm suite (515 tests) passes with no regressions elsewhere.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0194bzLUrg6cVCQ7u4NNDpaB
+---
+ libavcodec/ppc/vp8dsp_altivec.c | 90 +++++++++++++++++++++------------
+ 1 file changed, 59 insertions(+), 31 deletions(-)
+
+diff --git a/libavcodec/ppc/vp8dsp_altivec.c b/libavcodec/ppc/vp8dsp_altivec.c
+index 9d637af..acea9fc 100644
+--- a/libavcodec/ppc/vp8dsp_altivec.c
++++ b/libavcodec/ppc/vp8dsp_altivec.c
+@@ -95,6 +95,28 @@ static const vec_s8 h_subpel_filters_outer[4] =
+     dstv = vec_packs(filth, filtl); \
+     dstv = vec_sra(dstv, c7)
+ 
++// checkasm's BUF_RECT only guarantees CHECKASM_ALIGNMENT (8) for dst, not
++// 16 -- vec_st truncates its address down to the 16-byte boundary, so a
++// plain vec_st on an 8-mod-16 dst silently clobbers the 8 bytes before it
++// and leaves the last 8 bytes of the row unwritten. Same read-modify-write
++// splice as put_unligned_store in h264qpel.c.
++static av_always_inline void unaligned_store16(vec_u8 s, uint8_t *dst)
++{
++#if HAVE_BIGENDIAN
++    vec_u8 tmp1 = vec_ld(0, dst);
++    vec_u8 mask = vec_lvsl(0, dst);
++    vec_u8 tmp2 = vec_ld(15, dst);
++    vec_u8 edges = vec_perm(tmp2, tmp1, mask);
++    vec_u8 align = vec_lvsr(0, dst);
++    tmp2 = vec_perm(s, edges, align);
++    tmp1 = vec_perm(edges, s, align);
++    vec_st(tmp2, 15, dst);
++    vec_st(tmp1, 0, dst);
++#else
++    vec_vsx_st(s, 0, dst);
++#endif
++}
++
+ static av_always_inline
+ void put_vp8_epel_h_altivec_core(uint8_t *dst, ptrdiff_t dst_stride,
+                                  const uint8_t *src, ptrdiff_t src_stride,
+@@ -136,7 +158,7 @@ void put_vp8_epel_h_altivec_core(uint8_t *dst, ptrdiff_t dst_stride,
+         if (w == 16) {
+             FILTER_H(f16l, 8);
+             filt = vec_packsu(f16h, f16l);
+-            vec_st(filt, 0, dst);
++            unaligned_store16(filt, dst);
+         } else {
+             filt = vec_packsu(f16h, f16h);
+             vec_ste((vec_u32)filt, 0, (uint32_t*)dst);
+@@ -187,9 +209,24 @@ static const vec_u8 v_subpel_filters[7] =
+     dstv = vec_sra(dstv, c7)
+ 
+ #if HAVE_BIGENDIAN
+-#define LOAD_HL(off, s, perm) load_with_perm_vec(off, s, perm)
++// src_stride isn't guaranteed a multiple of 16, so each tap row can have a
++// different byte alignment than src itself -- derive the even/odd
++// interleave permute from THIS row's own address (off, s) instead of
++// reusing one computed from src (see the analogous fix in
++// vp9dsp_altivec.c's filter_8tap_v_16/filter_bilin_v_16). Still just one
++// vec_ld pair per row (align_vech's vec_lvsl folds the true unaligned
++// offset in), so no extra loads versus the original per-row cost.
++static av_always_inline vec_u8 load_hl(ptrdiff_t off, const uint8_t *s, int w)
++{
++    vec_u8 align_vech = vec_lvsl(off, s);
++    vec_u8 align_vecl = vec_sld(align_vech, align_vech, 8);
++    vec_u8 perm_vec = (w == 16) ? vec_mergeh(align_vech, align_vecl)
++                                : vec_mergeh(align_vech, align_vech);
++    return load_with_perm_vec(off, s, perm_vec);
++}
++#define LOAD_HL(off, s, w) load_hl(off, s, w)
+ #else
+-#define LOAD_HL(off, s, perm) vec_mergeh(vec_vsx_ld(off,s), vec_vsx_ld(off+8,s))
++#define LOAD_HL(off, s, w) vec_mergeh(vec_vsx_ld(off,s), vec_vsx_ld(off+8,s))
+ #endif
+ 
+ static av_always_inline
+@@ -198,44 +235,33 @@ void put_vp8_epel_v_altivec_core(uint8_t *dst, ptrdiff_t dst_stride,
+                                  int h, int my, int w, int is6tap)
+ {
+     LOAD_V_SUBPEL_FILTER(my-1);
+-    vec_u8 s0, s1, s2, s3, s4, s5, filt, align_vech, perm_vec, align_vecl;
++    vec_u8 s0, s1, s2, s3, s4, s5, filt;
+     vec_s16 s0f, s1f, s2f, s3f, s4f, s5f, f16h, f16l;
+     vec_s16 c64 = vec_sl(vec_splat_s16(1), vec_splat_u16(6));
+     vec_u16 c7  = vec_splat_u16(7);
+ 
+-#if HAVE_BIGENDIAN
+-    // we want pixels 0-7 to be in the even positions and 8-15 in the odd,
+-    // so combine this permute with the alignment permute vector
+-    align_vech = vec_lvsl(0, src);
+-    align_vecl = vec_sld(align_vech, align_vech, 8);
+-    if (w ==16)
+-        perm_vec = vec_mergeh(align_vech, align_vecl);
+-    else
+-        perm_vec = vec_mergeh(align_vech, align_vech);
+-#endif
+-
+     if (is6tap)
+-        s0 = LOAD_HL(-2*src_stride, src, perm_vec);
+-    s1 = LOAD_HL(-1*src_stride, src, perm_vec);
+-    s2 = LOAD_HL( 0*src_stride, src, perm_vec);
+-    s3 = LOAD_HL( 1*src_stride, src, perm_vec);
++        s0 = LOAD_HL(-2*src_stride, src, w);
++    s1 = LOAD_HL(-1*src_stride, src, w);
++    s2 = LOAD_HL( 0*src_stride, src, w);
++    s3 = LOAD_HL( 1*src_stride, src, w);
+     if (is6tap)
+-        s4 = LOAD_HL( 2*src_stride, src, perm_vec);
++        s4 = LOAD_HL( 2*src_stride, src, w);
+ 
+     src += (2+is6tap)*src_stride;
+ 
+     while (h --> 0) {
+         if (is6tap)
+-            s5 = LOAD_HL(0, src, perm_vec);
++            s5 = LOAD_HL(0, src, w);
+         else
+-            s4 = LOAD_HL(0, src, perm_vec);
++            s4 = LOAD_HL(0, src, w);
+ 
+         FILTER_V(f16h, vec_mule);
+ 
+         if (w == 16) {
+             FILTER_V(f16l, vec_mulo);
+             filt = vec_packsu(f16h, f16l);
+-            vec_st(filt, 0, dst);
++            unaligned_store16(filt, dst);
+         } else {
+             filt = vec_packsu(f16h, f16h);
+             if (w == 4)
+@@ -302,25 +328,27 @@ EPEL_HV(4,  4,4)
+ 
+ static void put_vp8_pixels16_altivec(uint8_t *dst, ptrdiff_t dstride, const uint8_t *src, ptrdiff_t sstride, int h, int mx, int my)
+ {
+-    register vector unsigned char perm;
+     int i;
+     register ptrdiff_t dstride2 = dstride << 1, sstride2 = sstride << 1;
+     register ptrdiff_t dstride3 = dstride2 + dstride, sstride3 = sstride + sstride2;
+     register ptrdiff_t dstride4 = dstride << 2, sstride4 = sstride << 2;
+ 
+-#if HAVE_BIGENDIAN
+-    perm = vec_lvsl(0, src);
+-#endif
+ // hand-unrolling the loop by 4 gains about 15%
+ // minimum execution time goes from 74 to 60 cycles
+ // it's faster than -funroll-loops, but using
+ // -funroll-loops w/ this is bad - 74 cycles again.
+ // all this is on a 7450, tuning for the 7450
++//
++// sstride isn't guaranteed a multiple of 16, so each row can have a
++// different alignment relative to src -- unaligned_load recomputes the
++// permute per call instead of reusing one derived from src's address
++// (see the analogous fix in vp9dsp_altivec.c's filter_8tap_v_16). dst
++// isn't guaranteed 16-aligned either -- see unaligned_store16 above.
+     for (i = 0; i < h; i += 4) {
+-        vec_st(load_with_perm_vec(0, src, perm), 0, dst);
+-        vec_st(load_with_perm_vec(sstride, src, perm), dstride, dst);
+-        vec_st(load_with_perm_vec(sstride2, src, perm), dstride2, dst);
+-        vec_st(load_with_perm_vec(sstride3, src, perm), dstride3, dst);
++        unaligned_store16(unaligned_load(0, src), dst);
++        unaligned_store16(unaligned_load(sstride, src), dst + dstride);
++        unaligned_store16(unaligned_load(sstride2, src), dst + dstride2);
++        unaligned_store16(unaligned_load(sstride3, src), dst + dstride3);
+         src += sstride4;
+         dst += dstride4;
+     }
+-- 
+2.43.0
+

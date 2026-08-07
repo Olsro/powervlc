@@ -72,8 +72,23 @@
 #define HANDOFF_PORT_FIRST 15821
 #define HANDOFF_PORT_LAST  15828
 
-/* How long the relay tab is trusted to still be there after its last poll. */
-#define HANDOFF_RELAY_STALE (CLOCK_FREQ * 5)
+/* How long the relay tab is trusted to still be there after its last poll.
+ *
+ * It stops polling for an honest reason: the guard sent it back through a
+ * check, and a tab walking a challenge chain has navigated away, so the
+ * script -- and its timer -- died with the old document and comes back
+ * only once the new page has loaded. That takes as long as the machine
+ * takes. Measured on an iBook G3 under 10.4, against go-away on
+ * inv.nadeko.net: 9 s for the first chain, 7 s for the second (browser
+ * history, 2026-08-07). At five seconds the player gave up on a browser
+ * that was doing exactly what it had been asked to do, and reported
+ * "relay gone".
+ *
+ * Waiting longer costs nothing now: the wait is sliced and calls
+ * vlc.keep_alive between slices, so the core's ten-second watchdog is fed
+ * whatever happens -- which is what the short window was really guarding
+ * against -- and fetch() still has its own deadline (30 s) above this. */
+#define HANDOFF_RELAY_STALE (CLOCK_FREQ * 20)
 
 typedef struct
 {
@@ -84,6 +99,7 @@ typedef struct
     httpd_url_t  *p_url_next;
     httpd_url_t  *p_url_reply;
     httpd_url_t  *p_url_inject;
+    httpd_url_t  *p_url_want;
 
     char *psz_base;          /* http://127.0.0.1:PORT/<secret> */
     char *psz_landing;       /* served on psz_base */
@@ -93,6 +109,18 @@ typedef struct
      * that puts it on the page takes it from here, so a page and the
      * player it talks to can never be two different versions. */
     char *psz_inject;
+
+    /* The address the player is waiting for, right now.
+     *
+     * The landing page carries one too, but it is baked in when the page
+     * is built, and a second guarded video reuses the SAME handover
+     * rather than minting one behind a new secret -- so that copy names
+     * the first video for ever. And when the check is passed through the
+     * cookie alone, no work is ever handed out, so nothing else tells the
+     * page what changed. Served read-only so the page can ask; a request
+     * for it is NOT a poll and must not touch i_last_poll, or a tab sat
+     * in a check would look like a relay hard at work. */
+    char *psz_want;
 
     /* written by the httpd thread, read by the script's thread */
     vlc_mutex_t lock;
@@ -119,6 +147,13 @@ typedef struct
      * is what a cookie marked HttpOnly leaves as the only way in -- the
      * script never sees the session, the browser just uses it. */
     mtime_t   i_last_poll;   /* 0 until a tab shows up */
+    /* ... and whether that tab is in a position to work. A tab walking a
+     * check knocks to say it is alive (?busy=1) without being able to
+     * fetch anything: treating that as an available relay spent the whole
+     * 30 s deadline on a browser that only became free at the very end.
+     * Measured on go-away/nadeko: cookie handed over one line before the
+     * "timeout". */
+    bool      b_relay_busy;
     char     *psz_pending;   /* handed out on the next poll */
     uint64_t  i_seq;         /* which request that is */
     uint64_t  i_reply_seq;   /* which one came back */
@@ -381,6 +416,30 @@ static int ReturnCallback( httpd_callback_sys_t *opaque, httpd_client_t *cl,
  *
  * The httpd host runs one poll loop for every client it has, so this must
  * never wait: the tab asks again in a moment instead. */
+/* What is the player waiting for? Read-only, and deliberately not a poll:
+ * the page asks this while its tab is still busy with a check, which is
+ * precisely when it must not be mistaken for a relay asking for work. */
+static int WantCallback( httpd_callback_sys_t *opaque, httpd_client_t *cl,
+                         httpd_message_t *answer,
+                         const httpd_message_t *query )
+{
+    vlclua_handoff_t *p_ho = (vlclua_handoff_t *)opaque;
+    VLC_UNUSED(cl);
+
+    if( answer == NULL || query == NULL )
+        return VLC_SUCCESS;
+
+    vlc_mutex_lock( &p_ho->lock );
+    char *psz_want = p_ho->psz_want != NULL ? strdup( p_ho->psz_want ) : NULL;
+    vlc_mutex_unlock( &p_ho->lock );
+
+    AnswerBody( answer, query, "text/plain; charset=utf-8",
+                psz_want ? psz_want : "", psz_want ? strlen( psz_want ) : 0,
+                true );
+    free( psz_want );
+    return VLC_SUCCESS;
+}
+
 static int NextCallback( httpd_callback_sys_t *opaque, httpd_client_t *cl,
                          httpd_message_t *answer,
                          const httpd_message_t *query )
@@ -391,11 +450,34 @@ static int NextCallback( httpd_callback_sys_t *opaque, httpd_client_t *cl,
     if( answer == NULL || query == NULL )
         return VLC_SUCCESS;
 
+    /* A tab walking a challenge chain is NOT a tab that died.
+     *
+     * The page stops taking work while its tab is in a check -- answering
+     * with an interstitial would poison the session -- and it used to stop
+     * asking altogether. But asking is the only sign of life the player
+     * has: i_last_poll froze, HANDOFF_RELAY_STALE elapsed, and fetch()
+     * reported "relay gone" about a browser that was doing exactly what it
+     * had been asked to do. Measured on go-away/nadeko, twice in a row.
+     *
+     * So the page keeps knocking with ?busy=1: it counts as a poll, and
+     * takes no work. The player's own deadline still bounds the wait. */
+    const char *psz_args = (const char *)query->psz_args;
+    char *psz_busy = ArgGet( psz_args, "busy" );
+    const bool b_busy = psz_busy != NULL && strcmp( psz_busy, "0" ) != 0;
+    free( psz_busy );
+
     char *psz_work = NULL;
 
     vlc_mutex_lock( &p_ho->lock );
     p_ho->i_last_poll = mdate();
-    if( p_ho->psz_pending != NULL )
+    if( p_ho->b_relay_busy != b_busy )
+    {
+        p_ho->b_relay_busy = b_busy;
+        msg_Dbg( (vlc_object_t *)p_ho->p_owner,
+                 b_busy ? "relay: the tab is working through a check"
+                        : "relay: the tab is free again" );
+    }
+    if( !b_busy && p_ho->psz_pending != NULL )
     {
         if( asprintf( &psz_work, "%llu %s",
                       (unsigned long long)p_ho->i_seq,
@@ -513,6 +595,11 @@ static void HandoffStop( vlclua_handoff_t *p_ho )
         httpd_UrlDelete( p_ho->p_url_inject );
         p_ho->p_url_inject = NULL;
     }
+    if( p_ho->p_url_want != NULL )
+    {
+        httpd_UrlDelete( p_ho->p_url_want );
+        p_ho->p_url_want = NULL;
+    }
     if( p_ho->p_url_next != NULL )
     {
         httpd_UrlDelete( p_ho->p_url_next );
@@ -544,6 +631,7 @@ static void HandoffStop( vlclua_handoff_t *p_ho )
     free( p_ho->psz_thanks );
     free( p_ho->psz_empty );
     free( p_ho->psz_inject );
+    free( p_ho->psz_want );
     free( p_ho->psz_cookie );
     free( p_ho->psz_agent );
     free( p_ho->psz_origin );
@@ -561,9 +649,11 @@ static void HandoffStop( vlclua_handoff_t *p_ho )
      * pointer otherwise */
     p_ho->b_answered = false;
     p_ho->i_last_poll = 0;
+    p_ho->b_relay_busy = false;
     p_ho->psz_base = p_ho->psz_landing = NULL;
     p_ho->psz_thanks = p_ho->psz_empty = NULL;
     p_ho->psz_inject = NULL;
+    p_ho->psz_want = NULL;
     p_ho->psz_cookie = p_ho->psz_agent = p_ho->psz_origin = NULL;
     p_ho->psz_language = p_ho->psz_encoding = NULL;
 }
@@ -576,6 +666,30 @@ static int vlclua_handoff_url( lua_State *L )
         return luaL_error( L, "handover already closed" );
     lua_pushstring( L, p_ho->psz_base );
     return 1;
+}
+
+/* handoff:want( url ) -- says which address the player is after now.
+ *
+ * A second guarded video puts the SAME handover back up rather than
+ * minting one behind a new secret, so the landing page already open in
+ * the browser still names the first one. The page asks for this instead,
+ * and the relay can then tell a tab the player is waiting for from a tab
+ * the user simply opened. */
+static int vlclua_handoff_want( lua_State *L )
+{
+    vlclua_handoff_t *p_ho =
+        (vlclua_handoff_t *)luaL_checkudata( L, 1, "vlc_handoff" );
+    const char *psz_url = luaL_checkstring( L, 2 );
+
+    char *psz_dup = strdup( psz_url );
+    if( psz_dup == NULL )
+        return luaL_error( L, "out of memory" );
+
+    vlc_mutex_lock( &p_ho->lock );
+    free( p_ho->psz_want );
+    p_ho->psz_want = psz_dup;
+    vlc_mutex_unlock( &p_ho->lock );
+    return 0;
 }
 
 /* nil while nothing came back, otherwise the answer. */
@@ -634,6 +748,7 @@ static int vlclua_handoff_relay( lua_State *L )
 
     vlc_mutex_lock( &p_ho->lock );
     bool b_live = p_ho->i_last_poll != 0
+               && !p_ho->b_relay_busy
                && mdate() - p_ho->i_last_poll < HANDOFF_RELAY_STALE;
     vlc_mutex_unlock( &p_ho->lock );
 
@@ -772,6 +887,7 @@ static int vlclua_handoff_gc( lua_State *L )
 static const luaL_Reg vlclua_handoff_reg[] = {
     { "url",   vlclua_handoff_url },
     { "poll",  vlclua_handoff_poll },
+    { "want",  vlclua_handoff_want },
     { "relay", vlclua_handoff_relay },
     { "fetch", vlclua_handoff_fetch },
     { "close", vlclua_handoff_close },
@@ -853,12 +969,13 @@ static int vlclua_browser_handoff( lua_State *L )
 
     char *psz_path = NULL, *psz_return_path = NULL, *psz_return = NULL;
     char *psz_next_path = NULL, *psz_reply_path = NULL;
-    char *psz_inject_path = NULL;
+    char *psz_inject_path = NULL, *psz_want_path = NULL;
     if( asprintf( &psz_path, "/%s", psz_secret ) < 0
      || asprintf( &psz_return_path, "/%s/done", psz_secret ) < 0
      || asprintf( &psz_next_path, "/%s/next", psz_secret ) < 0
      || asprintf( &psz_reply_path, "/%s/reply", psz_secret ) < 0
      || asprintf( &psz_inject_path, "/%s/inject.js", psz_secret ) < 0
+     || asprintf( &psz_want_path, "/%s/want", psz_secret ) < 0
      || asprintf( &p_ho->psz_base, "http://127.0.0.1:%u/%s",
                   i_port, psz_secret ) < 0
      || asprintf( &psz_return, "http://127.0.0.1:%u/%s/done",
@@ -867,6 +984,7 @@ static int vlclua_browser_handoff( lua_State *L )
         free( psz_path );
         free( psz_return_path );
         free( psz_next_path );
+        free( psz_want_path );
         free( psz_reply_path );
         free( psz_inject_path );
         free( psz_return );
@@ -908,10 +1026,13 @@ static int vlclua_browser_handoff( lua_State *L )
                                           NULL, NULL );
         p_ho->p_url_inject = httpd_UrlNew( p_ho->p_host, psz_inject_path,
                                            NULL, NULL );
+        p_ho->p_url_want = httpd_UrlNew( p_ho->p_host, psz_want_path,
+                                         NULL, NULL );
     }
     free( psz_path );
     free( psz_return_path );
     free( psz_next_path );
+    free( psz_want_path );
     free( psz_reply_path );
     free( psz_inject_path );
 
@@ -934,6 +1055,8 @@ static int vlclua_browser_handoff( lua_State *L )
     httpd_UrlCatch( p_ho->p_url_return, HTTPD_MSG_GET, ReturnCallback,
                     (httpd_callback_sys_t *)p_ho );
     httpd_UrlCatch( p_ho->p_url_next, HTTPD_MSG_GET, NextCallback,
+                    (httpd_callback_sys_t *)p_ho );
+    httpd_UrlCatch( p_ho->p_url_want, HTTPD_MSG_GET, WantCallback,
                     (httpd_callback_sys_t *)p_ho );
     httpd_UrlCatch( p_ho->p_url_reply, HTTPD_MSG_POST, ReplyCallback,
                     (httpd_callback_sys_t *)p_ho );

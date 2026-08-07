@@ -1,0 +1,65 @@
+From 8d2cf3242f50ff53d92de5be7a46e463fb6b2b90 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Tue, 28 Jul 2026 13:05:25 +0000
+Subject: [PATCH 22/22] avutil/ppc: drop top-level av_tx codelets for 4- and
+ 8-point FFTs
+
+Real-hardware benchmarking (checkasm --bench on a 2.3 GHz G5) shows the
+directly-selectable top-level AltiVec codelets losing to C at the two
+smallest sizes: fft4 0.50x, fft8 0.93x. The reason is structural, not
+tuning: the top-level entry gathers input through s->map before running
+the in-register kernel, and over the ~dozen flops of a 4- or 8-point
+FFT that per-element gather cannot amortize on any PPC core. From 16
+points up the codelets win (1.4-2.0x), so registration now starts at 16.
+
+The fft4_ns/fft8_ns building blocks are unaffected: as recursion bases
+inside larger transforms they receive already-permuted input and run
+in-register with no gather -- they are part of the measured large-size
+wins (1.91x @1024, 2.03x @16384).
+
+Selection safety: a bare av_tx_init(4/8) now resolves to the C path it
+used before the top-level codelets existed (which the bench shows is
+faster), and no sub-transform tree can regress -- the only paths that
+select non-PRESHUFFLE codelets as subs (the MDCT and PFA retry
+fallbacks) never fire for power-of-two lengths, where PRESHUFFLE-capable
+codelets always exist.
+
+Validated under qemu -cpu 7400: checkasm av_tx passes across seeds;
+full suite 567/567 (was 569; -2 = the two lengths whose top-level
+pointer reverted to C, no longer counted as AltiVec-dispatched).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01BaTf7hduqDkr3EhmqH6Ltz
+---
+ libavutil/ppc/tx_float_altivec.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/libavutil/ppc/tx_float_altivec.c b/libavutil/ppc/tx_float_altivec.c
+index bbc3c86..79dfb4f 100644
+--- a/libavutil/ppc/tx_float_altivec.c
++++ b/libavutil/ppc/tx_float_altivec.c
+@@ -394,8 +394,10 @@ static const FFTXCodelet ff_tx_fft##n##_def_altivec = {                 \
+     .prio       = FF_TX_PRIO_BASE + 128,                                \
+ };
+ 
+-DECL_SR_CODELET_TOP(4)
+-DECL_SR_CODELET_TOP(8)
++/* No top-level codelets for 4 and 8: the map gather cannot amortize over a
++ * dozen flops, so the C path wins there (measured 0.50x/0.93x on a 970).
++ * The fft4/fft8 _ns building blocks above are unaffected -- as recursion
++ * bases inside larger transforms they run in-register with no gather. */
+ DECL_SR_CODELET_TOP(16)
+ DECL_SR_CODELET_TOP(32)
+ DECL_SR_CODELET_TOP(64)
+@@ -428,8 +430,6 @@ const FFTXCodelet * const ff_tx_codelet_list_float_ppc[] = {
+     &ff_tx_fft32768_ns_def_altivec,
+     &ff_tx_fft65536_ns_def_altivec,
+     &ff_tx_fft131072_ns_def_altivec,
+-    &ff_tx_fft4_def_altivec,
+-    &ff_tx_fft8_def_altivec,
+     &ff_tx_fft16_def_altivec,
+     &ff_tx_fft32_def_altivec,
+     &ff_tx_fft64_def_altivec,
+-- 
+2.43.0
+

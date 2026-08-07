@@ -1,0 +1,760 @@
+From 1d39fbe53ea7def77f130e84d89bb0c83e8983f5 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Thu, 30 Jul 2026 07:02:17 +0000
+Subject: [PATCH 31/31] avcodec/ppc: add AltiVec VP9 16x16/32x32 inverse
+ transforms (O2)
+
+Full TX_16X16 (idct16/iadst16, all four txtype combos) and TX_32X32
+(idct32) AltiVec paths, replacing the previous eob==1-only DC wrappers
+that fell back to C for everything else; the DC fast paths are kept.
+
+Design: bit-for-bit the C reference (idct16_1d / iadst16_1d /
+idct32_1d under itxfm_wrapper), 8-bit only.  A 1D pass runs on 8 of
+the N columns at a time on the 8x8 section's s32x8 multiply helpers,
+but unlike the 8x8 code every value is narrowed back to int16 right
+after its (+(1<<13))>>14 rounding and the butterflies run as plain
+wrapping int16 adds - the layout the aarch64 NEON version keeps in
+.8h registers, legal because the C reference stores every such value
+in int16 tmp[]/out[] or feeds it to a later int16-operand multiply.
+iadst16's first/third multiply blocks stay unrounded s32 exactly like
+the C's t0..t15 (sums < 2^31 for all coefficient pairs).  The two-pass
+wrapper keeps pass-a output in a transposed vec_s16 scratch (vector k
+of column group g = tmp_C[8g..8g+7][k]) and gathers pass-b inputs with
+8x8 transposes; outputs go through an 8-wide bits==6 add/store
+(store8_row, no RMW).
+
+Registered unconditionally (no per-CPU gate - no bench data yet).
+
+Validated: qemu -cpu 7400 checkasm vp9dsp bit-exact vs C on seeds
+1/42/777/12345/31337; full suite 590/590 (+3: the 16x16 adst combos;
+the dct_dct 16x16/32x32 names existed already via the DC wrappers);
+per-name --bench listing shows _altivec entries for all sub-eob
+levels; -D_ARCH_PWR4 (G5-shape) compile warning-free.  Real-G4/G5
+bench pending (qemu TCG ratios are not predictive).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HcoCJhZQdwZvDdC836fitg
+---
+ libavcodec/ppc/vp9dsp_altivec.c | 685 ++++++++++++++++++++++++++++++--
+ 1 file changed, 648 insertions(+), 37 deletions(-)
+
+diff --git a/libavcodec/ppc/vp9dsp_altivec.c b/libavcodec/ppc/vp9dsp_altivec.c
+index 2f31b36..a2d5e5e 100644
+--- a/libavcodec/ppc/vp9dsp_altivec.c
++++ b/libavcodec/ppc/vp9dsp_altivec.c
+@@ -752,11 +752,6 @@ static void dc_129_32x32_altivec(uint8_t *dst, ptrdiff_t stride,
+     fill32_altivec(dst, stride, 32, 129);
+ }
+ 
+-static void (*idct_idct_16x16_add_c)(uint8_t *dst, ptrdiff_t stride,
+-                                     int16_t *block, int eob);
+-static void (*idct_idct_32x32_add_c)(uint8_t *dst, ptrdiff_t stride,
+-                                     int16_t *block, int eob);
+-
+ static av_always_inline int dc_only_idct_addend(int16_t *block, int bits)
+ {
+     int t = ((block[0] * 11585 + (1 << 13)) >> 14);
+@@ -806,28 +801,6 @@ static av_always_inline void idct_dc_add_32_altivec(uint8_t *dst,
+     }
+ }
+ 
+-static void idct_idct_16x16_add_altivec(uint8_t *dst, ptrdiff_t stride,
+-                                        int16_t *block, int eob)
+-{
+-    if (eob == 1) {
+-        idct_dc_add_16_altivec(dst, stride, block);
+-        return;
+-    }
+-
+-    idct_idct_16x16_add_c(dst, stride, block, eob);
+-}
+-
+-static void idct_idct_32x32_add_altivec(uint8_t *dst, ptrdiff_t stride,
+-                                        int16_t *block, int eob)
+-{
+-    if (eob == 1) {
+-        idct_dc_add_32_altivec(dst, stride, block);
+-        return;
+-    }
+-
+-    idct_idct_32x32_add_c(dst, stride, block, eob);
+-}
+-
+ /* ---- 4x4 inverse transforms (idct/iadst/iwht, all txtp combos) ----
+  *
+  * These reproduce, bit-for-bit, the C reference in vp9dsp_template.c
+@@ -2290,6 +2263,648 @@ static void idct_idct_8x8_add_altivec(uint8_t *dst, ptrdiff_t stride,
+     idct_idct_8x8_core_altivec(dst, stride, block, eob);
+ }
+ 
++/* ---- 16x16 / 32x32 inverse transforms ----
++ *
++ * Same contract as the 8x8 block above: bit-for-bit the C reference
++ * (idct16_1d / iadst16_1d / idct32_1d under itxfm_wrapper), 8-bit only.
++ * A 1D pass runs on 8 of the N columns at a time (vector k = IN(k) of
++ * the 8 parallel column transforms), on the 8x8 section's s32x8
++ * multiply helpers.  Unlike the 8x8 code, every value is narrowed back
++ * to int16 right after its (+ (1 << 13)) >> 14 rounding and the
++ * butterflies run as plain (wrapping) int16 adds - the same layout the
++ * aarch64 NEON version keeps in its .8h registers, and legal for the
++ * same reason the narrowing points there are: the C reference stores
++ * every rounded value and every butterfly result into int16 tmp[]
++ * arrays or feeds it to a later int16-operand multiply, so on any
++ * input the C reference handles they all fit int16 and the int16
++ * arithmetic here is exact.  Unrounded products (iadst16's first and
++ * third multiply blocks) stay in s32x8 exactly like the C's t0..t15,
++ * whose sums stay below 2^31 for all coefficient pairs used.
++ *
++ * Two-pass wrapper layout: pass a runs on each 8-column group g of the
++ * input, and its output vector k (holding out[k] of columns
++ * 8g..8g+7) is kept as scratch tmp[g][k]; in C terms lane j of
++ * tmp[g][k] is tmp_C[(8g+j)*N + k].  Pass b's transform i needs
++ * IN(x) = tmp_C[x*N + i], so each 8-transform output group h gathers
++ * its inputs by 8x8-transposing the scratch vectors tmp[m][8h..8h+7]
++ * into input vectors c[8m..8m+7], then adds its outputs to dst columns
++ * 8h..8h+7 (one 8-wide half-row store per row). */
++
++/* pack(rnd14(a*ca + b*cb)) and friends; operands int16, products and
++ * their sum int32 (|a*ca + b*cb| < 2^31 for every coefficient pair
++ * used here, so the s32x8 accumulation is exact). */
++static av_always_inline vec_s16 dmul_add_p(vec_s16 a, vec_s16 ca,
++                                           vec_s16 b, vec_s16 cb)
++{
++    return pack_eo(rnd14x8(add8(mul8(a, ca), mul8(b, cb))));
++}
++
++static av_always_inline vec_s16 dmul_sub_p(vec_s16 a, vec_s16 ca,
++                                           vec_s16 b, vec_s16 cb)
++{
++    return pack_eo(rnd14x8(sub8(mul8(a, ca), mul8(b, cb))));
++}
++
++/* pack((-(a*ca + b*cb) + (1 << 13)) >> 14): negation before the
++ * rounding add, exactly as at the C's -(x*C1 + y*C2) sites. */
++static av_always_inline vec_s16 dmul_nadd_p(vec_s16 a, vec_s16 ca,
++                                            vec_s16 b, vec_s16 cb)
++{
++    return pack_eo(rnd14x8(neg8(add8(mul8(a, ca), mul8(b, cb)))));
++}
++
++static av_always_inline vec_s16 smul_p(vec_s16 a, vec_s16 c)
++{
++    return pack_eo(rnd14x8(mul8(a, c)));
++}
++
++/* pack((-(a*c) + (1 << 13)) >> 14), negation before the rounding add. */
++static av_always_inline vec_s16 smul_np(vec_s16 a, vec_s16 c)
++{
++    return pack_eo(rnd14x8(neg8(mul8(a, c))));
++}
++
++static av_always_inline vec_s16 neg16(vec_s16 a)
++{
++    return vec_sub(vec_splat_s16(0), a);
++}
++
++/* One idct16 1D pass on the sixteen input vectors c[0..15] (in place).
++ * Mirrors idct16_1d() statement for statement. */
++static av_always_inline void idct16_1d_altivec(vec_s16 *c)
++{
++    const vec_s16 k11585 = VSPLAT16(11585);
++    const vec_s16 k6270  = VSPLAT16(6270);
++    const vec_s16 k15137 = VSPLAT16(15137);
++    const vec_s16 k3196  = VSPLAT16(3196);
++    const vec_s16 k16069 = VSPLAT16(16069);
++    const vec_s16 k13623 = VSPLAT16(13623);
++    const vec_s16 k9102  = VSPLAT16(9102);
++    const vec_s16 k1606  = VSPLAT16(1606);
++    const vec_s16 k16305 = VSPLAT16(16305);
++    const vec_s16 k12665 = VSPLAT16(12665);
++    const vec_s16 k10394 = VSPLAT16(10394);
++    const vec_s16 k7723  = VSPLAT16(7723);
++    const vec_s16 k14449 = VSPLAT16(14449);
++    const vec_s16 k15679 = VSPLAT16(15679);
++    const vec_s16 k4756  = VSPLAT16(4756);
++
++    vec_s16 t0a  = dmul_add_p(c[0],  k11585, c[8],  k11585);
++    vec_s16 t1a  = dmul_sub_p(c[0],  k11585, c[8],  k11585);
++    vec_s16 t2a  = dmul_sub_p(c[4],  k6270,  c[12], k15137);
++    vec_s16 t3a  = dmul_add_p(c[4],  k15137, c[12], k6270);
++    vec_s16 t4a  = dmul_sub_p(c[2],  k3196,  c[14], k16069);
++    vec_s16 t7a  = dmul_add_p(c[2],  k16069, c[14], k3196);
++    vec_s16 t5a  = dmul_sub_p(c[10], k13623, c[6],  k9102);
++    vec_s16 t6a  = dmul_add_p(c[10], k9102,  c[6],  k13623);
++    vec_s16 t8a  = dmul_sub_p(c[1],  k1606,  c[15], k16305);
++    vec_s16 t15a = dmul_add_p(c[1],  k16305, c[15], k1606);
++    vec_s16 t9a  = dmul_sub_p(c[9],  k12665, c[7],  k10394);
++    vec_s16 t14a = dmul_add_p(c[9],  k10394, c[7],  k12665);
++    vec_s16 t10a = dmul_sub_p(c[5],  k7723,  c[11], k14449);
++    vec_s16 t13a = dmul_add_p(c[5],  k14449, c[11], k7723);
++    vec_s16 t11a = dmul_sub_p(c[13], k15679, c[3],  k4756);
++    vec_s16 t12a = dmul_add_p(c[13], k4756,  c[3],  k15679);
++
++    vec_s16 t0  = vec_add(t0a,  t3a);
++    vec_s16 t1  = vec_add(t1a,  t2a);
++    vec_s16 t2  = vec_sub(t1a,  t2a);
++    vec_s16 t3  = vec_sub(t0a,  t3a);
++    vec_s16 t4  = vec_add(t4a,  t5a);
++    vec_s16 t5  = vec_sub(t4a,  t5a);
++    vec_s16 t6  = vec_sub(t7a,  t6a);
++    vec_s16 t7  = vec_add(t7a,  t6a);
++    vec_s16 t8  = vec_add(t8a,  t9a);
++    vec_s16 t9  = vec_sub(t8a,  t9a);
++    vec_s16 t10 = vec_sub(t11a, t10a);
++    vec_s16 t11 = vec_add(t11a, t10a);
++    vec_s16 t12 = vec_add(t12a, t13a);
++    vec_s16 t13 = vec_sub(t12a, t13a);
++    vec_s16 t14 = vec_sub(t15a, t14a);
++    vec_s16 t15 = vec_add(t15a, t14a);
++
++    t5a  = smul_p(vec_sub(t6, t5), k11585);
++    t6a  = smul_p(vec_add(t6, t5), k11585);
++    t9a  = dmul_sub_p(t14, k6270,  t9,  k15137);
++    t14a = dmul_add_p(t14, k15137, t9,  k6270);
++    t10a = dmul_nadd_p(t13, k15137, t10, k6270);
++    t13a = dmul_sub_p(t13, k6270,  t10, k15137);
++
++    t0a  = vec_add(t0, t7);
++    t1a  = vec_add(t1, t6a);
++    t2a  = vec_add(t2, t5a);
++    t3a  = vec_add(t3, t4);
++    t4   = vec_sub(t3, t4);
++    t5   = vec_sub(t2, t5a);
++    t6   = vec_sub(t1, t6a);
++    t7   = vec_sub(t0, t7);
++    t8a  = vec_add(t8, t11);
++    t9   = vec_add(t9a, t10a);
++    t10  = vec_sub(t9a, t10a);
++    t11a = vec_sub(t8, t11);
++    t12a = vec_sub(t15, t12);
++    t13  = vec_sub(t14a, t13a);
++    t14  = vec_add(t14a, t13a);
++    t15a = vec_add(t15, t12);
++
++    t10a = smul_p(vec_sub(t13,  t10),  k11585);
++    t13a = smul_p(vec_add(t13,  t10),  k11585);
++    t11  = smul_p(vec_sub(t12a, t11a), k11585);
++    t12  = smul_p(vec_add(t12a, t11a), k11585);
++
++    c[0]  = vec_add(t0a, t15a);
++    c[1]  = vec_add(t1a, t14);
++    c[2]  = vec_add(t2a, t13a);
++    c[3]  = vec_add(t3a, t12);
++    c[4]  = vec_add(t4,  t11);
++    c[5]  = vec_add(t5,  t10a);
++    c[6]  = vec_add(t6,  t9);
++    c[7]  = vec_add(t7,  t8a);
++    c[8]  = vec_sub(t7,  t8a);
++    c[9]  = vec_sub(t6,  t9);
++    c[10] = vec_sub(t5,  t10a);
++    c[11] = vec_sub(t4,  t11);
++    c[12] = vec_sub(t3a, t12);
++    c[13] = vec_sub(t2a, t13a);
++    c[14] = vec_sub(t1a, t14);
++    c[15] = vec_sub(t0a, t15a);
++}
++
++/* One iadst16 1D pass on c[0..15] (in place).  Mirrors iadst16_1d():
++ * the first and third multiply blocks stay unrounded s32x8 like the
++ * C's t0..t15, negations happen exactly where the C negates (before
++ * or after the rounding shift, per site). */
++static av_always_inline void iadst16_1d_altivec(vec_s16 *c)
++{
++    const vec_s16 k16364 = VSPLAT16(16364);
++    const vec_s16 k804   = VSPLAT16(804);
++    const vec_s16 k15893 = VSPLAT16(15893);
++    const vec_s16 k3981  = VSPLAT16(3981);
++    const vec_s16 k14811 = VSPLAT16(14811);
++    const vec_s16 k7005  = VSPLAT16(7005);
++    const vec_s16 k13160 = VSPLAT16(13160);
++    const vec_s16 k9760  = VSPLAT16(9760);
++    const vec_s16 k11003 = VSPLAT16(11003);
++    const vec_s16 k12140 = VSPLAT16(12140);
++    const vec_s16 k8423  = VSPLAT16(8423);
++    const vec_s16 k14053 = VSPLAT16(14053);
++    const vec_s16 k5520  = VSPLAT16(5520);
++    const vec_s16 k15426 = VSPLAT16(15426);
++    const vec_s16 k2404  = VSPLAT16(2404);
++    const vec_s16 k16207 = VSPLAT16(16207);
++    const vec_s16 k16069 = VSPLAT16(16069);
++    const vec_s16 k3196  = VSPLAT16(3196);
++    const vec_s16 k9102  = VSPLAT16(9102);
++    const vec_s16 k13623 = VSPLAT16(13623);
++    const vec_s16 k15137 = VSPLAT16(15137);
++    const vec_s16 k6270  = VSPLAT16(6270);
++    const vec_s16 k11585 = VSPLAT16(11585);
++
++    s32x8 T0  = add8(mul8(c[15], k16364), mul8(c[0],  k804));
++    s32x8 T1  = sub8(mul8(c[15], k804),   mul8(c[0],  k16364));
++    s32x8 T2  = add8(mul8(c[13], k15893), mul8(c[2],  k3981));
++    s32x8 T3  = sub8(mul8(c[13], k3981),  mul8(c[2],  k15893));
++    s32x8 T4  = add8(mul8(c[11], k14811), mul8(c[4],  k7005));
++    s32x8 T5  = sub8(mul8(c[11], k7005),  mul8(c[4],  k14811));
++    s32x8 T6  = add8(mul8(c[9],  k13160), mul8(c[6],  k9760));
++    s32x8 T7  = sub8(mul8(c[9],  k9760),  mul8(c[6],  k13160));
++    s32x8 T8  = add8(mul8(c[7],  k11003), mul8(c[8],  k12140));
++    s32x8 T9  = sub8(mul8(c[7],  k12140), mul8(c[8],  k11003));
++    s32x8 T10 = add8(mul8(c[5],  k8423),  mul8(c[10], k14053));
++    s32x8 T11 = sub8(mul8(c[5],  k14053), mul8(c[10], k8423));
++    s32x8 T12 = add8(mul8(c[3],  k5520),  mul8(c[12], k15426));
++    s32x8 T13 = sub8(mul8(c[3],  k15426), mul8(c[12], k5520));
++    s32x8 T14 = add8(mul8(c[1],  k2404),  mul8(c[14], k16207));
++    s32x8 T15 = sub8(mul8(c[1],  k16207), mul8(c[14], k2404));
++
++    {
++        vec_s16 t0a  = pack_eo(rnd14x8(add8(T0, T8)));
++        vec_s16 t1a  = pack_eo(rnd14x8(add8(T1, T9)));
++        vec_s16 t2a  = pack_eo(rnd14x8(add8(T2, T10)));
++        vec_s16 t3a  = pack_eo(rnd14x8(add8(T3, T11)));
++        vec_s16 t4a  = pack_eo(rnd14x8(add8(T4, T12)));
++        vec_s16 t5a  = pack_eo(rnd14x8(add8(T5, T13)));
++        vec_s16 t6a  = pack_eo(rnd14x8(add8(T6, T14)));
++        vec_s16 t7a  = pack_eo(rnd14x8(add8(T7, T15)));
++        vec_s16 t8a  = pack_eo(rnd14x8(sub8(T0, T8)));
++        vec_s16 t9a  = pack_eo(rnd14x8(sub8(T1, T9)));
++        vec_s16 t10a = pack_eo(rnd14x8(sub8(T2, T10)));
++        vec_s16 t11a = pack_eo(rnd14x8(sub8(T3, T11)));
++        vec_s16 t12a = pack_eo(rnd14x8(sub8(T4, T12)));
++        vec_s16 t13a = pack_eo(rnd14x8(sub8(T5, T13)));
++        vec_s16 t14a = pack_eo(rnd14x8(sub8(T6, T14)));
++        vec_s16 t15a = pack_eo(rnd14x8(sub8(T7, T15)));
++
++        vec_s16 t0, t1, t2, t3, t4, t5, t6, t7, t10, t11;
++
++        T8  = add8(mul8(t8a,  k16069), mul8(t9a,  k3196));
++        T9  = sub8(mul8(t8a,  k3196),  mul8(t9a,  k16069));
++        T10 = add8(mul8(t10a, k9102),  mul8(t11a, k13623));
++        T11 = sub8(mul8(t10a, k13623), mul8(t11a, k9102));
++        T12 = sub8(mul8(t13a, k16069), mul8(t12a, k3196));
++        T13 = add8(mul8(t13a, k3196),  mul8(t12a, k16069));
++        T14 = sub8(mul8(t15a, k9102),  mul8(t14a, k13623));
++        T15 = add8(mul8(t15a, k13623), mul8(t14a, k9102));
++
++        t0 = vec_add(t0a, t4a);
++        t1 = vec_add(t1a, t5a);
++        t2 = vec_add(t2a, t6a);
++        t3 = vec_add(t3a, t7a);
++        t4 = vec_sub(t0a, t4a);
++        t5 = vec_sub(t1a, t5a);
++        t6 = vec_sub(t2a, t6a);
++        t7 = vec_sub(t3a, t7a);
++        t8a  = pack_eo(rnd14x8(add8(T8,  T12)));
++        t9a  = pack_eo(rnd14x8(add8(T9,  T13)));
++        t10a = pack_eo(rnd14x8(add8(T10, T14)));
++        t11a = pack_eo(rnd14x8(add8(T11, T15)));
++        t12a = pack_eo(rnd14x8(sub8(T8,  T12)));
++        t13a = pack_eo(rnd14x8(sub8(T9,  T13)));
++        t14a = pack_eo(rnd14x8(sub8(T10, T14)));
++        t15a = pack_eo(rnd14x8(sub8(T11, T15)));
++
++        T4  = add8(mul8(t4, k15137), mul8(t5, k6270));      /* C t4a  */
++        T5  = sub8(mul8(t4, k6270),  mul8(t5, k15137));     /* C t5a  */
++        T6  = sub8(mul8(t7, k15137), mul8(t6, k6270));      /* C t6a  */
++        T7  = add8(mul8(t7, k6270),  mul8(t6, k15137));     /* C t7a  */
++        T12 = add8(mul8(t12a, k15137), mul8(t13a, k6270));  /* C t12  */
++        T13 = sub8(mul8(t12a, k6270),  mul8(t13a, k15137)); /* C t13  */
++        T14 = sub8(mul8(t15a, k15137), mul8(t14a, k6270));  /* C t14  */
++        T15 = add8(mul8(t15a, k6270),  mul8(t14a, k15137)); /* C t15  */
++
++        c[0]  = vec_add(t0, t2);
++        c[15] = neg16(vec_add(t1, t3));
++        t2a   = vec_sub(t0, t2);
++        t3a   = vec_sub(t1, t3);
++        c[3]  = pack_eo(neg8(rnd14x8(add8(T4, T6))));
++        c[12] = pack_eo(rnd14x8(add8(T5, T7)));
++        t6    = pack_eo(rnd14x8(sub8(T4, T6)));             /* C t6   */
++        t7    = pack_eo(rnd14x8(sub8(T5, T7)));             /* C t7   */
++        c[1]  = neg16(vec_add(t8a, t10a));
++        c[14] = vec_add(t9a, t11a);
++        t10   = vec_sub(t8a, t10a);
++        t11   = vec_sub(t9a, t11a);
++        c[2]  = pack_eo(rnd14x8(add8(T12, T14)));
++        c[13] = pack_eo(neg8(rnd14x8(add8(T13, T15))));
++        t14a  = pack_eo(rnd14x8(sub8(T12, T14)));
++        t15a  = pack_eo(rnd14x8(sub8(T13, T15)));
++
++        c[7]  = smul_np(vec_add(t2a,  t3a),  k11585);
++        c[8]  = smul_p(vec_sub(t2a,  t3a),  k11585);
++        c[4]  = smul_p(vec_add(t7,   t6),   k11585);
++        c[11] = smul_p(vec_sub(t7,   t6),   k11585);
++        c[6]  = smul_p(vec_add(t11,  t10),  k11585);
++        c[9]  = smul_p(vec_sub(t11,  t10),  k11585);
++        c[5]  = smul_np(vec_add(t14a, t15a), k11585);
++        c[10] = smul_p(vec_sub(t14a, t15a), k11585);
++    }
++}
++
++/* One idct32 1D pass on c[0..31] (in place).  Mirrors idct32_1d()
++ * statement for statement. */
++static av_always_inline void idct32_1d_altivec(vec_s16 *c)
++{
++    const vec_s16 k11585 = VSPLAT16(11585);
++    const vec_s16 k6270  = VSPLAT16(6270);
++    const vec_s16 k15137 = VSPLAT16(15137);
++    const vec_s16 k3196  = VSPLAT16(3196);
++    const vec_s16 k16069 = VSPLAT16(16069);
++    const vec_s16 k13623 = VSPLAT16(13623);
++    const vec_s16 k9102  = VSPLAT16(9102);
++    const vec_s16 k1606  = VSPLAT16(1606);
++    const vec_s16 k16305 = VSPLAT16(16305);
++    const vec_s16 k12665 = VSPLAT16(12665);
++    const vec_s16 k10394 = VSPLAT16(10394);
++    const vec_s16 k7723  = VSPLAT16(7723);
++    const vec_s16 k14449 = VSPLAT16(14449);
++    const vec_s16 k15679 = VSPLAT16(15679);
++    const vec_s16 k4756  = VSPLAT16(4756);
++    const vec_s16 k804   = VSPLAT16(804);
++    const vec_s16 k16364 = VSPLAT16(16364);
++    const vec_s16 k12140 = VSPLAT16(12140);
++    const vec_s16 k11003 = VSPLAT16(11003);
++    const vec_s16 k7005  = VSPLAT16(7005);
++    const vec_s16 k14811 = VSPLAT16(14811);
++    const vec_s16 k15426 = VSPLAT16(15426);
++    const vec_s16 k5520  = VSPLAT16(5520);
++    const vec_s16 k3981  = VSPLAT16(3981);
++    const vec_s16 k15893 = VSPLAT16(15893);
++    const vec_s16 k14053 = VSPLAT16(14053);
++    const vec_s16 k8423  = VSPLAT16(8423);
++    const vec_s16 k9760  = VSPLAT16(9760);
++    const vec_s16 k13160 = VSPLAT16(13160);
++    const vec_s16 k16207 = VSPLAT16(16207);
++    const vec_s16 k2404  = VSPLAT16(2404);
++
++    vec_s16 t0a  = dmul_add_p(c[0],  k11585, c[16], k11585);
++    vec_s16 t1a  = dmul_sub_p(c[0],  k11585, c[16], k11585);
++    vec_s16 t2a  = dmul_sub_p(c[8],  k6270,  c[24], k15137);
++    vec_s16 t3a  = dmul_add_p(c[8],  k15137, c[24], k6270);
++    vec_s16 t4a  = dmul_sub_p(c[4],  k3196,  c[28], k16069);
++    vec_s16 t7a  = dmul_add_p(c[4],  k16069, c[28], k3196);
++    vec_s16 t5a  = dmul_sub_p(c[20], k13623, c[12], k9102);
++    vec_s16 t6a  = dmul_add_p(c[20], k9102,  c[12], k13623);
++    vec_s16 t8a  = dmul_sub_p(c[2],  k1606,  c[30], k16305);
++    vec_s16 t15a = dmul_add_p(c[2],  k16305, c[30], k1606);
++    vec_s16 t9a  = dmul_sub_p(c[18], k12665, c[14], k10394);
++    vec_s16 t14a = dmul_add_p(c[18], k10394, c[14], k12665);
++    vec_s16 t10a = dmul_sub_p(c[10], k7723,  c[22], k14449);
++    vec_s16 t13a = dmul_add_p(c[10], k14449, c[22], k7723);
++    vec_s16 t11a = dmul_sub_p(c[26], k15679, c[6],  k4756);
++    vec_s16 t12a = dmul_add_p(c[26], k4756,  c[6],  k15679);
++    vec_s16 t16a = dmul_sub_p(c[1],  k804,   c[31], k16364);
++    vec_s16 t31a = dmul_add_p(c[1],  k16364, c[31], k804);
++    vec_s16 t17a = dmul_sub_p(c[17], k12140, c[15], k11003);
++    vec_s16 t30a = dmul_add_p(c[17], k11003, c[15], k12140);
++    vec_s16 t18a = dmul_sub_p(c[9],  k7005,  c[23], k14811);
++    vec_s16 t29a = dmul_add_p(c[9],  k14811, c[23], k7005);
++    vec_s16 t19a = dmul_sub_p(c[25], k15426, c[7],  k5520);
++    vec_s16 t28a = dmul_add_p(c[25], k5520,  c[7],  k15426);
++    vec_s16 t20a = dmul_sub_p(c[5],  k3981,  c[27], k15893);
++    vec_s16 t27a = dmul_add_p(c[5],  k15893, c[27], k3981);
++    vec_s16 t21a = dmul_sub_p(c[21], k14053, c[11], k8423);
++    vec_s16 t26a = dmul_add_p(c[21], k8423,  c[11], k14053);
++    vec_s16 t22a = dmul_sub_p(c[13], k9760,  c[19], k13160);
++    vec_s16 t25a = dmul_add_p(c[13], k13160, c[19], k9760);
++    vec_s16 t23a = dmul_sub_p(c[29], k16207, c[3],  k2404);
++    vec_s16 t24a = dmul_add_p(c[29], k2404,  c[3],  k16207);
++
++    vec_s16 t0  = vec_add(t0a,  t3a);
++    vec_s16 t1  = vec_add(t1a,  t2a);
++    vec_s16 t2  = vec_sub(t1a,  t2a);
++    vec_s16 t3  = vec_sub(t0a,  t3a);
++    vec_s16 t4  = vec_add(t4a,  t5a);
++    vec_s16 t5  = vec_sub(t4a,  t5a);
++    vec_s16 t6  = vec_sub(t7a,  t6a);
++    vec_s16 t7  = vec_add(t7a,  t6a);
++    vec_s16 t8  = vec_add(t8a,  t9a);
++    vec_s16 t9  = vec_sub(t8a,  t9a);
++    vec_s16 t10 = vec_sub(t11a, t10a);
++    vec_s16 t11 = vec_add(t11a, t10a);
++    vec_s16 t12 = vec_add(t12a, t13a);
++    vec_s16 t13 = vec_sub(t12a, t13a);
++    vec_s16 t14 = vec_sub(t15a, t14a);
++    vec_s16 t15 = vec_add(t15a, t14a);
++    vec_s16 t16 = vec_add(t16a, t17a);
++    vec_s16 t17 = vec_sub(t16a, t17a);
++    vec_s16 t18 = vec_sub(t19a, t18a);
++    vec_s16 t19 = vec_add(t19a, t18a);
++    vec_s16 t20 = vec_add(t20a, t21a);
++    vec_s16 t21 = vec_sub(t20a, t21a);
++    vec_s16 t22 = vec_sub(t23a, t22a);
++    vec_s16 t23 = vec_add(t23a, t22a);
++    vec_s16 t24 = vec_add(t24a, t25a);
++    vec_s16 t25 = vec_sub(t24a, t25a);
++    vec_s16 t26 = vec_sub(t27a, t26a);
++    vec_s16 t27 = vec_add(t27a, t26a);
++    vec_s16 t28 = vec_add(t28a, t29a);
++    vec_s16 t29 = vec_sub(t28a, t29a);
++    vec_s16 t30 = vec_sub(t31a, t30a);
++    vec_s16 t31 = vec_add(t31a, t30a);
++
++    t5a  = smul_p(vec_sub(t6, t5), k11585);
++    t6a  = smul_p(vec_add(t6, t5), k11585);
++    t9a  = dmul_sub_p(t14, k6270,  t9,  k15137);
++    t14a = dmul_add_p(t14, k15137, t9,  k6270);
++    t10a = dmul_nadd_p(t13, k15137, t10, k6270);
++    t13a = dmul_sub_p(t13, k6270,  t10, k15137);
++    t17a = dmul_sub_p(t30, k3196,  t17, k16069);
++    t30a = dmul_add_p(t30, k16069, t17, k3196);
++    t18a = dmul_nadd_p(t29, k16069, t18, k3196);
++    t29a = dmul_sub_p(t29, k3196,  t18, k16069);
++    t21a = dmul_sub_p(t26, k13623, t21, k9102);
++    t26a = dmul_add_p(t26, k9102,  t21, k13623);
++    t22a = dmul_nadd_p(t25, k9102,  t22, k13623);
++    t25a = dmul_sub_p(t25, k13623, t22, k9102);
++
++    t0a  = vec_add(t0, t7);
++    t1a  = vec_add(t1, t6a);
++    t2a  = vec_add(t2, t5a);
++    t3a  = vec_add(t3, t4);
++    t4a  = vec_sub(t3, t4);
++    t5   = vec_sub(t2, t5a);
++    t6   = vec_sub(t1, t6a);
++    t7a  = vec_sub(t0, t7);
++    t8a  = vec_add(t8, t11);
++    t9   = vec_add(t9a, t10a);
++    t10  = vec_sub(t9a, t10a);
++    t11a = vec_sub(t8, t11);
++    t12a = vec_sub(t15, t12);
++    t13  = vec_sub(t14a, t13a);
++    t14  = vec_add(t14a, t13a);
++    t15a = vec_add(t15, t12);
++    t16a = vec_add(t16, t19);
++    t17  = vec_add(t17a, t18a);
++    t18  = vec_sub(t17a, t18a);
++    t19a = vec_sub(t16, t19);
++    t20a = vec_sub(t23, t20);
++    t21  = vec_sub(t22a, t21a);
++    t22  = vec_add(t22a, t21a);
++    t23a = vec_add(t23, t20);
++    t24a = vec_add(t24, t27);
++    t25  = vec_add(t25a, t26a);
++    t26  = vec_sub(t25a, t26a);
++    t27a = vec_sub(t24, t27);
++    t28a = vec_sub(t31, t28);
++    t29  = vec_sub(t30a, t29a);
++    t30  = vec_add(t30a, t29a);
++    t31a = vec_add(t31, t28);
++
++    t10a = smul_p(vec_sub(t13,  t10),  k11585);
++    t13a = smul_p(vec_add(t13,  t10),  k11585);
++    t11  = smul_p(vec_sub(t12a, t11a), k11585);
++    t12  = smul_p(vec_add(t12a, t11a), k11585);
++    t18a = dmul_sub_p(t29,  k6270,  t18,  k15137);
++    t29a = dmul_add_p(t29,  k15137, t18,  k6270);
++    t19  = dmul_sub_p(t28a, k6270,  t19a, k15137);
++    t28  = dmul_add_p(t28a, k15137, t19a, k6270);
++    t20  = dmul_nadd_p(t27a, k15137, t20a, k6270);
++    t27  = dmul_sub_p(t27a, k6270,  t20a, k15137);
++    t21a = dmul_nadd_p(t26,  k15137, t21,  k6270);
++    t26a = dmul_sub_p(t26,  k6270,  t21,  k15137);
++
++    t0   = vec_add(t0a, t15a);
++    t1   = vec_add(t1a, t14);
++    t2   = vec_add(t2a, t13a);
++    t3   = vec_add(t3a, t12);
++    t4   = vec_add(t4a, t11);
++    t5a  = vec_add(t5,  t10a);
++    t6a  = vec_add(t6,  t9);
++    t7   = vec_add(t7a, t8a);
++    t8   = vec_sub(t7a, t8a);
++    t9a  = vec_sub(t6,  t9);
++    t10  = vec_sub(t5,  t10a);
++    t11a = vec_sub(t4a, t11);
++    t12a = vec_sub(t3a, t12);
++    t13  = vec_sub(t2a, t13a);
++    t14a = vec_sub(t1a, t14);
++    t15  = vec_sub(t0a, t15a);
++    t16  = vec_add(t16a, t23a);
++    t17a = vec_add(t17,  t22);
++    t18  = vec_add(t18a, t21a);
++    t19a = vec_add(t19,  t20);
++    t20a = vec_sub(t19,  t20);
++    t21  = vec_sub(t18a, t21a);
++    t22a = vec_sub(t17,  t22);
++    t23  = vec_sub(t16a, t23a);
++    t24  = vec_sub(t31a, t24a);
++    t25a = vec_sub(t30,  t25);
++    t26  = vec_sub(t29a, t26a);
++    t27a = vec_sub(t28,  t27);
++    t28a = vec_add(t28,  t27);
++    t29  = vec_add(t29a, t26a);
++    t30a = vec_add(t30,  t25);
++    t31  = vec_add(t31a, t24a);
++
++    t20  = smul_p(vec_sub(t27a, t20a), k11585);
++    t27  = smul_p(vec_add(t27a, t20a), k11585);
++    t21a = smul_p(vec_sub(t26,  t21),  k11585);
++    t26a = smul_p(vec_add(t26,  t21),  k11585);
++    t22  = smul_p(vec_sub(t25a, t22a), k11585);
++    t25  = smul_p(vec_add(t25a, t22a), k11585);
++    t23a = smul_p(vec_sub(t24,  t23),  k11585);
++    t24a = smul_p(vec_add(t24,  t23),  k11585);
++
++    c[0]  = vec_add(t0,   t31);
++    c[1]  = vec_add(t1,   t30a);
++    c[2]  = vec_add(t2,   t29);
++    c[3]  = vec_add(t3,   t28a);
++    c[4]  = vec_add(t4,   t27);
++    c[5]  = vec_add(t5a,  t26a);
++    c[6]  = vec_add(t6a,  t25);
++    c[7]  = vec_add(t7,   t24a);
++    c[8]  = vec_add(t8,   t23a);
++    c[9]  = vec_add(t9a,  t22);
++    c[10] = vec_add(t10,  t21a);
++    c[11] = vec_add(t11a, t20);
++    c[12] = vec_add(t12a, t19a);
++    c[13] = vec_add(t13,  t18);
++    c[14] = vec_add(t14a, t17a);
++    c[15] = vec_add(t15,  t16);
++    c[16] = vec_sub(t15,  t16);
++    c[17] = vec_sub(t14a, t17a);
++    c[18] = vec_sub(t13,  t18);
++    c[19] = vec_sub(t12a, t19a);
++    c[20] = vec_sub(t11a, t20);
++    c[21] = vec_sub(t10,  t21a);
++    c[22] = vec_sub(t9a,  t22);
++    c[23] = vec_sub(t8,   t23a);
++    c[24] = vec_sub(t7,   t24a);
++    c[25] = vec_sub(t6a,  t25);
++    c[26] = vec_sub(t5a,  t26a);
++    c[27] = vec_sub(t4,   t27);
++    c[28] = vec_sub(t3,   t28a);
++    c[29] = vec_sub(t2,   t29);
++    c[30] = vec_sub(t1,   t30a);
++    c[31] = vec_sub(t0,   t31);
++}
++
++/* Add one 8-wide half-row: dst[j] += (row[j] + 32) >> 6, clipped
++ * (bits == 6 as in itxfm_wrap(16, 6) / itxfm_wrap(32, 6)). */
++static av_always_inline void add_store8_row6(uint8_t *dst, vec_s16 row)
++{
++    const vec_u8  zero = vec_splat_u8(0);
++    const vec_s32 rnd  = vec_sl(vec_splat_s32(1), vec_splat_u32(5));
++    vec_s32 hi = vec_sra(vec_add(vec_unpackh(row), rnd), vec_splat_u32(6));
++    vec_s32 lo = vec_sra(vec_add(vec_unpackl(row), rnd), vec_splat_u32(6));
++    vec_s16 add = vec_packs(hi, lo);
++    vec_u8  pix = unaligned_load(0, dst);
++    vec_s16 p16 = (vec_s16)vec_mergeh(zero, pix);
++    vec_s16 sum = vec_adds(add, p16);
++
++    store8_row(vec_packsu(sum, sum), dst);
++}
++
++/* Two-pass 16x16 add, mirroring itxfm_wrapper() with the group /
++ * transpose layout described in the section comment. */
++#define ITXFM16_ADD(name, PA, PB)                                         \
++static void name(uint8_t *dst, ptrdiff_t stride, int16_t *block, int eob) \
++{                                                                         \
++    vec_s16 tmp[2][16], c[16];                                            \
++    int g, h, k, m;                                                       \
++                                                                          \
++    for (g = 0; g < 2; g++) {                                             \
++        for (k = 0; k < 16; k++)                                          \
++            c[k] = vec_ld(k * 32 + g * 16, block);                        \
++        PA(c);                                                            \
++        for (k = 0; k < 16; k++)                                          \
++            tmp[g][k] = c[k];                                             \
++    }                                                                     \
++    memset(block, 0, 16 * 16 * sizeof(int16_t));                          \
++    for (h = 0; h < 2; h++) {                                             \
++        for (m = 0; m < 2; m++) {                                         \
++            for (k = 0; k < 8; k++)                                       \
++                c[8 * m + k] = tmp[m][8 * h + k];                         \
++            transpose8x8_s16(&c[8 * m + 0], &c[8 * m + 1],                \
++                             &c[8 * m + 2], &c[8 * m + 3],                \
++                             &c[8 * m + 4], &c[8 * m + 5],                \
++                             &c[8 * m + 6], &c[8 * m + 7]);               \
++        }                                                                 \
++        PB(c);                                                            \
++        for (k = 0; k < 16; k++)                                          \
++            add_store8_row6(dst + k * stride + 8 * h, c[k]);              \
++    }                                                                     \
++}
++
++ITXFM16_ADD(idct_idct_16x16_core_altivec,  idct16_1d_altivec,  idct16_1d_altivec)
++ITXFM16_ADD(iadst_idct_16x16_add_altivec,  iadst16_1d_altivec, idct16_1d_altivec)
++ITXFM16_ADD(idct_iadst_16x16_add_altivec,  idct16_1d_altivec,  iadst16_1d_altivec)
++ITXFM16_ADD(iadst_iadst_16x16_add_altivec, iadst16_1d_altivec, iadst16_1d_altivec)
++
++/* idct_idct also handles eob==1 (DC only). */
++static void idct_idct_16x16_add_altivec(uint8_t *dst, ptrdiff_t stride,
++                                        int16_t *block, int eob)
++{
++    if (eob == 1) {
++        idct_dc_add_16_altivec(dst, stride, block);
++        return;
++    }
++
++    idct_idct_16x16_core_altivec(dst, stride, block, eob);
++}
++
++/* Two-pass 32x32 add: same layout with four 8-column groups. */
++static void idct_idct_32x32_core_altivec(uint8_t *dst, ptrdiff_t stride,
++                                         int16_t *block)
++{
++    vec_s16 tmp[4][32], c[32];
++    int g, h, k, m;
++
++    for (g = 0; g < 4; g++) {
++        for (k = 0; k < 32; k++)
++            c[k] = vec_ld(k * 64 + g * 16, block);
++        idct32_1d_altivec(c);
++        for (k = 0; k < 32; k++)
++            tmp[g][k] = c[k];
++    }
++    memset(block, 0, 32 * 32 * sizeof(int16_t));
++    for (h = 0; h < 4; h++) {
++        for (m = 0; m < 4; m++) {
++            for (k = 0; k < 8; k++)
++                c[8 * m + k] = tmp[m][8 * h + k];
++            transpose8x8_s16(&c[8 * m + 0], &c[8 * m + 1],
++                             &c[8 * m + 2], &c[8 * m + 3],
++                             &c[8 * m + 4], &c[8 * m + 5],
++                             &c[8 * m + 6], &c[8 * m + 7]);
++        }
++        idct32_1d_altivec(c);
++        for (k = 0; k < 32; k++)
++            add_store8_row6(dst + k * stride + 8 * h, c[k]);
++    }
++}
++
++/* idct_idct also handles eob==1 (DC only). */
++static void idct_idct_32x32_add_altivec(uint8_t *dst, ptrdiff_t stride,
++                                        int16_t *block, int eob)
++{
++    if (eob == 1) {
++        idct_dc_add_32_altivec(dst, stride, block);
++        return;
++    }
++
++    idct_idct_32x32_core_altivec(dst, stride, block);
++}
++
+ static av_cold void vp9dsp_itxfm_init_ppc(VP9DSPContext *dsp)
+ {
+ #ifndef _ARCH_PWR4 /* 970: the full 4x4 transforms are a wash (0.97-1.05x)
+@@ -2308,16 +2923,12 @@ static av_cold void vp9dsp_itxfm_init_ppc(VP9DSPContext *dsp)
+     dsp->itxfm_add[TX_8X8][DCT_ADST]  = iadst_idct_8x8_add_altivec;
+     dsp->itxfm_add[TX_8X8][ADST_ADST] = iadst_iadst_8x8_add_altivec;
+ 
+-    if (dsp->itxfm_add[TX_16X16][DCT_DCT] &&
+-        dsp->itxfm_add[TX_16X16][DCT_DCT] != idct_idct_16x16_add_altivec) {
+-        idct_idct_16x16_add_c = dsp->itxfm_add[TX_16X16][DCT_DCT];
+-        dsp->itxfm_add[TX_16X16][DCT_DCT] = idct_idct_16x16_add_altivec;
+-    }
+-    if (dsp->itxfm_add[TX_32X32][DCT_DCT] &&
+-        dsp->itxfm_add[TX_32X32][DCT_DCT] != idct_idct_32x32_add_altivec) {
+-        idct_idct_32x32_add_c = dsp->itxfm_add[TX_32X32][DCT_DCT];
+-        dsp->itxfm_add[TX_32X32][DCT_DCT] = idct_idct_32x32_add_altivec;
+-    }
++    dsp->itxfm_add[TX_16X16][DCT_DCT]   = idct_idct_16x16_add_altivec;
++    dsp->itxfm_add[TX_16X16][ADST_DCT]  = idct_iadst_16x16_add_altivec;
++    dsp->itxfm_add[TX_16X16][DCT_ADST]  = iadst_idct_16x16_add_altivec;
++    dsp->itxfm_add[TX_16X16][ADST_ADST] = iadst_iadst_16x16_add_altivec;
++
++    dsp->itxfm_add[TX_32X32][DCT_DCT]   = idct_idct_32x32_add_altivec;
+ }
+ 
+ static av_cold void vp9dsp_loopfilter_init_ppc(VP9DSPContext *dsp)
+-- 
+2.43.0
+

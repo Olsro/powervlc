@@ -1,0 +1,63 @@
+From 68182c8414b0c4976e7252883555541904d97780 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 24 Jul 2026 07:03:17 +0000
+Subject: [PATCH 19/20] avutil/ppc: fix wrong sel_hi permute in av_tx fft4_vec
+
+The sel_hi constant selected words {w3,w1,w1,w3} of the z23 vector
+instead of {w2,w1,w1,w2}: lanes 0 and 3 of the fft4 mid-vector read
+src[3].im where src[3].re belongs, and src[3].re was never read at
+all. Since fft4_vec is the recursion base of every codelet in this
+file, all sizes produced wrong output (errors around 40% of peak
+magnitude at every length).
+
+This was never caught because the codelets are registered
+FF_TX_PRESHUFFLE-only, so they are selected as SUB-transforms of the
+generic C wrappers (fft_float_c, mdct_inv_float_c, ...). checkasm's
+av_tx test compares top-level function pointers, and the top-level
+stays the same C wrapper whether the sub-transform is C or AltiVec --
+so it reported "no tests to perform" while the broken kernels were in
+fact live in any AAC/AC3/Opus/Vorbis-style MDCT path on AltiVec.
+
+Derived the correct selects from ff_tx_fft4_ns in tx_template.c:
+tb must be {r2+r3, i2+i3, i2-i3, r3-r2}; with sel_lo = {w0,w3,w3,w0}
+and VPM = {1,1,-1,-1} that requires sel_hi = {w2,w1,w1,w2}. The
+remaining kernels (bf_transform vs BUTTERFLIES/CMUL, fft8_vec,
+fft16_vec chain/twiddle order, sr_combine cos/sin indexing including
+the v2 sine wrap) were re-derived by hand against tx_template.c and
+are correct.
+
+Validated under qemu -cpu 7400 against the pure-C planner end to end:
+FFT lens 4..131072 fwd+inv and iMDCT lens 32..8192 now match C within
+a few ULPs (was: FAIL at every size). A follow-up commit adds
+directly-selectable top-level codelets so checkasm can actually see
+and test the AltiVec path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011BUPvhbJmFUU7zpuZf36JZ
+---
+ libavutil/ppc/tx_float_altivec.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/libavutil/ppc/tx_float_altivec.c b/libavutil/ppc/tx_float_altivec.c
+index d3801e0..a892012 100644
+--- a/libavutil/ppc/tx_float_altivec.c
++++ b/libavutil/ppc/tx_float_altivec.c
+@@ -70,10 +70,11 @@ static const vuc dup_c1  = {  8,  9, 10, 11, 12, 13, 14, 15,
+ /* {b[0], a[3], a[2], a[1]} - reversed-sine gather for the combine pass */
+ static const vuc srev    = { 16, 17, 18, 19, 12, 13, 14, 15,
+                               8,  9, 10, 11,  4,  5,  6,  7 };
+-/* fft4 mid-vector pair selects: {r3,i2,i2,r3} and {r2,i3,i3,r2}, so that
+- * H + L gives {t6,t5} and H - L gives {t7,t8} in the right lane order */
+-static const vuc sel_hi  = { 12, 13, 14, 15,  4,  5,  6,  7,
+-                              4,  5,  6,  7, 12, 13, 14, 15 };
++/* fft4 mid-vector pair selects: {r3,i2,i2,r3} (words {w2,w1,w1,w2}) and
++ * {r2,i3,i3,r2} (words {w0,w3,w3,w0}), so that lo*{1,1,-1,-1} + hi yields
++ * tb = {r2+r3, i2+i3, i2-i3, r3-r2} in the lane order fft4_vec needs */
++static const vuc sel_hi  = {  8,  9, 10, 11,  4,  5,  6,  7,
++                              4,  5,  6,  7,  8,  9, 10, 11 };
+ static const vuc sel_lo  = {  0,  1,  2,  3, 12, 13, 14, 15,
+                              12, 13, 14, 15,  0,  1,  2,  3 };
+ 
+-- 
+2.43.0
+

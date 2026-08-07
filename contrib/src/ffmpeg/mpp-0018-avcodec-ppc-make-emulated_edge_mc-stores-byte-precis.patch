@@ -1,0 +1,156 @@
+From 2f4a8fce4336d63f74a2e21fcf0302aaefac46e9 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 24 Jul 2026 06:55:34 +0000
+Subject: [PATCH 18/20] avcodec/ppc: make emulated_edge_mc stores byte-precise
+ on dst
+
+The store_full16()/store_partial() helpers spliced payload into memory
+with a read-modify-write of the two straddled aligned 16-byte words,
+touching up to ~30 bytes past the last payload byte of a row. That is
+fine mid-buffer, but emulated_edge_mc writes into exact-size scratch
+buffers, and an audit of all callers found three with insufficient
+trailing slack for the last row: vp3's VP4 loop-filter MC uses a stack
+buffer loop[12*12] with zero slack, vp8's edge_emu_buffer[21*32] has
+only 11 bytes of slack for a worst-case 21x21 block, and checkasm's own
+dst[64*64] has zero slack (svq3/vp3-MC/dirac are additionally unsafe
+for small linesizes). The splice would read and write out of bounds.
+
+Replace the splice with byte-precise spans: scalar bytes up to the
+first 16-byte boundary, plain aligned vec_st for the bulk, scalar
+bytes for the tail. Nothing outside [dst, dst+n) is read or written,
+and the bulk store no longer pays the 2-load/2-store RMW cost.
+src-side reads keep the standard unaligned_load pattern (<= 15 bytes
+overread into reference-frame slack).
+
+Validated under qemu -cpu 7400: new standalone guard-byte test over
+exact-size destination buffers (12x12/ls12, 21x21/ls32, 64x64/ls64 and
+odd sizes, all clamp corners) shows bit-exact payload vs the C
+reference with all guard bytes intact; checkasm videodsp passes across
+3 seeds; full suite 530/530.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011BUPvhbJmFUU7zpuZf36JZ
+---
+ libavcodec/ppc/videodsp.c | 86 ++++++++++++++++++---------------------
+ 1 file changed, 40 insertions(+), 46 deletions(-)
+
+diff --git a/libavcodec/ppc/videodsp.c b/libavcodec/ppc/videodsp.c
+index 35bc51e..c58ad9c 100644
+--- a/libavcodec/ppc/videodsp.c
++++ b/libavcodec/ppc/videodsp.c
+@@ -49,72 +49,66 @@ static void prefetch_ppc(const uint8_t *mem, ptrdiff_t stride, int h)
+  *   - splat_run():  fills a row span with a single replicated edge byte
+  *                   (the hot inner loop the C code does one byte at a time).
+  *
+- * Every store is width-precise: it writes exactly the requested number of
+- * bytes and never touches the neighbouring span.  This matters because the
+- * three horizontal regions (left edge / copied middle / right edge) are
+- * adjacent in the same row and hold different data, and because checkasm's
+- * dst is only 16-aligned at the row start -- once buf += start_x the working
+- * pointer is arbitrarily aligned.  So a plain vec_st (which truncates its
+- * address down to the 16-byte boundary and always writes a full 16 bytes)
+- * cannot be used directly; store_full16()/store_partial() do a read-modify-
+- * write splice that writes only the requested bytes at an unaligned address.
++ * Every store is byte-precise on dst: scalar bytes up to the first 16-byte
++ * boundary, aligned vec_st for the bulk, scalar bytes for the tail.  Nothing
++ * outside [dst, dst+n) is read or written.  This matters because the three
++ * horizontal regions of a row (left edge / copied middle / right edge) are
++ * adjacent and hold different data, and -- more importantly -- because
++ * several callers pass exact-size scratch buffers with no trailing slack at
++ * all (vp3's stack loop[12*12], vp8's edge_emu_buffer[21*32], checkasm's
++ * dst[64*64]): any read-modify-write vector splice at the end of the last
++ * row would touch out-of-bounds memory.
++ *
++ * src-side reads go through unaligned_load(), which can read up to 15 bytes
++ * past the last payload byte of a 16-byte chunk -- the standard accepted
++ * overread pattern here (src is a reference frame plane; those have >= 16
++ * bytes of allocation slack precisely for SIMD overreads).  The scalar tail
++ * copy reads exactly the remaining bytes.
+  */
+ 
+-/* Splice the 16 logical bytes of v into the two aligned words at dst,
+- * preserving every byte outside [dst, dst+16).  Works for any dst alignment.
+- * Same read-modify-write splice as unaligned_store16() in vp8dsp_altivec.c. */
+-static av_always_inline void store_full16(vec_u8 v, uint8_t *dst)
+-{
+-    vec_u8 lo    = vec_ld(0, dst);
+-    vec_u8 hi    = vec_ld(15, dst);
+-    vec_u8 edges = vec_perm(hi, lo, vec_lvsl(0, dst)); /* undo the load rotate */
+-    vec_u8 align = vec_lvsr(0, dst);
+-    hi = vec_perm(v, edges, align);
+-    lo = vec_perm(edges, v, align);
+-    vec_st(hi, 15, dst);
+-    vec_st(lo, 0, dst);
+-}
+-
+-/* store the low n (1..15) bytes of v at dst, leaving all other bytes of the
+- * two straddled 16-byte words untouched.  Works for any dst alignment. */
+-static av_always_inline void store_partial(vec_u8 v, uint8_t *dst, int n)
+-{
+-    /* length mask, in dst's logical byte order: lane i = 0xff if i < n. */
+-    const vec_u8 counter =
+-        (const vec_u8){0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
+-    const vec_u8 nv = vec_splat((vec_u8){ (uint8_t)n,0,0,0,0,0,0,0,
+-                                          0,0,0,0,0,0,0,0 }, 0);
+-    const vec_u8 lenmask = (vec_u8)vec_cmplt(counter, nv);
+-
+-    /* merge payload over current contents so lanes >= n keep memory's value */
+-    vec_u8 cur = unaligned_load(0, dst);
+-    store_full16(vec_sel(cur, v, lenmask), dst);
+-}
+-
+ /* copy n bytes from src to dst (vectorized memcpy), arbitrary alignment. */
+ static av_always_inline void store_run(uint8_t *dst, const uint8_t *src, int n)
+ {
++    int head = (int)(-(uintptr_t)dst & 15);
++
++    if (head) {
++        head = FFMIN(head, n);
++        for (int i = 0; i < head; i++)
++            dst[i] = src[i];
++        dst += head;
++        src += head;
++        n   -= head;
++    }
+     while (n >= 16) {
+-        store_full16(unaligned_load(0, src), dst);
++        vec_st(unaligned_load(0, src), 0, dst);
+         src += 16;
+         dst += 16;
+         n   -= 16;
+     }
+-    if (n > 0)
+-        store_partial(unaligned_load(0, src), dst, n);
++    for (int i = 0; i < n; i++)
++        dst[i] = src[i];
+ }
+ 
+ /* fill n bytes at dst with the byte value b (edge replication). */
+ static av_always_inline void splat_run(uint8_t *dst, uint8_t b, int n)
+ {
+     vec_u8 v = vec_splat((vec_u8){ b,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 }, 0);
++    int head = (int)(-(uintptr_t)dst & 15);
++
++    if (head) {
++        head = FFMIN(head, n);
++        for (int i = 0; i < head; i++)
++            dst[i] = b;
++        dst += head;
++        n   -= head;
++    }
+     while (n >= 16) {
+-        store_full16(v, dst);
++        vec_st(v, 0, dst);
+         dst += 16;
+         n   -= 16;
+     }
+-    if (n > 0)
+-        store_partial(v, dst, n);
++    for (int i = 0; i < n; i++)
++        dst[i] = b;
+ }
+ 
+ static void emulated_edge_mc_altivec(uint8_t *buf, const uint8_t *src,
+-- 
+2.43.0
+

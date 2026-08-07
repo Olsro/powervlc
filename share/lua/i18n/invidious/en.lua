@@ -161,4 +161,17 @@ return {
              .. "puts a small add-on in your browser that does the same "
              .. "thing by itself -- no bookmark, no clicking, on every "
              .. "page.",
+    web_addon_lead = "Add-on installed? There is nothing to drag and "
+                  .. "nothing to click: just open the instance below and "
+                  .. "pass its check. This page will tell you when the "
+                  .. "link is up.",
+    web_steps_title = "Without the add-on: the bookmark",
+    web_relay_on_addon = "Connected to PowerVLC through the browser "
+                      .. "add-on. Nothing to click: leave this window and "
+                      .. "the instance tab open.",
+    web_m_taking = "PowerVLC is playing this video. This tab was emptied "
+                .. "straight away on purpose: letting the site's player "
+                .. "finish loading here would cost a second decode and a "
+                .. "second download, and pull on the instance for nothing. "
+                .. "Leave it open.",
 }

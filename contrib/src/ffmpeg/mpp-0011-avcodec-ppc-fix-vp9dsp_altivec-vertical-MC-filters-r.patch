@@ -1,0 +1,122 @@
+From 5c584a5001785dcdc7ea161e7c316641b883872e Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 24 Jul 2026 04:39:39 +0000
+Subject: [PATCH 11/20] avcodec/ppc: fix vp9dsp_altivec vertical MC filters
+ reading wrong data
+
+filter_8tap_v_16, filter_8tap_v_8, and filter_bilin_v_16 each computed
+one vec_lvsl alignment-shuffle from src's address, then reused it via
+load_with_perm_vec() across all 8 (or 2, for bilinear) tap rows spaced
+src_stride bytes apart. This is only correct when src_stride % 16 == 0,
+so every row lands at the same byte alignment as src -- not guaranteed
+for real frame strides (padded to block width, not to 16) and not true
+of checkasm's own test stride (72). The sibling horizontal filter
+(filter_8tap_h_16) never had this bug: it uses unaligned_load(), which
+recomputes the alignment shift per call since all its loads are within
+one row anyway. Fixed the three vertical functions the same way.
+
+Root-caused independently after the user asked for confirmation this
+was a real code bug and not a checkasm-harness artifact (this file is
+a port from platform-uxp/Firefox ffvpx, not the same code as the
+separately-verified /home/sgr/barracuda/libvpx fork, so that earlier
+verification doesn't cover it). Confirmed via: (1) sibling functions in
+the same file/struct/dispatch mechanism -- ipred, itxfm, loopfilter --
+all pass under the same harness, so the harness itself isn't at fault;
+(2) isolating horizontal-only vs vertical-only with the same test
+(bilin_h passes 20/20 clean, bilin_v fails) narrows it to direction-
+specific code, not a harness-wide issue; (3) read the actual failing
+function and found the specific line-level cause above, matching the
+"only h uses unaligned_load, v doesn't" asymmetry exactly.
+
+VALIDATED: checkasm vp9dsp passes 168/168 under the cross-PPC/qemu
+harness (qemu-ppc-static -cpu 7400) across 6 random seeds; full
+checkasm suite (515 tests) passes with no regressions elsewhere.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0194bzLUrg6cVCQ7u4NNDpaB
+---
+ libavcodec/ppc/vp9dsp_altivec.c | 52 ++++++++++++++++++++-------------
+ 1 file changed, 31 insertions(+), 21 deletions(-)
+
+diff --git a/libavcodec/ppc/vp9dsp_altivec.c b/libavcodec/ppc/vp9dsp_altivec.c
+index 405a903..c91c70a 100644
+--- a/libavcodec/ppc/vp9dsp_altivec.c
++++ b/libavcodec/ppc/vp9dsp_altivec.c
+@@ -247,16 +247,22 @@ static av_always_inline vec_u8 filter_8tap_v_16(const uint8_t *src,
+                                                 ptrdiff_t src_stride,
+                                                 const int16_t *filter)
+ {
+-    vec_u8 perm = vec_lvsl(0, src);
+     vec_s16 filterv = vec_ld(0, filter);
+-    vec_u8 s0 = load_with_perm_vec(-3 * src_stride, src, perm);
+-    vec_u8 s1 = load_with_perm_vec(-2 * src_stride, src, perm);
+-    vec_u8 s2 = load_with_perm_vec(-1 * src_stride, src, perm);
+-    vec_u8 s3 = load_with_perm_vec( 0 * src_stride, src, perm);
+-    vec_u8 s4 = load_with_perm_vec( 1 * src_stride, src, perm);
+-    vec_u8 s5 = load_with_perm_vec( 2 * src_stride, src, perm);
+-    vec_u8 s6 = load_with_perm_vec( 3 * src_stride, src, perm);
+-    vec_u8 s7 = load_with_perm_vec( 4 * src_stride, src, perm);
++    /* Each tap row is src_stride bytes apart and src_stride is not
++     * guaranteed to be a multiple of 16 (checkasm uses 72; real frame
++     * strides are padded to the block width, not to 16), so a single
++     * vec_lvsl-derived permute computed from src's address is wrong for
++     * every row whose alignment mod 16 differs from src's. Use
++     * unaligned_load, which recomputes the shift per call, matching
++     * filter_8tap_h_16's approach for its own (same-row) unaligned loads. */
++    vec_u8 s0 = unaligned_load(-3 * src_stride, src);
++    vec_u8 s1 = unaligned_load(-2 * src_stride, src);
++    vec_u8 s2 = unaligned_load(-1 * src_stride, src);
++    vec_u8 s3 = unaligned_load( 0 * src_stride, src);
++    vec_u8 s4 = unaligned_load( 1 * src_stride, src);
++    vec_u8 s5 = unaligned_load( 2 * src_stride, src);
++    vec_u8 s6 = unaligned_load( 3 * src_stride, src);
++    vec_u8 s7 = unaligned_load( 4 * src_stride, src);
+     vec_s16 f0 = vec_splat(filterv, 0);
+     vec_s16 f1 = vec_splat(filterv, 1);
+     vec_s16 f2 = vec_splat(filterv, 2);
+@@ -277,16 +283,18 @@ static av_always_inline vec_u8 filter_8tap_v_8(const uint8_t *src,
+                                                ptrdiff_t src_stride,
+                                                const int16_t *filter)
+ {
+-    vec_u8 perm = vec_lvsl(0, src);
+     vec_s16 filterv = vec_ld(0, filter);
+-    vec_u8 s0 = load_with_perm_vec(-3 * src_stride, src, perm);
+-    vec_u8 s1 = load_with_perm_vec(-2 * src_stride, src, perm);
+-    vec_u8 s2 = load_with_perm_vec(-1 * src_stride, src, perm);
+-    vec_u8 s3 = load_with_perm_vec( 0 * src_stride, src, perm);
+-    vec_u8 s4 = load_with_perm_vec( 1 * src_stride, src, perm);
+-    vec_u8 s5 = load_with_perm_vec( 2 * src_stride, src, perm);
+-    vec_u8 s6 = load_with_perm_vec( 3 * src_stride, src, perm);
+-    vec_u8 s7 = load_with_perm_vec( 4 * src_stride, src, perm);
++    /* See filter_8tap_v_16: src_stride isn't guaranteed a multiple of 16,
++     * so a single shared alignment permute is wrong for rows whose
++     * address alignment differs from src's. */
++    vec_u8 s0 = unaligned_load(-3 * src_stride, src);
++    vec_u8 s1 = unaligned_load(-2 * src_stride, src);
++    vec_u8 s2 = unaligned_load(-1 * src_stride, src);
++    vec_u8 s3 = unaligned_load( 0 * src_stride, src);
++    vec_u8 s4 = unaligned_load( 1 * src_stride, src);
++    vec_u8 s5 = unaligned_load( 2 * src_stride, src);
++    vec_u8 s6 = unaligned_load( 3 * src_stride, src);
++    vec_u8 s7 = unaligned_load( 4 * src_stride, src);
+     vec_s16 f0 = vec_splat(filterv, 0);
+     vec_s16 f1 = vec_splat(filterv, 1);
+     vec_s16 f2 = vec_splat(filterv, 2);
+@@ -382,9 +390,11 @@ static av_always_inline vec_u8 filter_bilin_v_16(const uint8_t *src,
+                                                  ptrdiff_t src_stride,
+                                                  int my)
+ {
+-    vec_u8 perm = vec_lvsl(0, src);
+-    vec_u8 a = load_with_perm_vec(0, src, perm);
+-    vec_u8 b = load_with_perm_vec(src_stride, src, perm);
++    /* src_stride isn't guaranteed a multiple of 16 (see filter_8tap_v_16),
++     * so b's row can have different alignment than a's -- one shared perm
++     * is wrong for b whenever that differs. */
++    vec_u8 a = unaligned_load(0, src);
++    vec_u8 b = unaligned_load(src_stride, src);
+     vec_s16 m = vec_ld(0, vp9_bilin_splat[my]);
+     vec_s16 hi = bilin_half(a, b, m, 0);
+     vec_s16 lo = bilin_half(a, b, m, 1);
+-- 
+2.43.0
+

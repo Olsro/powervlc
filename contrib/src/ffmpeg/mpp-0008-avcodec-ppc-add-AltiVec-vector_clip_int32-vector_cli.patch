@@ -1,0 +1,80 @@
+From d35b8d5e71172e75b8eb7d1913b9b7b59f5b944a Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 24 Jul 2026 04:12:16 +0000
+Subject: [PATCH 08/20] avcodec/ppc: add AltiVec vector_clip_int32/vector_clipf
+ to audiodsp
+
+Adds vector_clip_int32_altivec and vector_clipf_altivec to
+libavcodec/ppc/audiodsp.c, same vec_ld/vec_min/vec_max/vec_st style
+as the existing PPC file (h264dsp.c, me_cmp.c already use vec_min/max
+on plain AltiVec, no VSX needed).
+
+VALIDATED: checkasm audiodsp passes under the cross-PPC/qemu harness
+(qemu-ppc-static -cpu 7400), real ALTIVEC dispatch confirmed for all
+3 functions (scalarproduct_int16 was already implemented; the two new
+ones join it).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0194bzLUrg6cVCQ7u4NNDpaB
+---
+ libavcodec/ppc/audiodsp.c | 37 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/libavcodec/ppc/audiodsp.c b/libavcodec/ppc/audiodsp.c
+index 2e37473..28c4c27 100644
+--- a/libavcodec/ppc/audiodsp.c
++++ b/libavcodec/ppc/audiodsp.c
+@@ -56,6 +56,41 @@ static int32_t scalarproduct_int16_altivec(const int16_t *v1, const int16_t *v2,
+     return ires;
+ }
+ 
++static void vector_clip_int32_altivec(int32_t *dst, const int32_t *src,
++                                      int32_t min, int32_t max,
++                                      unsigned int len)
++{
++    unsigned int i;
++    vec_s32 vmin = vec_splats(min), vmax = vec_splats(max);
++    vec_s32 s0, s1;
++
++    for (i = 0; i < len; i += 8) {
++        s0 = vec_ld( 0, src + i);
++        s1 = vec_ld(16, src + i);
++        s0 = vec_max(vec_min(s0, vmax), vmin);
++        s1 = vec_max(vec_min(s1, vmax), vmin);
++        vec_st(s0,  0, dst + i);
++        vec_st(s1, 16, dst + i);
++    }
++}
++
++static void vector_clipf_altivec(float *dst, const float *src, int len,
++                                 float min, float max)
++{
++    int i;
++    vec_f vmin = vec_splats(min), vmax = vec_splats(max);
++    vec_f s0, s1;
++
++    for (i = 0; i < len; i += 8) {
++        s0 = vec_ld( 0, src + i);
++        s1 = vec_ld(16, src + i);
++        s0 = vec_max(vec_min(s0, vmax), vmin);
++        s1 = vec_max(vec_min(s1, vmax), vmin);
++        vec_st(s0,  0, dst + i);
++        vec_st(s1, 16, dst + i);
++    }
++}
++
+ #endif /* HAVE_ALTIVEC */
+ 
+ #if HAVE_VSX
+@@ -90,6 +125,8 @@ av_cold void ff_audiodsp_init_ppc(AudioDSPContext *c)
+         return;
+ 
+     c->scalarproduct_int16 = scalarproduct_int16_altivec;
++    c->vector_clip_int32   = vector_clip_int32_altivec;
++    c->vector_clipf        = vector_clipf_altivec;
+ #endif /* HAVE_ALTIVEC */
+ 
+ #if HAVE_VSX
+-- 
+2.43.0
+

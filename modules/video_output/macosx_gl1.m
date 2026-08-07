@@ -2434,7 +2434,15 @@ static void OpenglSwap (vlc_gl_t *gl)
     if (!self)
         return nil;
 
-    /* Swap buffers only during the vertical retrace of the monitor. */
+    /* Swap buffers only during the vertical retrace of the monitor.
+     *
+     * Not made optional: turning it off was tried and measured on an
+     * iBook G3 (2026-08-07). It does remove the wait -- swap fell from
+     * 13.8 ms to 0.43 ms per frame -- and changes the display punctuality
+     * not at all, because that wait is wall time on a BLOCKED thread and
+     * the machine already had a quarter of its processor idle. What it
+     * does do is break the picture: black screen, then a slideshow, since
+     * the double-buffer handling here counts on a synchronised swap. */
     GLint params[] = { 1 };
     /* No CGL context to set it on below 10.3 (see vlc_CGLContextOf): the
      * output then simply swaps without waiting for the retrace. */

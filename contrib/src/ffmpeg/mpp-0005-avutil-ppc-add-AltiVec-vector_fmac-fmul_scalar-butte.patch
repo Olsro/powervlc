@@ -1,0 +1,144 @@
+From 054dabee3454ef811023dfa4f7ab1b805350f6cf Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 24 Jul 2026 03:47:08 +0000
+Subject: [PATCH 05/20] avutil/ppc: add AltiVec vector_fmac/fmul_scalar,
+ butterflies, scalarproduct
+
+Adds ff_vector_fmac_scalar_altivec, ff_vector_fmul_scalar_altivec,
+ff_butterflies_float_altivec, ff_scalarproduct_float_altivec to
+libavutil/ppc/float_dsp_altivec.c, wired into ff_float_dsp_init_ppc.
+
+Same style as the existing vec_ld/vec_madd/vec_st loops in this file;
+scalarproduct's horizontal sum goes through a 16-byte aligned stack
+temp (DECLARE_ALIGNED) since vec_st requires alignment.
+
+VALIDATED: checkasm float_dsp passes under the cross-PPC/qemu harness
+(qemu-ppc-static -cpu 7400), real ALTIVEC dispatch confirmed for all
+four functions against the C reference.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0194bzLUrg6cVCQ7u4NNDpaB
+---
+ libavutil/ppc/float_dsp_altivec.c | 65 +++++++++++++++++++++++++++++++
+ libavutil/ppc/float_dsp_altivec.h | 11 ++++++
+ libavutil/ppc/float_dsp_init.c    |  4 ++
+ 3 files changed, 80 insertions(+)
+
+diff --git a/libavutil/ppc/float_dsp_altivec.c b/libavutil/ppc/float_dsp_altivec.c
+index 6aa3e51..071a463 100644
+--- a/libavutil/ppc/float_dsp_altivec.c
++++ b/libavutil/ppc/float_dsp_altivec.c
+@@ -20,6 +20,7 @@
+ 
+ #include "util_altivec.h"
+ #include "float_dsp_altivec.h"
++#include "libavutil/mem_internal.h"
+ 
+ void ff_vector_fmul_altivec(float *dst, const float *src0, const float *src1,
+                             int len)
+@@ -120,3 +121,67 @@ void ff_vector_fmul_reverse_altivec(float *dst, const float *src0,
+         vec_st(d, 16, dst + i);
+     }
+ }
++
++void ff_vector_fmac_scalar_altivec(float *dst, const float *src, float mul,
++                                   int len)
++{
++    int i;
++    vec_f d0, d1, s0, s1, m = vec_splats(mul);
++
++    for (i = 0; i < len - 7; i += 8) {
++        d0 = vec_ld( 0, dst + i);
++        d1 = vec_ld(16, dst + i);
++        s0 = vec_ld( 0, src + i);
++        s1 = vec_ld(16, src + i);
++        d0 = vec_madd(s0, m, d0);
++        d1 = vec_madd(s1, m, d1);
++        vec_st(d0,  0, dst + i);
++        vec_st(d1, 16, dst + i);
++    }
++}
++
++void ff_vector_fmul_scalar_altivec(float *dst, const float *src, float mul,
++                                   int len)
++{
++    int i;
++    vec_f s, m = vec_splats(mul);
++    vec_f zero = (vec_f)vec_splat_u32(0);
++
++    for (i = 0; i < len - 3; i += 4) {
++        s = vec_ld(0, src + i);
++        vec_st(vec_madd(s, m, zero), 0, dst + i);
++    }
++}
++
++void ff_butterflies_float_altivec(float *restrict v1, float *restrict v2,
++                                  int len)
++{
++    int i;
++    vec_f a, b, sum, diff;
++
++    for (i = 0; i < len - 3; i += 4) {
++        a = vec_ld(0, v1 + i);
++        b = vec_ld(0, v2 + i);
++        sum  = vec_add(a, b);
++        diff = vec_sub(a, b);
++        vec_st(sum,  0, v1 + i);
++        vec_st(diff, 0, v2 + i);
++    }
++}
++
++float ff_scalarproduct_float_altivec(const float *v1, const float *v2, int len)
++{
++    int i;
++    vec_f acc = (vec_f)vec_splat_u32(0);
++    vec_f a, b;
++    DECLARE_ALIGNED(16, float, sums)[4];
++
++    for (i = 0; i < len - 3; i += 4) {
++        a = vec_ld(0, v1 + i);
++        b = vec_ld(0, v2 + i);
++        acc = vec_madd(a, b, acc);
++    }
++    vec_st(acc, 0, sums);
++
++    return sums[0] + sums[1] + sums[2] + sums[3];
++}
+diff --git a/libavutil/ppc/float_dsp_altivec.h b/libavutil/ppc/float_dsp_altivec.h
+index e1d530a..9db873e 100644
+--- a/libavutil/ppc/float_dsp_altivec.h
++++ b/libavutil/ppc/float_dsp_altivec.h
+@@ -35,4 +35,15 @@ void ff_vector_fmul_add_altivec(float *dst, const float *src0,
+ void ff_vector_fmul_reverse_altivec(float *dst, const float *src0,
+                                     const float *src1, int len);
+ 
++void ff_vector_fmac_scalar_altivec(float *dst, const float *src, float mul,
++                                   int len);
++
++void ff_vector_fmul_scalar_altivec(float *dst, const float *src, float mul,
++                                   int len);
++
++void ff_butterflies_float_altivec(float *restrict v1, float *restrict v2,
++                                  int len);
++
++float ff_scalarproduct_float_altivec(const float *v1, const float *v2, int len);
++
+ #endif /* AVUTIL_PPC_FLOAT_DSP_ALTIVEC_H */
+diff --git a/libavutil/ppc/float_dsp_init.c b/libavutil/ppc/float_dsp_init.c
+index 1d490bd..9336aa8 100644
+--- a/libavutil/ppc/float_dsp_init.c
++++ b/libavutil/ppc/float_dsp_init.c
+@@ -32,6 +32,10 @@ av_cold void ff_float_dsp_init_ppc(AVFloatDSPContext *fdsp, int bit_exact)
+         fdsp->vector_fmul = ff_vector_fmul_altivec;
+         fdsp->vector_fmul_add = ff_vector_fmul_add_altivec;
+         fdsp->vector_fmul_reverse = ff_vector_fmul_reverse_altivec;
++        fdsp->vector_fmac_scalar = ff_vector_fmac_scalar_altivec;
++        fdsp->vector_fmul_scalar = ff_vector_fmul_scalar_altivec;
++        fdsp->butterflies_float = ff_butterflies_float_altivec;
++        fdsp->scalarproduct_float = ff_scalarproduct_float_altivec;
+ 
+         if (!bit_exact) {
+             fdsp->vector_fmul_window = ff_vector_fmul_window_altivec;
+-- 
+2.43.0
+

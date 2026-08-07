@@ -30,8 +30,14 @@
 # include <sys/time.h>
 # include <sys/select.h>
 # include <fcntl.h>
+# include <pthread.h>
 
-int (poll) (struct pollfd *fds, unsigned nfds, int timeout)
+/* How long a wait with no deadline is allowed to last before the thread
+ * gets a chance to notice it has been cancelled. See the wrapper at the
+ * bottom of this branch for why that matters. */
+# define POLL_SLICE_MS 100
+
+static int poll_once (struct pollfd *fds, unsigned nfds, int timeout)
 {
     fd_set rdset[1], wrset[1], exset[1];
     struct timeval tv = { 0, 0 };
@@ -104,6 +110,42 @@ int (poll) (struct pollfd *fds, unsigned nfds, int timeout)
                        | (FD_ISSET (fd, exset) ? POLLPRI : 0);
     }
     return val;
+}
+
+/* poll() is a cancellation point, and the callers here count on it: the
+ * HTTP server thread waits with no deadline at all and is stopped by
+ * httpd_HostDelete() doing nothing but vlc_cancel() then vlc_join().
+ *
+ * select() is a cancellation point too -- where the system delivers
+ * cancellation to a thread already inside a system call, which Mac OS X
+ * only learned to do in 10.5. On the releases this replacement is
+ * compiled for (poll() itself arrived in 10.3), pthread_cancel() sets the
+ * flag and nothing acts on it, so a thread parked here never comes back
+ * and the join waits forever. Measured on an iBook G3 under 10.4:
+ * quitting the player hung with the main thread joining the extension
+ * thread, that thread joining the HTTP host thread, and the host thread
+ * sitting in select() with no timeout -- the player could not be quit at
+ * all once the browser handoff server had been started.
+ *
+ * So never wait without a deadline: sleep in slices and test for
+ * cancellation between them, which is what the Windows branch below
+ * already does for its own reasons. pthread_testcancel() is a no-op while
+ * cancellation is disabled, so vlc_savecancel() still means what it says.
+ */
+int (poll) (struct pollfd *fds, unsigned nfds, int timeout)
+{
+    pthread_testcancel ();
+
+    if (timeout >= 0)
+        return poll_once (fds, nfds, timeout);
+
+    for (;;)
+    {
+        int val = poll_once (fds, nfds, POLL_SLICE_MS);
+        if (val != 0)
+            return val;   /* ready, or an error the caller must see */
+        pthread_testcancel ();
+    }
 }
 #else
 # include <windows.h>

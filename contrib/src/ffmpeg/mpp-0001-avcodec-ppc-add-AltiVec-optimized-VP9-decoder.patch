@@ -1,0 +1,1616 @@
+From 5b257aa02094dd2ed3148a8feef481e43e07ff9c Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 24 Jul 2026 01:36:59 +0000
+Subject: [PATCH 01/20] avcodec/ppc: add AltiVec-optimized VP9 decoder
+
+Ported from the platform-uxp (Firefox ffvpx) tree, which carries this
+as a from-scratch AltiVec implementation for the mozavcodec build:
+https://github.com/Jazzzny/platform-uxp/commit/8d02131b2a106e511489901613ed642b4951b8e9
+
+Adapted to build under the standard FFmpeg build system (CONFIG_VP9_DECODER
+Makefile rule and ff_vp9dsp_init_ppc arch dispatch) instead of moz.build;
+the DSP code itself is unchanged, as the VP9DSPContext layout and helper
+macros already matched.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KpUsGMxFgGTrTWRfW8PB8S
+---
+ libavcodec/ppc/Makefile         |    1 +
+ libavcodec/ppc/vp9dsp_altivec.c | 1551 +++++++++++++++++++++++++++++++
+ libavcodec/vp9dsp.c             |    2 +
+ libavcodec/vp9dsp.h             |    1 +
+ 4 files changed, 1555 insertions(+)
+ create mode 100644 libavcodec/ppc/vp9dsp_altivec.c
+
+diff --git a/libavcodec/ppc/Makefile b/libavcodec/ppc/Makefile
+index bddba27..469d44e 100644
+--- a/libavcodec/ppc/Makefile
++++ b/libavcodec/ppc/Makefile
+@@ -25,3 +25,4 @@ OBJS-$(CONFIG_MPEG4_DECODER)           += ppc/mpeg4videodsp.o
+ OBJS-$(CONFIG_SVQ1_ENCODER)            += ppc/svq1enc_altivec.o
+ OBJS-$(CONFIG_VORBIS_DECODER)          += ppc/vorbisdsp_altivec.o
+ OBJS-$(CONFIG_VP7_DECODER)             += ppc/vp8dsp_altivec.o
++OBJS-$(CONFIG_VP9_DECODER)             += ppc/vp9dsp_altivec.o
+diff --git a/libavcodec/ppc/vp9dsp_altivec.c b/libavcodec/ppc/vp9dsp_altivec.c
+new file mode 100644
+index 0000000..405a903
+--- /dev/null
++++ b/libavcodec/ppc/vp9dsp_altivec.c
+@@ -0,0 +1,1551 @@
++/*
++ * VP9 compatible video decoder
++ *
++ * Copyright (C) 2026 FFmpeg
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "config.h"
++
++#include "libavutil/attributes.h"
++#include "libavutil/common.h"
++#include "libavutil/cpu.h"
++#include "libavutil/intreadwrite.h"
++#include "libavutil/ppc/cpu.h"
++#include "libavutil/ppc/util_altivec.h"
++
++#include "libavcodec/vp9dsp.h"
++
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++
++#define REPT8(x) x, x, x, x, x, x, x, x
++
++static const int16_t vp9_bilin_splat[16][8] __attribute__((aligned(16))) = {
++    { REPT8( 0) }, { REPT8( 1) }, { REPT8( 2) }, { REPT8( 3) },
++    { REPT8( 4) }, { REPT8( 5) }, { REPT8( 6) }, { REPT8( 7) },
++    { REPT8( 8) }, { REPT8( 9) }, { REPT8(10) }, { REPT8(11) },
++    { REPT8(12) }, { REPT8(13) }, { REPT8(14) }, { REPT8(15) },
++};
++
++static av_always_inline void copy_c(uint8_t *dst, ptrdiff_t dst_stride,
++                                    const uint8_t *src, ptrdiff_t src_stride,
++                                    int w, int h)
++{
++    int y;
++
++    for (y = 0; y < h; y++) {
++        int x;
++
++        for (x = 0; x < w; x += 4)
++            AV_WN32(dst + x, AV_RN32(src + x));
++        src += src_stride;
++        dst += dst_stride;
++    }
++}
++
++static av_always_inline uint32_t avg_bytes32(uint32_t a, uint32_t b)
++{
++    return (a | b) - (((a ^ b) & 0xfefefefeU) >> 1);
++}
++
++static av_always_inline void avg_c(uint8_t *dst, ptrdiff_t dst_stride,
++                                   const uint8_t *src, ptrdiff_t src_stride,
++                                   int w, int h)
++{
++    int y;
++
++    for (y = 0; y < h; y++) {
++        int x;
++
++        for (x = 0; x < w; x += 4)
++            AV_WN32(dst + x, avg_bytes32(AV_RN32(dst + x), AV_RN32(src + x)));
++        src += src_stride;
++        dst += dst_stride;
++    }
++}
++
++static av_always_inline void store_u32(vec_u8 v, uint8_t *dst, int offset)
++{
++    vec_ste((vec_u32)v, offset, (uint32_t *)dst);
++}
++
++static av_always_inline int filter_8tap_1d(const uint8_t *src,
++                                           ptrdiff_t stride,
++                                           const int16_t *filter)
++{
++    int sum;
++
++    sum = filter[0] * src[-3 * stride] +
++          filter[1] * src[-2 * stride] +
++          filter[2] * src[-1 * stride] +
++          filter[3] * src[ 0 * stride] +
++          filter[4] * src[ 1 * stride] +
++          filter[5] * src[ 2 * stride] +
++          filter[6] * src[ 3 * stride] +
++          filter[7] * src[ 4 * stride];
++
++    return av_clip_uint8((sum + 64) >> 7);
++}
++
++static av_always_inline void filter_8tap_v_c(uint8_t *dst,
++                                             ptrdiff_t dst_stride,
++                                             const uint8_t *src,
++                                             ptrdiff_t src_stride,
++                                             int w, int h,
++                                             const int16_t *filter,
++                                             int avg)
++{
++    int y;
++
++    for (y = 0; y < h; y++) {
++        int x;
++
++        for (x = 0; x < w; x++) {
++            int p = filter_8tap_1d(src + x, src_stride, filter);
++
++            if (avg)
++                p = (dst[x] + p + 1) >> 1;
++            dst[x] = p;
++        }
++        src += src_stride;
++        dst += dst_stride;
++    }
++}
++
++static av_always_inline void filter_8tap_h_c(uint8_t *dst,
++                                             ptrdiff_t dst_stride,
++                                             const uint8_t *src,
++                                             ptrdiff_t src_stride,
++                                             int w, int h,
++                                             const int16_t *filter,
++                                             int avg)
++{
++    int y;
++
++    for (y = 0; y < h; y++) {
++        int x;
++
++        for (x = 0; x < w; x++) {
++            int p = filter_8tap_1d(src + x, 1, filter);
++
++            if (avg)
++                p = (dst[x] + p + 1) >> 1;
++            dst[x] = p;
++        }
++        src += src_stride;
++        dst += dst_stride;
++    }
++}
++
++static av_always_inline int filter_bilin_1d(const uint8_t *src,
++                                            ptrdiff_t stride, int mxy)
++{
++    return src[0] + ((mxy * (src[stride] - src[0]) + 8) >> 4);
++}
++
++static av_always_inline void filter_bilin_c(uint8_t *dst,
++                                            ptrdiff_t dst_stride,
++                                            const uint8_t *src,
++                                            ptrdiff_t src_stride,
++                                            int w, int h, ptrdiff_t ds,
++                                            int mxy, int avg)
++{
++    int y;
++
++    for (y = 0; y < h; y++) {
++        int x;
++
++        for (x = 0; x < w; x++) {
++            int p = filter_bilin_1d(src + x, ds, mxy);
++
++            if (avg)
++                p = (dst[x] + p + 1) >> 1;
++            dst[x] = p;
++        }
++        src += src_stride;
++        dst += dst_stride;
++    }
++}
++
++static av_always_inline vec_s16 filter_8tap_v_half(vec_u8 s0, vec_u8 s1,
++                                                   vec_u8 s2, vec_u8 s3,
++                                                   vec_u8 s4, vec_u8 s5,
++                                                   vec_u8 s6, vec_u8 s7,
++                                                   vec_s16 f0, vec_s16 f1,
++                                                   vec_s16 f2, vec_s16 f3,
++                                                   vec_s16 f4, vec_s16 f5,
++                                                   vec_s16 f6, vec_s16 f7,
++                                                   int low)
++{
++    const vec_u8 zero_u8 = vec_splat_u8(0);
++    const vec_s32 c64 = vec_sl(vec_splat_s32(1), vec_splat_u32(6));
++    const vec_u32 c7 = vec_splat_u32(7);
++    vec_s16 p0, p1, p2, p3, p4, p5, p6, p7;
++    vec_s32 se, so, oh, ol;
++
++    if (low) {
++        p0 = (vec_s16)vec_mergel(zero_u8, s0);
++        p1 = (vec_s16)vec_mergel(zero_u8, s1);
++        p2 = (vec_s16)vec_mergel(zero_u8, s2);
++        p3 = (vec_s16)vec_mergel(zero_u8, s3);
++        p4 = (vec_s16)vec_mergel(zero_u8, s4);
++        p5 = (vec_s16)vec_mergel(zero_u8, s5);
++        p6 = (vec_s16)vec_mergel(zero_u8, s6);
++        p7 = (vec_s16)vec_mergel(zero_u8, s7);
++    } else {
++        p0 = (vec_s16)vec_mergeh(zero_u8, s0);
++        p1 = (vec_s16)vec_mergeh(zero_u8, s1);
++        p2 = (vec_s16)vec_mergeh(zero_u8, s2);
++        p3 = (vec_s16)vec_mergeh(zero_u8, s3);
++        p4 = (vec_s16)vec_mergeh(zero_u8, s4);
++        p5 = (vec_s16)vec_mergeh(zero_u8, s5);
++        p6 = (vec_s16)vec_mergeh(zero_u8, s6);
++        p7 = (vec_s16)vec_mergeh(zero_u8, s7);
++    }
++
++    se = vec_mule(p0, f0);
++    so = vec_mulo(p0, f0);
++    se = vec_add(se, vec_mule(p1, f1));
++    so = vec_add(so, vec_mulo(p1, f1));
++    se = vec_add(se, vec_mule(p2, f2));
++    so = vec_add(so, vec_mulo(p2, f2));
++    se = vec_add(se, vec_mule(p3, f3));
++    so = vec_add(so, vec_mulo(p3, f3));
++    se = vec_add(se, vec_mule(p4, f4));
++    so = vec_add(so, vec_mulo(p4, f4));
++    se = vec_add(se, vec_mule(p5, f5));
++    so = vec_add(so, vec_mulo(p5, f5));
++    se = vec_add(se, vec_mule(p6, f6));
++    so = vec_add(so, vec_mulo(p6, f6));
++    se = vec_add(se, vec_mule(p7, f7));
++    so = vec_add(so, vec_mulo(p7, f7));
++
++    se = vec_sra(vec_add(se, c64), c7);
++    so = vec_sra(vec_add(so, c64), c7);
++    oh = vec_mergeh(se, so);
++    ol = vec_mergel(se, so);
++
++    return vec_packs(oh, ol);
++}
++
++static av_always_inline vec_u8 filter_8tap_v_16(const uint8_t *src,
++                                                ptrdiff_t src_stride,
++                                                const int16_t *filter)
++{
++    vec_u8 perm = vec_lvsl(0, src);
++    vec_s16 filterv = vec_ld(0, filter);
++    vec_u8 s0 = load_with_perm_vec(-3 * src_stride, src, perm);
++    vec_u8 s1 = load_with_perm_vec(-2 * src_stride, src, perm);
++    vec_u8 s2 = load_with_perm_vec(-1 * src_stride, src, perm);
++    vec_u8 s3 = load_with_perm_vec( 0 * src_stride, src, perm);
++    vec_u8 s4 = load_with_perm_vec( 1 * src_stride, src, perm);
++    vec_u8 s5 = load_with_perm_vec( 2 * src_stride, src, perm);
++    vec_u8 s6 = load_with_perm_vec( 3 * src_stride, src, perm);
++    vec_u8 s7 = load_with_perm_vec( 4 * src_stride, src, perm);
++    vec_s16 f0 = vec_splat(filterv, 0);
++    vec_s16 f1 = vec_splat(filterv, 1);
++    vec_s16 f2 = vec_splat(filterv, 2);
++    vec_s16 f3 = vec_splat(filterv, 3);
++    vec_s16 f4 = vec_splat(filterv, 4);
++    vec_s16 f5 = vec_splat(filterv, 5);
++    vec_s16 f6 = vec_splat(filterv, 6);
++    vec_s16 f7 = vec_splat(filterv, 7);
++    vec_s16 hi = filter_8tap_v_half(s0, s1, s2, s3, s4, s5, s6, s7,
++                                    f0, f1, f2, f3, f4, f5, f6, f7, 0);
++    vec_s16 lo = filter_8tap_v_half(s0, s1, s2, s3, s4, s5, s6, s7,
++                                    f0, f1, f2, f3, f4, f5, f6, f7, 1);
++
++    return vec_packsu(hi, lo);
++}
++
++static av_always_inline vec_u8 filter_8tap_v_8(const uint8_t *src,
++                                               ptrdiff_t src_stride,
++                                               const int16_t *filter)
++{
++    vec_u8 perm = vec_lvsl(0, src);
++    vec_s16 filterv = vec_ld(0, filter);
++    vec_u8 s0 = load_with_perm_vec(-3 * src_stride, src, perm);
++    vec_u8 s1 = load_with_perm_vec(-2 * src_stride, src, perm);
++    vec_u8 s2 = load_with_perm_vec(-1 * src_stride, src, perm);
++    vec_u8 s3 = load_with_perm_vec( 0 * src_stride, src, perm);
++    vec_u8 s4 = load_with_perm_vec( 1 * src_stride, src, perm);
++    vec_u8 s5 = load_with_perm_vec( 2 * src_stride, src, perm);
++    vec_u8 s6 = load_with_perm_vec( 3 * src_stride, src, perm);
++    vec_u8 s7 = load_with_perm_vec( 4 * src_stride, src, perm);
++    vec_s16 f0 = vec_splat(filterv, 0);
++    vec_s16 f1 = vec_splat(filterv, 1);
++    vec_s16 f2 = vec_splat(filterv, 2);
++    vec_s16 f3 = vec_splat(filterv, 3);
++    vec_s16 f4 = vec_splat(filterv, 4);
++    vec_s16 f5 = vec_splat(filterv, 5);
++    vec_s16 f6 = vec_splat(filterv, 6);
++    vec_s16 f7 = vec_splat(filterv, 7);
++    vec_s16 hi = filter_8tap_v_half(s0, s1, s2, s3, s4, s5, s6, s7,
++                                    f0, f1, f2, f3, f4, f5, f6, f7, 0);
++
++    return vec_packsu(hi, hi);
++}
++
++static av_always_inline vec_u8 filter_8tap_h_16(const uint8_t *src,
++                                                const int16_t *filter)
++{
++    vec_s16 filterv = vec_ld(0, filter);
++    vec_u8 s0 = unaligned_load(-3, src);
++    vec_u8 s1 = unaligned_load(-2, src);
++    vec_u8 s2 = unaligned_load(-1, src);
++    vec_u8 s3 = unaligned_load( 0, src);
++    vec_u8 s4 = unaligned_load( 1, src);
++    vec_u8 s5 = unaligned_load( 2, src);
++    vec_u8 s6 = unaligned_load( 3, src);
++    vec_u8 s7 = unaligned_load( 4, src);
++    vec_s16 f0 = vec_splat(filterv, 0);
++    vec_s16 f1 = vec_splat(filterv, 1);
++    vec_s16 f2 = vec_splat(filterv, 2);
++    vec_s16 f3 = vec_splat(filterv, 3);
++    vec_s16 f4 = vec_splat(filterv, 4);
++    vec_s16 f5 = vec_splat(filterv, 5);
++    vec_s16 f6 = vec_splat(filterv, 6);
++    vec_s16 f7 = vec_splat(filterv, 7);
++    vec_s16 hi = filter_8tap_v_half(s0, s1, s2, s3, s4, s5, s6, s7,
++                                    f0, f1, f2, f3, f4, f5, f6, f7, 0);
++    vec_s16 lo = filter_8tap_v_half(s0, s1, s2, s3, s4, s5, s6, s7,
++                                    f0, f1, f2, f3, f4, f5, f6, f7, 1);
++
++    return vec_packsu(hi, lo);
++}
++
++static av_always_inline vec_u8 filter_8tap_h_8(const uint8_t *src,
++                                               const int16_t *filter)
++{
++    vec_s16 filterv = vec_ld(0, filter);
++    vec_u8 s0 = unaligned_load(-3, src);
++    vec_u8 s1 = unaligned_load(-2, src);
++    vec_u8 s2 = unaligned_load(-1, src);
++    vec_u8 s3 = unaligned_load( 0, src);
++    vec_u8 s4 = unaligned_load( 1, src);
++    vec_u8 s5 = unaligned_load( 2, src);
++    vec_u8 s6 = unaligned_load( 3, src);
++    vec_u8 s7 = unaligned_load( 4, src);
++    vec_s16 f0 = vec_splat(filterv, 0);
++    vec_s16 f1 = vec_splat(filterv, 1);
++    vec_s16 f2 = vec_splat(filterv, 2);
++    vec_s16 f3 = vec_splat(filterv, 3);
++    vec_s16 f4 = vec_splat(filterv, 4);
++    vec_s16 f5 = vec_splat(filterv, 5);
++    vec_s16 f6 = vec_splat(filterv, 6);
++    vec_s16 f7 = vec_splat(filterv, 7);
++    vec_s16 hi = filter_8tap_v_half(s0, s1, s2, s3, s4, s5, s6, s7,
++                                    f0, f1, f2, f3, f4, f5, f6, f7, 0);
++
++    return vec_packsu(hi, hi);
++}
++
++static av_always_inline vec_s16 bilin_half(vec_u8 a, vec_u8 b, vec_s16 mxy,
++                                           int low)
++{
++    const vec_u8 zero_u8 = vec_splat_u8(0);
++    const vec_s16 c8 = vec_splat_s16(8);
++    const vec_u16 c4 = vec_splat_u16(4);
++    vec_s16 av, bv, d;
++
++    if (low) {
++        av = (vec_s16)vec_mergel(zero_u8, a);
++        bv = (vec_s16)vec_mergel(zero_u8, b);
++    } else {
++        av = (vec_s16)vec_mergeh(zero_u8, a);
++        bv = (vec_s16)vec_mergeh(zero_u8, b);
++    }
++
++    d = vec_sub(bv, av);
++    d = vec_mladd(d, mxy, c8);
++    d = vec_sra(d, c4);
++
++    return vec_add(av, d);
++}
++
++static av_always_inline vec_u8 filter_bilin_v_16(const uint8_t *src,
++                                                 ptrdiff_t src_stride,
++                                                 int my)
++{
++    vec_u8 perm = vec_lvsl(0, src);
++    vec_u8 a = load_with_perm_vec(0, src, perm);
++    vec_u8 b = load_with_perm_vec(src_stride, src, perm);
++    vec_s16 m = vec_ld(0, vp9_bilin_splat[my]);
++    vec_s16 hi = bilin_half(a, b, m, 0);
++    vec_s16 lo = bilin_half(a, b, m, 1);
++
++    return vec_packsu(hi, lo);
++}
++
++static av_always_inline vec_u8 filter_bilin_h_16(const uint8_t *src, int mx)
++{
++    vec_u8 a = unaligned_load(0, src);
++    vec_u8 b = unaligned_load(1, src);
++    vec_s16 m = vec_ld(0, vp9_bilin_splat[mx]);
++    vec_s16 hi = bilin_half(a, b, m, 0);
++    vec_s16 lo = bilin_half(a, b, m, 1);
++
++    return vec_packsu(hi, lo);
++}
++
++static av_always_inline void store_filter_small(uint8_t *dst, vec_u8 p,
++                                                int w, int avg)
++{
++    uint8_t tmp[16] __attribute__((aligned(16)));
++
++    vec_st(p, 0, tmp);
++    if (avg) {
++        AV_WN32(dst, avg_bytes32(AV_RN32(dst), AV_RN32(tmp)));
++        if (w == 8)
++            AV_WN32(dst + 4, avg_bytes32(AV_RN32(dst + 4), AV_RN32(tmp + 4)));
++    } else {
++        AV_WN32(dst, AV_RN32(tmp));
++        if (w == 8)
++            AV_WN32(dst + 4, AV_RN32(tmp + 4));
++    }
++}
++
++static av_always_inline void filter_8tap_v_altivec(uint8_t *dst,
++                                                   ptrdiff_t dst_stride,
++                                                   const uint8_t *src,
++                                                   ptrdiff_t src_stride,
++                                                   int w, int h,
++                                                   const int16_t *filter,
++                                                   int avg)
++{
++    int y;
++
++    if (w < 16) {
++        for (y = 0; y < h; y++) {
++            store_filter_small(dst, filter_8tap_v_8(src, src_stride, filter),
++                               w, avg);
++            src += src_stride;
++            dst += dst_stride;
++        }
++        return;
++    }
++
++    if (((uintptr_t)dst | dst_stride) & 15) {
++        filter_8tap_v_c(dst, dst_stride, src, src_stride, w, h, filter, avg);
++        return;
++    }
++
++    for (y = 0; y < h; y++) {
++        int x;
++
++        for (x = 0; x < w; x += 16) {
++            vec_u8 p = filter_8tap_v_16(src + x, src_stride, filter);
++
++            if (avg)
++                p = vec_avg((vec_u8)vec_ld(x, dst), p);
++            vec_st(p, x, dst);
++        }
++        src += src_stride;
++        dst += dst_stride;
++    }
++}
++
++static av_always_inline void filter_8tap_h_altivec(uint8_t *dst,
++                                                   ptrdiff_t dst_stride,
++                                                   const uint8_t *src,
++                                                   ptrdiff_t src_stride,
++                                                   int w, int h,
++                                                   const int16_t *filter,
++                                                   int avg)
++{
++    int y;
++
++    if (w < 16) {
++        for (y = 0; y < h; y++) {
++            store_filter_small(dst, filter_8tap_h_8(src, filter), w, avg);
++            src += src_stride;
++            dst += dst_stride;
++        }
++        return;
++    }
++
++    if (((uintptr_t)dst | dst_stride) & 15) {
++        filter_8tap_h_c(dst, dst_stride, src, src_stride, w, h, filter, avg);
++        return;
++    }
++
++    for (y = 0; y < h; y++) {
++        int x;
++
++        for (x = 0; x < w; x += 16) {
++            vec_u8 p = filter_8tap_h_16(src + x, filter);
++
++            if (avg)
++                p = vec_avg((vec_u8)vec_ld(x, dst), p);
++            vec_st(p, x, dst);
++        }
++        src += src_stride;
++        dst += dst_stride;
++    }
++}
++
++static av_always_inline void filter_bilin_v_altivec(uint8_t *dst,
++                                                    ptrdiff_t dst_stride,
++                                                    const uint8_t *src,
++                                                    ptrdiff_t src_stride,
++                                                    int w, int h,
++                                                    int my, int avg)
++{
++    int y;
++
++    if (w < 16) {
++        for (y = 0; y < h; y++) {
++            store_filter_small(dst, filter_bilin_v_16(src, src_stride, my),
++                               w, avg);
++            src += src_stride;
++            dst += dst_stride;
++        }
++        return;
++    }
++
++    if (((uintptr_t)dst | dst_stride) & 15) {
++        filter_bilin_c(dst, dst_stride, src, src_stride, w, h, src_stride,
++                       my, avg);
++        return;
++    }
++
++    for (y = 0; y < h; y++) {
++        int x;
++
++        for (x = 0; x < w; x += 16) {
++            vec_u8 p = filter_bilin_v_16(src + x, src_stride, my);
++
++            if (avg)
++                p = vec_avg((vec_u8)vec_ld(x, dst), p);
++            vec_st(p, x, dst);
++        }
++        src += src_stride;
++        dst += dst_stride;
++    }
++}
++
++static av_always_inline void filter_bilin_h_altivec(uint8_t *dst,
++                                                    ptrdiff_t dst_stride,
++                                                    const uint8_t *src,
++                                                    ptrdiff_t src_stride,
++                                                    int w, int h,
++                                                    int mx, int avg)
++{
++    int y;
++
++    if (w < 16) {
++        for (y = 0; y < h; y++) {
++            store_filter_small(dst, filter_bilin_h_16(src, mx), w, avg);
++            src += src_stride;
++            dst += dst_stride;
++        }
++        return;
++    }
++
++    if (((uintptr_t)dst | dst_stride) & 15) {
++        filter_bilin_c(dst, dst_stride, src, src_stride, w, h, 1, mx, avg);
++        return;
++    }
++
++    for (y = 0; y < h; y++) {
++        int x;
++
++        for (x = 0; x < w; x += 16) {
++            vec_u8 p = filter_bilin_h_16(src + x, mx);
++
++            if (avg)
++                p = vec_avg((vec_u8)vec_ld(x, dst), p);
++            vec_st(p, x, dst);
++        }
++        src += src_stride;
++        dst += dst_stride;
++    }
++}
++
++static av_always_inline vec_u8 splat_u8(unsigned v)
++{
++    return vec_splats((unsigned char)v);
++}
++
++static av_always_inline int sum_u8(const uint8_t *src, int n)
++{
++    int i, sum = 0;
++
++    for (i = 0; i < n; i++)
++        sum += src[i];
++
++    return sum;
++}
++
++static av_always_inline void fill16_altivec(uint8_t *dst, ptrdiff_t stride,
++                                            int h, unsigned v)
++{
++    vec_u8 row = splat_u8(v);
++    int y;
++
++    for (y = 0; y < h; y++) {
++        vec_st(row, 0, dst);
++        dst += stride;
++    }
++}
++
++static av_always_inline void fill32_altivec(uint8_t *dst, ptrdiff_t stride,
++                                            int h, unsigned v)
++{
++    vec_u8 row = splat_u8(v);
++    int y;
++
++    for (y = 0; y < h; y++) {
++        vec_st(row,  0, dst);
++        vec_st(row, 16, dst);
++        dst += stride;
++    }
++}
++
++static void vert_16x16_altivec(uint8_t *dst, ptrdiff_t stride,
++                               const uint8_t *left, const uint8_t *top)
++{
++    vec_u8 row = vec_ld(0, top);
++    int y;
++
++    for (y = 0; y < 16; y++) {
++        vec_st(row, 0, dst);
++        dst += stride;
++    }
++}
++
++static void vert_32x32_altivec(uint8_t *dst, ptrdiff_t stride,
++                               const uint8_t *left, const uint8_t *top)
++{
++    vec_u8 row0 = vec_ld( 0, top);
++    vec_u8 row1 = vec_ld(16, top);
++    int y;
++
++    for (y = 0; y < 32; y++) {
++        vec_st(row0,  0, dst);
++        vec_st(row1, 16, dst);
++        dst += stride;
++    }
++}
++
++static void hor_16x16_altivec(uint8_t *dst, ptrdiff_t stride,
++                              const uint8_t *left, const uint8_t *top)
++{
++    int y;
++
++    for (y = 0; y < 16; y++) {
++        vec_st(splat_u8(left[15 - y]), 0, dst);
++        dst += stride;
++    }
++}
++
++static void hor_32x32_altivec(uint8_t *dst, ptrdiff_t stride,
++                              const uint8_t *left, const uint8_t *top)
++{
++    int y;
++
++    for (y = 0; y < 32; y++) {
++        vec_u8 row = splat_u8(left[31 - y]);
++
++        vec_st(row,  0, dst);
++        vec_st(row, 16, dst);
++        dst += stride;
++    }
++}
++
++static void dc_16x16_altivec(uint8_t *dst, ptrdiff_t stride,
++                             const uint8_t *left, const uint8_t *top)
++{
++    fill16_altivec(dst, stride, 16,
++                   (sum_u8(left, 16) + sum_u8(top, 16) + 16) >> 5);
++}
++
++static void dc_32x32_altivec(uint8_t *dst, ptrdiff_t stride,
++                             const uint8_t *left, const uint8_t *top)
++{
++    fill32_altivec(dst, stride, 32,
++                   (sum_u8(left, 32) + sum_u8(top, 32) + 32) >> 6);
++}
++
++static void dc_left_16x16_altivec(uint8_t *dst, ptrdiff_t stride,
++                                  const uint8_t *left, const uint8_t *top)
++{
++    fill16_altivec(dst, stride, 16, (sum_u8(left, 16) + 8) >> 4);
++}
++
++static void dc_left_32x32_altivec(uint8_t *dst, ptrdiff_t stride,
++                                  const uint8_t *left, const uint8_t *top)
++{
++    fill32_altivec(dst, stride, 32, (sum_u8(left, 32) + 16) >> 5);
++}
++
++static void dc_top_16x16_altivec(uint8_t *dst, ptrdiff_t stride,
++                                 const uint8_t *left, const uint8_t *top)
++{
++    fill16_altivec(dst, stride, 16, (sum_u8(top, 16) + 8) >> 4);
++}
++
++static void dc_top_32x32_altivec(uint8_t *dst, ptrdiff_t stride,
++                                 const uint8_t *left, const uint8_t *top)
++{
++    fill32_altivec(dst, stride, 32, (sum_u8(top, 32) + 16) >> 5);
++}
++
++static void dc_128_16x16_altivec(uint8_t *dst, ptrdiff_t stride,
++                                 const uint8_t *left, const uint8_t *top)
++{
++    fill16_altivec(dst, stride, 16, 128);
++}
++
++static void dc_128_32x32_altivec(uint8_t *dst, ptrdiff_t stride,
++                                 const uint8_t *left, const uint8_t *top)
++{
++    fill32_altivec(dst, stride, 32, 128);
++}
++
++static void dc_127_16x16_altivec(uint8_t *dst, ptrdiff_t stride,
++                                 const uint8_t *left, const uint8_t *top)
++{
++    fill16_altivec(dst, stride, 16, 127);
++}
++
++static void dc_127_32x32_altivec(uint8_t *dst, ptrdiff_t stride,
++                                 const uint8_t *left, const uint8_t *top)
++{
++    fill32_altivec(dst, stride, 32, 127);
++}
++
++static void dc_129_16x16_altivec(uint8_t *dst, ptrdiff_t stride,
++                                 const uint8_t *left, const uint8_t *top)
++{
++    fill16_altivec(dst, stride, 16, 129);
++}
++
++static void dc_129_32x32_altivec(uint8_t *dst, ptrdiff_t stride,
++                                 const uint8_t *left, const uint8_t *top)
++{
++    fill32_altivec(dst, stride, 32, 129);
++}
++
++static void (*idct_idct_16x16_add_c)(uint8_t *dst, ptrdiff_t stride,
++                                     int16_t *block, int eob);
++static void (*idct_idct_32x32_add_c)(uint8_t *dst, ptrdiff_t stride,
++                                     int16_t *block, int eob);
++
++static av_always_inline int dc_only_idct_addend(int16_t *block, int bits)
++{
++    int t = ((block[0] * 11585 + (1 << 13)) >> 14);
++
++    t = (t * 11585 + (1 << 13)) >> 14;
++    block[0] = 0;
++
++    return (t + (1 << (bits - 1))) >> bits;
++}
++
++static av_always_inline vec_u8 add_dc_to_vec(vec_u8 pix, vec_s16 dc)
++{
++    const vec_u8 zero = vec_splat_u8(0);
++    vec_s16 hi = (vec_s16)vec_mergeh(zero, pix);
++    vec_s16 lo = (vec_s16)vec_mergel(zero, pix);
++
++    hi = vec_adds(hi, dc);
++    lo = vec_adds(lo, dc);
++
++    return vec_packsu(hi, lo);
++}
++
++static av_always_inline void idct_dc_add_16_altivec(uint8_t *dst,
++                                                    ptrdiff_t stride,
++                                                    int16_t *block)
++{
++    vec_s16 dc = vec_splats((short)dc_only_idct_addend(block, 6));
++    int y;
++
++    for (y = 0; y < 16; y++) {
++        vec_st(add_dc_to_vec(vec_ld(0, dst), dc), 0, dst);
++        dst += stride;
++    }
++}
++
++static av_always_inline void idct_dc_add_32_altivec(uint8_t *dst,
++                                                    ptrdiff_t stride,
++                                                    int16_t *block)
++{
++    vec_s16 dc = vec_splats((short)dc_only_idct_addend(block, 6));
++    int y;
++
++    for (y = 0; y < 32; y++) {
++        vec_st(add_dc_to_vec(vec_ld( 0, dst), dc),  0, dst);
++        vec_st(add_dc_to_vec(vec_ld(16, dst), dc), 16, dst);
++        dst += stride;
++    }
++}
++
++static void idct_idct_16x16_add_altivec(uint8_t *dst, ptrdiff_t stride,
++                                        int16_t *block, int eob)
++{
++    if (eob == 1) {
++        idct_dc_add_16_altivec(dst, stride, block);
++        return;
++    }
++
++    idct_idct_16x16_add_c(dst, stride, block, eob);
++}
++
++static void idct_idct_32x32_add_altivec(uint8_t *dst, ptrdiff_t stride,
++                                        int16_t *block, int eob)
++{
++    if (eob == 1) {
++        idct_dc_add_32_altivec(dst, stride, block);
++        return;
++    }
++
++    idct_idct_32x32_add_c(dst, stride, block, eob);
++}
++
++static av_always_inline vec_u8 not_u8(vec_u8 a)
++{
++    return vec_xor(a, vec_splat_u8(-1));
++}
++
++static av_always_inline vec_u8 absdiff_u8(vec_u8 a, vec_u8 b)
++{
++    return vec_or(vec_subs(a, b), vec_subs(b, a));
++}
++
++static av_always_inline vec_u8 cmpgt_u8(vec_u8 a, vec_u8 b)
++{
++    return (vec_u8)vec_cmpgt(a, b);
++}
++
++static av_always_inline vec_u8 cmpgt_u16_to_u8(vec_u16 a, vec_u16 b)
++{
++    vec_s16 gt = (vec_s16)vec_cmpgt(a, b);
++
++    return (vec_u8)vec_packs(gt, gt);
++}
++
++static av_always_inline vec_s16 u8_high_to_s16(vec_u8 a)
++{
++    const vec_u8 zero = vec_splat_u8(0);
++
++    return (vec_s16)vec_mergeh(zero, a);
++}
++
++static av_always_inline void store_u64(vec_u8 v, uint8_t *dst)
++{
++    uint8_t tmp[16] __attribute__((aligned(16)));
++
++    vec_st(v, 0, tmp);
++    AV_WN64(dst, AV_RN64(tmp));
++}
++
++static av_always_inline vec_u8 pack_u16_to_u8(vec_u16 a)
++{
++    return vec_packsu((vec_s16)a, (vec_s16)a);
++}
++
++static av_always_inline vec_u16 add_u8_to_u16(vec_u16 a, vec_u8 b)
++{
++    return vec_add(a, (vec_u16)vec_mergeh(vec_splat_u8(0), b));
++}
++
++static void loop_filter_v_4_8_altivec(uint8_t *dst, ptrdiff_t stride,
++                                      int E, int I, int H)
++{
++    const vec_u8 zero = vec_splat_u8(0);
++    const vec_u8 sign = splat_u8(0x80);
++    const vec_u16 one_u16 = vec_splat_u16(1);
++    const vec_u8 i8 = splat_u8(I);
++    const vec_u8 h8 = splat_u8(H);
++    const vec_u16 e16 = vec_splats((unsigned short)E);
++    const vec_u8 shift1 = vec_splat_u8(1);
++    const vec_u8 shift3 = vec_splat_u8(3);
++    const vec_s8 one = vec_splats((signed char)1);
++    const vec_s8 three = vec_splats((signed char)3);
++    const vec_s8 four = vec_splats((signed char)4);
++    vec_u8 p3 = unaligned_load(-4 * stride, dst);
++    vec_u8 p2 = unaligned_load(-3 * stride, dst);
++    vec_u8 p1 = unaligned_load(-2 * stride, dst);
++    vec_u8 p0 = unaligned_load(-1 * stride, dst);
++    vec_u8 q0 = unaligned_load( 0 * stride, dst);
++    vec_u8 q1 = unaligned_load( 1 * stride, dst);
++    vec_u8 q2 = unaligned_load( 2 * stride, dst);
++    vec_u8 q3 = unaligned_load( 3 * stride, dst);
++    vec_u8 over, edge_over, fm, hev, not_hev;
++    vec_u8 p1q1_abs = absdiff_u8(p1, q1);
++    vec_u8 p0q0_abs = absdiff_u8(p0, q0);
++    vec_u16 edge;
++    vec_s16 p1q1, q0p0, f16;
++    vec_s8 p1s, p0s, q0s, q1s, f, f1, f2, f_inner;
++    vec_u8 p1f, p0f, q0f, q1f;
++
++    over = cmpgt_u8(absdiff_u8(p3, p2), i8);
++    over = vec_or(over, cmpgt_u8(absdiff_u8(p2, p1), i8));
++    over = vec_or(over, cmpgt_u8(absdiff_u8(p1, p0), i8));
++    over = vec_or(over, cmpgt_u8(absdiff_u8(q1, q0), i8));
++    over = vec_or(over, cmpgt_u8(absdiff_u8(q2, q1), i8));
++    over = vec_or(over, cmpgt_u8(absdiff_u8(q3, q2), i8));
++
++    edge = vec_sl((vec_u16)vec_mergeh(zero, p0q0_abs), one_u16);
++    edge = vec_add(edge, (vec_u16)vec_mergeh(zero, vec_sr(p1q1_abs, shift1)));
++    edge_over = cmpgt_u16_to_u8(edge, e16);
++    fm = not_u8(vec_or(over, edge_over));
++
++    hev = vec_or(cmpgt_u8(absdiff_u8(p1, p0), h8),
++                 cmpgt_u8(absdiff_u8(q1, q0), h8));
++    not_hev = not_u8(hev);
++
++    p1s = (vec_s8)vec_xor(p1, sign);
++    p0s = (vec_s8)vec_xor(p0, sign);
++    q0s = (vec_s8)vec_xor(q0, sign);
++    q1s = (vec_s8)vec_xor(q1, sign);
++
++    q0p0 = vec_sub(u8_high_to_s16(q0), u8_high_to_s16(p0));
++    p1q1 = vec_sub(u8_high_to_s16(p1), u8_high_to_s16(q1));
++    p1q1 = vec_max(vec_min(p1q1, vec_splats((short)127)),
++                   vec_splats((short)-128));
++    f16 = vec_add(vec_add(q0p0, q0p0), q0p0);
++    f16 = vec_add(f16, vec_and(p1q1, (vec_s16)vec_mergeh(hev, hev)));
++    f = (vec_s8)vec_packs(f16, f16);
++    f = vec_and(f, (vec_s8)fm);
++
++    f1 = vec_sra(vec_adds(f, four), shift3);
++    f2 = vec_sra(vec_adds(f, three), shift3);
++
++    p0f = vec_xor((vec_u8)vec_adds(p0s, f2), sign);
++    q0f = vec_xor((vec_u8)vec_subs(q0s, f1), sign);
++
++    f_inner = vec_sra(vec_adds(f1, one), shift1);
++    f_inner = vec_and(f_inner, (vec_s8)not_hev);
++    f_inner = vec_and(f_inner, (vec_s8)fm);
++    p1f = vec_xor((vec_u8)vec_adds(p1s, f_inner), sign);
++    q1f = vec_xor((vec_u8)vec_subs(q1s, f_inner), sign);
++
++    store_u64(vec_sel(p1, p1f, fm), dst - 2 * stride);
++    store_u64(vec_sel(p0, p0f, fm), dst - 1 * stride);
++    store_u64(vec_sel(q0, q0f, fm), dst);
++    store_u64(vec_sel(q1, q1f, fm), dst + 1 * stride);
++}
++
++static void loop_filter_v_8_8_altivec(uint8_t *dst, ptrdiff_t stride,
++                                      int E, int I, int H)
++{
++    const vec_u8 zero = vec_splat_u8(0);
++    const vec_u8 one = vec_splat_u8(1);
++    const vec_u8 high8 = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
++                           0,    0,    0,    0,    0,    0,    0,    0 };
++    const vec_u8 i8 = splat_u8(I);
++    const vec_u16 e16 = vec_splats((unsigned short)E);
++    const vec_u16 c4 = vec_splat_u16(4);
++    const vec_u16 shift3 = vec_splat_u16(3);
++    vec_u8 p3 = unaligned_load(-4 * stride, dst);
++    vec_u8 p2 = unaligned_load(-3 * stride, dst);
++    vec_u8 p1 = unaligned_load(-2 * stride, dst);
++    vec_u8 p0 = unaligned_load(-1 * stride, dst);
++    vec_u8 q0 = unaligned_load( 0 * stride, dst);
++    vec_u8 q1 = unaligned_load( 1 * stride, dst);
++    vec_u8 q2 = unaligned_load( 2 * stride, dst);
++    vec_u8 q3 = unaligned_load( 3 * stride, dst);
++    vec_u8 p2f, p1f, p0f, q0f, q1f, q2f;
++    vec_u8 edge_over, flat, fm, over;
++    vec_u8 p1q1_abs = absdiff_u8(p1, q1);
++    vec_u8 p0q0_abs = absdiff_u8(p0, q0);
++    vec_u16 edge, s;
++
++    loop_filter_v_4_8_altivec(dst, stride, E, I, H);
++
++    over = cmpgt_u8(absdiff_u8(p3, p2), i8);
++    over = vec_or(over, cmpgt_u8(absdiff_u8(p2, p1), i8));
++    over = vec_or(over, cmpgt_u8(absdiff_u8(p1, p0), i8));
++    over = vec_or(over, cmpgt_u8(absdiff_u8(q1, q0), i8));
++    over = vec_or(over, cmpgt_u8(absdiff_u8(q2, q1), i8));
++    over = vec_or(over, cmpgt_u8(absdiff_u8(q3, q2), i8));
++    edge = vec_sl((vec_u16)vec_mergeh(vec_splat_u8(0), p0q0_abs),
++                  vec_splat_u16(1));
++    edge = vec_add(edge, (vec_u16)vec_mergeh(vec_splat_u8(0),
++                                             vec_sr(p1q1_abs, one)));
++    edge_over = cmpgt_u16_to_u8(edge, e16);
++    fm = not_u8(vec_or(over, edge_over));
++
++    over = cmpgt_u8(absdiff_u8(p3, p0), one);
++    over = vec_or(over, cmpgt_u8(absdiff_u8(p2, p0), one));
++    over = vec_or(over, cmpgt_u8(absdiff_u8(p1, p0), one));
++    over = vec_or(over, cmpgt_u8(absdiff_u8(q1, q0), one));
++    over = vec_or(over, cmpgt_u8(absdiff_u8(q2, q0), one));
++    over = vec_or(over, cmpgt_u8(absdiff_u8(q3, q0), one));
++    flat = vec_and(vec_and(not_u8(over), fm), high8);
++    if (vec_all_eq(flat, zero))
++        return;
++
++    s = vec_add((vec_u16)vec_mergeh(vec_splat_u8(0), p3),
++                (vec_u16)vec_mergeh(vec_splat_u8(0), p3));
++    s = add_u8_to_u16(s, p3);
++    s = add_u8_to_u16(s, p2);
++    s = add_u8_to_u16(s, p2);
++    s = add_u8_to_u16(s, p1);
++    s = add_u8_to_u16(s, p0);
++    s = add_u8_to_u16(s, q0);
++    p2f = pack_u16_to_u8(vec_sr(vec_add(s, c4), shift3));
++
++    s = vec_add((vec_u16)vec_mergeh(vec_splat_u8(0), p3),
++                (vec_u16)vec_mergeh(vec_splat_u8(0), p3));
++    s = add_u8_to_u16(s, p2);
++    s = add_u8_to_u16(s, p1);
++    s = add_u8_to_u16(s, p1);
++    s = add_u8_to_u16(s, p0);
++    s = add_u8_to_u16(s, q0);
++    s = add_u8_to_u16(s, q1);
++    p1f = pack_u16_to_u8(vec_sr(vec_add(s, c4), shift3));
++
++    s = (vec_u16)vec_mergeh(vec_splat_u8(0), p3);
++    s = add_u8_to_u16(s, p2);
++    s = add_u8_to_u16(s, p1);
++    s = add_u8_to_u16(s, p0);
++    s = add_u8_to_u16(s, p0);
++    s = add_u8_to_u16(s, q0);
++    s = add_u8_to_u16(s, q1);
++    s = add_u8_to_u16(s, q2);
++    p0f = pack_u16_to_u8(vec_sr(vec_add(s, c4), shift3));
++
++    s = (vec_u16)vec_mergeh(vec_splat_u8(0), p2);
++    s = add_u8_to_u16(s, p1);
++    s = add_u8_to_u16(s, p0);
++    s = add_u8_to_u16(s, q0);
++    s = add_u8_to_u16(s, q0);
++    s = add_u8_to_u16(s, q1);
++    s = add_u8_to_u16(s, q2);
++    s = add_u8_to_u16(s, q3);
++    q0f = pack_u16_to_u8(vec_sr(vec_add(s, c4), shift3));
++
++    s = (vec_u16)vec_mergeh(vec_splat_u8(0), p1);
++    s = add_u8_to_u16(s, p0);
++    s = add_u8_to_u16(s, q0);
++    s = add_u8_to_u16(s, q1);
++    s = add_u8_to_u16(s, q1);
++    s = add_u8_to_u16(s, q2);
++    s = add_u8_to_u16(s, q3);
++    s = add_u8_to_u16(s, q3);
++    q1f = pack_u16_to_u8(vec_sr(vec_add(s, c4), shift3));
++
++    s = (vec_u16)vec_mergeh(vec_splat_u8(0), p0);
++    s = add_u8_to_u16(s, q0);
++    s = add_u8_to_u16(s, q1);
++    s = add_u8_to_u16(s, q2);
++    s = add_u8_to_u16(s, q2);
++    s = add_u8_to_u16(s, q3);
++    s = add_u8_to_u16(s, q3);
++    s = add_u8_to_u16(s, q3);
++    q2f = pack_u16_to_u8(vec_sr(vec_add(s, c4), shift3));
++
++    p2 = unaligned_load(-3 * stride, dst);
++    p1 = unaligned_load(-2 * stride, dst);
++    p0 = unaligned_load(-1 * stride, dst);
++    q0 = unaligned_load( 0 * stride, dst);
++    q1 = unaligned_load( 1 * stride, dst);
++    q2 = unaligned_load( 2 * stride, dst);
++
++    store_u64(vec_sel(p2, p2f, flat), dst - 3 * stride);
++    store_u64(vec_sel(p1, p1f, flat), dst - 2 * stride);
++    store_u64(vec_sel(p0, p0f, flat), dst - 1 * stride);
++    store_u64(vec_sel(q0, q0f, flat), dst);
++    store_u64(vec_sel(q1, q1f, flat), dst + 1 * stride);
++    store_u64(vec_sel(q2, q2f, flat), dst + 2 * stride);
++}
++
++static void loop_filter_v_44_16_altivec(uint8_t *dst, ptrdiff_t stride,
++                                        int E, int I, int H)
++{
++    loop_filter_v_4_8_altivec(dst,     stride, E & 0xff, I & 0xff, H & 0xff);
++    loop_filter_v_4_8_altivec(dst + 8, stride, E >> 8,   I >> 8,   H >> 8);
++}
++
++static void loop_filter_v_48_16_altivec(uint8_t *dst, ptrdiff_t stride,
++                                        int E, int I, int H)
++{
++    loop_filter_v_4_8_altivec(dst,     stride, E & 0xff, I & 0xff, H & 0xff);
++    loop_filter_v_8_8_altivec(dst + 8, stride, E >> 8,   I >> 8,   H >> 8);
++}
++
++static void loop_filter_v_84_16_altivec(uint8_t *dst, ptrdiff_t stride,
++                                        int E, int I, int H)
++{
++    loop_filter_v_8_8_altivec(dst,     stride, E & 0xff, I & 0xff, H & 0xff);
++    loop_filter_v_4_8_altivec(dst + 8, stride, E >> 8,   I >> 8,   H >> 8);
++}
++
++static void loop_filter_v_88_16_altivec(uint8_t *dst, ptrdiff_t stride,
++                                        int E, int I, int H)
++{
++    loop_filter_v_8_8_altivec(dst,     stride, E & 0xff, I & 0xff, H & 0xff);
++    loop_filter_v_8_8_altivec(dst + 8, stride, E >> 8,   I >> 8,   H >> 8);
++}
++
++#define VP9_COPY_ALIGNED(W, align)                                         \
++static void copy##W##_altivec(uint8_t *dst, ptrdiff_t dst_stride,          \
++                              const uint8_t *src, ptrdiff_t src_stride,    \
++                              int h, int mx, int my)                       \
++{                                                                          \
++    int y;                                                                 \
++                                                                           \
++    if (((uintptr_t)dst | dst_stride) & ((align) - 1)) {                   \
++        copy_c(dst, dst_stride, src, src_stride, W, h);                    \
++        return;                                                            \
++    }                                                                      \
++    for (y = 0; y < h; y++) {                                              \
++        copy##W##_altivec_row(dst, src);                                   \
++        src += src_stride;                                                 \
++        dst += dst_stride;                                                 \
++    }                                                                      \
++}
++
++#define VP9_AVG_ALIGNED(W, align)                                          \
++static void avg##W##_altivec(uint8_t *dst, ptrdiff_t dst_stride,           \
++                             const uint8_t *src, ptrdiff_t src_stride,     \
++                             int h, int mx, int my)                        \
++{                                                                          \
++    int y;                                                                 \
++                                                                           \
++    if (((uintptr_t)dst | dst_stride) & ((align) - 1)) {                   \
++        avg_c(dst, dst_stride, src, src_stride, W, h);                     \
++        return;                                                            \
++    }                                                                      \
++    for (y = 0; y < h; y++) {                                              \
++        avg##W##_altivec_row(dst, src);                                    \
++        src += src_stride;                                                 \
++        dst += dst_stride;                                                 \
++    }                                                                      \
++}
++
++static av_always_inline void copy64_altivec_row(uint8_t *dst,
++                                                const uint8_t *src)
++{
++    const vec_u8 perm = vec_lvsl(0, src);
++
++    vec_st(load_with_perm_vec( 0, src, perm),  0, dst);
++    vec_st(load_with_perm_vec(16, src, perm), 16, dst);
++    vec_st(load_with_perm_vec(32, src, perm), 32, dst);
++    vec_st(load_with_perm_vec(48, src, perm), 48, dst);
++}
++
++static av_always_inline void copy32_altivec_row(uint8_t *dst,
++                                                const uint8_t *src)
++{
++    const vec_u8 perm = vec_lvsl(0, src);
++
++    vec_st(load_with_perm_vec( 0, src, perm),  0, dst);
++    vec_st(load_with_perm_vec(16, src, perm), 16, dst);
++}
++
++static av_always_inline void copy16_altivec_row(uint8_t *dst,
++                                                const uint8_t *src)
++{
++    const vec_u8 perm = vec_lvsl(0, src);
++
++    vec_st(load_with_perm_vec(0, src, perm), 0, dst);
++}
++
++static av_always_inline void copy8_altivec_row(uint8_t *dst,
++                                               const uint8_t *src)
++{
++    const vec_u8 perm = vec_lvsl(0, src);
++    vec_u8 s = load_with_perm_vec(0, src, perm);
++
++    store_u32(s, dst, 0);
++    store_u32(s, dst, 4);
++}
++
++static av_always_inline void copy4_altivec_row(uint8_t *dst,
++                                               const uint8_t *src)
++{
++    const vec_u8 perm = vec_lvsl(0, src);
++
++    store_u32(load_with_perm_vec(0, src, perm), dst, 0);
++}
++
++static av_always_inline void avg64_altivec_row(uint8_t *dst,
++                                               const uint8_t *src)
++{
++    const vec_u8 src_perm = vec_lvsl(0, src);
++    vec_u8 s0 = load_with_perm_vec( 0, src, src_perm);
++    vec_u8 s1 = load_with_perm_vec(16, src, src_perm);
++    vec_u8 s2 = load_with_perm_vec(32, src, src_perm);
++    vec_u8 s3 = load_with_perm_vec(48, src, src_perm);
++
++    vec_st(vec_avg(s0, vec_ld( 0, dst)),  0, dst);
++    vec_st(vec_avg(s1, vec_ld(16, dst)), 16, dst);
++    vec_st(vec_avg(s2, vec_ld(32, dst)), 32, dst);
++    vec_st(vec_avg(s3, vec_ld(48, dst)), 48, dst);
++}
++
++static av_always_inline void avg32_altivec_row(uint8_t *dst,
++                                               const uint8_t *src)
++{
++    const vec_u8 src_perm = vec_lvsl(0, src);
++    vec_u8 s0 = load_with_perm_vec( 0, src, src_perm);
++    vec_u8 s1 = load_with_perm_vec(16, src, src_perm);
++
++    vec_st(vec_avg(s0, vec_ld( 0, dst)),  0, dst);
++    vec_st(vec_avg(s1, vec_ld(16, dst)), 16, dst);
++}
++
++static av_always_inline void avg16_altivec_row(uint8_t *dst,
++                                               const uint8_t *src)
++{
++    const vec_u8 src_perm = vec_lvsl(0, src);
++
++    vec_st(vec_avg(load_with_perm_vec(0, src, src_perm), vec_ld(0, dst)), 0, dst);
++}
++
++static av_always_inline void avg8_altivec_row(uint8_t *dst,
++                                              const uint8_t *src)
++{
++    const vec_u8 src_perm = vec_lvsl(0, src);
++    const vec_u8 dst_perm = vec_lvsl(0, dst);
++    vec_u8 s = load_with_perm_vec(0, src, src_perm);
++    vec_u8 d = load_with_perm_vec(0, dst, dst_perm);
++    vec_u8 a = vec_avg(s, d);
++
++    store_u32(a, dst, 0);
++    store_u32(a, dst, 4);
++}
++
++static av_always_inline void avg4_altivec_row(uint8_t *dst,
++                                              const uint8_t *src)
++{
++    const vec_u8 src_perm = vec_lvsl(0, src);
++    const vec_u8 dst_perm = vec_lvsl(0, dst);
++
++    store_u32(vec_avg(load_with_perm_vec(0, src, src_perm),
++                      load_with_perm_vec(0, dst, dst_perm)), dst, 0);
++}
++
++VP9_COPY_ALIGNED(64, 16)
++VP9_COPY_ALIGNED(32, 16)
++VP9_COPY_ALIGNED(16, 16)
++VP9_COPY_ALIGNED( 8, 16)
++VP9_COPY_ALIGNED( 4, 16)
++
++VP9_AVG_ALIGNED(64, 16)
++VP9_AVG_ALIGNED(32, 16)
++VP9_AVG_ALIGNED(16, 16)
++VP9_AVG_ALIGNED( 8, 16)
++VP9_AVG_ALIGNED( 4, 16)
++
++#define VP9_8TAP_V(sz, filter_name, filter_idx, type, avg)                 \
++static void type##_8tap_##filter_name##_##sz##v_altivec(uint8_t *dst,      \
++                                                        ptrdiff_t dst_stride, \
++                                                        const uint8_t *src, \
++                                                        ptrdiff_t src_stride, \
++                                                        int h, int mx, int my) \
++{                                                                          \
++    filter_8tap_v_altivec(dst, dst_stride, src, src_stride, sz, h,         \
++                          ff_vp9_subpel_filters[filter_idx][my], avg);     \
++}
++
++#define VP9_8TAP_V_FUNCS(sz, type, avg)              \
++    VP9_8TAP_V(sz, smooth,  FILTER_8TAP_SMOOTH,  type, avg) \
++    VP9_8TAP_V(sz, regular, FILTER_8TAP_REGULAR, type, avg) \
++    VP9_8TAP_V(sz, sharp,   FILTER_8TAP_SHARP,   type, avg)
++
++VP9_8TAP_V_FUNCS(64, put, 0)
++VP9_8TAP_V_FUNCS(32, put, 0)
++VP9_8TAP_V_FUNCS(16, put, 0)
++VP9_8TAP_V_FUNCS( 8, put, 0)
++VP9_8TAP_V_FUNCS( 4, put, 0)
++
++VP9_8TAP_V_FUNCS(64, avg, 1)
++VP9_8TAP_V_FUNCS(32, avg, 1)
++VP9_8TAP_V_FUNCS(16, avg, 1)
++VP9_8TAP_V_FUNCS( 8, avg, 1)
++VP9_8TAP_V_FUNCS( 4, avg, 1)
++
++#undef VP9_8TAP_V
++#undef VP9_8TAP_V_FUNCS
++
++#define VP9_8TAP_H(sz, filter_name, filter_idx, type, avg)                 \
++static void type##_8tap_##filter_name##_##sz##h_altivec(uint8_t *dst,      \
++                                                        ptrdiff_t dst_stride, \
++                                                        const uint8_t *src, \
++                                                        ptrdiff_t src_stride, \
++                                                        int h, int mx, int my) \
++{                                                                          \
++    filter_8tap_h_altivec(dst, dst_stride, src, src_stride, sz, h,         \
++                          ff_vp9_subpel_filters[filter_idx][mx], avg);     \
++}
++
++#define VP9_8TAP_H_FUNCS(sz, type, avg)              \
++    VP9_8TAP_H(sz, smooth,  FILTER_8TAP_SMOOTH,  type, avg) \
++    VP9_8TAP_H(sz, regular, FILTER_8TAP_REGULAR, type, avg) \
++    VP9_8TAP_H(sz, sharp,   FILTER_8TAP_SHARP,   type, avg)
++
++VP9_8TAP_H_FUNCS(64, put, 0)
++VP9_8TAP_H_FUNCS(32, put, 0)
++VP9_8TAP_H_FUNCS(16, put, 0)
++VP9_8TAP_H_FUNCS( 8, put, 0)
++VP9_8TAP_H_FUNCS( 4, put, 0)
++
++VP9_8TAP_H_FUNCS(64, avg, 1)
++VP9_8TAP_H_FUNCS(32, avg, 1)
++VP9_8TAP_H_FUNCS(16, avg, 1)
++VP9_8TAP_H_FUNCS( 8, avg, 1)
++VP9_8TAP_H_FUNCS( 4, avg, 1)
++
++#undef VP9_8TAP_H
++#undef VP9_8TAP_H_FUNCS
++
++#define VP9_8TAP_HV(sz, filter_name, filter_idx, type, avg)                \
++static void type##_8tap_##filter_name##_##sz##hv_altivec(uint8_t *dst,     \
++                                                         ptrdiff_t dst_stride, \
++                                                         const uint8_t *src, \
++                                                         ptrdiff_t src_stride, \
++                                                         int h, int mx, int my) \
++{                                                                          \
++    const int tmp_stride = sz < 16 ? 16 : sz;                              \
++    uint8_t tmp[(sz < 16 ? 16 : sz) * 71] __attribute__((aligned(16)));    \
++                                                                           \
++    filter_8tap_h_altivec(tmp, tmp_stride,                                 \
++                          src - 3 * src_stride, src_stride,                \
++                          sz, h + 7,                                       \
++                          ff_vp9_subpel_filters[filter_idx][mx], 0);       \
++    filter_8tap_v_altivec(dst, dst_stride, tmp + 3 * tmp_stride,           \
++                          tmp_stride, sz, h,                               \
++                          ff_vp9_subpel_filters[filter_idx][my], avg);     \
++}
++
++#define VP9_8TAP_HV_FUNCS(sz, type, avg)             \
++    VP9_8TAP_HV(sz, smooth,  FILTER_8TAP_SMOOTH,  type, avg) \
++    VP9_8TAP_HV(sz, regular, FILTER_8TAP_REGULAR, type, avg) \
++    VP9_8TAP_HV(sz, sharp,   FILTER_8TAP_SHARP,   type, avg)
++
++VP9_8TAP_HV_FUNCS(64, put, 0)
++VP9_8TAP_HV_FUNCS(32, put, 0)
++VP9_8TAP_HV_FUNCS(16, put, 0)
++VP9_8TAP_HV_FUNCS( 8, put, 0)
++VP9_8TAP_HV_FUNCS( 4, put, 0)
++
++VP9_8TAP_HV_FUNCS(64, avg, 1)
++VP9_8TAP_HV_FUNCS(32, avg, 1)
++VP9_8TAP_HV_FUNCS(16, avg, 1)
++VP9_8TAP_HV_FUNCS( 8, avg, 1)
++VP9_8TAP_HV_FUNCS( 4, avg, 1)
++
++#undef VP9_8TAP_HV
++#undef VP9_8TAP_HV_FUNCS
++
++#define VP9_BILIN_V(sz, type, avg)                                         \
++static void type##_bilin_##sz##v_altivec(uint8_t *dst,                     \
++                                         ptrdiff_t dst_stride,             \
++                                         const uint8_t *src,               \
++                                         ptrdiff_t src_stride,             \
++                                         int h, int mx, int my)            \
++{                                                                          \
++    filter_bilin_v_altivec(dst, dst_stride, src, src_stride, sz, h, my, avg); \
++}
++
++#define VP9_BILIN_H(sz, type, avg)                                         \
++static void type##_bilin_##sz##h_altivec(uint8_t *dst,                     \
++                                         ptrdiff_t dst_stride,             \
++                                         const uint8_t *src,               \
++                                         ptrdiff_t src_stride,             \
++                                         int h, int mx, int my)            \
++{                                                                          \
++    filter_bilin_h_altivec(dst, dst_stride, src, src_stride, sz, h, mx, avg); \
++}
++
++#define VP9_BILIN_HV(sz, type, avg)                                        \
++static void type##_bilin_##sz##hv_altivec(uint8_t *dst,                    \
++                                          ptrdiff_t dst_stride,            \
++                                          const uint8_t *src,              \
++                                          ptrdiff_t src_stride,            \
++                                          int h, int mx, int my)           \
++{                                                                          \
++    uint8_t tmp[64 * 65] __attribute__((aligned(16)));                     \
++                                                                           \
++    filter_bilin_h_altivec(tmp, 64, src, src_stride, sz, h + 1, mx, 0);    \
++    filter_bilin_v_altivec(dst, dst_stride, tmp, 64, sz, h, my, avg);      \
++}
++
++#define VP9_BILIN_FUNCS(sz, type, avg) \
++    VP9_BILIN_H(sz,  type, avg)        \
++    VP9_BILIN_V(sz,  type, avg)        \
++    VP9_BILIN_HV(sz, type, avg)
++
++VP9_BILIN_FUNCS(64, put, 0)
++VP9_BILIN_FUNCS(32, put, 0)
++VP9_BILIN_FUNCS(16, put, 0)
++VP9_BILIN_FUNCS( 8, put, 0)
++VP9_BILIN_FUNCS( 4, put, 0)
++
++VP9_BILIN_FUNCS(64, avg, 1)
++VP9_BILIN_FUNCS(32, avg, 1)
++VP9_BILIN_FUNCS(16, avg, 1)
++VP9_BILIN_FUNCS( 8, avg, 1)
++VP9_BILIN_FUNCS( 4, avg, 1)
++
++#undef VP9_BILIN_H
++#undef VP9_BILIN_V
++#undef VP9_BILIN_HV
++#undef VP9_BILIN_FUNCS
++
++#define init_fpel(idx1, idx2, sz, type)              \
++    dsp->mc[idx1][FILTER_8TAP_SMOOTH ][idx2][0][0] = \
++    dsp->mc[idx1][FILTER_8TAP_REGULAR][idx2][0][0] = \
++    dsp->mc[idx1][FILTER_8TAP_SHARP  ][idx2][0][0] = \
++    dsp->mc[idx1][FILTER_BILINEAR    ][idx2][0][0] = type##sz##_altivec
++
++#define init_copy_avg(idx, sz)   \
++    init_fpel(idx, 0, sz, copy); \
++    init_fpel(idx, 1, sz, avg)
++
++#define init_subpel_v(idx1, idx2, sz, filter_name, filter_idx, type) \
++    dsp->mc[idx1][filter_idx][idx2][0][1] = \
++        type##_8tap_##filter_name##_##sz##v_altivec
++
++#define init_subpel_v_filters(idx1, idx2, sz, type) \
++    init_subpel_v(idx1, idx2, sz, smooth,  FILTER_8TAP_SMOOTH,  type); \
++    init_subpel_v(idx1, idx2, sz, regular, FILTER_8TAP_REGULAR, type); \
++    init_subpel_v(idx1, idx2, sz, sharp,   FILTER_8TAP_SHARP,   type)
++
++#define init_subpel_v_avg(idx, sz)      \
++    init_subpel_v_filters(idx, 0, sz, put); \
++    init_subpel_v_filters(idx, 1, sz, avg)
++
++#define init_subpel_h(idx1, idx2, sz, filter_name, filter_idx, type) \
++    dsp->mc[idx1][filter_idx][idx2][1][0] = \
++        type##_8tap_##filter_name##_##sz##h_altivec
++
++#define init_subpel_h_filters(idx1, idx2, sz, type) \
++    init_subpel_h(idx1, idx2, sz, smooth,  FILTER_8TAP_SMOOTH,  type); \
++    init_subpel_h(idx1, idx2, sz, regular, FILTER_8TAP_REGULAR, type); \
++    init_subpel_h(idx1, idx2, sz, sharp,   FILTER_8TAP_SHARP,   type)
++
++#define init_subpel_h_avg(idx, sz)      \
++    init_subpel_h_filters(idx, 0, sz, put); \
++    init_subpel_h_filters(idx, 1, sz, avg)
++
++#define init_subpel_hv(idx1, idx2, sz, filter_name, filter_idx, type) \
++    dsp->mc[idx1][filter_idx][idx2][1][1] = \
++        type##_8tap_##filter_name##_##sz##hv_altivec
++
++#define init_subpel_hv_filters(idx1, idx2, sz, type) \
++    init_subpel_hv(idx1, idx2, sz, smooth,  FILTER_8TAP_SMOOTH,  type); \
++    init_subpel_hv(idx1, idx2, sz, regular, FILTER_8TAP_REGULAR, type); \
++    init_subpel_hv(idx1, idx2, sz, sharp,   FILTER_8TAP_SHARP,   type)
++
++#define init_subpel_hv_avg(idx, sz)      \
++    init_subpel_hv_filters(idx, 0, sz, put); \
++    init_subpel_hv_filters(idx, 1, sz, avg)
++
++#define init_bilin(idx, idx2, sz, type)       \
++    dsp->mc[idx][FILTER_BILINEAR][idx2][1][0] = type##_bilin_##sz##h_altivec; \
++    dsp->mc[idx][FILTER_BILINEAR][idx2][0][1] = type##_bilin_##sz##v_altivec; \
++    dsp->mc[idx][FILTER_BILINEAR][idx2][1][1] = type##_bilin_##sz##hv_altivec
++
++#define init_bilin_avg(idx, sz) \
++    init_bilin(idx, 0, sz, put); \
++    init_bilin(idx, 1, sz, avg)
++
++static av_cold void vp9dsp_intra_init_ppc(VP9DSPContext *dsp)
++{
++#define init_intra(tx, sz) \
++    dsp->intra_pred[tx][VERT_PRED]    = vert_##sz##_altivec; \
++    dsp->intra_pred[tx][HOR_PRED]     = hor_##sz##_altivec; \
++    dsp->intra_pred[tx][DC_PRED]      = dc_##sz##_altivec; \
++    dsp->intra_pred[tx][LEFT_DC_PRED] = dc_left_##sz##_altivec; \
++    dsp->intra_pred[tx][TOP_DC_PRED]  = dc_top_##sz##_altivec; \
++    dsp->intra_pred[tx][DC_128_PRED]  = dc_128_##sz##_altivec; \
++    dsp->intra_pred[tx][DC_127_PRED]  = dc_127_##sz##_altivec; \
++    dsp->intra_pred[tx][DC_129_PRED]  = dc_129_##sz##_altivec
++
++    init_intra(TX_16X16, 16x16);
++    init_intra(TX_32X32, 32x32);
++
++#undef init_intra
++}
++
++static av_cold void vp9dsp_mc_init_ppc(VP9DSPContext *dsp)
++{
++    init_copy_avg(0, 64);
++    init_copy_avg(1, 32);
++    init_copy_avg(2, 16);
++    init_copy_avg(3,  8);
++    init_copy_avg(4,  4);
++
++    init_subpel_v_avg(0, 64);
++    init_subpel_v_avg(1, 32);
++    init_subpel_v_avg(2, 16);
++    init_subpel_v_avg(3,  8);
++    init_subpel_v_avg(4,  4);
++
++    init_subpel_h_avg(0, 64);
++    init_subpel_h_avg(1, 32);
++    init_subpel_h_avg(2, 16);
++    init_subpel_h_avg(3,  8);
++    init_subpel_h_avg(4,  4);
++
++    init_subpel_hv_avg(0, 64);
++    init_subpel_hv_avg(1, 32);
++    init_subpel_hv_avg(2, 16);
++    init_subpel_hv_avg(3,  8);
++    init_subpel_hv_avg(4,  4);
++
++    init_bilin_avg(0, 64);
++    init_bilin_avg(1, 32);
++    init_bilin_avg(2, 16);
++    init_bilin_avg(3,  8);
++    init_bilin_avg(4,  4);
++}
++
++static av_cold void vp9dsp_itxfm_init_ppc(VP9DSPContext *dsp)
++{
++    if (dsp->itxfm_add[TX_16X16][DCT_DCT] &&
++        dsp->itxfm_add[TX_16X16][DCT_DCT] != idct_idct_16x16_add_altivec) {
++        idct_idct_16x16_add_c = dsp->itxfm_add[TX_16X16][DCT_DCT];
++        dsp->itxfm_add[TX_16X16][DCT_DCT] = idct_idct_16x16_add_altivec;
++    }
++    if (dsp->itxfm_add[TX_32X32][DCT_DCT] &&
++        dsp->itxfm_add[TX_32X32][DCT_DCT] != idct_idct_32x32_add_altivec) {
++        idct_idct_32x32_add_c = dsp->itxfm_add[TX_32X32][DCT_DCT];
++        dsp->itxfm_add[TX_32X32][DCT_DCT] = idct_idct_32x32_add_altivec;
++    }
++}
++
++static av_cold void vp9dsp_loopfilter_init_ppc(VP9DSPContext *dsp)
++{
++    dsp->loop_filter_8[0][1] = loop_filter_v_4_8_altivec;
++    dsp->loop_filter_8[1][1] = loop_filter_v_8_8_altivec;
++    dsp->loop_filter_mix2[0][0][1] = loop_filter_v_44_16_altivec;
++    dsp->loop_filter_mix2[0][1][1] = loop_filter_v_48_16_altivec;
++    dsp->loop_filter_mix2[1][0][1] = loop_filter_v_84_16_altivec;
++    dsp->loop_filter_mix2[1][1][1] = loop_filter_v_88_16_altivec;
++}
++
++#endif /* HAVE_ALTIVEC && HAVE_BIGENDIAN */
++
++av_cold void ff_vp9dsp_init_ppc(VP9DSPContext *dsp, int bpp)
++{
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++    if (bpp == 8 && PPC_ALTIVEC(av_get_cpu_flags())) {
++        vp9dsp_intra_init_ppc(dsp);
++        vp9dsp_mc_init_ppc(dsp);
++        vp9dsp_itxfm_init_ppc(dsp);
++        vp9dsp_loopfilter_init_ppc(dsp);
++    }
++#endif /* HAVE_ALTIVEC && HAVE_BIGENDIAN */
++}
+diff --git a/libavcodec/vp9dsp.c b/libavcodec/vp9dsp.c
+index 147486e..e3d9896 100644
+--- a/libavcodec/vp9dsp.c
++++ b/libavcodec/vp9dsp.c
+@@ -108,5 +108,7 @@ av_cold void ff_vp9dsp_init(VP9DSPContext *dsp, int bpp, int bitexact)
+     ff_vp9dsp_init_mips(dsp, bpp);
+ #elif ARCH_LOONGARCH
+     ff_vp9dsp_init_loongarch(dsp, bpp);
++#elif ARCH_PPC
++    ff_vp9dsp_init_ppc(dsp, bpp);
+ #endif
+ }
+diff --git a/libavcodec/vp9dsp.h b/libavcodec/vp9dsp.h
+index 0e93224..73df841 100644
+--- a/libavcodec/vp9dsp.h
++++ b/libavcodec/vp9dsp.h
+@@ -135,5 +135,6 @@ void ff_vp9dsp_init_riscv(VP9DSPContext *dsp, int bpp, int bitexact);
+ void ff_vp9dsp_init_x86(VP9DSPContext *dsp, int bpp, int bitexact);
+ void ff_vp9dsp_init_mips(VP9DSPContext *dsp, int bpp);
+ void ff_vp9dsp_init_loongarch(VP9DSPContext *dsp, int bpp);
++void ff_vp9dsp_init_ppc(VP9DSPContext *dsp, int bpp);
+ 
+ #endif /* AVCODEC_VP9DSP_H */
+-- 
+2.43.0
+

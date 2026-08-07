@@ -1,0 +1,532 @@
+From 6372eb0219ac7fb2a6d1240f6f9beea384ea7e27 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 24 Jul 2026 06:06:41 +0000
+Subject: [PATCH 15/20] avcodec/ppc: VP9 horizontal loop filters (4/8-wide +
+ mix2) AltiVec (O2)
+
+Add the horizontal (column-edge) VP9 loop filters to vp9dsp_altivec.c,
+reusing the existing vertical (row-edge) filter arithmetic via an 8x8
+transpose:
+
+  - loop_filter_h_4_8 / loop_filter_h_8_8       (loop_filter_8[0/1][0])
+  - loop_filter_h_{44,48,84,88}_16              (loop_filter_mix2[*][*][0])
+
+The 4-wide narrow filter and the 8-wide flat8in average are factored out
+of loop_filter_v_4_8/v_8_8 into a shared filter_core_8() operating purely
+on register vectors (samples in the high 8 lanes). The vertical path loads
+8 samples per tap by stride; the horizontal path loads 8 rows around the
+edge, transposes them into per-tap column vectors, runs the same core, and
+transposes the modified taps back before storing. The vertical output is
+bit-identical to before the refactor (the removed early-out on an all-zero
+flat mask is subsumed by the vec_sel merge, which yields the same result).
+
+transpose_8x8_u8() is a 3-level vec_mergeh/mergel network plus a vec_sld to
+un-pack the two-columns-per-vector intermediate; it is an involution so the
+same routine serves both the load->core and core->store directions. The
+network was verified by exhaustive simulation of the index arithmetic.
+
+All loads use unaligned_load (per-row alignment shift), so no stride%16
+assumption is made, matching the fix applied to the vertical filters.
+
+Validated with the qemu -cpu 7400 checkasm harness: vp9dsp.loopfilter real
+ALTIVEC dispatch across 7 seeds, the six new h functions confirmed selected
+and bit-exact against the C reference; full checkasm suite 529/529 (was 523,
++6 newly-dispatching functions). No non-emulated performance claim is made.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RRd5iHpy8XYruiyTHUT6Ru
+---
+ libavcodec/ppc/vp9dsp_altivec.c | 424 ++++++++++++++++++++++----------
+ 1 file changed, 298 insertions(+), 126 deletions(-)
+
+diff --git a/libavcodec/ppc/vp9dsp_altivec.c b/libavcodec/ppc/vp9dsp_altivec.c
+index c91c70a..fe80379 100644
+--- a/libavcodec/ppc/vp9dsp_altivec.c
++++ b/libavcodec/ppc/vp9dsp_altivec.c
+@@ -875,10 +875,28 @@ static av_always_inline vec_u16 add_u8_to_u16(vec_u16 a, vec_u8 b)
+     return vec_add(a, (vec_u16)vec_mergeh(vec_splat_u8(0), b));
+ }
+ 
+-static void loop_filter_v_4_8_altivec(uint8_t *dst, ptrdiff_t stride,
+-                                      int E, int I, int H)
++/*
++ * Core VP9 narrow (4-wide) + flat8in (8-wide) loop-filter arithmetic on
++ * register vectors. Inputs p3..q3 carry the 8 filtered samples in the high
++ * 8 byte lanes (as produced by unaligned_load of a row, or by an 8x8
++ * transpose). Outputs the (possibly) modified p2..q2 in the same layout.
++ *
++ * wd8 == 0 selects the 4-wide filter (p2/q2 returned unchanged, only
++ * p1/p0/q0/q1 touched); wd8 == 1 additionally applies the flat8in average
++ * where the flat mask is set. This mirrors the C loop_filter() for wd 4/8
++ * and is shared by both the vertical (row-edge) and horizontal (col-edge,
++ * via transpose) entry points.
++ */
++static av_always_inline void filter_core_8(vec_u8 p3, vec_u8 p2, vec_u8 p1,
++                                           vec_u8 p0, vec_u8 q0, vec_u8 q1,
++                                           vec_u8 q2, vec_u8 q3,
++                                           int E, int I, int H, int wd8,
++                                           vec_u8 *out_p2, vec_u8 *out_p1,
++                                           vec_u8 *out_p0, vec_u8 *out_q0,
++                                           vec_u8 *out_q1, vec_u8 *out_q2)
+ {
+     const vec_u8 zero = vec_splat_u8(0);
++    const vec_u8 one = vec_splat_u8(1);
+     const vec_u8 sign = splat_u8(0x80);
+     const vec_u16 one_u16 = vec_splat_u16(1);
+     const vec_u8 i8 = splat_u8(I);
+@@ -886,17 +904,9 @@ static void loop_filter_v_4_8_altivec(uint8_t *dst, ptrdiff_t stride,
+     const vec_u16 e16 = vec_splats((unsigned short)E);
+     const vec_u8 shift1 = vec_splat_u8(1);
+     const vec_u8 shift3 = vec_splat_u8(3);
+-    const vec_s8 one = vec_splats((signed char)1);
++    const vec_s8 c1 = vec_splats((signed char)1);
+     const vec_s8 three = vec_splats((signed char)3);
+     const vec_s8 four = vec_splats((signed char)4);
+-    vec_u8 p3 = unaligned_load(-4 * stride, dst);
+-    vec_u8 p2 = unaligned_load(-3 * stride, dst);
+-    vec_u8 p1 = unaligned_load(-2 * stride, dst);
+-    vec_u8 p0 = unaligned_load(-1 * stride, dst);
+-    vec_u8 q0 = unaligned_load( 0 * stride, dst);
+-    vec_u8 q1 = unaligned_load( 1 * stride, dst);
+-    vec_u8 q2 = unaligned_load( 2 * stride, dst);
+-    vec_u8 q3 = unaligned_load( 3 * stride, dst);
+     vec_u8 over, edge_over, fm, hev, not_hev;
+     vec_u8 p1q1_abs = absdiff_u8(p1, q1);
+     vec_u8 p0q0_abs = absdiff_u8(p0, q0);
+@@ -941,29 +951,121 @@ static void loop_filter_v_4_8_altivec(uint8_t *dst, ptrdiff_t stride,
+     p0f = vec_xor((vec_u8)vec_adds(p0s, f2), sign);
+     q0f = vec_xor((vec_u8)vec_subs(q0s, f1), sign);
+ 
+-    f_inner = vec_sra(vec_adds(f1, one), shift1);
++    f_inner = vec_sra(vec_adds(f1, c1), shift1);
+     f_inner = vec_and(f_inner, (vec_s8)not_hev);
+     f_inner = vec_and(f_inner, (vec_s8)fm);
+     p1f = vec_xor((vec_u8)vec_adds(p1s, f_inner), sign);
+     q1f = vec_xor((vec_u8)vec_subs(q1s, f_inner), sign);
+ 
+-    store_u64(vec_sel(p1, p1f, fm), dst - 2 * stride);
+-    store_u64(vec_sel(p0, p0f, fm), dst - 1 * stride);
+-    store_u64(vec_sel(q0, q0f, fm), dst);
+-    store_u64(vec_sel(q1, q1f, fm), dst + 1 * stride);
++    /* Narrow-filter results (4-wide); p2/q2 untouched here. */
++    p1f = vec_sel(p1, p1f, fm);
++    p0f = vec_sel(p0, p0f, fm);
++    q0f = vec_sel(q0, q0f, fm);
++    q1f = vec_sel(q1, q1f, fm);
++
++    *out_p2 = p2;
++    *out_q2 = q2;
++
++    if (wd8) {
++        const vec_u8 high8 = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
++                               0,    0,    0,    0,    0,    0,    0,    0 };
++        vec_u8 flat, p2f, q2f;
++        vec_u8 flat_p1, flat_p0, flat_q0, flat_q1;
++        vec_u16 s;
++
++        over = cmpgt_u8(absdiff_u8(p3, p0), one);
++        over = vec_or(over, cmpgt_u8(absdiff_u8(p2, p0), one));
++        over = vec_or(over, cmpgt_u8(absdiff_u8(p1, p0), one));
++        over = vec_or(over, cmpgt_u8(absdiff_u8(q1, q0), one));
++        over = vec_or(over, cmpgt_u8(absdiff_u8(q2, q0), one));
++        over = vec_or(over, cmpgt_u8(absdiff_u8(q3, q0), one));
++        flat = vec_and(vec_and(not_u8(over), fm), high8);
++
++        s = vec_add((vec_u16)vec_mergeh(zero, p3),
++                    (vec_u16)vec_mergeh(zero, p3));
++        s = add_u8_to_u16(s, p3);
++        s = add_u8_to_u16(s, p2);
++        s = add_u8_to_u16(s, p2);
++        s = add_u8_to_u16(s, p1);
++        s = add_u8_to_u16(s, p0);
++        s = add_u8_to_u16(s, q0);
++        p2f = pack_u16_to_u8(vec_sr(vec_add(s, vec_splat_u16(4)),
++                                    vec_splat_u16(3)));
++
++        s = vec_add((vec_u16)vec_mergeh(zero, p3),
++                    (vec_u16)vec_mergeh(zero, p3));
++        s = add_u8_to_u16(s, p2);
++        s = add_u8_to_u16(s, p1);
++        s = add_u8_to_u16(s, p1);
++        s = add_u8_to_u16(s, p0);
++        s = add_u8_to_u16(s, q0);
++        s = add_u8_to_u16(s, q1);
++        flat_p1 = pack_u16_to_u8(vec_sr(vec_add(s, vec_splat_u16(4)),
++                                        vec_splat_u16(3)));
++
++        s = (vec_u16)vec_mergeh(zero, p3);
++        s = add_u8_to_u16(s, p2);
++        s = add_u8_to_u16(s, p1);
++        s = add_u8_to_u16(s, p0);
++        s = add_u8_to_u16(s, p0);
++        s = add_u8_to_u16(s, q0);
++        s = add_u8_to_u16(s, q1);
++        s = add_u8_to_u16(s, q2);
++        flat_p0 = pack_u16_to_u8(vec_sr(vec_add(s, vec_splat_u16(4)),
++                                        vec_splat_u16(3)));
++
++        s = (vec_u16)vec_mergeh(zero, p2);
++        s = add_u8_to_u16(s, p1);
++        s = add_u8_to_u16(s, p0);
++        s = add_u8_to_u16(s, q0);
++        s = add_u8_to_u16(s, q0);
++        s = add_u8_to_u16(s, q1);
++        s = add_u8_to_u16(s, q2);
++        s = add_u8_to_u16(s, q3);
++        flat_q0 = pack_u16_to_u8(vec_sr(vec_add(s, vec_splat_u16(4)),
++                                        vec_splat_u16(3)));
++
++        s = (vec_u16)vec_mergeh(zero, p1);
++        s = add_u8_to_u16(s, p0);
++        s = add_u8_to_u16(s, q0);
++        s = add_u8_to_u16(s, q1);
++        s = add_u8_to_u16(s, q1);
++        s = add_u8_to_u16(s, q2);
++        s = add_u8_to_u16(s, q3);
++        s = add_u8_to_u16(s, q3);
++        flat_q1 = pack_u16_to_u8(vec_sr(vec_add(s, vec_splat_u16(4)),
++                                        vec_splat_u16(3)));
++
++        s = (vec_u16)vec_mergeh(zero, p0);
++        s = add_u8_to_u16(s, q0);
++        s = add_u8_to_u16(s, q1);
++        s = add_u8_to_u16(s, q2);
++        s = add_u8_to_u16(s, q2);
++        s = add_u8_to_u16(s, q3);
++        s = add_u8_to_u16(s, q3);
++        s = add_u8_to_u16(s, q3);
++        q2f = pack_u16_to_u8(vec_sr(vec_add(s, vec_splat_u16(4)),
++                                    vec_splat_u16(3)));
++
++        p1f = vec_sel(p1f, flat_p1, flat);
++        p0f = vec_sel(p0f, flat_p0, flat);
++        q0f = vec_sel(q0f, flat_q0, flat);
++        q1f = vec_sel(q1f, flat_q1, flat);
++        *out_p2 = vec_sel(p2, p2f, flat);
++        *out_q2 = vec_sel(q2, q2f, flat);
++    }
++
++    *out_p1 = p1f;
++    *out_p0 = p0f;
++    *out_q0 = q0f;
++    *out_q1 = q1f;
+ }
+ 
+-static void loop_filter_v_8_8_altivec(uint8_t *dst, ptrdiff_t stride,
+-                                      int E, int I, int H)
++static av_always_inline void loop_filter_v_8w_altivec(uint8_t *dst,
++                                                      ptrdiff_t stride,
++                                                      int E, int I, int H,
++                                                      int wd8)
+ {
+-    const vec_u8 zero = vec_splat_u8(0);
+-    const vec_u8 one = vec_splat_u8(1);
+-    const vec_u8 high8 = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+-                           0,    0,    0,    0,    0,    0,    0,    0 };
+-    const vec_u8 i8 = splat_u8(I);
+-    const vec_u16 e16 = vec_splats((unsigned short)E);
+-    const vec_u16 c4 = vec_splat_u16(4);
+-    const vec_u16 shift3 = vec_splat_u16(3);
+     vec_u8 p3 = unaligned_load(-4 * stride, dst);
+     vec_u8 p2 = unaligned_load(-3 * stride, dst);
+     vec_u8 p1 = unaligned_load(-2 * stride, dst);
+@@ -972,110 +1074,140 @@ static void loop_filter_v_8_8_altivec(uint8_t *dst, ptrdiff_t stride,
+     vec_u8 q1 = unaligned_load( 1 * stride, dst);
+     vec_u8 q2 = unaligned_load( 2 * stride, dst);
+     vec_u8 q3 = unaligned_load( 3 * stride, dst);
+-    vec_u8 p2f, p1f, p0f, q0f, q1f, q2f;
+-    vec_u8 edge_over, flat, fm, over;
+-    vec_u8 p1q1_abs = absdiff_u8(p1, q1);
+-    vec_u8 p0q0_abs = absdiff_u8(p0, q0);
+-    vec_u16 edge, s;
++    vec_u8 o_p2, o_p1, o_p0, o_q0, o_q1, o_q2;
+ 
+-    loop_filter_v_4_8_altivec(dst, stride, E, I, H);
++    filter_core_8(p3, p2, p1, p0, q0, q1, q2, q3, E, I, H, wd8,
++                  &o_p2, &o_p1, &o_p0, &o_q0, &o_q1, &o_q2);
+ 
+-    over = cmpgt_u8(absdiff_u8(p3, p2), i8);
+-    over = vec_or(over, cmpgt_u8(absdiff_u8(p2, p1), i8));
+-    over = vec_or(over, cmpgt_u8(absdiff_u8(p1, p0), i8));
+-    over = vec_or(over, cmpgt_u8(absdiff_u8(q1, q0), i8));
+-    over = vec_or(over, cmpgt_u8(absdiff_u8(q2, q1), i8));
+-    over = vec_or(over, cmpgt_u8(absdiff_u8(q3, q2), i8));
+-    edge = vec_sl((vec_u16)vec_mergeh(vec_splat_u8(0), p0q0_abs),
+-                  vec_splat_u16(1));
+-    edge = vec_add(edge, (vec_u16)vec_mergeh(vec_splat_u8(0),
+-                                             vec_sr(p1q1_abs, one)));
+-    edge_over = cmpgt_u16_to_u8(edge, e16);
+-    fm = not_u8(vec_or(over, edge_over));
++    if (wd8) {
++        store_u64(o_p2, dst - 3 * stride);
++        store_u64(o_q2, dst + 2 * stride);
++    }
++    store_u64(o_p1, dst - 2 * stride);
++    store_u64(o_p0, dst - 1 * stride);
++    store_u64(o_q0, dst);
++    store_u64(o_q1, dst + 1 * stride);
++}
+ 
+-    over = cmpgt_u8(absdiff_u8(p3, p0), one);
+-    over = vec_or(over, cmpgt_u8(absdiff_u8(p2, p0), one));
+-    over = vec_or(over, cmpgt_u8(absdiff_u8(p1, p0), one));
+-    over = vec_or(over, cmpgt_u8(absdiff_u8(q1, q0), one));
+-    over = vec_or(over, cmpgt_u8(absdiff_u8(q2, q0), one));
+-    over = vec_or(over, cmpgt_u8(absdiff_u8(q3, q0), one));
+-    flat = vec_and(vec_and(not_u8(over), fm), high8);
+-    if (vec_all_eq(flat, zero))
+-        return;
++static void loop_filter_v_4_8_altivec(uint8_t *dst, ptrdiff_t stride,
++                                      int E, int I, int H)
++{
++    loop_filter_v_8w_altivec(dst, stride, E, I, H, 0);
++}
++
++static void loop_filter_v_8_8_altivec(uint8_t *dst, ptrdiff_t stride,
++                                      int E, int I, int H)
++{
++    loop_filter_v_8w_altivec(dst, stride, E, I, H, 1);
++}
+ 
+-    s = vec_add((vec_u16)vec_mergeh(vec_splat_u8(0), p3),
+-                (vec_u16)vec_mergeh(vec_splat_u8(0), p3));
+-    s = add_u8_to_u16(s, p3);
+-    s = add_u8_to_u16(s, p2);
+-    s = add_u8_to_u16(s, p2);
+-    s = add_u8_to_u16(s, p1);
+-    s = add_u8_to_u16(s, p0);
+-    s = add_u8_to_u16(s, q0);
+-    p2f = pack_u16_to_u8(vec_sr(vec_add(s, c4), shift3));
+-
+-    s = vec_add((vec_u16)vec_mergeh(vec_splat_u8(0), p3),
+-                (vec_u16)vec_mergeh(vec_splat_u8(0), p3));
+-    s = add_u8_to_u16(s, p2);
+-    s = add_u8_to_u16(s, p1);
+-    s = add_u8_to_u16(s, p1);
+-    s = add_u8_to_u16(s, p0);
+-    s = add_u8_to_u16(s, q0);
+-    s = add_u8_to_u16(s, q1);
+-    p1f = pack_u16_to_u8(vec_sr(vec_add(s, c4), shift3));
+-
+-    s = (vec_u16)vec_mergeh(vec_splat_u8(0), p3);
+-    s = add_u8_to_u16(s, p2);
+-    s = add_u8_to_u16(s, p1);
+-    s = add_u8_to_u16(s, p0);
+-    s = add_u8_to_u16(s, p0);
+-    s = add_u8_to_u16(s, q0);
+-    s = add_u8_to_u16(s, q1);
+-    s = add_u8_to_u16(s, q2);
+-    p0f = pack_u16_to_u8(vec_sr(vec_add(s, c4), shift3));
+-
+-    s = (vec_u16)vec_mergeh(vec_splat_u8(0), p2);
+-    s = add_u8_to_u16(s, p1);
+-    s = add_u8_to_u16(s, p0);
+-    s = add_u8_to_u16(s, q0);
+-    s = add_u8_to_u16(s, q0);
+-    s = add_u8_to_u16(s, q1);
+-    s = add_u8_to_u16(s, q2);
+-    s = add_u8_to_u16(s, q3);
+-    q0f = pack_u16_to_u8(vec_sr(vec_add(s, c4), shift3));
+-
+-    s = (vec_u16)vec_mergeh(vec_splat_u8(0), p1);
+-    s = add_u8_to_u16(s, p0);
+-    s = add_u8_to_u16(s, q0);
+-    s = add_u8_to_u16(s, q1);
+-    s = add_u8_to_u16(s, q1);
+-    s = add_u8_to_u16(s, q2);
+-    s = add_u8_to_u16(s, q3);
+-    s = add_u8_to_u16(s, q3);
+-    q1f = pack_u16_to_u8(vec_sr(vec_add(s, c4), shift3));
+-
+-    s = (vec_u16)vec_mergeh(vec_splat_u8(0), p0);
+-    s = add_u8_to_u16(s, q0);
+-    s = add_u8_to_u16(s, q1);
+-    s = add_u8_to_u16(s, q2);
+-    s = add_u8_to_u16(s, q2);
+-    s = add_u8_to_u16(s, q3);
+-    s = add_u8_to_u16(s, q3);
+-    s = add_u8_to_u16(s, q3);
+-    q2f = pack_u16_to_u8(vec_sr(vec_add(s, c4), shift3));
+-
+-    p2 = unaligned_load(-3 * stride, dst);
+-    p1 = unaligned_load(-2 * stride, dst);
+-    p0 = unaligned_load(-1 * stride, dst);
+-    q0 = unaligned_load( 0 * stride, dst);
+-    q1 = unaligned_load( 1 * stride, dst);
+-    q2 = unaligned_load( 2 * stride, dst);
+-
+-    store_u64(vec_sel(p2, p2f, flat), dst - 3 * stride);
+-    store_u64(vec_sel(p1, p1f, flat), dst - 2 * stride);
+-    store_u64(vec_sel(p0, p0f, flat), dst - 1 * stride);
+-    store_u64(vec_sel(q0, q0f, flat), dst);
+-    store_u64(vec_sel(q1, q1f, flat), dst + 1 * stride);
+-    store_u64(vec_sel(q2, q2f, flat), dst + 2 * stride);
++/*
++ * Transpose an 8x8 block of bytes held in the low 8 lanes of 8 vectors.
++ * After the call, output vector k holds column k of the input in its low 8
++ * lanes, which is exactly the layout filter_core_8 consumes (and the store
++ * expects). This is an involution: applying it again restores the original,
++ * so the same routine serves both the load->core and core->store directions.
++ *
++ * The 3-level merge network packs two transposed columns per intermediate
++ * vector (col 2m in the high half, col 2m+1 in the low half); a vec_sld by
++ * 8 bytes brings the odd column down into its own low half. Verified by
++ * exhaustive simulation of the vec_mergeh/mergel/sld index arithmetic.
++ */
++static av_always_inline void transpose_8x8_u8(vec_u8 *r0, vec_u8 *r1,
++                                              vec_u8 *r2, vec_u8 *r3,
++                                              vec_u8 *r4, vec_u8 *r5,
++                                              vec_u8 *r6, vec_u8 *r7)
++{
++    vec_u8 m1_0 = vec_mergeh(*r0, *r4);
++    vec_u8 m1_1 = vec_mergeh(*r1, *r5);
++    vec_u8 m1_2 = vec_mergeh(*r2, *r6);
++    vec_u8 m1_3 = vec_mergeh(*r3, *r7);
++    vec_u8 m2_0 = vec_mergeh(m1_0, m1_2);
++    vec_u8 m2_1 = vec_mergel(m1_0, m1_2);
++    vec_u8 m2_2 = vec_mergeh(m1_1, m1_3);
++    vec_u8 m2_3 = vec_mergel(m1_1, m1_3);
++    vec_u8 c0 = vec_mergeh(m2_0, m2_2);   /* col0 | col1 */
++    vec_u8 c1 = vec_mergel(m2_0, m2_2);   /* col2 | col3 */
++    vec_u8 c2 = vec_mergeh(m2_1, m2_3);   /* col4 | col5 */
++    vec_u8 c3 = vec_mergel(m2_1, m2_3);   /* col6 | col7 */
++
++    *r0 = c0;
++    *r1 = vec_sld(c0, c0, 8);
++    *r2 = c1;
++    *r3 = vec_sld(c1, c1, 8);
++    *r4 = c2;
++    *r5 = vec_sld(c2, c2, 8);
++    *r6 = c3;
++    *r7 = vec_sld(c3, c3, 8);
++}
++
++/*
++ * Horizontal (column-edge) 8-row loop filter. Taps p3..q3 run horizontally
++ * within each of 8 consecutive rows; transpose them into per-tap column
++ * vectors, run the shared vertical core, transpose the modified taps back
++ * and splice them into each row. dst points at q0 of row 0; the 8 rows are
++ * dst[r*stride]. wd8 selects 4- vs 8-wide.
++ */
++static av_always_inline void loop_filter_h_8w_altivec(uint8_t *dst,
++                                                      ptrdiff_t stride,
++                                                      int E, int I, int H,
++                                                      int wd8)
++{
++    /* Each row's 8 taps live at dst[-4..+3]; load a 16-byte window at -4 so
++     * bytes 0..7 hold p3..q3. unaligned_load recomputes the per-row shift,
++     * so no stride%16 assumption is made. */
++    vec_u8 r0 = unaligned_load(-4 + 0 * stride, dst);
++    vec_u8 r1 = unaligned_load(-4 + 1 * stride, dst);
++    vec_u8 r2 = unaligned_load(-4 + 2 * stride, dst);
++    vec_u8 r3 = unaligned_load(-4 + 3 * stride, dst);
++    vec_u8 r4 = unaligned_load(-4 + 4 * stride, dst);
++    vec_u8 r5 = unaligned_load(-4 + 5 * stride, dst);
++    vec_u8 r6 = unaligned_load(-4 + 6 * stride, dst);
++    vec_u8 r7 = unaligned_load(-4 + 7 * stride, dst);
++    vec_u8 p3, p2, p1, p0, q0, q1, q2, q3;
++    vec_u8 o_p2, o_p1, o_p0, o_q0, o_q1, o_q2;
++
++    p3 = r0; p2 = r1; p1 = r2; p0 = r3;
++    q0 = r4; q1 = r5; q2 = r6; q3 = r7;
++    transpose_8x8_u8(&p3, &p2, &p1, &p0, &q0, &q1, &q2, &q3);
++
++    filter_core_8(p3, p2, p1, p0, q0, q1, q2, q3, E, I, H, wd8,
++                  &o_p2, &o_p1, &o_p0, &o_q0, &o_q1, &o_q2);
++
++    /* Transpose the 8 tap columns (p3,p2,o_p1,o_p0,o_q0,o_q1,q2,q3 for
++     * wd8==0; p3,o_p2,o_p1,o_p0,o_q0,o_q1,o_q2,q3 for wd8==1) back to rows.
++     * Unmodified outer taps keep their transposed originals so the store of
++     * a full 8-byte row is exact. */
++    r0 = p3;
++    r1 = wd8 ? o_p2 : p2;
++    r2 = o_p1;
++    r3 = o_p0;
++    r4 = o_q0;
++    r5 = o_q1;
++    r6 = wd8 ? o_q2 : q2;
++    r7 = q3;
++    transpose_8x8_u8(&r0, &r1, &r2, &r3, &r4, &r5, &r6, &r7);
++
++    store_u64(r0, dst - 4 + 0 * stride);
++    store_u64(r1, dst - 4 + 1 * stride);
++    store_u64(r2, dst - 4 + 2 * stride);
++    store_u64(r3, dst - 4 + 3 * stride);
++    store_u64(r4, dst - 4 + 4 * stride);
++    store_u64(r5, dst - 4 + 5 * stride);
++    store_u64(r6, dst - 4 + 6 * stride);
++    store_u64(r7, dst - 4 + 7 * stride);
++}
++
++static void loop_filter_h_4_8_altivec(uint8_t *dst, ptrdiff_t stride,
++                                      int E, int I, int H)
++{
++    loop_filter_h_8w_altivec(dst, stride, E, I, H, 0);
++}
++
++static void loop_filter_h_8_8_altivec(uint8_t *dst, ptrdiff_t stride,
++                                      int E, int I, int H)
++{
++    loop_filter_h_8w_altivec(dst, stride, E, I, H, 1);
+ }
+ 
+ static void loop_filter_v_44_16_altivec(uint8_t *dst, ptrdiff_t stride,
+@@ -1106,6 +1238,40 @@ static void loop_filter_v_88_16_altivec(uint8_t *dst, ptrdiff_t stride,
+     loop_filter_v_8_8_altivec(dst + 8, stride, E >> 8,   I >> 8,   H >> 8);
+ }
+ 
++/*
++ * mix2 horizontal variants: two 8-row groups stacked vertically. Unlike the
++ * vertical mix2 (second half at dst+8, i.e. 8 columns over), the horizontal
++ * second half is at dst + 8*stride (8 rows down), matching the C template's
++ * stridea == stride for the h direction.
++ */
++static void loop_filter_h_44_16_altivec(uint8_t *dst, ptrdiff_t stride,
++                                        int E, int I, int H)
++{
++    loop_filter_h_4_8_altivec(dst,              stride, E & 0xff, I & 0xff, H & 0xff);
++    loop_filter_h_4_8_altivec(dst + 8 * stride, stride, E >> 8,   I >> 8,   H >> 8);
++}
++
++static void loop_filter_h_48_16_altivec(uint8_t *dst, ptrdiff_t stride,
++                                        int E, int I, int H)
++{
++    loop_filter_h_4_8_altivec(dst,              stride, E & 0xff, I & 0xff, H & 0xff);
++    loop_filter_h_8_8_altivec(dst + 8 * stride, stride, E >> 8,   I >> 8,   H >> 8);
++}
++
++static void loop_filter_h_84_16_altivec(uint8_t *dst, ptrdiff_t stride,
++                                        int E, int I, int H)
++{
++    loop_filter_h_8_8_altivec(dst,              stride, E & 0xff, I & 0xff, H & 0xff);
++    loop_filter_h_4_8_altivec(dst + 8 * stride, stride, E >> 8,   I >> 8,   H >> 8);
++}
++
++static void loop_filter_h_88_16_altivec(uint8_t *dst, ptrdiff_t stride,
++                                        int E, int I, int H)
++{
++    loop_filter_h_8_8_altivec(dst,              stride, E & 0xff, I & 0xff, H & 0xff);
++    loop_filter_h_8_8_altivec(dst + 8 * stride, stride, E >> 8,   I >> 8,   H >> 8);
++}
++
+ #define VP9_COPY_ALIGNED(W, align)                                         \
+ static void copy##W##_altivec(uint8_t *dst, ptrdiff_t dst_stride,          \
+                               const uint8_t *src, ptrdiff_t src_stride,    \
+@@ -1538,8 +1704,14 @@ static av_cold void vp9dsp_itxfm_init_ppc(VP9DSPContext *dsp)
+ 
+ static av_cold void vp9dsp_loopfilter_init_ppc(VP9DSPContext *dsp)
+ {
++    dsp->loop_filter_8[0][0] = loop_filter_h_4_8_altivec;
++    dsp->loop_filter_8[1][0] = loop_filter_h_8_8_altivec;
+     dsp->loop_filter_8[0][1] = loop_filter_v_4_8_altivec;
+     dsp->loop_filter_8[1][1] = loop_filter_v_8_8_altivec;
++    dsp->loop_filter_mix2[0][0][0] = loop_filter_h_44_16_altivec;
++    dsp->loop_filter_mix2[0][1][0] = loop_filter_h_48_16_altivec;
++    dsp->loop_filter_mix2[1][0][0] = loop_filter_h_84_16_altivec;
++    dsp->loop_filter_mix2[1][1][0] = loop_filter_h_88_16_altivec;
+     dsp->loop_filter_mix2[0][0][1] = loop_filter_v_44_16_altivec;
+     dsp->loop_filter_mix2[0][1][1] = loop_filter_v_48_16_altivec;
+     dsp->loop_filter_mix2[1][0][1] = loop_filter_v_84_16_altivec;
+-- 
+2.43.0
+

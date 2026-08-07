@@ -1,0 +1,278 @@
+From b7a7da28a7ee0a3b4309f78e473f2ad71634b6dd Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Tue, 28 Jul 2026 16:08:05 +0000
+Subject: [PATCH 25/27] swresample/ppc: add AltiVec resample_common float
+ kernel (O6)
+
+New libswresample/ppc/resample.c implementing the FLTP resample_common
+FIR inner loop in AltiVec C intrinsics, wired via swri_resample_dsp_ppc_init
+(declared in resample.h, dispatched from resample_dsp.c under ARCH_PPC).
+Mirrors the aarch64 NEON donor: an apply_filter helper accumulates the
+filter taps 4-wide (vec_madd) and the C wrapper keeps the index/frac
+bookkeeping and the scalar tail. float path only, HAVE_ALTIVEC &&
+HAVE_BIGENDIAN gated, PPC_ALTIVEC runtime check.
+
+Alignment: filter rows are 16-aligned (filter_bank from av_calloc, offset
+by filter_alloc*index with filter_alloc a multiple of 8), so filter loads
+are plain vec_ld; src is arbitrarily aligned, so each 4-float block is
+spliced from the two bracketing aligned loads with a per-step vec_lvsl
+permute (the load address changes alignment mod 16 every iteration -- the
+same per-access-permute rule as the vp8/vp9 unaligned fixes, no stride%16
+assumption). Padding taps beyond filter_length are zero, but the loop runs
+only up to filter_length & ~3 and finishes the 0-3 remaining taps in scalar
+to avoid reading src past the C reference's bound.
+
+checkasm swr_resample fixes required to actually exercise this:
+- Pin internal_sample_fmt to the tested fmt. swresample promotes S16P/S32P
+  to FLTP internally when the rate changes, so the S16P/S32P checks were
+  silently building FLTP ResampleContexts; without the pin they hit the new
+  float kernel but were compared with exact memcmp and failed on FP reorder.
+  With the pin each of s16p/s32p/fltp/dblp builds its own-format context.
+- Compare FLTP/DBLP outputs with float/double_near_abs_eps_array instead of
+  memcmp: the 4-wide reduction reorders the sum vs the C serial two-
+  accumulator loop, differing in the last ULPs. Integer paths stay exact.
+
+Validated under the qemu -cpu 7400 harness: real ALTIVEC dispatch confirmed
+(swr_resample_fltp_common_altivec benched, ~1.46x vs C under emulation --
+ratio only, not a real-HW perf claim); s16p/s32p/dblp correctly stay on C.
+checkasm swr_resample passes seeds 1/2/42/777; full suite 574/574 (was 573).
+
+Deliberately left on C: resample_linear (matches the aarch64 donor, which
+also does common-only for float), and the s16p/s32p/dblp resample_common
+kernels (own follow-ups; int paths need an integer-madd port, double needs
+a 2-wide port).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01LCRwMB85x399KJGdHjzQ8u
+---
+ libswresample/ppc/Makefile    |   1 +
+ libswresample/ppc/resample.c  | 132 ++++++++++++++++++++++++++++++++++
+ libswresample/resample.h      |   1 +
+ libswresample/resample_dsp.c  |   2 +
+ tests/checkasm/swr_resample.c |  31 +++++++-
+ 5 files changed, 165 insertions(+), 2 deletions(-)
+ create mode 100644 libswresample/ppc/Makefile
+ create mode 100644 libswresample/ppc/resample.c
+
+diff --git a/libswresample/ppc/Makefile b/libswresample/ppc/Makefile
+new file mode 100644
+index 0000000..5f5c3f5
+--- /dev/null
++++ b/libswresample/ppc/Makefile
+@@ -0,0 +1 @@
++OBJS += ppc/resample.o
+diff --git a/libswresample/ppc/resample.c b/libswresample/ppc/resample.c
+new file mode 100644
+index 0000000..342948c
+--- /dev/null
++++ b/libswresample/ppc/resample.c
+@@ -0,0 +1,132 @@
++/*
++ * AltiVec audio resampling
++ * Copyright (c) 2004-2012 Michael Niedermayer <michaelni@gmx.at>
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "config.h"
++
++#include "libavutil/attributes.h"
++#include "libavutil/cpu.h"
++#include "libavutil/mem_internal.h"
++#include "libavutil/ppc/cpu.h"
++#include "libavutil/ppc/util_altivec.h"
++#include "libswresample/resample.h"
++
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++
++/*
++ * Multiply-accumulate 'length' float taps (a multiple of 4) of the FIR filter
++ * into a 4-lane vector accumulator, returning the horizontal sum.
++ *
++ * filter is guaranteed 16-byte aligned: it is filter_bank (from av_calloc, so
++ * at least 32-byte aligned) offset by filter_alloc*index floats, and
++ * filter_alloc is a multiple of 8 -> the row start is a multiple of 32 bytes.
++ * Padding taps beyond filter_length are zero (av_calloc), so running up to the
++ * next multiple of 4 contributes nothing.
++ *
++ * src (== &src[sample_index]) is arbitrarily aligned; each step's load address
++ * base+off changes alignment mod 16 (off advances by 16 bytes = 4 floats), so
++ * the lvsl permute is recomputed per iteration and the two bracketing aligned
++ * loads vec_ld(off) / vec_ld(off+15) splice the unaligned src[i..i+3].
++ */
++static float apply_filter_x4_float_altivec(const float *src, const float *filter,
++                                           int length)
++{
++    DECLARE_ALIGNED(16, float, sums)[4];
++    vec_f acc = (vec_f)vec_splat_u32(0);
++    int off;
++
++    for (off = 0; off < length * 4; off += 16) {
++        vec_f s = vec_perm(vec_ld(off, src), vec_ld(off + 15, src),
++                           vec_lvsl(off, src));
++        vec_f f = vec_ld(off, filter);   /* filter row is 16-aligned */
++        acc = vec_madd(s, f, acc);
++    }
++
++    vec_st(acc, 0, sums);
++    return sums[0] + sums[1] + sums[2] + sums[3];
++}
++
++static int resample_common_float_altivec(ResampleContext *c, void *dest,
++                                         const void *source, int n, int update_ctx)
++{
++    float *dst = dest;
++    const float *src = source;
++    int dst_index;
++    int index = c->index;
++    int frac  = c->frac;
++    int sample_index = 0;
++    int x4_len = c->filter_length & ~3;
++
++    while (index >= c->phase_count) {
++        sample_index++;
++        index -= c->phase_count;
++    }
++
++    for (dst_index = 0; dst_index < n; dst_index++) {
++        const float *filter = ((const float *)c->filter_bank)
++                            + c->filter_alloc * index;
++        float val = 0;
++        int i = 0;
++
++        if (x4_len >= 4) {
++            val = apply_filter_x4_float_altivec(&src[sample_index], filter, x4_len);
++            i   = x4_len;
++        }
++        for (; i < c->filter_length; i++)
++            val += src[sample_index + i] * filter[i];
++
++        dst[dst_index] = val;
++
++        frac  += c->dst_incr_mod;
++        index += c->dst_incr_div;
++        if (frac >= c->src_incr) {
++            frac -= c->src_incr;
++            index++;
++        }
++
++        while (index >= c->phase_count) {
++            sample_index++;
++            index -= c->phase_count;
++        }
++    }
++
++    if (update_ctx) {
++        c->frac  = frac;
++        c->index = index;
++    }
++
++    return sample_index;
++}
++
++#endif /* HAVE_ALTIVEC && HAVE_BIGENDIAN */
++
++av_cold void swri_resample_dsp_ppc_init(ResampleContext *c)
++{
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++    if (!PPC_ALTIVEC(av_get_cpu_flags()))
++        return;
++
++    switch (c->format) {
++    case AV_SAMPLE_FMT_FLTP:
++        c->dsp.resample_common = resample_common_float_altivec;
++        break;
++    }
++#endif
++}
+diff --git a/libswresample/resample.h b/libswresample/resample.h
+index 1731dad..96bcdd8 100644
+--- a/libswresample/resample.h
++++ b/libswresample/resample.h
+@@ -64,5 +64,6 @@ void swri_resample_dsp_init(ResampleContext *c);
+ void swri_resample_dsp_x86_init(ResampleContext *c);
+ void swri_resample_dsp_arm_init(ResampleContext *c);
+ void swri_resample_dsp_aarch64_init(ResampleContext *c);
++void swri_resample_dsp_ppc_init(ResampleContext *c);
+ 
+ #endif /* SWRESAMPLE_RESAMPLE_H */
+diff --git a/libswresample/resample_dsp.c b/libswresample/resample_dsp.c
+index 96f567f..60504e8 100644
+--- a/libswresample/resample_dsp.c
++++ b/libswresample/resample_dsp.c
+@@ -74,5 +74,7 @@ void swri_resample_dsp_init(ResampleContext *c)
+     swri_resample_dsp_arm_init(c);
+ #elif ARCH_AARCH64
+     swri_resample_dsp_aarch64_init(c);
++#elif ARCH_PPC
++    swri_resample_dsp_ppc_init(c);
+ #endif
+ }
+diff --git a/tests/checkasm/swr_resample.c b/tests/checkasm/swr_resample.c
+index e692765..ca1979e 100644
+--- a/tests/checkasm/swr_resample.c
++++ b/tests/checkasm/swr_resample.c
+@@ -53,6 +53,11 @@ static ResampleContext *make_resample_ctx(enum AVSampleFormat fmt,
+     av_opt_set_chlayout(s, "out_chlayout", &mono, 0);
+     av_opt_set_sample_fmt(s, "in_sample_fmt",  fmt, 0);
+     av_opt_set_sample_fmt(s, "out_sample_fmt", fmt, 0);
++    /* Pin the INTERNAL (resample) sample format to fmt: swresample otherwise
++     * picks its own (e.g. it promotes S16P/S32P to FLTP when the rate changes),
++     * so without this the ResampleContext.format -- which selects the dsp
++     * kernels under test -- would not match fmt. */
++    av_opt_set_sample_fmt(s, "internal_sample_fmt", fmt, 0);
+     av_opt_set_int(s, "in_sample_rate",  48000, 0);
+     av_opt_set_int(s, "out_sample_rate", 44100, 0);
+     av_opt_set_int(s, "linear_interp", linear_interp, 0);
+@@ -132,10 +137,32 @@ static void check_one(enum AVSampleFormat fmt, const char *fmt_name,
+             consumed_ref = call_ref(c, dst0, src, SRC_LEN / 2, 0);
+             consumed_new = call_new(c, dst1, src, SRC_LEN / 2, 0);
+ 
+-            if (consumed_ref != consumed_new ||
+-                memcmp(dst0, dst1, DST_LEN * elem_size))
++            if (consumed_ref != consumed_new)
+                 fail();
+ 
++            /* SIMD kernels reorder the FIR reduction relative to the C
++             * template's serial two-accumulator sum, so the float/double
++             * results differ in the last ULPs; compare with a tolerance.
++             * The integer paths are bit-exact (integer madd is associative). */
++            switch (fmt) {
++            case AV_SAMPLE_FMT_FLTP:
++                if (!float_near_abs_eps_array((const float *)dst0,
++                                              (const float *)dst1,
++                                              1e-4f, DST_LEN))
++                    fail();
++                break;
++            case AV_SAMPLE_FMT_DBLP:
++                if (!double_near_abs_eps_array((const double *)dst0,
++                                               (const double *)dst1,
++                                               1e-9, DST_LEN))
++                    fail();
++                break;
++            default:
++                if (memcmp(dst0, dst1, DST_LEN * elem_size))
++                    fail();
++                break;
++            }
++
+             bench_new(c, dst1, src, SRC_LEN / 2, 0);
+         }
+     }
+-- 
+2.43.0
+

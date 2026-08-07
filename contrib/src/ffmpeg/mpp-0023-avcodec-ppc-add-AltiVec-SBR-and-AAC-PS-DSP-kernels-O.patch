@@ -1,0 +1,459 @@
+From fa3ef306b59749a9961a54d059791a4d062f6b28 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Tue, 28 Jul 2026 15:31:52 +0000
+Subject: [PATCH 24/27] avcodec/ppc: add AltiVec SBR and AAC-PS DSP kernels
+ (O3)
+
+New libavcodec/ppc/sbrdsp.c and ppc/aacpsdsp.c, wired via
+ff_sbrdsp_init_ppc / ff_psdsp_init_ppc (declared in the headers and
+dispatched from the float-path sbrdsp_template.c / aacpsdsp_template.c
+under #if !USE_FIXED, ARCH_PPC branch). Built into the AAC decoder
+(CONFIG_AAC_DECODER) in ppc/Makefile, matching the x86/aarch64 gating.
+Pure AltiVec C intrinsics, HAVE_ALTIVEC && HAVE_BIGENDIAN gated, float
+path only (fixed-point stays on C) -- no gas/Darwin-assembler dependency.
+
+sbrdsp:
+- sum64x5: 5-way vertical add, 4 floats/step.
+- sum_square: |x|^2 reduction, 2 complex/step + scalar tail (n is always
+  even; real caller passes iub-ilb = 2*(t_env diff), base 16-aligned).
+- qmf_deint_bfly: sub/add butterfly with src1 consumed in reverse via an
+  in-register 4-lane reverse permute; both output halves stored aligned.
+- hf_gen: complex FIR (a0*X_low[k-2] + a2*X_low[k-1] + X_low[k]), two
+  complex samples per vector. start arrives even in both the checkasm
+  sweep and the real caller (2*t_env), so X_low[i-2]/X_low[i] load
+  aligned and the odd-index k-1 window is derived with vec_sld rather
+  than an unaligned load; imaginary cross-terms via a swap-permute plus a
+  real-lane sign flip.
+
+aacpsdsp:
+- add_squares: dst[i] += re^2 + im^2, 4 complex/step + scalar tail
+  (power[i] dst is 16-aligned; n = nL-n0 arbitrary).
+- hybrid_analysis: vectorized 13-tap complex dot product per output; the
+  in[] reduction lands in aligned local scratch, so it is correct
+  regardless of the caller's in[] alignment (in advances by one complex
+  sample per outer iteration -> often 8-mod-16). strided out[] and the
+  filter gather stay scalar.
+
+Deliberately left on C this pass (alignment hazard or numerically subtle,
+future work): sbr neg_odd_64 / qmf_pre_shuffle / qmf_post_shuffle /
+qmf_deint_neg (pure permute, likely G5 losers), autocorrelate and
+hf_apply_noise (irregular reductions / data-dependent selects); ps
+mul_pair_single (real caller hands it 8-mod-16 src0/src1/dst at odd
+complex offsets), hybrid_analysis_ileave / hybrid_synthesis_deint (pure
+data movement), decorrelate (serial recurrence), stereo_interpolate.
+
+Statically reviewed only; checkasm sbrdsp/aacpsdsp validation under the
+S1 qemu harness pending (host low on disk/RAM), plus real-G4/G5 --bench.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GYc9HVhLgkmZTpJS49PCT3
+---
+ libavcodec/aacpsdsp.h          |   1 +
+ libavcodec/aacpsdsp_template.c |   2 +
+ libavcodec/ppc/Makefile        |   1 +
+ libavcodec/ppc/aacpsdsp.c      | 134 +++++++++++++++++++++++
+ libavcodec/ppc/sbrdsp.c        | 187 +++++++++++++++++++++++++++++++++
+ libavcodec/sbrdsp.h            |   1 +
+ libavcodec/sbrdsp_template.c   |   2 +
+ 7 files changed, 328 insertions(+)
+ create mode 100644 libavcodec/ppc/aacpsdsp.c
+ create mode 100644 libavcodec/ppc/sbrdsp.c
+
+diff --git a/libavcodec/aacpsdsp.h b/libavcodec/aacpsdsp.h
+index daeb0a6..7a15085 100644
+--- a/libavcodec/aacpsdsp.h
++++ b/libavcodec/aacpsdsp.h
+@@ -54,6 +54,7 @@ typedef struct PSDSPContext {
+ void AAC_RENAME(ff_psdsp_init)(PSDSPContext *s);
+ void ff_psdsp_init_arm(PSDSPContext *s);
+ void ff_psdsp_init_aarch64(PSDSPContext *s);
++void ff_psdsp_init_ppc(PSDSPContext *s);
+ void ff_psdsp_init_riscv(PSDSPContext *s);
+ void ff_psdsp_init_x86(PSDSPContext *s);
+ 
+diff --git a/libavcodec/aacpsdsp_template.c b/libavcodec/aacpsdsp_template.c
+index 341bf77..01594ea 100644
+--- a/libavcodec/aacpsdsp_template.c
++++ b/libavcodec/aacpsdsp_template.c
+@@ -226,6 +226,8 @@ av_cold void AAC_RENAME(ff_psdsp_init)(PSDSPContext *s)
+     ff_psdsp_init_arm(s);
+ #elif ARCH_AARCH64
+     ff_psdsp_init_aarch64(s);
++#elif ARCH_PPC
++    ff_psdsp_init_ppc(s);
+ #elif ARCH_RISCV
+     ff_psdsp_init_riscv(s);
+ #elif ARCH_X86 && HAVE_X86ASM
+diff --git a/libavcodec/ppc/Makefile b/libavcodec/ppc/Makefile
+index 7dbdda2..63ece26 100644
+--- a/libavcodec/ppc/Makefile
++++ b/libavcodec/ppc/Makefile
+@@ -22,6 +22,7 @@ OBJS-$(CONFIG_VP3DSP)                  += ppc/vp3dsp_altivec.o
+ OBJS-$(CONFIG_VP8DSP)                  += ppc/vp8dsp_altivec.o
+ 
+ # decoders/encoders
++OBJS-$(CONFIG_AAC_DECODER)            += ppc/sbrdsp.o ppc/aacpsdsp.o
+ OBJS-$(CONFIG_HEVC_DECODER)            += ppc/hevcdsp.o
+ OBJS-$(CONFIG_MPEG4_DECODER)           += ppc/mpeg4videodsp.o
+ OBJS-$(CONFIG_OPUS_DECODER)            += ppc/opusdsp_altivec.o
+diff --git a/libavcodec/ppc/aacpsdsp.c b/libavcodec/ppc/aacpsdsp.c
+new file mode 100644
+index 0000000..2c8479b
+--- /dev/null
++++ b/libavcodec/ppc/aacpsdsp.c
+@@ -0,0 +1,134 @@
++/*
++ * AltiVec-optimized AAC Parametric Stereo DSP functions
++ * Copyright (c) 2026
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "config.h"
++
++#include "libavutil/attributes.h"
++#include "libavutil/cpu.h"
++#include "libavutil/mem_internal.h"
++#include "libavcodec/aacpsdsp.h"
++
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++
++#include "libavutil/ppc/util_altivec.h"
++
++typedef vector float         vf;
++typedef vector unsigned char vuc;
++
++#define VZERO ((vf) { 0.0f, 0.0f, 0.0f, 0.0f })
++
++/* dst[i] += src[i][0]*src[i][0] + src[i][1]*src[i][1]
++ * dst is a plain float array, src is interleaved complex (2 floats/sample).
++ * Process 4 complex samples (two 4-float vectors) -> 4 dst floats per step. */
++static void ps_add_squares_altivec(float *restrict dst,
++                                   const float (*src)[2], int n)
++{
++    const float *s = &src[0][0];
++    int i = 0;
++
++    for (; i <= n - 4; i += 4, s += 8) {
++        vf a = vec_ld( 0, s);          /* {r0,i0, r1,i1} */
++        vf b = vec_ld(16, s);          /* {r2,i2, r3,i3} */
++        vf aa = vec_madd(a, a, VZERO); /* {r0^2,i0^2, r1^2,i1^2} */
++        vf bb = vec_madd(b, b, VZERO); /* {r2^2,i2^2, r3^2,i3^2} */
++        /* de-interleave the squared re/im lanes and add them so that
++         * lane k of pw holds r_k^2 + i_k^2 for sample i+k. */
++        vf re = vec_perm(aa, bb, ((vuc){ 0,1,2,3, 8,9,10,11, 16,17,18,19, 24,25,26,27}));
++        vf im = vec_perm(aa, bb, ((vuc){ 4,5,6,7, 12,13,14,15, 20,21,22,23, 28,29,30,31}));
++        vf pw = vec_add(re, im);       /* {p0,p1,p2,p3} */
++        vf d  = vec_ld(0, dst + i);
++        vec_st(vec_add(d, pw), 0, dst + i);
++    }
++
++    for (; i < n; i++, s += 2)
++        dst[i] += s[0] * s[0] + s[1] * s[1];
++}
++
++static void ps_hybrid_analysis_altivec(float (*restrict out)[2],
++                                       float (*in)[2],
++                                       const float (*filter)[8][2],
++                                       ptrdiff_t stride, int n)
++{
++    DECLARE_ALIGNED(16, float, inre0)[6];
++    DECLARE_ALIGNED(16, float, inre1)[6];
++    DECLARE_ALIGNED(16, float, inim0)[6];
++    DECLARE_ALIGNED(16, float, inim1)[6];
++    int i, j;
++
++    for (j = 0; j < 6; j++) {
++        inre0[j] = in[j][0] + in[12 - j][0];
++        inre1[j] = in[j][1] - in[12 - j][1];
++        inim0[j] = in[j][1] + in[12 - j][1];
++        inim1[j] = in[j][0] - in[12 - j][0];
++    }
++
++    for (i = 0; i < n; i++) {
++        vf accre = VZERO, accim = VZERO;
++        float sum_re, sum_im;
++        DECLARE_ALIGNED(16, float, tre)[4];
++        DECLARE_ALIGNED(16, float, tim)[4];
++
++        /* j = 0..5 : filter[i][j] is {f_re, f_im}; use vec of 4 j at a time */
++        for (j = 0; j <= 6 - 4; j += 4) {
++            /* gather filter re/im for these 4 taps */
++            DECLARE_ALIGNED(16, float, fr)[4] = {
++                filter[i][j+0][0], filter[i][j+1][0],
++                filter[i][j+2][0], filter[i][j+3][0] };
++            DECLARE_ALIGNED(16, float, fi)[4] = {
++                filter[i][j+0][1], filter[i][j+1][1],
++                filter[i][j+2][1], filter[i][j+3][1] };
++            vf vfr = vec_ld(0, fr);
++            vf vfi = vec_ld(0, fi);
++            accre = vec_madd(vfr, vec_ld(0, inre0 + j), accre);
++            accre = vec_nmsub(vfi, vec_ld(0, inre1 + j), accre);
++            accim = vec_madd(vfr, vec_ld(0, inim0 + j), accim);
++            accim = vec_madd(vfi, vec_ld(0, inim1 + j), accim);
++        }
++        vec_st(accre, 0, tre);
++        vec_st(accim, 0, tim);
++        sum_re = tre[0] + tre[1] + tre[2] + tre[3];
++        sum_im = tim[0] + tim[1] + tim[2] + tim[3];
++
++        /* remaining taps j = 4, 5 and the center tap 6 (scalar) */
++        for (; j < 6; j++) {
++            sum_re += filter[i][j][0] * inre0[j] - filter[i][j][1] * inre1[j];
++            sum_im += filter[i][j][0] * inim0[j] + filter[i][j][1] * inim1[j];
++        }
++        sum_re += filter[i][6][0] * in[6][0];
++        sum_im += filter[i][6][0] * in[6][1];
++
++        out[i * stride][0] = sum_re;
++        out[i * stride][1] = sum_im;
++    }
++}
++
++#endif /* HAVE_ALTIVEC && HAVE_BIGENDIAN */
++
++av_cold void ff_psdsp_init_ppc(PSDSPContext *s)
++{
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++    if (!(av_get_cpu_flags() & AV_CPU_FLAG_ALTIVEC))
++        return;
++
++    s->add_squares     = ps_add_squares_altivec;
++    s->hybrid_analysis = ps_hybrid_analysis_altivec;
++#endif
++}
+diff --git a/libavcodec/ppc/sbrdsp.c b/libavcodec/ppc/sbrdsp.c
+new file mode 100644
+index 0000000..6146b53
+--- /dev/null
++++ b/libavcodec/ppc/sbrdsp.c
+@@ -0,0 +1,187 @@
++/*
++ * AltiVec-optimized AAC SBR DSP functions
++ * Copyright (c) 2026
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "config.h"
++
++#include "libavutil/attributes.h"
++#include "libavutil/cpu.h"
++#include "libavutil/mem_internal.h"
++#include "libavcodec/sbrdsp.h"
++
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++
++#include "libavutil/ppc/util_altivec.h"
++
++typedef vector float         vf;
++typedef vector unsigned char vuc;
++
++#define VZERO ((vf) { 0.0f, 0.0f, 0.0f, 0.0f })
++
++/* All SBR DSP buffers passed here (z, x, X_high, Y, g_filt) come from
++ * DECLARE_ALIGNED(16, ...) fields in SpectralBandReplication and from
++ * LOCAL_ALIGNED_16 in checkasm, so every base pointer is 16-byte aligned
++ * and each row advances by a multiple of 16 bytes -> plain vec_ld/vec_st. */
++
++static void sbr_sum64x5_altivec(float *z)
++{
++    int k;
++    for (k = 0; k < 64; k += 4) {
++        vf f = vec_ld(0, z + k);
++        f = vec_add(f, vec_ld(0, z + k +  64));
++        f = vec_add(f, vec_ld(0, z + k + 128));
++        f = vec_add(f, vec_ld(0, z + k + 192));
++        f = vec_add(f, vec_ld(0, z + k + 256));
++        vec_st(f, 0, z + k);
++    }
++}
++
++static float sbr_sum_square_altivec(float (*x)[2], int n)
++{
++    vf sum = VZERO;
++    float *p = &x[0][0];
++    int i = 0;
++
++    /* n comes from the C loop's "i += 2" bound so it is always even;
++     * process 2 complex pairs (4 floats) per step and mop up the odd
++     * pair, if any, with a 2-wide tail. */
++    for (; i <= n - 2; i += 2, p += 4) {
++        vf v = vec_ld(0, p);
++        sum = vec_madd(v, v, sum);
++    }
++
++    {
++        DECLARE_ALIGNED(16, float, tmp)[4];
++        float res;
++        vec_st(sum, 0, tmp);
++        res = tmp[0] + tmp[1] + tmp[2] + tmp[3];
++        for (; i < n; i++, p += 2)
++            res += p[0] * p[0] + p[1] * p[1];
++        return res;
++    }
++}
++
++static void sbr_qmf_deint_bfly_altivec(float *v, const float *src0,
++                                       const float *src1)
++{
++    /* v[i]       = src0[i] - src1[63 - i]
++     * v[127 - i] = src0[i] + src1[63 - i]
++     * src1 is consumed in reverse; build the reversed 4-lane group with a
++     * within-vector reverse (sld of a per-element-reversed pair). */
++    static const vuc rev = { 12, 13, 14, 15,  8,  9, 10, 11,
++                              4,  5,  6,  7,  0,  1,  2,  3 };
++    int i;
++    for (i = 0; i < 64; i += 4) {
++        vf s0 = vec_ld(0, src0 + i);
++        /* src1[63 - i] .. src1[60 - i] : load the aligned group ending at
++         * 63 - i and reverse it in-register. 63 - i - 3 = 60 - i is a
++         * multiple of 4, so the group [60 - i, 63 - i] is 16-aligned. */
++        vf s1 = vec_ld(0, src1 + (60 - i));
++        vf s1r = vec_perm(s1, s1, rev);
++        vf lo = vec_sub(s0, s1r);           /* v[i .. i+3]            */
++        vf hi = vec_add(s0, s1r);           /* v[127-i .. 124-i]     */
++        /* hi must be stored reversed so that hi lane 0 lands at v[127-i]. */
++        vf hir = vec_perm(hi, hi, rev);
++        vec_st(lo,  0, v + i);
++        vec_st(hir, 0, v + (124 - i));
++    }
++}
++
++static void sbr_hf_gen_altivec(float (*X_high)[2], const float (*X_low)[2],
++                               const float alpha0[2], const float alpha1[2],
++                               float bw, int start, int end)
++{
++    /* Complex FIR:
++     *   X_high[i] = a0 * X_low[i-2] + a2 * X_low[i-1] + X_low[i]
++     * with the imaginary cross-terms folded in. Process two complex
++     * samples (one 4-float vector) per step; the coefficient set is
++     * per-lane and constant across i, so build it once. */
++    const float bw2 = bw * bw;
++    const float a0r = alpha1[0] * bw2, a0i = alpha1[1] * bw2;
++    const float a2r = alpha0[0] * bw,  a2i = alpha0[1] * bw;
++    DECLARE_ALIGNED(16, float, ct)[16] = {
++        /* for a pair (i, i+1): coeff replicated per complex lane */
++        a0r, a0r, a0r, a0r,   /* real weight of X_low[k-2] */
++        a0i, a0i, a0i, a0i,   /* imag weight of X_low[k-2] */
++        a2r, a2r, a2r, a2r,   /* real weight of X_low[k-1] */
++        a2i, a2i, a2i, a2i,   /* imag weight of X_low[k-1] */
++    };
++    const vf v_a0r = vec_ld( 0, ct);
++    const vf v_a0i = vec_ld(16, ct);
++    const vf v_a2r = vec_ld(32, ct);
++    const vf v_a2i = vec_ld(48, ct);
++    /* swap re<->im within each complex lane: {re,im,re,im}->{im,re,im,re} */
++    static const vuc swap = {  4,  5,  6,  7,  0,  1,  2,  3,
++                              12, 13, 14, 15,  8,  9, 10, 11 };
++    /* flip the sign of the REAL output lanes (0 and 2) only */
++    static const vector unsigned int negre =
++        { 0x80000000u, 0u, 0x80000000u, 0u };
++    int i = start;
++
++    /* Process output samples in pairs (i, i+1). start arrives even (both
++     * the checkasm sweep and the real caller step it by 2), so with i even
++     * &X_low[i-2] and &X_low[i] are 16-aligned; the k-1 window
++     * {X_low[i-1], X_low[i]} would be at the odd, unaligned index i-1, so
++     * derive it from the two aligned loads via vec_sld instead.
++     *   l2 = {X_low[i-2], X_low[i-1]}   (k-2 inputs of samples i, i+1)
++     *   l0 = {X_low[i],   X_low[i+1]}   (direct k term)
++     *   l1 = {X_low[i-1], X_low[i]}     (k-1 inputs) = sld(l2, l0, 8) */
++    for (; i <= end - 2; i += 2) {
++        vf l2 = vec_ld(0, &X_low[i - 2][0]);
++        vf l0 = vec_ld(0, &X_low[i    ][0]);
++        vf l1 = vec_sld(l2, l0, 8);
++
++        /* real out += a0r*re - a0i*im ;  imag out += a0r*im + a0i*re */
++        vf l2s = vec_perm(l2, l2, swap);    /* {im,re, im,re} */
++        vf l1s = vec_perm(l1, l1, swap);
++        vf acc = l0;
++        acc = vec_madd(v_a0r, l2, acc);
++        /* a0i * {im,re,im,re} with the real lanes negated: {-a0i*im, a0i*re} */
++        acc = vec_madd(v_a0i, (vf)vec_xor((vector unsigned int)l2s, negre), acc);
++        acc = vec_madd(v_a2r, l1, acc);
++        acc = vec_madd(v_a2i, (vf)vec_xor((vector unsigned int)l1s, negre), acc);
++        vec_st(acc, 0, &X_high[i][0]);
++    }
++    for (; i < end; i++) {
++        X_high[i][0] =
++            X_low[i - 2][0] * a0r - X_low[i - 2][1] * a0i +
++            X_low[i - 1][0] * a2r - X_low[i - 1][1] * a2i +
++            X_low[i][0];
++        X_high[i][1] =
++            X_low[i - 2][1] * a0r + X_low[i - 2][0] * a0i +
++            X_low[i - 1][1] * a2r + X_low[i - 1][0] * a2i +
++            X_low[i][1];
++    }
++}
++
++#endif /* HAVE_ALTIVEC && HAVE_BIGENDIAN */
++
++av_cold void ff_sbrdsp_init_ppc(SBRDSPContext *s)
++{
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++    if (!(av_get_cpu_flags() & AV_CPU_FLAG_ALTIVEC))
++        return;
++
++    s->sum64x5        = sbr_sum64x5_altivec;
++    s->sum_square     = sbr_sum_square_altivec;
++    s->qmf_deint_bfly = sbr_qmf_deint_bfly_altivec;
++    s->hf_gen         = sbr_hf_gen_altivec;
++#endif
++}
+diff --git a/libavcodec/sbrdsp.h b/libavcodec/sbrdsp.h
+index 09b2cbf..f01d081 100644
+--- a/libavcodec/sbrdsp.h
++++ b/libavcodec/sbrdsp.h
+@@ -48,6 +48,7 @@ extern const INTFLOAT AAC_RENAME(ff_sbr_noise_table)[][2];
+ void AAC_RENAME(ff_sbrdsp_init)(SBRDSPContext *s);
+ void ff_sbrdsp_init_arm(SBRDSPContext *s);
+ void ff_sbrdsp_init_aarch64(SBRDSPContext *s);
++void ff_sbrdsp_init_ppc(SBRDSPContext *s);
+ void ff_sbrdsp_init_riscv(SBRDSPContext *s);
+ void ff_sbrdsp_init_x86(SBRDSPContext *s);
+ 
+diff --git a/libavcodec/sbrdsp_template.c b/libavcodec/sbrdsp_template.c
+index b5766c6..936e255 100644
+--- a/libavcodec/sbrdsp_template.c
++++ b/libavcodec/sbrdsp_template.c
+@@ -100,6 +100,8 @@ av_cold void AAC_RENAME(ff_sbrdsp_init)(SBRDSPContext *s)
+     ff_sbrdsp_init_arm(s);
+ #elif ARCH_AARCH64
+     ff_sbrdsp_init_aarch64(s);
++#elif ARCH_PPC
++    ff_sbrdsp_init_ppc(s);
+ #elif ARCH_RISCV
+     ff_sbrdsp_init_riscv(s);
+ #elif ARCH_X86 && HAVE_X86ASM
+-- 
+2.43.0
+

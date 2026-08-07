@@ -1,0 +1,229 @@
+From 936505a054ddcc5d88b7541fb62ebce055188bf4 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 24 Jul 2026 06:26:43 +0000
+Subject: [PATCH 16/20] avcodec/ppc: emulated_edge_mc AltiVec (O4)
+
+Add an AltiVec emulated_edge_mc for the 8-bit path (checkasm's only
+covered depth). The scalar reference in videodsp_template.c computes the
+clamped copy geometry then moves bytes with per-row memcpy()s plus a
+byte-at-a-time left/right edge replication; this port keeps that geometry
+math verbatim (so results stay bit-identical) and only vectorizes the
+byte movers:
+
+  - store_run():  vectorized memcpy of one contiguous row span,
+  - splat_run():  fills a row span with one replicated edge byte, which
+                  the C code otherwise does one byte at a time.
+
+Every store is width-precise. The three horizontal regions of a row
+(left edge / copied middle / right edge) are adjacent and hold different
+data, and once buf += start_x the working pointer is arbitrarily aligned
+(checkasm only guarantees 16-alignment at the row start), so a plain
+vec_st -- which truncates its address to the 16-byte boundary and always
+writes a full 16 bytes -- cannot be used. store_full16()/store_partial()
+do the same vec_lvsl/vec_lvsr read-modify-write splice as
+unaligned_store16() in vp8dsp_altivec.c, store_partial() additionally
+masking the payload against current memory via a byte length mask so it
+writes only the requested count.
+
+Validated under qemu -cpu 7400 (AltiVec): checkasm videodsp
+emulated_edge_mc dispatches to a named ALTIVEC block and is bit-exact vs
+the C reference across 7 seeds; full checkasm suite 530/530 (was 529,
++1 newly-dispatching function).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01B8CvXRDFGyvFbrc9otpQSj
+---
+ libavcodec/ppc/videodsp.c | 168 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 168 insertions(+)
+
+diff --git a/libavcodec/ppc/videodsp.c b/libavcodec/ppc/videodsp.c
+index a7ab5a6..35bc51e 100644
+--- a/libavcodec/ppc/videodsp.c
++++ b/libavcodec/ppc/videodsp.c
+@@ -18,7 +18,12 @@
+  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+  */
+ 
++#include "config.h"
+ #include "libavutil/attributes.h"
++#include "libavutil/cpu.h"
++#include "libavutil/macros.h"
++#include "libavutil/ppc/cpu.h"
++#include "libavutil/ppc/util_altivec.h"
+ #include "libavcodec/videodsp.h"
+ 
+ static void prefetch_ppc(const uint8_t *mem, ptrdiff_t stride, int h)
+@@ -30,7 +35,170 @@ static void prefetch_ppc(const uint8_t *mem, ptrdiff_t stride, int h)
+     } while(--h);
+ }
+ 
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++
++/*
++ * AltiVec emulated_edge_mc, 8-bit only.
++ *
++ * The scalar C reference (videodsp_template.c) computes the clamped copy
++ * geometry, then moves bytes with three groups of memcpy()s (top-replicate,
++ * copied region, bottom-replicate) followed by a byte-at-a-time left/right
++ * horizontal edge replication.  This port keeps that geometry math verbatim
++ * -- so the result is bit-identical -- and only replaces the byte movers:
++ *   - store_run():  a vectorized memcpy for one contiguous row span,
++ *   - splat_run():  fills a row span with a single replicated edge byte
++ *                   (the hot inner loop the C code does one byte at a time).
++ *
++ * Every store is width-precise: it writes exactly the requested number of
++ * bytes and never touches the neighbouring span.  This matters because the
++ * three horizontal regions (left edge / copied middle / right edge) are
++ * adjacent in the same row and hold different data, and because checkasm's
++ * dst is only 16-aligned at the row start -- once buf += start_x the working
++ * pointer is arbitrarily aligned.  So a plain vec_st (which truncates its
++ * address down to the 16-byte boundary and always writes a full 16 bytes)
++ * cannot be used directly; store_full16()/store_partial() do a read-modify-
++ * write splice that writes only the requested bytes at an unaligned address.
++ */
++
++/* Splice the 16 logical bytes of v into the two aligned words at dst,
++ * preserving every byte outside [dst, dst+16).  Works for any dst alignment.
++ * Same read-modify-write splice as unaligned_store16() in vp8dsp_altivec.c. */
++static av_always_inline void store_full16(vec_u8 v, uint8_t *dst)
++{
++    vec_u8 lo    = vec_ld(0, dst);
++    vec_u8 hi    = vec_ld(15, dst);
++    vec_u8 edges = vec_perm(hi, lo, vec_lvsl(0, dst)); /* undo the load rotate */
++    vec_u8 align = vec_lvsr(0, dst);
++    hi = vec_perm(v, edges, align);
++    lo = vec_perm(edges, v, align);
++    vec_st(hi, 15, dst);
++    vec_st(lo, 0, dst);
++}
++
++/* store the low n (1..15) bytes of v at dst, leaving all other bytes of the
++ * two straddled 16-byte words untouched.  Works for any dst alignment. */
++static av_always_inline void store_partial(vec_u8 v, uint8_t *dst, int n)
++{
++    /* length mask, in dst's logical byte order: lane i = 0xff if i < n. */
++    const vec_u8 counter =
++        (const vec_u8){0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
++    const vec_u8 nv = vec_splat((vec_u8){ (uint8_t)n,0,0,0,0,0,0,0,
++                                          0,0,0,0,0,0,0,0 }, 0);
++    const vec_u8 lenmask = (vec_u8)vec_cmplt(counter, nv);
++
++    /* merge payload over current contents so lanes >= n keep memory's value */
++    vec_u8 cur = unaligned_load(0, dst);
++    store_full16(vec_sel(cur, v, lenmask), dst);
++}
++
++/* copy n bytes from src to dst (vectorized memcpy), arbitrary alignment. */
++static av_always_inline void store_run(uint8_t *dst, const uint8_t *src, int n)
++{
++    while (n >= 16) {
++        store_full16(unaligned_load(0, src), dst);
++        src += 16;
++        dst += 16;
++        n   -= 16;
++    }
++    if (n > 0)
++        store_partial(unaligned_load(0, src), dst, n);
++}
++
++/* fill n bytes at dst with the byte value b (edge replication). */
++static av_always_inline void splat_run(uint8_t *dst, uint8_t b, int n)
++{
++    vec_u8 v = vec_splat((vec_u8){ b,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 }, 0);
++    while (n >= 16) {
++        store_full16(v, dst);
++        dst += 16;
++        n   -= 16;
++    }
++    if (n > 0)
++        store_partial(v, dst, n);
++}
++
++static void emulated_edge_mc_altivec(uint8_t *buf, const uint8_t *src,
++                                     ptrdiff_t buf_linesize,
++                                     ptrdiff_t src_linesize,
++                                     int block_w, int block_h,
++                                     int src_x, int src_y, int w, int h)
++{
++    int y;
++    int start_y, start_x, end_y, end_x;
++
++    if (!w || !h)
++        return;
++
++    if (src_y >= h) {
++        src -= src_y * src_linesize;
++        src += (h - 1) * src_linesize;
++        src_y = h - 1;
++    } else if (src_y <= -block_h) {
++        src -= src_y * src_linesize;
++        src += (1 - block_h) * src_linesize;
++        src_y = 1 - block_h;
++    }
++    if (src_x >= w) {
++        src  -= (1 + src_x - w);
++        src_x = w - 1;
++    } else if (src_x <= -block_w) {
++        src  += (1 - block_w - src_x);
++        src_x = 1 - block_w;
++    }
++
++    start_y = FFMAX(0, -src_y);
++    start_x = FFMAX(0, -src_x);
++    end_y = FFMIN(block_h, h-src_y);
++    end_x = FFMIN(block_w, w-src_x);
++
++    w    = end_x - start_x;
++    src += start_y * src_linesize + start_x;
++    buf += start_x;
++
++    // top
++    for (y = 0; y < start_y; y++) {
++        store_run(buf, src, w);
++        buf += buf_linesize;
++    }
++
++    // copy existing part
++    for (; y < end_y; y++) {
++        store_run(buf, src, w);
++        src += src_linesize;
++        buf += buf_linesize;
++    }
++
++    // bottom
++    src -= src_linesize;
++    for (; y < block_h; y++) {
++        store_run(buf, src, w);
++        buf += buf_linesize;
++    }
++
++    buf -= block_h * buf_linesize + start_x;
++    while (block_h--) {
++        uint8_t *bufp = buf;
++
++        // left
++        if (start_x)
++            splat_run(bufp, bufp[start_x], start_x);
++
++        // right
++        if (end_x < block_w)
++            splat_run(bufp + end_x, bufp[end_x - 1], block_w - end_x);
++
++        buf += buf_linesize;
++    }
++}
++
++#endif /* HAVE_ALTIVEC && HAVE_BIGENDIAN */
++
+ av_cold void ff_videodsp_init_ppc(VideoDSPContext *ctx, int bpc)
+ {
+     ctx->prefetch = prefetch_ppc;
++
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++    if (PPC_ALTIVEC(av_get_cpu_flags()) && bpc <= 8)
++        ctx->emulated_edge_mc = emulated_edge_mc_altivec;
++#endif
+ }
+-- 
+2.43.0
+

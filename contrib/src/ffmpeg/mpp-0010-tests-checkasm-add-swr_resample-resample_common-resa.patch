@@ -1,0 +1,269 @@
+From 4ef673590295a1012f0e22b37c5c45b9e35a33dc Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 24 Jul 2026 04:23:20 +0000
+Subject: [PATCH 10/20] tests/checkasm: add swr_resample
+ (resample_common/resample_linear)
+
+New tests/checkasm/swr_resample.c -- swresample previously had NO
+checkasm coverage (FATE only), blocking any future PPC/other-arch
+resample kernel work from having an oracle.
+
+Builds a real ResampleContext via the public swr_alloc/swr_init path
+(48000->44100 mono, forcing the actual resample path rather than the
+same-rate passthrough) for all 4 sample formats (S16P/S32P/FLTP/DBLP)
+x both linear_interp modes (0 selects resample_common, 1 selects
+resample_linear, the default). No synthetic filter_bank construction:
+reusing real swr_init gets genuine filter coefficients for free and
+matches how every other checkasm test relies on the library's own
+init-time CPU dispatch to distinguish ref vs. new, rather than
+building two separately-flagged contexts by hand.
+
+Wired into tests/checkasm/Makefile (new SWRESAMPLEOBJS section,
+CONFIG_SWRESAMPLE-gated, mirroring SWSCALEOBJS), checkasm.h/.c, and
+tests/fate/checkasm.mak per the existing "new tests must be listed
+there too" convention.
+
+VALIDATED: runs cleanly under the cross-PPC/qemu harness
+(qemu-ppc-static -cpu 7400) across multiple seeds; --bench confirms
+real dispatch and distinct timings across all 8 format/mode
+combinations. No PPC resample kernels exist yet, so this currently
+only exercises/benches the C reference -- that's expected, this
+commit is test infrastructure only (unblocks O6).
+
+Also surfaced (out of scope, not fixed here): running the full
+checkasm suite under this harness for the first time found 44
+pre-existing failures in vp9dsp.mc (vertical MC filters, all
+_altivec) and 4 in vp8dsp.mc (put_pixels16/epel16_h6/v6/h6v6,
+_altivec) -- both from the earlier AltiVec VP8/VP9 decoder work,
+unrelated to this session's changes. Flagged in project memory for a
+follow-up session.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0194bzLUrg6cVCQ7u4NNDpaB
+---
+ tests/checkasm/Makefile       |   5 ++
+ tests/checkasm/checkasm.c     |   3 +
+ tests/checkasm/checkasm.h     |   1 +
+ tests/checkasm/swr_resample.c | 155 ++++++++++++++++++++++++++++++++++
+ tests/fate/checkasm.mak       |   1 +
+ 5 files changed, 165 insertions(+)
+ create mode 100644 tests/checkasm/swr_resample.c
+
+diff --git a/tests/checkasm/Makefile b/tests/checkasm/Makefile
+index c154d19..5c520e8 100644
+--- a/tests/checkasm/Makefile
++++ b/tests/checkasm/Makefile
+@@ -97,6 +97,11 @@ SWSCALEOBJS                             += sw_gbrp.o            \
+ 
+ CHECKASMOBJS-$(CONFIG_SWSCALE)  += $(SWSCALEOBJS)
+ 
++# swresample tests
++SWRESAMPLEOBJS                          += swr_resample.o
++
++CHECKASMOBJS-$(CONFIG_SWRESAMPLE) += $(SWRESAMPLEOBJS)
++
+ # libavutil tests
+ AVUTILOBJS                              += aes.o
+ AVUTILOBJS                              += av_tx.o
+diff --git a/tests/checkasm/checkasm.c b/tests/checkasm/checkasm.c
+index a8cad59..2445439 100644
+--- a/tests/checkasm/checkasm.c
++++ b/tests/checkasm/checkasm.c
+@@ -298,6 +298,9 @@ static const CheckasmTest tests[] = {
+     { "sw_yuv2yuv", checkasm_check_sw_yuv2yuv },
+     { "sw_ops", checkasm_check_sw_ops },
+ #endif
++#if CONFIG_SWRESAMPLE
++    { "swr_resample", checkasm_check_swr_resample },
++#endif
+ #if CONFIG_AVUTIL
+         { "aes",       checkasm_check_aes },
+         { "crc",       checkasm_check_crc },
+diff --git a/tests/checkasm/checkasm.h b/tests/checkasm/checkasm.h
+index b473c5d..17169cd 100644
+--- a/tests/checkasm/checkasm.h
++++ b/tests/checkasm/checkasm.h
+@@ -110,6 +110,7 @@ void checkasm_check_sw_xyz2rgb(void);
+ void checkasm_check_sw_yuv2rgb(void);
+ void checkasm_check_sw_yuv2yuv(void);
+ void checkasm_check_sw_ops(void);
++void checkasm_check_swr_resample(void);
+ void checkasm_check_takdsp(void);
+ void checkasm_check_utvideodsp(void);
+ void checkasm_check_v210dec(void);
+diff --git a/tests/checkasm/swr_resample.c b/tests/checkasm/swr_resample.c
+new file mode 100644
+index 0000000..abb701f
+--- /dev/null
++++ b/tests/checkasm/swr_resample.c
+@@ -0,0 +1,155 @@
++/*
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with FFmpeg; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++#include "checkasm.h"
++
++#include "libavutil/avassert.h"
++#include "libavutil/channel_layout.h"
++#include "libavutil/mem_internal.h"
++#include "libavutil/opt.h"
++#include "libavutil/samplefmt.h"
++
++#include "libswresample/swresample.h"
++#include "libswresample/swresample_internal.h"
++#include "libswresample/resample.h"
++
++#define SRC_LEN 256
++#define DST_LEN 256
++
++/* checkasm re-invokes this whole test once per simulated CPU flag mask (see
++ * ext/src/checkasm.c's cpuflags loop) and distinguishes ref vs. new purely
++ * by comparing the dsp.resample_* function pointer each swr_init() call
++ * lands on -- exactly like every other checkasm test's init-time dispatch.
++ * So a single, real SwrContext per format/mode is enough; no need to force
++ * two separately-flagged contexts by hand. */
++static ResampleContext *make_resample_ctx(enum AVSampleFormat fmt,
++                                          int linear_interp)
++{
++    struct SwrContext *s = swr_alloc();
++    AVChannelLayout mono = AV_CHANNEL_LAYOUT_MONO;
++    ResampleContext *c;
++
++    if (!s)
++        return NULL;
++
++    /* 48000 -> 44100: a real, non-integer rate ratio forces the resample
++     * path (not the passthrough taken when in/out rates match). */
++    av_opt_set_chlayout(s, "in_chlayout",  &mono, 0);
++    av_opt_set_chlayout(s, "out_chlayout", &mono, 0);
++    av_opt_set_sample_fmt(s, "in_sample_fmt",  fmt, 0);
++    av_opt_set_sample_fmt(s, "out_sample_fmt", fmt, 0);
++    av_opt_set_int(s, "in_sample_rate",  48000, 0);
++    av_opt_set_int(s, "out_sample_rate", 44100, 0);
++    av_opt_set_int(s, "linear_interp", linear_interp, 0);
++
++    if (swr_init(s) < 0) {
++        swr_free(&s);
++        return NULL;
++    }
++
++    /* Detach the ResampleContext so it outlives this SwrContext: swr_free()
++     * would otherwise tear it down too, but call_ref/call_new need it (and
++     * its filter_bank) alive across the whole check_func block below. */
++    c = s->resample;
++    s->resample = NULL;
++    swr_free(&s);
++
++    return c;
++}
++
++static void free_resample_ctx(ResampleContext *c)
++{
++    if (!c)
++        return;
++    av_freep(&c->filter_bank);
++    av_free(c);
++}
++
++#define RANDOMIZE(TYPE, MAXVAL) do {                                    \
++        TYPE *p = (TYPE *)buf;                                          \
++        for (int i = 0; i < SRC_LEN; i++)                               \
++            p[i] = (TYPE)((rnd() / (double)UINT_MAX - 0.5) * (MAXVAL)); \
++    } while (0)
++
++static void check_one(enum AVSampleFormat fmt, const char *fmt_name,
++                      int linear_interp, size_t elem_size)
++{
++    ResampleContext *c;
++    DECLARE_ALIGNED(32, uint8_t, src)[SRC_LEN * 8];
++    DECLARE_ALIGNED(32, uint8_t, dst0)[DST_LEN * 8];
++    DECLARE_ALIGNED(32, uint8_t, dst1)[DST_LEN * 8];
++    void *buf = src;
++    declare_func(int, ResampleContext *c, void *dst, const void *src,
++                int n, int update_ctx);
++
++    c = make_resample_ctx(fmt, linear_interp);
++    if (!c)
++        return;
++
++    switch (fmt) {
++    case AV_SAMPLE_FMT_S16P: RANDOMIZE(int16_t, INT16_MAX); break;
++    case AV_SAMPLE_FMT_S32P: RANDOMIZE(int32_t, INT32_MAX); break;
++    case AV_SAMPLE_FMT_FLTP: RANDOMIZE(float,   1.0);       break;
++    case AV_SAMPLE_FMT_DBLP: RANDOMIZE(double,  1.0);       break;
++    default: av_assert0(0);
++    }
++
++    {
++        void *fn = linear_interp ? (void *)c->dsp.resample_linear
++                                 : (void *)c->dsp.resample_common;
++
++        if (check_func(fn, "swr_resample_%s_%s", fmt_name,
++                       linear_interp ? "linear" : "common")) {
++            int consumed_ref, consumed_new;
++
++            memset(dst0, 0, sizeof(dst0));
++            memset(dst1, 0, sizeof(dst1));
++
++            consumed_ref = call_ref(c, dst0, src, SRC_LEN / 2, 0);
++            consumed_new = call_new(c, dst1, src, SRC_LEN / 2, 0);
++
++            if (consumed_ref != consumed_new ||
++                memcmp(dst0, dst1, DST_LEN * elem_size))
++                fail();
++
++            bench_new(c, dst1, src, SRC_LEN / 2, 0);
++        }
++    }
++
++    free_resample_ctx(c);
++}
++
++void checkasm_check_swr_resample(void)
++{
++    static const struct {
++        enum AVSampleFormat fmt;
++        const char *name;
++        size_t elem_size;
++    } formats[] = {
++        { AV_SAMPLE_FMT_S16P, "s16p", 2 },
++        { AV_SAMPLE_FMT_S32P, "s32p", 4 },
++        { AV_SAMPLE_FMT_FLTP, "fltp", 4 },
++        { AV_SAMPLE_FMT_DBLP, "dblp", 8 },
++    };
++
++    for (int i = 0; i < FF_ARRAY_ELEMS(formats); i++) {
++        check_one(formats[i].fmt, formats[i].name, 0, formats[i].elem_size);
++        check_one(formats[i].fmt, formats[i].name, 1, formats[i].elem_size);
++    }
++    report("swr_resample");
++}
+diff --git a/tests/fate/checkasm.mak b/tests/fate/checkasm.mak
+index 249fb91..3456974 100644
+--- a/tests/fate/checkasm.mak
++++ b/tests/fate/checkasm.mak
+@@ -68,6 +68,7 @@ FATE_CHECKASM = fate-checkasm-aacencdsp                                 \
+                 fate-checkasm-sw_xyz2rgb                                \
+                 fate-checkasm-sw_yuv2rgb                                \
+                 fate-checkasm-sw_yuv2yuv                                \
++                fate-checkasm-swr_resample                              \
+                 fate-checkasm-takdsp                                    \
+                 fate-checkasm-utvideodsp                                \
+                 fate-checkasm-v210dec                                   \
+-- 
+2.43.0
+

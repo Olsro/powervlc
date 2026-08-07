@@ -1,0 +1,176 @@
+From: PowerVLC
+Subject: [PATCH] ppc: bench-driven registration tuning from a real 7447A
+
+Second tuning pass, from a full `checkasm --bench` run of every AltiVec
+kernel we register, on the Mac mini G4 (7447A 1.42 GHz, 2026-08-07,
+seed 42). 507 kernels: 415 beat their C reference, 92 lose. This drops
+the losers that matter.
+
+1. HEVC motion compensation: register only from block width 8 up.
+
+   The split is total and has no overlap, so it is a property of the
+   code rather than measurement noise:
+
+     width  4 : 42/42 lose,  median 0.69x, min 0.26x
+     width  6 : 42/42 lose,  median 0.78x, min 0.44x
+     width  8 : 0/42 lose,   median 1.92x
+     width 12 : 0/42 lose,   median 1.45x
+     width 16 : 0/42 lose,   median 2.52x
+     width 24-64 : 0/168 lose, median 2.74x to 3.14x
+
+   Under 8 pixels per row, building the permute vectors and splicing the
+   unaligned loads costs more than the filter. hevc_pel_weight maps
+   widths 2/4/6 to table indices 0/1/2 and width 8 to index 3, so both
+   registration loops now start at 3.
+
+   Only MC_SET registers these slots now. mpp-0004 used to write the
+   same three put_hevc_qpel entries just before it, for every width
+   class, which would have left widths 4 and 6 on that patch's AltiVec
+   kernels instead of on C; since none of its kernels was ever reachable
+   (MC_SET overwrote all of them), it has been dropped from the series
+   entirely rather than bounded here.
+
+2. HEVC SAO, 8-bit, width 8 only: back to C (band 0.62x, edge 0.98x).
+   filter.c indexes with sao_tab[(FFALIGN(width,8)>>3)-1] and sao_tab[0]
+   is 0, so index 0 is exactly width 8. Width 16 and up win 2.5x to
+   10.4x. The 10-bit path keeps width 8, where it wins (band 1.96x,
+   edge 3.05x).
+
+3. Three upstream kernels that lose on the 7447A. These are the ones
+   macos-powerpc drops in the parts of its 0027/0030 we had left out
+   because they touched files carrying our own kernels; we now have our
+   own numbers for them and they agree:
+
+     hpeldsp avg_pixels_tab[1][0]      0.69x   (upstream 0.80x G4)
+     put_h264_qpel_8_mc00              0.75x   (same kernel underneath)
+     avg_h264_qpel_8_mc00              0.82x
+     h264dsp h_loop_filter_luma        0.66x   (upstream 0.87x G4)
+
+   The v loop filter counterpart wins 4.52x and stays; every other
+   8-wide qpel wins 2.07x to 4.59x and stays.
+
+Left registered on purpose: idct_add16intra, which upstream drops on
+both CPUs (0.52x G4) but measures 1.07x here - our patches modify that
+file, so their number does not transfer. And avg_pixels8_x2 at 0.99x, a
+wash either way.
+
+NOT acted on: h264dsp idct8_add4 reports 0.06x (C 2.1 ticks vs AltiVec
+36.0). That is a bench artifact, not a regression. h264_idct8_add4_altivec
+has the same nnz-skip structure as the C reference and only ever calls
+idct8_add (2.02x) and idct8_dc_add (2.29x), so it cannot be 17x slower;
+and 2.1 ticks is impossible for a function that ran any 8x8 IDCT at all
+(idct8_add alone costs 23.2 ticks in C). The two halves of the pair did
+not get the same nnzc.
+
+Every kernel stays compiled (av_unused where a gate removes the last
+reference), so any single decision here is a one-line revert.
+--- a/libavcodec/ppc/hevcdsp.c	2026-08-07 11:30:50
++++ b/libavcodec/ppc/hevcdsp.c	2026-08-07 11:31:15
+@@ -136,7 +136,20 @@
+ #define MC_SET(depth)                                                          \
+     do {                                                                       \
+         int i;                                                                 \
+-        for (i = 0; i < 10; i++) {                                             \
++        /* PowerVLC: start at index 3. hevc_pel_weight maps block widths     \
++         * 2/4/6 to indices 0/1/2 and width 8 to index 3. checkasm --bench   \
++         * on a 7447A (2026-08-07) has every narrow kernel losing to C and    \
++         * every wide one winning, with no overlap at all:                    \
++         *   width  4: 42/42 lose, median 0.69x (min 0.26x)                   \
++         *   width  6: 42/42 lose, median 0.78x (min 0.44x)                   \
++         *   width  8: 0/42 lose,  median 1.92x                               \
++         *   width 12: 0/42 lose,  median 1.45x                               \
++         *   width 16+:0/168 lose, median 2.52x to 3.14x                      \
++         * Below 8 pixels per row, building the permute vectors and splicing  \
++         * the unaligned loads costs more than the filter itself. Width 2 is  \
++         * not benched (checkasm does not exercise it) but sits on the same   \
++         * side of the threshold. */                                          \
++        for (i = 3; i < 10; i++) {                                             \
+             c->put_hevc_qpel[i][0][1]     = ff_hevc_put_qpel_h_ ## depth ## _altivec;      \
+             c->put_hevc_qpel[i][1][0]     = ff_hevc_put_qpel_v_ ## depth ## _altivec;      \
+             c->put_hevc_qpel[i][1][1]     = ff_hevc_put_qpel_hv_ ## depth ## _altivec;     \
+@@ -189,9 +202,14 @@
+         c->idct[1] = ff_hevc_idct_8x8_8_altivec;
+         c->idct[2] = ff_hevc_idct_16x16_8_altivec;
+         c->idct[3] = ff_hevc_idct_32x32_8_altivec;
+-        c->sao_band_filter[0] = c->sao_band_filter[1] = c->sao_band_filter[2] =
++        /* PowerVLC: index 0 is width 8 exactly (filter.c indexes with
++         * sao_tab[(FFALIGN(width,8)>>3)-1], sao_tab[0] == 0), and at 8 bits
++         * it loses on a 7447A: band 0.62x, edge 0.98x. Everything from
++         * width 16 up wins 2.5x to 10.4x and stays. The 10-bit path keeps
++         * width 8 - it wins there (band 1.96x, edge 3.05x). */
++        c->sao_band_filter[1] = c->sao_band_filter[2] =
+         c->sao_band_filter[3] = c->sao_band_filter[4] = ff_hevc_sao_band_filter_8_altivec;
+-        c->sao_edge_filter[0] = c->sao_edge_filter[1] = c->sao_edge_filter[2] =
++        c->sao_edge_filter[1] = c->sao_edge_filter[2] =
+         c->sao_edge_filter[3] = c->sao_edge_filter[4] = ff_hevc_sao_edge_filter_8_altivec;
+         MC_SET(8);
+     }
+--- a/libavcodec/ppc/hpeldsp_altivec.c	2026-08-07 11:30:50
++++ b/libavcodec/ppc/hpeldsp_altivec.c	2026-08-07 11:31:15
+@@ -82,7 +82,7 @@
+ }
+ 
+ /* next one assumes that ((line_size % 8) == 0) */
+-static void avg_pixels8_altivec(uint8_t * block, const uint8_t * pixels, ptrdiff_t line_size, int h)
++static av_unused void avg_pixels8_altivec(uint8_t * block, const uint8_t * pixels, ptrdiff_t line_size, int h)
+ {
+     register vector unsigned char pixelsv, blockv;
+     int i;
+@@ -583,7 +583,10 @@
+     c->avg_pixels_tab[0][1]        = avg_pixels16_x2_altivec;
+     c->avg_pixels_tab[0][2]        = avg_pixels16_y2_altivec;
+     c->avg_pixels_tab[0][3]        = avg_pixels16_xy2_altivec;
+-    c->avg_pixels_tab[1][0]        = avg_pixels8_altivec;
++    /* PowerVLC: [1][0] (8-wide avg copy) stays on C, like [1][0]/[1][2] of
++     * put_pixels_tab below. Benched 0.69x vs C on a 7447A (2026-08-07);
++     * upstream macos-powerpc measured 0.80x on the same CPU and 0.51x on a
++     * 970, and unregisters it on both. */
+     c->avg_pixels_tab[1][1]        = avg_pixels8_x2_altivec;
+     c->avg_pixels_tab[1][2]        = avg_pixels8_y2_altivec;
+     c->avg_pixels_tab[1][3]        = avg_pixels8_xy2_altivec;
+--- a/libavcodec/ppc/h264qpel.c	2026-08-07 11:30:50
++++ b/libavcodec/ppc/h264qpel.c	2026-08-07 11:31:15
+@@ -399,8 +399,19 @@
+         dspfunc(put_h264_qpel, 0, 16);
+         dspfunc(avg_h264_qpel, 0, 16);
+ #if HAVE_BIGENDIAN
+-        dspfunc(put_h264_qpel, 1, 8);
+-        dspfunc(avg_h264_qpel, 1, 8);
++        {
++            /* PowerVLC: 8-wide mc00 is a plain 8x8 copy/avg sitting on
++             * ff_put/avg_pixels8_altivec, the same kernels as hpeldsp
++             * [1][0]. Benched on a 7447A (2026-08-07): put 0.75x, avg
++             * 0.82x vs C. Keep the C entries; every other 8-wide qpel
++             * wins 2.07x to 4.59x and stays. */
++            qpel_mc_func put8_mc00_c = c->put_h264_qpel_pixels_tab[1][0];
++            qpel_mc_func avg8_mc00_c = c->avg_h264_qpel_pixels_tab[1][0];
++            dspfunc(put_h264_qpel, 1, 8);
++            dspfunc(avg_h264_qpel, 1, 8);
++            c->put_h264_qpel_pixels_tab[1][0] = put8_mc00_c;
++            c->avg_h264_qpel_pixels_tab[1][0] = avg8_mc00_c;
++        }
+ #endif
+ #undef dspfunc
+     }
+--- a/libavcodec/ppc/h264dsp.c	2026-08-07 11:30:50
++++ b/libavcodec/ppc/h264dsp.c	2026-08-07 11:31:15
+@@ -641,7 +641,7 @@
+     }
+ }
+ 
+-static void h264_h_loop_filter_luma_altivec(uint8_t *pix, ptrdiff_t stride, int alpha, int beta, int8_t *tc0) {
++static av_unused void h264_h_loop_filter_luma_altivec(uint8_t *pix, ptrdiff_t stride, int alpha, int beta, int8_t *tc0) {
+ 
+     register vec_u8 line0, line1, line2, line3, line4, line5;
+     if ((tc0[0] & tc0[1] & tc0[2] & tc0[3]) < 0)
+@@ -1138,7 +1138,9 @@
+         c->idct8_add    = h264_idct8_add_altivec;
+         c->idct8_add4   = h264_idct8_add4_altivec;
+         c->v_loop_filter_luma = h264_v_loop_filter_luma_altivec;
+-        c->h_loop_filter_luma = h264_h_loop_filter_luma_altivec;
++        /* PowerVLC: transpose-bound, loses to C. 0.66x on a 7447A
++         * (2026-08-07); upstream measured 0.87x G4 / 0.90x 970 and drops
++         * it on both. The v counterpart wins 4.52x and stays. */
+ #if HAVE_BIGENDIAN
+         /* v (cross-row) chroma filter only: the column-wise h filter and
+          * the intra variants measured SLOWER than C on a 7447A (transpose

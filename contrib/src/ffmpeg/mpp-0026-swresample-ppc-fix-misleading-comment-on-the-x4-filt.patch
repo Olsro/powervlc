@@ -1,0 +1,44 @@
+From 89d0495951c416ff02f1508ed7db426adf45bca0 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Tue, 28 Jul 2026 16:52:09 +0000
+Subject: [PATCH 27/27] swresample/ppc: fix misleading comment on the x4 filter
+ loop bound
+
+The apply_filter_x4_float_altivec header claimed the zero padding taps
+mean "running up to the next multiple of 4 contributes nothing", which
+describes exactly the design the code rejects: extending the vector loop
+into the padding would read src[] past the last tap the C reference
+touches, potentially out of bounds at the end of the source buffer
+(value-wise harmless, address-wise not). State the real constraint so a
+future cleanup does not reintroduce that overread. Comment-only change.
+
+Found in the Fable review of b7a7da2; the code itself is correct.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019ABxmfsk6Jfpb2qXEhcHPo
+---
+ libswresample/ppc/resample.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/libswresample/ppc/resample.c b/libswresample/ppc/resample.c
+index 342948c..8ed4a6f 100644
+--- a/libswresample/ppc/resample.c
++++ b/libswresample/ppc/resample.c
+@@ -37,8 +37,12 @@
+  * filter is guaranteed 16-byte aligned: it is filter_bank (from av_calloc, so
+  * at least 32-byte aligned) offset by filter_alloc*index floats, and
+  * filter_alloc is a multiple of 8 -> the row start is a multiple of 32 bytes.
+- * Padding taps beyond filter_length are zero (av_calloc), so running up to the
+- * next multiple of 4 contributes nothing.
++ * The caller passes length = filter_length & ~3 and finishes the remaining
++ * 0-3 taps in scalar: although the filter row's padding taps beyond
++ * filter_length are zero (av_calloc), running the vector loop into them would
++ * read src[] past the last tap the C reference touches -- potentially out of
++ * bounds at the end of the source buffer. Do not "extend" the loop to
++ * FFALIGN(filter_length, 4).
+  *
+  * src (== &src[sample_index]) is arbitrarily aligned; each step's load address
+  * base+off changes alignment mod 16 (off advances by 16 bytes = 4 floats), so
+-- 
+2.43.0
+

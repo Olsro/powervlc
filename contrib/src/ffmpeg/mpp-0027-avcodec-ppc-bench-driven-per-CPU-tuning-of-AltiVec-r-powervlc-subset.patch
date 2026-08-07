@@ -1,0 +1,230 @@
+From 63ddb1abfa52d227f1244ec06475bd5f93a4ce8e Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Thu, 30 Jul 2026 02:47:28 +0000
+Subject: [PATCH] avcodec/ppc: bench-driven per-CPU tuning of AltiVec
+ registrations
+
+Gate individual AltiVec registrations on _ARCH_PWR4 (predefined by GCC
+for -mcpu=970/G5, absent for -mcpu=7450/G4) so one source tree
+auto-tunes per MacPorts CPU variant, and drop the few kernels that
+measured slower than C on both CPUs. Registration-level excludes only:
+all kernel code stays compiled (av_unused where a build shape loses its
+only reference), so any single decision here is a one-line revert.
+
+Data: checkasm --bench on real hardware, C-vs-AltiVec tick ratios.
+- G5: 970 2.3 GHz, full patched tree (2026-07-28).
+- G4: 7447A 1.42 GHz Mac mini (2026-07-30) - an unpatched stock build,
+  so it only provides numbers for pre-existing upstream kernels. Every
+  G5-only gate below therefore leaves the G4 side unchanged; a patched
+  G4 bench can revisit.
+
+Disabled on G5 only (#ifndef _ARCH_PWR4, measured loss vs C on 970):
+- h264pred: pred16x16_horizontal 0.43x, pred8x8_horizontal 0.19x,
+  pred8x8 dc 0.56x / left_dc 0.53x / top_dc 0.63x
+- h264dsp: h_loop_filter_chroma 0.66x, h_loop_filter_chroma_intra
+  0.60x, h_loop_filter_luma_intra 0.65x (all transpose-bound; the
+  vertical counterparts win 2.2-6.9x and stay)
+- h264dsp 4x4 idct family: idct_add 0.53x, idct_dc_add 0.52x,
+  idct_add16 0.74x (the 7447A measured a 1.27x WIN on idct_add16, so
+  the family stays on G4); idct_add8 has no checkasm bench but is the
+  same two kernels in a chroma loop, so it goes with idct_add16
+- hpeldsp put_pixels8 (put_pixels_tab[1][0]) 0.42x, and its h264qpel
+  twin put_h264_qpel8_mc00 (same function underneath)
+- vp8dsp put_vp8_pixels16 0.46x (measured with the byte-precise
+  unaligned store of e34797f; an aligned-dst fast path could win it
+  back on both CPUs - future work)
+- vp9dsp: hor ipred 16x16 0.39x / 32x32 0.67x; 4-wide bilin MC
+  0.70-0.89x (avg_bilin_4h measured 1.06x at noise-level tick counts
+  and is gated with its family)
+
+Disabled on G4 only (#ifdef _ARCH_PWR4):
+- hpeldsp avg_pixels8 (avg_pixels_tab[1][0]): 0.80x on 7447A vs 2.46x
+  win on 970, and its h264qpel twin avg_h264_qpel8_mc00
+
+Disabled everywhere (measured loss on both CPUs):
+- h264dsp h_loop_filter_luma: 0.87x G4 / 0.90x G5
+- h264dsp idct_add16intra: 0.52x G4 / 0.78x G5
+
+Left registered despite sub-1.0 bench entries (timer noise or wash):
+pred8x8 vertical 0.91x / dc_128 0.90x (0.7-tick entries), h264
+chroma_mc4 0.96-0.97x, vp9 put4 0.83x (0.3 ticks), vp9 avg8 0.92x,
+sw_scale hscale (mixed across filter sizes, shared registration).
+
+The MacPorts +G4/+G5 variants pass -mcpu=G4 / -mcpu=970 -mno-powerpc64
+respectively; -mcpu=970 predefines _ARCH_PWR4 (verified with GCC 14),
+so no Portfile changes are needed. Builds without -mcpu (including the
+qemu checkasm harness) get the G4 registration set.
+
+Validated: cross-PPC qemu harness (-cpu 7400), full checkasm suite
+577/577 on seeds 42 and 777 (was 581; -4 = the two disabled-everywhere
+kernels plus avg_pixels8/avg qpel8 mc00, which are G5-only and absent
+from the harness's G4-shape build). All six files also compile
+warning-free with -D_ARCH_PWR4 simulating the G5 shape.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016PpTqZd4mMkQFMFRSf7k8c
+
+PowerVLC: hunks touching libavcodec/ppc/h264dsp.c, h264qpel.c and
+hpeldsp_altivec.c were dropped from this patch.  Those three files carry
+PowerVLC's own AltiVec kernels (contrib/src/ffmpeg/0001..0007-ppc-h264-*
+and ffmpeg-ppc-hpeldsp-altivec.patch), so the registration verdicts above,
+measured against the stock upstream kernels, do not transfer to them.  The
+kept hunks cover only files PowerVLC does not modify.  Re-benching our own
+H.264/hpeldsp registrations against C on real hardware is separate work.
+
+---
+ libavcodec/ppc/h264dsp.c         | 49 +++++++++++++++++++-------------
+ libavcodec/ppc/h264pred_init.c   |  6 ++++
+ libavcodec/ppc/h264qpel.c        | 19 +++++++++++--
+ libavcodec/ppc/hpeldsp_altivec.c |  4 +++
+ libavcodec/ppc/vp8dsp_altivec.c  |  5 +++-
+ libavcodec/ppc/vp9dsp_altivec.c  | 24 ++++++++++------
+ 6 files changed, 77 insertions(+), 30 deletions(-)
+
+diff --git a/libavcodec/ppc/h264pred_init.c b/libavcodec/ppc/h264pred_init.c
+index b7cd012..68e1972 100644
+--- a/libavcodec/ppc/h264pred_init.c
++++ b/libavcodec/ppc/h264pred_init.c
+@@ -40,7 +40,9 @@ av_cold void ff_h264_pred_init_ppc(H264PredContext *h, int codec_id,
+         return;
+ 
+     h->pred16x16[VERT_PRED8x8   ] = ff_pred16x16_vertical_altivec;
++#ifndef _ARCH_PWR4 /* 970: 0.43x vs C */
+     h->pred16x16[HOR_PRED8x8    ] = ff_pred16x16_horizontal_altivec;
++#endif
+     h->pred16x16[DC_PRED8x8     ] = ff_pred16x16_dc_altivec;
+     h->pred16x16[LEFT_DC_PRED8x8] = ff_pred16x16_left_dc_altivec;
+     h->pred16x16[TOP_DC_PRED8x8 ] = ff_pred16x16_top_dc_altivec;
+@@ -48,15 +50,19 @@ av_cold void ff_h264_pred_init_ppc(H264PredContext *h, int codec_id,
+ 
+     if (chroma_format_idc <= 1) {
+         h->pred8x8[VERT_PRED8x8  ] = ff_pred8x8_vertical_altivec;
++#ifndef _ARCH_PWR4 /* 970: 0.19x vs C */
+         h->pred8x8[HOR_PRED8x8   ] = ff_pred8x8_horizontal_altivec;
++#endif
+         h->pred8x8[DC_128_PRED8x8] = ff_pred8x8_128_dc_altivec;
+ 
++#ifndef _ARCH_PWR4 /* 970: dc 0.56x, left_dc 0.53x, top_dc 0.63x vs C */
+         if (codec_id != AV_CODEC_ID_RV40 && codec_id != AV_CODEC_ID_VP7 &&
+             codec_id != AV_CODEC_ID_VP8) {
+             h->pred8x8[DC_PRED8x8     ] = ff_pred8x8_dc_altivec;
+             h->pred8x8[LEFT_DC_PRED8x8] = ff_pred8x8_left_dc_altivec;
+             h->pred8x8[TOP_DC_PRED8x8 ] = ff_pred8x8_top_dc_altivec;
+         }
++#endif
+     }
+ #endif
+ }
+diff --git a/libavcodec/ppc/vp8dsp_altivec.c b/libavcodec/ppc/vp8dsp_altivec.c
+index acea9fc..f25742e 100644
+--- a/libavcodec/ppc/vp8dsp_altivec.c
++++ b/libavcodec/ppc/vp8dsp_altivec.c
+@@ -326,7 +326,7 @@ EPEL_HV(4,  4,6)
+ EPEL_HV(4,  6,4)
+ EPEL_HV(4,  4,4)
+ 
+-static void put_vp8_pixels16_altivec(uint8_t *dst, ptrdiff_t dstride, const uint8_t *src, ptrdiff_t sstride, int h, int mx, int my)
++static av_unused void put_vp8_pixels16_altivec(uint8_t *dst, ptrdiff_t dstride, const uint8_t *src, ptrdiff_t sstride, int h, int mx, int my)
+ {
+     int i;
+     register ptrdiff_t dstride2 = dstride << 1, sstride2 = sstride << 1;
+@@ -363,7 +363,10 @@ av_cold void ff_vp78dsp_init_ppc(VP8DSPContext *c)
+     if (!PPC_ALTIVEC(av_get_cpu_flags()))
+         return;
+ 
++#ifndef _ARCH_PWR4 /* 970: 0.46x vs C (with the byte-precise unaligned store;
++                    * an aligned-dst fast path could win it back — future work) */
+     c->put_vp8_epel_pixels_tab[0][0][0] = put_vp8_pixels16_altivec;
++#endif
+     c->put_vp8_epel_pixels_tab[0][0][2] = put_vp8_epel16_h6_altivec;
+     c->put_vp8_epel_pixels_tab[0][2][0] = put_vp8_epel16_v6_altivec;
+     c->put_vp8_epel_pixels_tab[0][2][2] = put_vp8_epel16_h6v6_altivec;
+diff --git a/libavcodec/ppc/vp9dsp_altivec.c b/libavcodec/ppc/vp9dsp_altivec.c
+index 70b58e8..bfdb485 100644
+--- a/libavcodec/ppc/vp9dsp_altivec.c
++++ b/libavcodec/ppc/vp9dsp_altivec.c
+@@ -653,8 +653,8 @@ static void vert_32x32_altivec(uint8_t *dst, ptrdiff_t stride,
+     }
+ }
+ 
+-static void hor_16x16_altivec(uint8_t *dst, ptrdiff_t stride,
+-                              const uint8_t *left, const uint8_t *top)
++static av_unused void hor_16x16_altivec(uint8_t *dst, ptrdiff_t stride,
++                                        const uint8_t *left, const uint8_t *top)
+ {
+     int y;
+ 
+@@ -664,8 +664,8 @@ static void hor_16x16_altivec(uint8_t *dst, ptrdiff_t stride,
+     }
+ }
+ 
+-static void hor_32x32_altivec(uint8_t *dst, ptrdiff_t stride,
+-                              const uint8_t *left, const uint8_t *top)
++static av_unused void hor_32x32_altivec(uint8_t *dst, ptrdiff_t stride,
++                                        const uint8_t *left, const uint8_t *top)
+ {
+     int y;
+ 
+@@ -1731,8 +1731,9 @@ VP9_8TAP_HV_FUNCS( 4, avg, 1)
+ #undef VP9_8TAP_HV
+ #undef VP9_8TAP_HV_FUNCS
+ 
++/* av_unused: the 4-wide instances go unreferenced on _ARCH_PWR4 builds */
+ #define VP9_BILIN_V(sz, type, avg)                                         \
+-static void type##_bilin_##sz##v_altivec(uint8_t *dst,                     \
++static av_unused void type##_bilin_##sz##v_altivec(uint8_t *dst,           \
+                                          ptrdiff_t dst_stride,             \
+                                          const uint8_t *src,               \
+                                          ptrdiff_t src_stride,             \
+@@ -1742,7 +1743,7 @@ static void type##_bilin_##sz##v_altivec(uint8_t *dst,                     \
+ }
+ 
+ #define VP9_BILIN_H(sz, type, avg)                                         \
+-static void type##_bilin_##sz##h_altivec(uint8_t *dst,                     \
++static av_unused void type##_bilin_##sz##h_altivec(uint8_t *dst,           \
+                                          ptrdiff_t dst_stride,             \
+                                          const uint8_t *src,               \
+                                          ptrdiff_t src_stride,             \
+@@ -1752,7 +1753,7 @@ static void type##_bilin_##sz##h_altivec(uint8_t *dst,                     \
+ }
+ 
+ #define VP9_BILIN_HV(sz, type, avg)                                        \
+-static void type##_bilin_##sz##hv_altivec(uint8_t *dst,                    \
++static av_unused void type##_bilin_##sz##hv_altivec(uint8_t *dst,          \
+                                           ptrdiff_t dst_stride,            \
+                                           const uint8_t *src,              \
+                                           ptrdiff_t src_stride,            \
+@@ -1848,7 +1849,6 @@ static av_cold void vp9dsp_intra_init_ppc(VP9DSPContext *dsp)
+ {
+ #define init_intra(tx, sz) \
+     dsp->intra_pred[tx][VERT_PRED]    = vert_##sz##_altivec; \
+-    dsp->intra_pred[tx][HOR_PRED]     = hor_##sz##_altivec; \
+     dsp->intra_pred[tx][DC_PRED]      = dc_##sz##_altivec; \
+     dsp->intra_pred[tx][LEFT_DC_PRED] = dc_left_##sz##_altivec; \
+     dsp->intra_pred[tx][TOP_DC_PRED]  = dc_top_##sz##_altivec; \
+@@ -1859,6 +1859,11 @@ static av_cold void vp9dsp_intra_init_ppc(VP9DSPContext *dsp)
+     init_intra(TX_16X16, 16x16);
+     init_intra(TX_32X32, 32x32);
+ 
++#ifndef _ARCH_PWR4 /* 970: hor 16x16 0.39x, 32x32 0.67x vs C */
++    dsp->intra_pred[TX_16X16][HOR_PRED] = hor_16x16_altivec;
++    dsp->intra_pred[TX_32X32][HOR_PRED] = hor_32x32_altivec;
++#endif
++
+ #undef init_intra
+ }
+ 
+@@ -1892,7 +1897,10 @@ static av_cold void vp9dsp_mc_init_ppc(VP9DSPContext *dsp)
+     init_bilin_avg(1, 32);
+     init_bilin_avg(2, 16);
+     init_bilin_avg(3,  8);
++#ifndef _ARCH_PWR4 /* 970: 4-wide bilin 0.70-0.89x vs C (avg_4h 1.06x is
++                    * within timer noise and goes with its family) */
+     init_bilin_avg(4,  4);
++#endif
+ }
+ 
+ /* Two-pass 4x4 add for a given (row-pass, col-pass) transform pair.
+-- 
+2.43.0
+

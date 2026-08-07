@@ -165,4 +165,17 @@ return {
              .. "l'extension PowerVLC</strong> pose dans votre navigateur "
              .. "une petite extension qui s'en charge toute seule — plus "
              .. "de favori, plus de clic, sur toutes les pages.",
+    web_addon_lead = "Extension installée ? Il n'y a rien à glisser et "
+                  .. "rien à cliquer : ouvrez simplement l'instance "
+                  .. "ci-dessous et passez sa vérification. Cette page "
+                  .. "vous dira elle-même quand le lien est établi.",
+    web_steps_title = "Sans l'extension : le favori",
+    web_relay_on_addon = "Relié à PowerVLC par l'extension du navigateur. "
+                      .. "Rien à cliquer : laissez cette fenêtre et "
+                      .. "l'onglet de l'instance ouverts.",
+    web_m_taking = "PowerVLC lit cette vidéo. L'onglet a été vidé tout de "
+                .. "suite à dessein : laisser le lecteur du site se charger "
+                .. "ici coûterait un second décodage et un second "
+                .. "téléchargement, et solliciterait l'instance pour rien. "
+                .. "Laissez-le ouvert.",
 }

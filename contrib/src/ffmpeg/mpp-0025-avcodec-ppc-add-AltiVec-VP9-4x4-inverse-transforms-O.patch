@@ -1,0 +1,344 @@
+From 36de952c92f2caeedaf4514c087932c445501beb Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Tue, 28 Jul 2026 16:30:35 +0000
+Subject: [PATCH 26/27] avcodec/ppc: add AltiVec VP9 4x4 inverse transforms
+ (O2)
+
+Implement the full 4x4 VP9 inverse-transform-add kernels in AltiVec,
+covering every itxfm_add[TX_4X4][*] slot plus the lossless WHT:
+
+  idct_idct   (DCT_DCT, incl. the eob==1 DC-only fast path)
+  iadst_idct  (DCT_ADST)
+  idct_iadst  (ADST_DCT)
+  iadst_iadst (ADST_ADST)
+  iwht_iwht   (lossless)
+
+The kernels reproduce libavcodec/vp9dsp_template.c bit-for-bit. 8-bit
+only (dctcoef == int16_t), so all values that flow between the two 1D
+passes are int16 exactly as in the reference, which stores the inter-
+pass tmp[] as int16. Each 1D pass runs the four parallel transforms in
+int16 lanes 0..3 (lane j == transform j); constant multiplies use
+vec_mule/vec_mulo (int16 x int16 -> int32) accumulated in int32, with
+sums like (IN0+IN2)*C evaluated distributively as IN0*C + IN2*C so no
+int16 partial sum is ever formed. A vec_mergeh/mergel + vec_sld network
+transposes the 4x4 between passes.
+
+The 4-byte row store rotates the payload with vec_lvsr(0,dst) before
+vec_ste (the h264qpel qpel8_store idiom): vec_ste selects the stored
+word element by destination address, so an unrotated store corrupts
+dst at every 4- and 12-mod-16 offset -- exactly the offsets a 4-byte
+row stride produces. Reproduced that store bug standalone before
+adding the rotation.
+
+Validated with the qemu -cpu 7400 checkasm harness: vp9dsp.itxfm real
+ALTIVEC dispatch on all 7 new 4x4 functions, bit-exact vs C across
+seeds 1/2/42/777/12345; full suite 581/581 (was 574, +7).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TrEun5nqjxyJcKGVnxM5BH
+---
+ libavcodec/ppc/vp9dsp_altivec.c | 279 ++++++++++++++++++++++++++++++++
+ 1 file changed, 279 insertions(+)
+
+diff --git a/libavcodec/ppc/vp9dsp_altivec.c b/libavcodec/ppc/vp9dsp_altivec.c
+index fe80379..70b58e8 100644
+--- a/libavcodec/ppc/vp9dsp_altivec.c
++++ b/libavcodec/ppc/vp9dsp_altivec.c
+@@ -828,6 +828,213 @@ static void idct_idct_32x32_add_altivec(uint8_t *dst, ptrdiff_t stride,
+     idct_idct_32x32_add_c(dst, stride, block, eob);
+ }
+ 
++/* ---- 4x4 inverse transforms (idct/iadst/iwht, all txtp combos) ----
++ *
++ * These reproduce, bit-for-bit, the C reference in vp9dsp_template.c
++ * (idct4_1d / iadst4_1d / iwht4_1d driven by the itxfm_wrapper two-pass
++ * add).  8-bit only: the block coefficients and the inter-pass "tmp"
++ * array are int16 in the C code (dctcoef == int16_t for BIT_DEPTH 8), so
++ * the values that flow between the two passes fit int16 exactly as they
++ * do in the reference.
++ *
++ * Layout: the four vectors c0..c3 each hold, in int16 lanes 0..3, the
++ * IN(0)..IN(3) inputs of the four parallel 1D transforms (lane j is
++ * transform j).  Constant multiplies use vec_mule/vec_mulo (int16 x int16
++ * -> int32), accumulating in int32; sums like (IN(0)+IN(2))*C are computed
++ * distributively as IN(0)*C + IN(2)*C so no int16 partial sum is ever
++ * formed and nothing overflows.  A 4x4 transpose between passes swaps rows
++ * and columns.  Results are round-shifted (+ (1<<13)) >> 14 and packed
++ * back to int16, matching the reference's storage into tmp[]/out[].
++ */
++
++/* Splat an int16 constant across a vector. */
++#define VSPLAT16(x) ((vec_s16)vec_splats((int16_t)(x)))
++
++/* Return {v[0]*c, v[1]*c, v[2]*c, v[3]*c} as int32 lanes, from int16 lanes
++ * 0..3 of v times the int16 constant splat c. */
++static av_always_inline vec_s32 vmul4(vec_s16 v, vec_s16 c)
++{
++    vec_s32 e = vec_mule(v, c);   /* {v0*c, v2*c} in lanes 0,1 */
++    vec_s32 o = vec_mulo(v, c);   /* {v1*c, v3*c} in lanes 0,1 */
++    return (vec_s32)vec_mergeh(e, o); /* {v0*c, v1*c, v2*c, v3*c} */
++}
++
++/* (a + (1<<13)) >> 14 lane-wise. */
++static av_always_inline vec_s32 rnd14(vec_s32 a)
++{
++    const vec_s32 rnd = vec_sl(vec_splat_s32(1), vec_splat_u32(13));
++    return vec_sra(vec_add(a, rnd), vec_splat_u32(14));
++}
++
++/* Pack two int32 lane-quads (in lanes 0..3 of a,b) into one int16 vector
++ * with a's values in lanes 0..3 and b's in lanes 4..7. */
++static av_always_inline vec_s16 pack_s32(vec_s32 a, vec_s32 b)
++{
++    return vec_packs(a, b);
++}
++
++/* Transpose a 4x4 matrix held in int16 lanes 0..3 of r0..r3 (lanes 4..7
++ * are don't-care and become populated with the transpose too). */
++static av_always_inline void transpose4x4_s16(vec_s16 *r0, vec_s16 *r1,
++                                              vec_s16 *r2, vec_s16 *r3)
++{
++    vec_s16 a = vec_mergeh(*r0, *r2); /* r0[0] r2[0] r0[1] r2[1] r0[2] r2[2] r0[3] r2[3] */
++    vec_s16 b = vec_mergeh(*r1, *r3); /* r1[0] r3[0] r1[1] r3[1] r1[2] r3[2] r1[3] r3[3] */
++    *r0 = vec_mergeh(a, b);           /* r0[0] r1[0] r2[0] r3[0] | r0[1] r1[1] r2[1] r3[1] */
++    *r2 = vec_mergel(a, b);           /* r0[2] r1[2] r2[2] r3[2] | r0[3] r1[3] r2[3] r3[3] */
++    /* r1 (col1) and r3 (col3) live in the high halves of r0/r2 above. */
++    *r1 = vec_sld(*r0, *r0, 8);
++    *r3 = vec_sld(*r2, *r2, 8);
++}
++
++/* One idct4 1D pass on the four transforms held in lanes 0..3 of c0..c3.
++ * Mirrors idct4_1d(): out[0]=t0+t3, out[1]=t1+t2, out[2]=t1-t2, out[3]=t0-t3
++ * with t0=((IN0+IN2)*11585+r)>>14, t1=((IN0-IN2)*11585+r)>>14,
++ * t2=(IN1*6270 - IN3*15137 +r)>>14, t3=(IN1*15137 + IN3*6270 +r)>>14. */
++static av_always_inline void idct4_1d_altivec(vec_s16 *c0, vec_s16 *c1,
++                                              vec_s16 *c2, vec_s16 *c3)
++{
++    const vec_s16 k11585 = VSPLAT16(11585);
++    const vec_s16 k6270  = VSPLAT16(6270);
++    const vec_s16 k15137 = VSPLAT16(15137);
++
++    vec_s32 m0 = vmul4(*c0, k11585);
++    vec_s32 m2 = vmul4(*c2, k11585);
++    vec_s32 t0 = rnd14(vec_add(m0, m2));
++    vec_s32 t1 = rnd14(vec_sub(m0, m2));
++    vec_s32 t2 = rnd14(vec_sub(vmul4(*c1, k6270),  vmul4(*c3, k15137)));
++    vec_s32 t3 = rnd14(vec_add(vmul4(*c1, k15137), vmul4(*c3, k6270)));
++
++    *c0 = pack_s32(vec_add(t0, t3), vec_add(t0, t3));
++    *c1 = pack_s32(vec_add(t1, t2), vec_add(t1, t2));
++    *c2 = pack_s32(vec_sub(t1, t2), vec_sub(t1, t2));
++    *c3 = pack_s32(vec_sub(t0, t3), vec_sub(t0, t3));
++}
++
++/* One iadst4 1D pass. Mirrors iadst4_1d():
++ *   t0 = 5283*IN0 + 15212*IN2 + 9929*IN3
++ *   t1 = 9929*IN0 - 5283*IN2 - 15212*IN3
++ *   t2 = 13377*(IN0 - IN2 + IN3)
++ *   t3 = 13377*IN1
++ *   out0=(t0+t3+r)>>14, out1=(t1+t3+r)>>14, out2=(t2+r)>>14,
++ *   out3=(t0+t1-t3+r)>>14. */
++static av_always_inline void iadst4_1d_altivec(vec_s16 *c0, vec_s16 *c1,
++                                               vec_s16 *c2, vec_s16 *c3)
++{
++    const vec_s16 k5283  = VSPLAT16(5283);
++    const vec_s16 k15212 = VSPLAT16(15212);
++    const vec_s16 k9929  = VSPLAT16(9929);
++    const vec_s16 k13377 = VSPLAT16(13377);
++
++    vec_s32 t0 = vec_add(vec_add(vmul4(*c0, k5283), vmul4(*c2, k15212)),
++                         vmul4(*c3, k9929));
++    vec_s32 t1 = vec_sub(vec_sub(vmul4(*c0, k9929), vmul4(*c2, k5283)),
++                         vmul4(*c3, k15212));
++    /* 13377*(IN0 - IN2 + IN3) computed distributively */
++    vec_s32 t2 = vec_add(vec_sub(vmul4(*c0, k13377), vmul4(*c2, k13377)),
++                         vmul4(*c3, k13377));
++    vec_s32 t3 = vmul4(*c1, k13377);
++
++    vec_s32 o0 = rnd14(vec_add(t0, t3));
++    vec_s32 o1 = rnd14(vec_add(t1, t3));
++    vec_s32 o2 = rnd14(t2);
++    vec_s32 o3 = rnd14(vec_sub(vec_add(t0, t1), t3));
++
++    *c0 = pack_s32(o0, o0);
++    *c1 = pack_s32(o1, o1);
++    *c2 = pack_s32(o2, o2);
++    *c3 = pack_s32(o3, o3);
++}
++
++/* One iwht4 1D pass. Mirrors iwht4_1d(); pass 0 pre-shifts inputs by >>2. */
++static av_always_inline void iwht4_1d_altivec(vec_s16 *c0, vec_s16 *c1,
++                                              vec_s16 *c2, vec_s16 *c3,
++                                              int pass)
++{
++    vec_s16 t0, t1, t2, t3, t4;
++
++    if (pass == 0) {
++        vec_u16 sh2 = vec_splat_u16(2);
++        t0 = vec_sra(*c0, sh2);   /* IN(0) >> 2 */
++        t1 = vec_sra(*c3, sh2);   /* IN(3) >> 2 */
++        t2 = vec_sra(*c1, sh2);   /* IN(1) >> 2 */
++        t3 = vec_sra(*c2, sh2);   /* IN(2) >> 2 */
++    } else {
++        t0 = *c0;                 /* IN(0) */
++        t1 = *c3;                 /* IN(3) */
++        t2 = *c1;                 /* IN(1) */
++        t3 = *c2;                 /* IN(2) */
++    }
++
++    t0 = vec_add(t0, t2);
++    t3 = vec_sub(t3, t1);
++    t4 = vec_sra(vec_sub(t0, t3), vec_splat_u16(1)); /* (t0 - t3) >> 1 */
++    t1 = vec_sub(t4, t1);
++    t2 = vec_sub(t4, t2);
++    t0 = vec_sub(t0, t1);
++    t3 = vec_add(t3, t2);
++
++    *c0 = t0;
++    *c1 = t1;
++    *c2 = t2;
++    *c3 = t3;
++}
++
++/* Load a 4x4 int16 block into c0..c3, with row k in int16 lanes 0..3 of ck
++ * (lane j == column j). The block buffer is 16-byte aligned (checkasm
++ * LOCAL_ALIGNED_64 and real decode's coefficient buffer), 32 bytes total. */
++static av_always_inline void load_block4(const int16_t *block,
++                                         vec_s16 *c0, vec_s16 *c1,
++                                         vec_s16 *c2, vec_s16 *c3)
++{
++    vec_s16 lo = vec_ld(0,  block);   /* row0 in lanes 0..3, row1 in 4..7 */
++    vec_s16 hi = vec_ld(16, block);   /* row2 in lanes 0..3, row3 in 4..7 */
++
++    *c0 = lo;                          /* row0 -> lanes 0..3 */
++    *c1 = vec_sld(lo, lo, 8);          /* row1 -> lanes 0..3 */
++    *c2 = hi;                          /* row2 -> lanes 0..3 */
++    *c3 = vec_sld(hi, hi, 8);          /* row3 -> lanes 0..3 */
++}
++
++/* dst[j] = clip_uint8(dst[j] + ((row[j] + rnd) >> bits)) for one 4-pixel
++ * destination row, row[j] in int16 lanes 0..3 of `row`.  dst is 4-byte
++ * aligned in every caller (checkasm 4-byte stride, real decode plane). */
++
++/* Store the 4 bytes in lanes 0..3 of `res` to dst[0..3], for any 4-byte
++ * aligned dst, touching only those 4 bytes.  vec_ste selects the vector
++ * word element by the destination address, so rotate the payload with
++ * vec_lvsr(0,dst) first (the h264qpel qpel8_store idiom). */
++static av_always_inline void store4_row(vec_u8 res, uint8_t *dst)
++{
++    vec_u8 r = vec_perm(res, res, vec_lvsr(0, dst));
++    vec_ste((vec_u32)r, 0, (uint32_t *)dst);
++}
++
++static av_always_inline void add_store4_row(uint8_t *dst, vec_s16 row,
++                                            int bits)
++{
++    const vec_u8 zero = vec_splat_u8(0);
++    vec_s16 add = row;
++    vec_u8  pix, res;
++    vec_s16 p16, sum;
++
++    if (bits) {
++        const vec_s32 rnd = vec_sl(vec_splat_s32(1),
++                                   vec_splats((unsigned)(bits - 1)));
++        vec_s32 e = vec_sra(vec_add(vec_unpackh(row), rnd),
++                            vec_splats((unsigned)bits));
++        add = vec_packs(e, e);
++    }
++
++    /* load the 4 destination bytes into lanes 0..3 */
++    pix = unaligned_load(0, dst);
++    p16 = (vec_s16)vec_mergeh(zero, pix);   /* byte i -> int16 lane i */
++    sum = vec_adds(add, p16);
++    res = vec_packsu(sum, sum);             /* clip to uint8, lanes 0..3 */
++
++    store4_row(res, dst);
++}
++
+ static av_always_inline vec_u8 not_u8(vec_u8 a)
+ {
+     return vec_xor(a, vec_splat_u8(-1));
+@@ -1688,8 +1895,80 @@ static av_cold void vp9dsp_mc_init_ppc(VP9DSPContext *dsp)
+     init_bilin_avg(4,  4);
+ }
+ 
++/* Two-pass 4x4 add for a given (row-pass, col-pass) transform pair.
++ * `pa` is applied per column (pass 0), `pb` per row (pass 1) with a
++ * transpose between; results are round-shifted by `bits` and added to dst.
++ * This mirrors itxfm_wrapper() exactly. */
++#define ITXFM4_ADD(name, PA_CALL, PB_CALL, bits)                          \
++static void name(uint8_t *dst, ptrdiff_t stride, int16_t *block, int eob) \
++{                                                                         \
++    vec_s16 c0, c1, c2, c3;                                               \
++    load_block4(block, &c0, &c1, &c2, &c3);                              \
++    PA_CALL;                          /* pass 0: columns */               \
++    transpose4x4_s16(&c0, &c1, &c2, &c3);                                \
++    PB_CALL;                          /* pass 1: rows    */               \
++    memset(block, 0, 4 * 4 * sizeof(int16_t));                            \
++    add_store4_row(dst + 0 * stride, c0, bits);                          \
++    add_store4_row(dst + 1 * stride, c1, bits);                          \
++    add_store4_row(dst + 2 * stride, c2, bits);                          \
++    add_store4_row(dst + 3 * stride, c3, bits);                          \
++}
++
++/* idct_idct also handles eob==1 (DC only). */
++static void idct_idct_4x4_add_altivec(uint8_t *dst, ptrdiff_t stride,
++                                      int16_t *block, int eob)
++{
++    vec_s16 c0, c1, c2, c3;
++
++    if (eob == 1) {
++        int t = ((((int)block[0] * 11585 + (1 << 13)) >> 14)
++                                   * 11585 + (1 << 13)) >> 14;
++        vec_s16 dc = vec_splats((short)((t + (1 << 3)) >> 4));
++        int y;
++
++        block[0] = 0;
++        for (y = 0; y < 4; y++) {
++            const vec_u8 zero = vec_splat_u8(0);
++            vec_u8 pix = unaligned_load(0, dst + y * stride);
++            vec_s16 p16 = (vec_s16)vec_mergeh(zero, pix);
++            vec_s16 sum = vec_adds(dc, p16);
++            store4_row(vec_packsu(sum, sum), dst + y * stride);
++        }
++        return;
++    }
++
++    load_block4(block, &c0, &c1, &c2, &c3);
++    idct4_1d_altivec(&c0, &c1, &c2, &c3);
++    transpose4x4_s16(&c0, &c1, &c2, &c3);
++    idct4_1d_altivec(&c0, &c1, &c2, &c3);
++    memset(block, 0, 4 * 4 * sizeof(int16_t));
++    add_store4_row(dst + 0 * stride, c0, 4);
++    add_store4_row(dst + 1 * stride, c1, 4);
++    add_store4_row(dst + 2 * stride, c2, 4);
++    add_store4_row(dst + 3 * stride, c3, 4);
++}
++
++ITXFM4_ADD(iadst_idct_4x4_add_altivec,
++           iadst4_1d_altivec(&c0, &c1, &c2, &c3),
++           idct4_1d_altivec(&c0, &c1, &c2, &c3), 4)
++ITXFM4_ADD(idct_iadst_4x4_add_altivec,
++           idct4_1d_altivec(&c0, &c1, &c2, &c3),
++           iadst4_1d_altivec(&c0, &c1, &c2, &c3), 4)
++ITXFM4_ADD(iadst_iadst_4x4_add_altivec,
++           iadst4_1d_altivec(&c0, &c1, &c2, &c3),
++           iadst4_1d_altivec(&c0, &c1, &c2, &c3), 4)
++ITXFM4_ADD(iwht_iwht_4x4_add_altivec,
++           iwht4_1d_altivec(&c0, &c1, &c2, &c3, 0),
++           iwht4_1d_altivec(&c0, &c1, &c2, &c3, 1), 0)
++
+ static av_cold void vp9dsp_itxfm_init_ppc(VP9DSPContext *dsp)
+ {
++    dsp->itxfm_add[TX_4X4][DCT_DCT]   = idct_idct_4x4_add_altivec;
++    dsp->itxfm_add[TX_4X4][ADST_DCT]  = idct_iadst_4x4_add_altivec;
++    dsp->itxfm_add[TX_4X4][DCT_ADST]  = iadst_idct_4x4_add_altivec;
++    dsp->itxfm_add[TX_4X4][ADST_ADST] = iadst_iadst_4x4_add_altivec;
++    dsp->itxfm_add[4 /* lossless */][DCT_DCT] = iwht_iwht_4x4_add_altivec;
++
+     if (dsp->itxfm_add[TX_16X16][DCT_DCT] &&
+         dsp->itxfm_add[TX_16X16][DCT_DCT] != idct_idct_16x16_add_altivec) {
+         idct_idct_16x16_add_c = dsp->itxfm_add[TX_16X16][DCT_DCT];
+-- 
+2.43.0
+

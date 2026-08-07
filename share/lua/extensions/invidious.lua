@@ -1195,18 +1195,35 @@ function click_connect()
   connect_to(url)
 end
 
+-- What to search for when all we want to know is whether an instance
+-- answers at all.
+--
+-- It used to be "vlc", which reads as a statement of who is asking; and
+-- on the guarded instances (chocolatemoo, nerdvpn) the check carries the
+-- query along, so the user was sent to a browser page searching for
+-- "VLC" without ever having asked for it. A neutral word is friendlier
+-- and gives away nothing.
+--
+-- ⚠ NOT an empty query, tempting as it is: measured 2026-08-07 on three
+-- instances, `?q=` answers 200 with an empty results page (~6 kB, zero
+-- items) while `?q=test` gives ~57 kB of real ones. The HTML probe below
+-- judges an instance on `#items == 0`, so an empty search would declare
+-- every instance dead.
+local PROBE_QUERY = "test"
+
 function connect_to(url)
   set_message(lang.msg_connecting)
 
   -- Prefer the JSON API: it carries exact dates and every quality.
-  local obj, jerr = get_json(url .. "/api/v1/search?q=vlc&fields=type")
+  local obj, jerr = get_json(url .. "/api/v1/search?q=" .. PROBE_QUERY
+                             .. "&fields=type")
   if obj then
     app.mode = "api"
   else
     -- API switched off by the operator: fall back to the HTML pages the
     -- instance serves to browsers.
     set_message(lang.msg_trying_html)
-    local items, err = html_search(url, "vlc", "video")
+    local items, err = html_search(url, PROBE_QUERY, "video")
     if not items or #items == 0 then
       -- Guarded rather than closed: the browser can pass the check, so
       -- offer that instead of writing the instance off.
@@ -1336,12 +1353,28 @@ local BOOKMARKLET = "javascript:(function(){"
   -- element and keep it empty: anything that starts playing afterwards is
   -- paused on the spot. Only ever called once the page has been handed
   -- over, never while the user is merely browsing.
+  -- ⚠ Emptying the body DETACHES the player without stopping it: a media
+  -- element goes on playing once it is out of the document, and a `play'
+  -- listener on the document no longer hears it, so the guard below stops
+  -- guarding at the very moment it is needed. Reported: page blank in the
+  -- browser, sound still coming out of it. So remember the elements the
+  -- first time round and work on that list afterwards, hang the guard on
+  -- each element rather than only on the document, and drop `autoplay'
+  -- before load() -- load() on an element that still carries it is an
+  -- invitation to start over.
   .. "function stophard(){try{var m=document.querySelectorAll('video,audio');"
-  .. "for(var k=0;k<m.length;k++){try{m[k].pause();"
-  .. "m[k].removeAttribute('src');"
-  .. "var q=m[k].getElementsByTagName('source');"
+  .. "if(m.length){S.m=[];for(var j=0;j<m.length;j++)S.m.push(m[j]);}}"
+  .. "catch(err){}"
+  .. "var L=S.m||[];"
+  .. "for(var k=0;k<L.length;k++){try{L[k].pause();"
+  .. "L[k].autoplay=false;L[k].removeAttribute('autoplay');"
+  .. "L[k].removeAttribute('src');try{L[k].src='';}catch(e4){}"
+  .. "var q=L[k].getElementsByTagName('source');"
   .. "while(q.length){q[0].parentNode.removeChild(q[0]);}"
-  .. "m[k].load();}catch(e2){}}}catch(err){}"
+  .. "L[k].load();L[k].pause();"
+  .. "if(!L[k].__pvlcg){L[k].__pvlcg=1;"
+  .. "L[k].addEventListener('play',function(e){"
+  .. "try{e.target.pause();}catch(e5){}},true);}}catch(e2){}}"
   .. "if(!S.k){S.k=1;document.addEventListener('play',function(e){"
   .. "try{e.target.pause();}catch(e3){}},true);}}"
   -- Is this the page, or the check standing in front of it? The very
@@ -1366,9 +1399,12 @@ local BOOKMARKLET = "javascript:(function(){"
   -- whoever is reading it, and an add-on that blanks the site as you
   -- browse it is not a companion, it is a nuisance.
   .. "if(OURS)wipe();return 1;}"
+  -- Twice on purpose: once while the player is still in the document, and
+  -- once on the remembered elements after it has been taken out of it.
   .. "function wipe(){stophard();"
   .. "try{var b=document.body;if(b){while(b.firstChild)"
   .. "b.removeChild(b.firstChild);}}catch(e2){}"
+  .. "stophard();"
   .. "say('{{M_TAKEN}}');}"
   .. "function real(){if(S.real)return 1;try{"
   .. "var h=document.documentElement.outerHTML;"
@@ -1379,7 +1415,47 @@ local BOOKMARKLET = "javascript:(function(){"
   .. "if(!S){S=window.__pvlc={};"
   .. "window.addEventListener('message',function(e){if(e.origin!==O)return;"
   .. "var d=e.data;if(!d||d.pv!==1)return;"
-  .. "if(d.ack){S.ack=1;note('{{M_OK}}');return;}"
+  -- The answer to hello says which video the player is waiting for. If it
+  -- is the one this tab is showing, then this page exists BECAUSE the
+  -- player asked for it -- nobody opened it to watch it here -- so silence
+  -- it at once instead of waiting for the handover. Autoplay starts the
+  -- moment the check is passed, and the handover is a hello, a poll and a
+  -- round trip later: on a G3 that is several seconds of the same video
+  -- playing twice, which is exactly what the whole page-handover design
+  -- exists to avoid. Pause only, never stophard(): the DOM must still be
+  -- intact when it is serialised and sent.
+  -- The answer to hello says which video the player is waiting for. When
+  -- it is the one this tab is showing, this page exists BECAUSE the
+  -- player asked for it -- nobody opened it to watch it here -- so the
+  -- tab is ours and gets the full treatment at once: take a copy of the
+  -- page, then empty it.
+  --
+  -- Emptying rather than pausing, and as early as we possibly can. On
+  -- these machines letting the browser finish standing its player up is
+  -- one of the heaviest things that can happen: it pins the processor,
+  -- decodes a second copy of a video the player is already decoding, and
+  -- keeps pulling it off the instance for nothing. A pause leaves all of
+  -- that in place. So the moment the page is known to be real, it goes.
+  --
+  -- Order matters and is not negotiable: `ready()' serialises outerHTML
+  -- BEFORE wipe() rewrites the DOM, so the copy handed over later is the
+  -- page as it was. And it only fires once the page IS the page: on a
+  -- check still standing in front of it `ready()' answers 0 and nothing
+  -- is touched -- wiping an interstitial would destroy the very check we
+  -- are waiting on.
+  .. "if(d.ack){S.ack=1;"
+  .. "try{if(d.want){var wv=(d.want.match(/[?&]v=([^&]*)/)||[])[1];"
+  .. "var mv=(location.search.match(/[?&]v=([^&]*)/)||[])[1];"
+  -- ⚠ wipe() is called HERE and not left to ready(): the first hello, sent
+  -- the instant the script is injected, has already run ready() and filled
+  -- S.page, so every later call returns on `if(S.page)' before it ever
+  -- looks at OURS. Setting the flag and calling ready() again therefore
+  -- wiped nothing at all -- caught in simulation, never on the machine.
+  .. "if(wv&&mv&&wv===mv){OURS=1;"
+  .. "if(ready()){if(!S.wiped){S.wiped=1;wipe();}say('{{M_TAKING}}');}"
+  .. "else{stop();}"
+  .. "return;}}}catch(e6){}"
+  .. "note('{{M_OK}}');return;}"
   .. "if(!d.url)return;"
   -- The page asked for may be the very one this tab is displaying. Hand
   -- that over instead of fetching it again: on the instances that only
@@ -1414,8 +1490,12 @@ local BOOKMARKLET = "javascript:(function(){"
   -- keeps the player from asking, and keeps its half-earned cookie out of
   -- the player's hands -- measured on go-away, the state grows in stages
   -- and only the last one opens anything.
+  -- `auto` says which of the two paths is live: put there by the add-on,
+  -- or run from a click on the bookmark. The local page needs it to stop
+  -- asking for a click that, on the browsers this fork exists for, can
+  -- never work -- and to name the thing that did connect.
   .. "function h(){if(!S.w)return;var ok=ready();"
-  .. "S.w.postMessage({pv:1,hello:1,busy:ok?0:1,"
+  .. "S.w.postMessage({pv:1,hello:1,busy:ok?0:1,auto:AUTO,"
   .. "cookie:ok?document.cookie:'',ua:navigator.userAgent},O);}"
   -- Run by the browser add-on rather than clicked, this page was never
   -- opened from PowerVLC's own, so there is no opener to find: the add-on
@@ -1431,25 +1511,50 @@ local BOOKMARKLET = "javascript:(function(){"
   .. "var OURS=AUTO?0:1;"
   .. "try{if(AUTO&&sessionStorage.getItem('pvlc')==='1'){OURS=1;"
   .. "sessionStorage.removeItem('pvlc');}}catch(e5){}"
-  .. "if(!w||w.closed){w=window.open('{{BASE}}','powervlc');}"
-  .. "if(!w){say('{{M_POPUP}}',1);return;}"
+  -- ⛔ Injected, never open a window. The address baked into this script
+  -- is the one the player had WHEN THE SCRIPT WAS FETCHED, and a player
+  -- that has been restarted since is behind a new secret: opening it
+  -- lands on a 404, and the retry below did it again four seconds later.
+  -- Reported as "404 not found" with the browser opening pages nobody
+  -- asked for. In add-on mode the player's window is the add-on's to
+  -- know (__pvlcw): if it has none, there is nothing to relay to and
+  -- this tab has no business opening anything. The bookmark path keeps
+  -- the window, since a click IS the intent -- but it stops after one
+  -- try instead of leaving a timer running against a dead address.
+  .. "if((!w||w.closed)&&!AUTO){w=window.open('{{BASE}}','powervlc');}"
+  .. "if(!w||w.closed){if(!AUTO)say('{{M_POPUP}}',1);return;}"
   .. "S.w=w;if(!S.t){S.t=setInterval(h,2000);}h();if(!AUTO)stop();"
   .. "if(!S.ack)note('{{M_WAIT}}');"
   -- the opener may be some other page entirely, in which case the messages
   -- go nowhere: no acknowledgement means open our own window and retry
   .. "setTimeout(function(){if(S.ack)return;"
-  .. "var w2=window.open('{{BASE}}','powervlc');"
-  .. "if(w2){S.w=w2;h();}"
-  .. "setTimeout(function(){if(!S.ack)note('{{M_FAIL}}',1);},4000);},4000);"
+  .. "if(!AUTO){var w2=window.open('{{BASE}}','powervlc');"
+  .. "if(w2){S.w=w2;h();}}"
+  .. "setTimeout(function(){if(S.ack)return;"
+  .. "if(S.t){clearInterval(S.t);S.t=0;}S.gone=1;"
+  .. "note('{{M_FAIL}}',1);},4000);},4000);"
   .. "})()"
 
 -- Runs on our own page. Nothing here is subject to the instance's policy.
 local RELAY_JS = [==[
 (function(){
- var BASE='{{BASE}}', TARGET='__TARGET__';
- var tab=null, lastHello=0, lastCookie='', job=null, busy=false;
+ var BASE='{{BASE}}', TARGET='__TARGET__', WANT='__WANT__';
+ var tab=null, lastHello=0, lastCookie='', job=null, busy=false, live=null;
  var st=document.getElementById('st');
  function say(t){ if(st) st.innerHTML=t; }
+ /* The bookmark half of the page is only of use until something is
+    relaying. Hidden rather than rewritten so nothing has to be
+    translated twice, and so the add-on note stays put when it is the
+    add-on that connected. */
+ var stepsDone=false;
+ function hideSteps(auto){
+   if(stepsDone) return; stepsDone=true;
+   var ids=auto?['steps','addon']:['steps'];
+   for(var i=0;i<ids.length;i++){
+     var el=document.getElementById(ids[i]);
+     if(el) el.style.display='none';
+   }
+ }
  function xhr(m,u,b,cb){
    var x=new XMLHttpRequest(); x.open(m,u,true);
    x.onreadystatechange=function(){ if(x.readyState==4&&cb) cb(x); };
@@ -1462,7 +1567,16 @@ local RELAY_JS = [==[
      tab=e.source; lastHello=new Date().getTime(); busy=!!d.busy;
      /* tell the page its messages are arriving: without this it has no
         way to know whether the opener it found is really us */
-     try{ e.source.postMessage({pv:1,ack:1},TARGET); }catch(err){}
+     /* tell it which video is wanted, so that a tab showing that very
+        one can clear itself straight away rather than at handover.
+        WANT was baked in when this page was built and names the first
+        guarded video for ever -- a second one reuses this same page --
+        so ask the player, and keep the baked value only as a starting
+        point. The answer lands a tick late, which costs one hello. */
+     try{ e.source.postMessage({pv:1,ack:1,want:(job&&job.url)||live||WANT},
+                               TARGET); }catch(err){}
+     xhr('GET',BASE+'/want',null,function(x){
+       if(x.status==200&&x.responseText) live=x.responseText; });
      /* the state grows as checks are passed, so send it again every
         time it changes -- once only would freeze the first, useless one */
      if(d.cookie&&d.cookie!==lastCookie){ lastCookie=d.cookie;
@@ -1474,7 +1588,12 @@ local RELAY_JS = [==[
         ready again and the job has to be put to it once more. Handing it
         out once left the player waiting for its whole timeout. */
      if(job&&!busy){ tab.postMessage({pv:1,id:job.id,url:job.url},TARGET); }
-     say(busy?'__BUSY__':'__ON__'); return;
+     /* Something is answering, so the instructions have done their job:
+        take them away rather than leave the page asking for a click that
+        already happened -- or, with the add-on, for one that must never
+        happen and would do nothing if it did. */
+     hideSteps(!!d.auto);
+     say(busy?'__BUSY__':(d.auto?'__ONADDON__':'__ON__')); return;
    }
    if(d.id!==undefined){ job=null; post(d.id,d.s,d.body||''); }
  },false);
@@ -1503,8 +1622,17 @@ local RELAY_JS = [==[
     the player sees no relay at all and simply waits, which is what it
     already does well. */
  function loop(){
-   if(!tab||busy||new Date().getTime()-lastHello>6000){
-     say(busy?'__BUSY__':'__OFF__'); setTimeout(loop,600); return;
+   var quiet = tab ? (new Date().getTime()-lastHello) : 1e9;
+   if(!tab||busy||quiet>6000){
+     /* Not free to take work -- but if a tab is there and was heard from
+        recently enough, it is working, not gone. Keep knocking so the
+        player can tell the two apart: a challenge chain silences the tab
+        for the seconds it takes to walk it (7 to 9 measured on the G3),
+        and its script dies with each document on the way. Without this
+        the player declared "relay gone" on a browser that was busy
+        earning the very session it had been asked for. */
+     if(tab&&quiet<=25000){ xhr('GET',BASE+'/next?busy=1'); }
+     say(busy?'__BUSY__':'__OFF__'); setTimeout(loop,1000); return;
    }
    xhr('GET',BASE+'/next',null,function(x){
      var t=x.responseText||'';
@@ -1559,7 +1687,8 @@ local function challenge_pages(instance)
         M_DRAG = lang.web_m_drag, M_OK = lang.web_m_ok,
         M_POPUP = lang.web_m_popup, M_WAIT = lang.web_m_wait,
         M_FAIL = lang.web_m_fail, M_PAGE = lang.web_m_page,
-        M_NAV = lang.web_m_nav, M_TAKEN = lang.web_m_taken }) do
+        M_NAV = lang.web_m_nav, M_TAKEN = lang.web_m_taken,
+        M_TAKING = lang.web_m_taking }) do
     bm = js_put(bm, "{{" .. token .. "}}", text)
   end
 
@@ -1580,28 +1709,39 @@ local function challenge_pages(instance)
             .. attr_escape(origin) .. '">'
 
   local js = js_put(RELAY_JS, "__TARGET__", origin)
+  js = js_put(js, "__WANT__", target)
   js = js_put(js, "__ON__", lang.web_relay_on)
+  js = js_put(js, "__ONADDON__", lang.web_relay_on_addon)
   js = js_put(js, "__OFF__", lang.web_relay_off)
   js = js_put(js, "__BUSY__", lang.web_relay_busy)
 
+  -- The add-on comes FIRST, and the bookmark is what is left for the
+  -- browsers that do not need it. It used to be the other way round: the
+  -- page opened by telling you to drag a bookmark and to click it once
+  -- the check was passed, then explained six lines further down that on
+  -- TenFourFox and PowerFox that bookmark can do nothing at all. Someone
+  -- who had installed the add-on -- the only path that works there --
+  -- was left following instructions for the path that does not, with
+  -- nothing on the page ever saying the add-on was in fact connected.
   local landing = web_page(lang.web_title,
-    "<p>" .. lang.web_intro .. "</p><ol>"
-    .. "<li>" .. lang.web_step1 .. "<br><a class=\"bm\" href=\""
-       .. attr_escape(bm) .. "\">" .. lang.web_bookmark
-       .. "</a></li>"
+    "<p>" .. lang.web_intro .. "</p>"
+    .. '<div id="addon"><h2>' .. lang.web_addon_title .. "</h2>"
+    .. "<p>" .. lang.web_addon .. "</p>"
+    .. "<p><strong>" .. lang.web_addon_lead .. "</strong></p></div>"
     -- rel="opener" on purpose: target="_blank" has implied noopener since
     -- 2021, and the opener is the whole point -- it is what lets the tab
     -- reach this page without any Content-Security-Policy in the way. The
     -- bookmarklet opens a window of its own where that is refused anyway.
-    .. "<li>" .. lang.web_step2 .. "<br><a class=\"inst\" target=\"_blank\" "
-       .. "rel=\"opener\" href=\"" .. attr_escape(target) .. "\">"
-       .. html_escape(target) .. "</a></li>"
-    .. "<li>" .. lang.web_step3 .. "</li></ol>"
+    -- Outside the steps: both paths start by opening the instance.
+    .. "<hr><p>" .. lang.web_step2 .. "<br><a class=\"inst\" "
+       .. "target=\"_blank\" rel=\"opener\" href=\""
+       .. attr_escape(target) .. "\">" .. html_escape(target) .. "</a></p>"
+    .. '<div id="steps"><hr><h2>' .. lang.web_steps_title .. "</h2><ol>"
+    .. "<li>" .. lang.web_step1 .. "<br><a class=\"bm\" href=\""
+       .. attr_escape(bm) .. "\">" .. lang.web_bookmark
+       .. "</a></li>"
+    .. "<li>" .. lang.web_step3 .. "</li></ol></div>"
     .. '<div id="st">' .. lang.web_relay_off .. "</div>"
-    -- Not a footnote: on the machines this fork exists for, this is the
-    -- only path that works at all -- see web_addon.
-    .. "<hr><h2>" .. lang.web_addon_title .. "</h2>"
-    .. "<p>" .. lang.web_addon .. "</p>"
     .. "<hr><p class=\"note\">" .. lang.web_note .. "</p>"
     .. "<script>" .. js .. "</script>", head)
 
@@ -1637,6 +1777,14 @@ function start_challenge(instance, retry_fn)
   -- back up rather than mint another one behind a new secret.
   if app.handoff and app.challenge_instance == instance then
     app.retry = retry_fn
+    -- The page in the browser was built for the FIRST guarded video and
+    -- is not rebuilt here on purpose, so it still names that one. Tell
+    -- the handover what is wanted now: it is the only thing the page can
+    -- ask, and without it a second video is never recognised as ours --
+    -- the tab is left to load a player nobody is going to watch.
+    if app.handoff.want then
+      pcall(app.handoff.want, app.handoff, app.challenge_url or instance)
+    end
     if app.stale_session then
       app.refused[instance] = (app.refused[instance] or 0) + 1
     end
@@ -1670,6 +1818,9 @@ function start_challenge(instance, retry_fn)
     return
   end
   app.handoff = handle
+  if handle.want then
+    pcall(handle.want, handle, app.challenge_url or instance)
+  end
   app.challenge_instance = instance
   app.tried_cookie, app.tried_relay, app.tried_seq = nil, false, nil
   app.retry = retry_fn
@@ -1682,7 +1833,12 @@ function show_challenge()
   dlg:set_size(DIALOG_WIDTH, 0)
   dlg:add_label(lang.lbl_challenge_1, 1, 1, 4, 1)
   dlg:add_label(lang.lbl_challenge_2, 1, 2, 4, 1)
-  ui.local_url = dlg:add_text_input(
+  -- A label, not a text input: on both macOS providers a label is
+  -- selectable but not editable, which is exactly what this address is
+  -- for -- reading and copying. As an input it could be typed over or
+  -- emptied by accident, and the two buttons beside it read it back, so
+  -- a stray keystroke handed the browser a mangled address.
+  ui.local_url = dlg:add_label(
     app.handoff and app.handoff:url() or "", 1, 3, 2, 1)
   dlg:add_button(lang.btn_challenge_copy, click_challenge_copy, 3, 3, 1, 1)
   dlg:add_button(lang.btn_challenge_open, click_challenge_open, 4, 3, 1, 1)
@@ -1698,10 +1854,13 @@ function show_challenge()
 end
 
 function click_challenge_copy()
-  if not ui.local_url then
+  -- Straight from the handover rather than read back off the dialog:
+  -- what is shown is a copy, and only the player knows the real address.
+  local url = app.handoff and app.handoff:url()
+  if not url or url == "" then
     return
   end
-  if copy_to_clipboard(ui.local_url:get_text()) then
+  if copy_to_clipboard(url) then
     set_message(lang.msg_challenge_copied)
   else
     set_message(lang.msg_copy_fallback)
@@ -1709,10 +1868,11 @@ function click_challenge_copy()
 end
 
 function click_challenge_open()
-  if not ui.local_url then
+  local url = app.handoff and app.handoff:url()
+  if not url or url == "" then
     return
   end
-  if open_in_browser(ui.local_url:get_text()) then
+  if open_in_browser(url) then
     set_message(lang.msg_challenge_opened)
   else
     set_message(lang.msg_challenge_no_browser)

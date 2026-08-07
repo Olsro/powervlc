@@ -1,0 +1,195 @@
+From e1d3a62d495e8c4c95733c7da7a6fdd886fb9c7e Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 24 Jul 2026 04:15:10 +0000
+Subject: [PATCH 09/20] avcodec/ppc: add AltiVec ac3dsp (float_to_fixed24,
+ sum_square_butterfly_float)
+
+New libavcodec/ppc/ac3dsp.c, dispatched via ff_ac3dsp_init_ppc (first
+ARCH_PPC branch in the shared ac3dsp.c -- no PPC ac3dsp existed
+before):
+
+- float_to_fixed24: vec_round (PowerPC round-to-nearest-even) then
+  vec_cts, matching lrintf's default rounding exactly -- plain vec_cts
+  alone truncates toward zero and would mismatch at .5 boundaries.
+  Same round-then-convert idiom as CTS() in fdctdsp.c.
+- sum_square_butterfly_float: vec_madd reduction into 4 accumulators
+  (lt*lt, rt*rt, md*md, sd*sd), horizontal-summed via an aligned
+  stack temp; scalar tail loop for len not a multiple of 4.
+
+sum_square_butterfly_int32 (needs int64-widening multiply-accumulate,
+no vec_msum equivalent for genuine 64-bit accumulation) and
+extract_exponents (needs a per-lane av_log2/bit-scan-reverse) are
+intentionally left on the C path this pass -- both need more careful
+design than a mechanical vectorization to get right.
+
+VALIDATED: checkasm ac3dsp passes under the cross-PPC/qemu harness
+(qemu-ppc-static -cpu 7400) across 5 random seeds, real ALTIVEC
+dispatch confirmed, exact memcmp match (float_to_fixed24 has zero
+tolerance in the checkasm test, confirming the rounding fix is right).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0194bzLUrg6cVCQ7u4NNDpaB
+---
+ libavcodec/ac3dsp.c     |   2 +
+ libavcodec/ac3dsp.h     |   1 +
+ libavcodec/ppc/Makefile |   1 +
+ libavcodec/ppc/ac3dsp.c | 112 ++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 116 insertions(+)
+ create mode 100644 libavcodec/ppc/ac3dsp.c
+
+diff --git a/libavcodec/ac3dsp.c b/libavcodec/ac3dsp.c
+index a4a28c8..8166278 100644
+--- a/libavcodec/ac3dsp.c
++++ b/libavcodec/ac3dsp.c
+@@ -393,6 +393,8 @@ av_cold void ff_ac3dsp_init(AC3DSPContext *c)
+     ff_ac3dsp_init_aarch64(c);
+ #elif ARCH_ARM
+     ff_ac3dsp_init_arm(c);
++#elif ARCH_PPC
++    ff_ac3dsp_init_ppc(c);
+ #elif ARCH_X86 && HAVE_X86ASM
+     ff_ac3dsp_init_x86(c);
+ #elif ARCH_MIPS
+diff --git a/libavcodec/ac3dsp.h b/libavcodec/ac3dsp.h
+index b1b2bce..bbb56bd 100644
+--- a/libavcodec/ac3dsp.h
++++ b/libavcodec/ac3dsp.h
+@@ -109,6 +109,7 @@ typedef struct AC3DSPContext {
+ void ff_ac3dsp_init(AC3DSPContext *c);
+ void ff_ac3dsp_init_aarch64(AC3DSPContext *c);
+ void ff_ac3dsp_init_arm(AC3DSPContext *c);
++void ff_ac3dsp_init_ppc(AC3DSPContext *c);
+ void ff_ac3dsp_init_x86(AC3DSPContext *c);
+ void ff_ac3dsp_init_mips(AC3DSPContext *c);
+ void ff_ac3dsp_init_riscv(AC3DSPContext *c);
+diff --git a/libavcodec/ppc/Makefile b/libavcodec/ppc/Makefile
+index 2be552f..7dbdda2 100644
+--- a/libavcodec/ppc/Makefile
++++ b/libavcodec/ppc/Makefile
+@@ -1,4 +1,5 @@
+ # subsystems
++OBJS-$(CONFIG_AC3DSP)                  += ppc/ac3dsp.o
+ OBJS-$(CONFIG_AUDIODSP)                += ppc/audiodsp.o
+ OBJS-$(CONFIG_BLOCKDSP)                += ppc/blockdsp.o
+ OBJS-$(CONFIG_FDCTDSP)                 += ppc/fdctdsp.o
+diff --git a/libavcodec/ppc/ac3dsp.c b/libavcodec/ppc/ac3dsp.c
+new file mode 100644
+index 0000000..059512d
+--- /dev/null
++++ b/libavcodec/ppc/ac3dsp.c
+@@ -0,0 +1,112 @@
++/*
++ * AC-3 DSP functions, AltiVec optimized
++ *
++ * Copyright (c) 2026
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "config.h"
++
++#include "libavutil/attributes.h"
++#include "libavutil/cpu.h"
++#include "libavutil/mem_internal.h"
++#include "libavutil/ppc/cpu.h"
++#include "libavutil/ppc/util_altivec.h"
++
++#include "libavcodec/ac3dsp.h"
++
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++
++/* dst[i] = lrintf(src[i] * (1<<24)): vec_round is PowerPC round-to-nearest
++ * (ties to even), matching lrintf's default rounding mode -- plain vec_cts
++ * alone would truncate toward zero instead. Same round-then-convert idiom
++ * as CTS() in fdctdsp.c. */
++static void float_to_fixed24_altivec(int32_t *dst, const float *src, size_t len)
++{
++    size_t i;
++    const vec_f scale = vec_splats((float)(1 << 24));
++    vec_f s0, s1;
++    vec_s32 d0, d1;
++
++    for (i = 0; i < len; i += 8) {
++        s0 = vec_ld( 0, src + i);
++        s1 = vec_ld(16, src + i);
++        s0 = vec_round(vec_madd(s0, scale, (vec_f)vec_splat_u32(0)));
++        s1 = vec_round(vec_madd(s1, scale, (vec_f)vec_splat_u32(0)));
++        d0 = vec_cts(s0, 0);
++        d1 = vec_cts(s1, 0);
++        vec_st(d0,  0, dst + i);
++        vec_st(d1, 16, dst + i);
++    }
++}
++
++static void ac3_sum_square_butterfly_float_altivec(float sum[4],
++                                                    const float *coef0,
++                                                    const float *coef1,
++                                                    int len)
++{
++    int i;
++    vec_f vlt, vrt, vmd, vsd;
++    vec_f zero = (vec_f)vec_splat_u32(0);
++    vec_f acc0 = zero, acc1 = zero, acc2 = zero, acc3 = zero;
++    DECLARE_ALIGNED(16, float, tmp)[4];
++
++    for (i = 0; i < len - 3; i += 4) {
++        vlt = vec_ld(0, coef0 + i);
++        vrt = vec_ld(0, coef1 + i);
++        vmd = vec_add(vlt, vrt);
++        vsd = vec_sub(vlt, vrt);
++        acc0 = vec_madd(vlt, vlt, acc0);
++        acc1 = vec_madd(vrt, vrt, acc1);
++        acc2 = vec_madd(vmd, vmd, acc2);
++        acc3 = vec_madd(vsd, vsd, acc3);
++    }
++
++    vec_st(acc0, 0, tmp);
++    sum[0] = tmp[0] + tmp[1] + tmp[2] + tmp[3];
++    vec_st(acc1, 0, tmp);
++    sum[1] = tmp[0] + tmp[1] + tmp[2] + tmp[3];
++    vec_st(acc2, 0, tmp);
++    sum[2] = tmp[0] + tmp[1] + tmp[2] + tmp[3];
++    vec_st(acc3, 0, tmp);
++    sum[3] = tmp[0] + tmp[1] + tmp[2] + tmp[3];
++
++    for (; i < len; i++) {
++        float lt = coef0[i];
++        float rt = coef1[i];
++        float md = lt + rt;
++        float sd = lt - rt;
++        sum[0] += lt * lt;
++        sum[1] += rt * rt;
++        sum[2] += md * md;
++        sum[3] += sd * sd;
++    }
++}
++
++#endif /* HAVE_ALTIVEC && HAVE_BIGENDIAN */
++
++av_cold void ff_ac3dsp_init_ppc(AC3DSPContext *c)
++{
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++    if (!PPC_ALTIVEC(av_get_cpu_flags()))
++        return;
++
++    c->float_to_fixed24 = float_to_fixed24_altivec;
++    c->sum_square_butterfly_float = ac3_sum_square_butterfly_float_altivec;
++#endif /* HAVE_ALTIVEC && HAVE_BIGENDIAN */
++}
+-- 
+2.43.0
+

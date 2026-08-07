@@ -1,0 +1,210 @@
+From 080c6a873bd42b7f0e24dad2d12e590b20582b90 Mon Sep 17 00:00:00 2001
+From: Sergey Fedorov <barracuda@macos-powerpc.org>
+Date: Fri, 24 Jul 2026 03:07:45 +0000
+Subject: [PATCH 03/20] avcodec/ppc: add AltiVec-optimized Opus DSP
+ (postfilter, deemphasis)
+
+Adds ff_opus_dsp_init_ppc (libavcodec/ppc/opusdsp_altivec.c):
+- postfilter: unaligned register-chained tap stream.
+- deemphasis: vectorizes the serial IIR recurrence via prefix-expansion
+  using the {c,c^2,c^3,c^4} rows of ff_opus_deemph_weights.
+
+Wired into opus/dsp.c arch dispatch (ARCH_PPC branch) and
+libavcodec/ppc/Makefile (CONFIG_OPUS_DECODER).
+
+NOT YET VALIDATED: no checkasm run performed. AltiVec-only (no VSX),
+32-bit big-endian, G4 (7400) primary target per HAVE_ALTIVEC &&
+HAVE_BIGENDIAN guard.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0194bzLUrg6cVCQ7u4NNDpaB
+---
+ libavcodec/opus/dsp.c            |   2 +
+ libavcodec/opus/dsp.h            |   1 +
+ libavcodec/ppc/Makefile          |   1 +
+ libavcodec/ppc/opusdsp_altivec.c | 136 +++++++++++++++++++++++++++++++
+ 4 files changed, 140 insertions(+)
+ create mode 100644 libavcodec/ppc/opusdsp_altivec.c
+
+diff --git a/libavcodec/opus/dsp.c b/libavcodec/opus/dsp.c
+index f2278c5..7022ab7 100644
+--- a/libavcodec/opus/dsp.c
++++ b/libavcodec/opus/dsp.c
+@@ -60,6 +60,8 @@ av_cold void ff_opus_dsp_init(OpusDSP *ctx)
+ 
+ #if ARCH_AARCH64
+     ff_opus_dsp_init_aarch64(ctx);
++#elif ARCH_PPC
++    ff_opus_dsp_init_ppc(ctx);
+ #elif ARCH_RISCV
+     ff_opus_dsp_init_riscv(ctx);
+ #elif ARCH_X86 && HAVE_X86ASM
+diff --git a/libavcodec/opus/dsp.h b/libavcodec/opus/dsp.h
+index 2179ee6..be40cf2 100644
+--- a/libavcodec/opus/dsp.h
++++ b/libavcodec/opus/dsp.h
+@@ -28,6 +28,7 @@ void ff_opus_dsp_init(OpusDSP *ctx);
+ 
+ void ff_opus_dsp_init_x86(OpusDSP *ctx);
+ void ff_opus_dsp_init_aarch64(OpusDSP *ctx);
++void ff_opus_dsp_init_ppc(OpusDSP *ctx);
+ void ff_opus_dsp_init_riscv(OpusDSP *ctx);
+ 
+ #endif /* AVCODEC_OPUS_DSP_H */
+diff --git a/libavcodec/ppc/Makefile b/libavcodec/ppc/Makefile
+index 469d44e..3f30e05 100644
+--- a/libavcodec/ppc/Makefile
++++ b/libavcodec/ppc/Makefile
+@@ -22,6 +22,7 @@ OBJS-$(CONFIG_VP8DSP)                  += ppc/vp8dsp_altivec.o
+ # decoders/encoders
+ OBJS-$(CONFIG_HEVC_DECODER)            += ppc/hevcdsp.o
+ OBJS-$(CONFIG_MPEG4_DECODER)           += ppc/mpeg4videodsp.o
++OBJS-$(CONFIG_OPUS_DECODER)            += ppc/opusdsp_altivec.o
+ OBJS-$(CONFIG_SVQ1_ENCODER)            += ppc/svq1enc_altivec.o
+ OBJS-$(CONFIG_VORBIS_DECODER)          += ppc/vorbisdsp_altivec.o
+ OBJS-$(CONFIG_VP7_DECODER)             += ppc/vp8dsp_altivec.o
+diff --git a/libavcodec/ppc/opusdsp_altivec.c b/libavcodec/ppc/opusdsp_altivec.c
+new file mode 100644
+index 0000000..77ab8eb
+--- /dev/null
++++ b/libavcodec/ppc/opusdsp_altivec.c
+@@ -0,0 +1,136 @@
++/*
++ * AltiVec-optimized Opus DSP functions
++ * Copyright (c) 2026
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "config.h"
++
++#include "libavutil/attributes.h"
++#include "libavutil/cpu.h"
++#include "libavutil/mem_internal.h"
++#include "libavcodec/opus/dsp.h"
++
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++
++#include "libavutil/ppc/util_altivec.h"
++
++typedef vector float         vf;
++typedef vector unsigned char vuc;
++
++#define VZERO ((vf) { 0.0f, 0.0f, 0.0f, 0.0f })
++
++static void postfilter_altivec(float *data, int period, float *gains, int len)
++{
++    DECLARE_ALIGNED(16, float, gtmp)[4] = { gains[0], gains[1], gains[2], 0.0f };
++    const vf gv = vec_ld(0, gtmp);
++    const vf g0 = vec_splat(gv, 0);
++    const vf g1 = vec_splat(gv, 1);
++    const vf g2 = vec_splat(gv, 2);
++    const float g0s = gains[0], g1s = gains[1], g2s = gains[2];
++    int i = 0;
++
++    /* data - (period + 2) is 16-byte aligned in practice, data itself
++     * usually is not; peel scalar iterations until the store pointer is
++     * aligned, then run an aligned-store body with a register-chained
++     * unaligned tap stream. Taps trail the store pointer by at least
++     * period - 2 >= 13 floats, so 4-wide grouping never reads a value
++     * this same call has yet to write. */
++    for (; i < len && ((uintptr_t)(data + i) & 15); i++)
++        data[i] += g0s * data[i - period]     +
++                   g1s * (data[i - period + 1] + data[i - period - 1]) +
++                   g2s * (data[i - period + 2] + data[i - period - 2]);
++
++    if (len - i >= 4) {
++        const float *q = data + i - period - 2;
++        const vuc pm = vec_lvsl(0, q);
++        vf vc  = vec_ld( 0, q);
++        vf vn  = vec_ld(16, q);
++        vf u0  = vec_perm(vc, vn, pm);
++        int qb = 32;
++
++        for (; i <= len - 4; i += 4, qb += 16) {
++            vf vn2 = vec_ld(qb, q);
++            vf u1  = vec_perm(vn, vn2, pm);     /* x0 lanes */
++            vf x3  = vec_sld(u0, u1,  4);
++            vf x2  = vec_sld(u0, u1,  8);
++            vf x1  = vec_sld(u0, u1, 12);
++            vf acc = vec_ld(0, data + i);
++
++            acc = vec_madd(g0, x2, acc);
++            acc = vec_madd(g1, vec_add(x1, x3), acc);
++            acc = vec_madd(g2, vec_add(u1, u0), acc); /* u0 = x4 lanes */
++            vec_st(acc, 0, data + i);
++
++            u0 = u1;
++            vn = vn2;
++        }
++    }
++
++    for (; i < len; i++)
++        data[i] += g0s * data[i - period]     +
++                   g1s * (data[i - period + 1] + data[i - period - 1]) +
++                   g2s * (data[i - period + 2] + data[i - period - 2]);
++}
++
++static float deemphasis_altivec(float *y, float *x, float coeff,
++                                const float *weights, int len)
++{
++    int i = 0;
++
++    /* y[i] = x[i] + c * y[i-1], vectorized by expanding the recurrence
++     * over 4 samples; weights holds { c, c^2, c^3, c^4 } (16-aligned) */
++    if (!(((uintptr_t)y | (uintptr_t)x) & 15) && len >= 4) {
++        DECLARE_ALIGNED(16, float, ctmp)[4] = { coeff, 0.0f, 0.0f, 0.0f };
++        const vf w  = vec_ld(0, weights);
++        const vf c1 = vec_splat(w, 0);
++        const vf c2 = vec_splat(w, 1);
++        const vf c3 = vec_splat(w, 2);
++        vf p = vec_splat(vec_ld(0, ctmp), 0);
++
++        for (; i <= len - 4; i += 4) {
++            vf xv  = vec_ld(0, x + i);
++            vf acc = vec_madd(vec_sld(VZERO, xv, 12), c1, xv);
++            vf yv;
++
++            acc = vec_madd(vec_sld(VZERO, xv,  8), c2, acc);
++            acc = vec_madd(vec_sld(VZERO, xv,  4), c3, acc);
++            yv  = vec_madd(w, p, acc);
++            vec_st(yv, 0, y + i);
++            p = vec_splat(yv, 3);
++        }
++        coeff = y[i - 1];
++    }
++
++    for (; i < len; i++)
++        coeff = y[i] = x[i] + coeff * weights[0];
++
++    return coeff;
++}
++#endif /* HAVE_ALTIVEC && HAVE_BIGENDIAN */
++
++av_cold void ff_opus_dsp_init_ppc(OpusDSP *ctx)
++{
++#if HAVE_ALTIVEC && HAVE_BIGENDIAN
++    if (!(av_get_cpu_flags() & AV_CPU_FLAG_ALTIVEC))
++        return;
++
++    ctx->postfilter = postfilter_altivec;
++    ctx->deemphasis = deemphasis_altivec;
++#endif
++}
+-- 
+2.43.0
+

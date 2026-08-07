@@ -502,6 +502,38 @@ void vout_PutPicture(vout_thread_t *vout, picture_t *picture)
     picture->p_next = NULL;
     if (picture_pool_OwnsPic(vout->p->decoder_pool, picture))
     {
+        /* How much time is left before this picture is due? Positive means
+         * the decoder is ahead and the delay that shows up at the swap was
+         * introduced downstream; zero or negative means it arrived late and
+         * no display path, however quick, could have saved it. */
+        if (picture->date > VLC_TICK_INVALID) {
+            const vlc_tick_t now = mdate();
+            const vlc_tick_t lead = picture->date - now;
+
+            vout->p->handoff.count++;
+            vout->p->handoff.sum += lead;
+            if (vout->p->handoff.count == 1 || lead < vout->p->handoff.worst)
+                vout->p->handoff.worst = lead;
+            if (lead <= 0)
+                vout->p->handoff.late++;
+            if (vout->p->handoff.last_report == VLC_TICK_INVALID)
+                vout->p->handoff.last_report = now;
+            else if (now - vout->p->handoff.last_report >= 5 * CLOCK_FREQ) {
+                msg_Dbg(vout, "handoff lead: %u pictures, avg %d us ahead, "
+                        "least %d us, already late: %u",
+                        vout->p->handoff.count,
+                        (int)(vout->p->handoff.sum
+                              / __MAX(vout->p->handoff.count, 1)),
+                        (int)vout->p->handoff.worst,
+                        vout->p->handoff.late);
+                vout->p->handoff.count = 0;
+                vout->p->handoff.late = 0;
+                vout->p->handoff.worst = 0;
+                vout->p->handoff.sum = 0;
+                vout->p->handoff.last_report = now;
+            }
+        }
+
         picture_fifo_Push(vout->p->decoder_fifo, picture);
 
         vout_control_Wake(&vout->p->control);

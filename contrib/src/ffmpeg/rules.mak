@@ -318,6 +318,64 @@ ifdef USE_FFMPEG
 	$(APPLY) $(SRC)/ffmpeg/0005-ppc-h264-altivec-chroma-mc4.patch
 	$(APPLY) $(SRC)/ffmpeg/0006-ppc-hevc-altivec-sao-idct-and-mc.patch
 	$(APPLY) $(SRC)/ffmpeg/0007-ppc-h264-chroma-mc8-element-stores.patch
+	# AltiVec series from the macos-powerpc/powerpc-ports tree (Sergey
+	# Fedorov, multimedia/ffmpeg8/files), same ffmpeg 8.1.2 base as ours.
+	# Kept at the upstream numbering under an `mpp-` prefix so the series
+	# can be re-synced patch by patch. Five are deliberately not taken:
+	# 0004 (AltiVec HEVC 8-bit qpel h/v/hv) registers exactly the three
+	# put_hevc_qpel slots that PowerVLC's own 0006-ppc-hevc-* overwrites a
+	# few lines later, for every width class, so none of its kernels were
+	# ever reachable in this tree — dead weight, and a trap: it silently
+	# claimed the narrow widths that our 0009 width floor removes.
+	# 0007 and 0021 collide with the PowerVLC hpeldsp/h264qpel kernels
+	# above; 0014 adds AltiVec H.264 chroma loop filters that BOTH trees
+	# have since measured as a loss (our 0003 kept the h and intra
+	# variants in C after benching a 7447A, their 0027 disables the same
+	# ones on a 970 at 0.60-0.66x), and its chroma_mc4 half duplicates our
+	# 0005; 0017 only fixes a pix%16==8 bug inside 0014's own kernels (our
+	# equivalents load through vec_perm/vec_lvsl and fill all eight tc0
+	# lanes, so they are not affected). 0027 and 0030 are taken as
+	# subsets, see the note in their commit messages.
+	#
+	# Some of these build nothing with our configure flags and are kept
+	# only to keep the series intact and rebasable: 0003 (Opus DSP, we pass
+	# --disable-decoder=opus), 0010/0013 (checkasm, tests are not built),
+	# 0024/0026/0029 (libswresample, we pass --disable-swresample).
+	$(APPLY) $(SRC)/ffmpeg/mpp-0001-avcodec-ppc-add-AltiVec-optimized-VP9-decoder.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0002-avutil-ppc-add-AltiVec-split-radix-FFT-backend-for-a.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0003-avcodec-ppc-add-AltiVec-optimized-Opus-DSP-postfilte.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0005-avutil-ppc-add-AltiVec-vector_fmac-fmul_scalar-butte.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0006-avcodec-ppc-add-AltiVec-H.264-intra-prediction-16x16.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0008-avcodec-ppc-add-AltiVec-vector_clip_int32-vector_cli.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0009-avcodec-ppc-add-AltiVec-ac3dsp-float_to_fixed24-sum_.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0010-tests-checkasm-add-swr_resample-resample_common-resa.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0011-avcodec-ppc-fix-vp9dsp_altivec-vertical-MC-filters-r.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0012-avcodec-ppc-fix-vp8dsp_altivec-unaligned-read-write-.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0013-tests-checkasm-call-swr-resample-dsp-under-the-real-.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0015-avcodec-ppc-VP9-horizontal-loop-filters-4-8-wide-mix.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0016-avcodec-ppc-emulated_edge_mc-AltiVec-O4.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0018-avcodec-ppc-make-emulated_edge_mc-stores-byte-precis.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0019-avutil-ppc-fix-wrong-sel_hi-permute-in-av_tx-fft4_ve.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0020-avutil-ppc-add-directly-selectable-top-level-av_tx-F.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0022-avutil-ppc-drop-top-level-av_tx-codelets-for-4-and-8.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0023-avcodec-ppc-add-AltiVec-SBR-and-AAC-PS-DSP-kernels-O.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0024-swresample-ppc-add-AltiVec-resample_common-float-ker.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0025-avcodec-ppc-add-AltiVec-VP9-4x4-inverse-transforms-O.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0026-swresample-ppc-fix-misleading-comment-on-the-x4-filt.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0027-avcodec-ppc-bench-driven-per-CPU-tuning-of-AltiVec-r-powervlc-subset.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0028-avcodec-ppc-add-AltiVec-VP9-8x8-inverse-transforms-O.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0029-swresample-ppc-add-AltiVec-resample_linear-float-S16.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0030-avcodec-ppc-tuning-pass-2-from-the-2026-07-30-G5-re--powervlc-subset.patch
+	$(APPLY) $(SRC)/ffmpeg/mpp-0031-avcodec-ppc-add-AltiVec-VP9-16x16-32x32-inverse-tran.patch
+	# PowerVLC tuning on top of the series: two registrations that the
+	# shared g4/g5 contrib would otherwise keep, benched as losses on a
+	# real 7447A.
+	$(APPLY) $(SRC)/ffmpeg/0008-ppc-drop-two-altivec-registrations-slower-than-C-on-7447A.patch
+	# Second tuning pass, from a full checkasm --bench of all 507 registered
+	# AltiVec kernels on the 7447A: HEVC MC gains a width>=8 floor, HEVC SAO
+	# 8-bit drops width 8, and three upstream kernels that lose there are
+	# unregistered. See doc/ffmpeg-altivec-macos-powerpc.md.
+	$(APPLY) $(SRC)/ffmpeg/0009-ppc-bench-driven-registration-tuning-on-a-7447A.patch
 endif
 ifdef USE_LIBAV
 	$(APPLY) $(SRC)/ffmpeg/libav_gsm.patch
