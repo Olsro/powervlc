@@ -81,6 +81,11 @@
 /// so that long values (URLs, video titles) are readable without the user
 /// dragging a divider on every search.
 - (void)fitColumnsToContent;
+/// Share the width the list has NOW between its columns. Must be called
+/// whenever the box around the list changes size: a clip view only ever
+/// grows its document view, so a table left in a narrower scroll view is
+/// never told about it and keeps columns reaching past its right edge.
+- (void)layoutColumns;
 /// Sort contentArray on a column (string compare, numeric-aware).
 - (void)sortByColumn:(NSInteger)index ascending:(BOOL)ascending;
 /// Show the first row, now and once more on the next turn of the run

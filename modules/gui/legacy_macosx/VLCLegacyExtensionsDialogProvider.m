@@ -1282,6 +1282,16 @@ static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
             NSView *view = [cell objectForKey:@"view"];
             if (![view isKindOfClass:[NSButton class]])
                 continue;
+            /* A drop-down is an NSButton too, and it truncates its title
+             * perfectly well -- which a push button does not, hence this
+             * floor. Counting it made a whole column un-shrinkable
+             * because of ONE long entry: an audio track named after the
+             * film ("... DTS@768 Kbps 5.1 FRE (VFF) - French - Par
+             * défaut") asked for 572 px, its column then gave nothing,
+             * and the shortfall came out of the last column -- the
+             * artwork, drawn 130 px past the right edge of the window. */
+            if ([view isKindOfClass:[NSPopUpButton class]])
+                continue;
             if ([[cell objectForKey:@"colSpan"] intValue] > 1)
                 continue;
             int col = [[cell objectForKey:@"col"] intValue];
@@ -1293,18 +1303,40 @@ static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
                 floors[col] = want;
         }
 
+        float missing = -extraW;
         float shrinkable = 0.f;
         for (i = 0; i < cols && i < 64; i++)
             if (!rigid[i] && widths[i] > floors[i])
                 shrinkable += widths[i] - floors[i];
         if (shrinkable > 0.f) {
-            float missing = -extraW;
-            if (missing > shrinkable)
-                missing = shrinkable;
+            float take = (missing > shrinkable) ? shrinkable : missing;
             for (i = 0; i < cols && i < 64; i++) {
                 if (rigid[i] || widths[i] <= floors[i])
                     continue;
-                widths[i] -= missing * (widths[i] - floors[i]) / shrinkable;
+                widths[i] -= take * (widths[i] - floors[i]) / shrinkable;
+            }
+            missing -= take;
+        }
+
+        /* Everything that could give has given and it still does not fit.
+         * What is left over is drawn past the right edge of the window,
+         * and the picture column being the last one, the picture is what
+         * vanishes -- so let the pictures shrink too, as a last resort. A
+         * cover shown a little smaller reads far better than one cut in
+         * half by the window frame. */
+        if (missing > 0.f) {
+            float room = 0.f;
+            for (i = 0; i < cols && i < 64; i++)
+                if (rigid[i] && widths[i] > VLC_LEGACY_MIN_COLUMN_W)
+                    room += widths[i] - VLC_LEGACY_MIN_COLUMN_W;
+            if (room > 0.f) {
+                float take = (missing > room) ? room : missing;
+                for (i = 0; i < cols && i < 64; i++) {
+                    if (!rigid[i] || widths[i] <= VLC_LEGACY_MIN_COLUMN_W)
+                        continue;
+                    widths[i] -= take
+                        * (widths[i] - VLC_LEGACY_MIN_COLUMN_W) / room;
+                }
             }
         }
     }
@@ -1448,6 +1480,18 @@ static FILE *VLCLegacyGridTrace(void)
         }
 
         [view setFrame:NSMakeRect(x, y, w, h)];
+        /* A list is a table inside a scroll view, and a clip view only
+         * ever GROWS its document view to fill itself -- it never shrinks
+         * it. So narrowing the box around a list does not reach the table
+         * at all: -setFrameSize: is not called on it, the column widths
+         * worked out for the wider box stand, and the last column ends up
+         * outside the frame. That is what cut the "Durée" column off the
+         * moment the cover art claimed a column of its own. */
+        if ([view isKindOfClass:[NSScrollView class]]) {
+            NSView *doc = [(NSScrollView *)view documentView];
+            if ([doc isKindOfClass:[VLCLegacyDialogList class]])
+                [(VLCLegacyDialogList *)doc layoutColumns];
+        }
         if (trace)
             fprintf(trace, "    %-22s r%d c%d span %dx%d -> "
                            "x %.0f y %.0f w %.0f h %.0f\n",

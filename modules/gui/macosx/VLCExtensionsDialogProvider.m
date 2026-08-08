@@ -789,6 +789,18 @@ static id VLCDialogCornerKey(extension_dialog_t *p_dialog)
      * away with this window */
     [NSObject cancelPreviousPerformRequestsWithTarget:self];
 
+    /* The grid schedules its own resize a tenth of a second after a
+     * widget changes, and that request is held by the run loop, not by
+     * us: a dialog torn down within that tenth -- which is exactly what
+     * a double-click on a list that has just been refilled does -- left
+     * it to fire on a view whose window is gone by then, and it reads
+     * that window's frame. Cancel it while the view is still ours. */
+    NSView *contentView = [dialogWindow contentView];
+    if ([contentView isKindOfClass:[VLCDialogGridView class]])
+        [NSObject cancelPreviousPerformRequestsWithTarget:contentView
+                          selector:@selector(recomputeWindowSize)
+                            object:nil];
+
     [dialogWindow setDelegate:nil];
     [dialogWindow close];
     dialogWindow = nil;

@@ -944,6 +944,19 @@
     return NO;
 }
 
+/* Is there anything at all in this dialog that a wider window would help?
+ * Not the same question as "can a column stretch": a list or an entry
+ * field spanning several columns is invisible to the per-column pass --
+ * it is not what fixes any single column's width -- yet it is exactly
+ * what the extra width goes to, through -columnSlack. */
+- (BOOL)anyColumnUsesSlack
+{
+    for (NSUInteger i = 0; i < _colCount; i++)
+        if ([self columnUsesSlack:i])
+            return YES;
+    return NO;
+}
+
 - (CGFloat)columnSlack
 {
     if (!_colCount)
@@ -1107,6 +1120,18 @@
         rect.origin.x = [self leftOfColumn:col] + imageLeft;
 
         [view setFrame:rect];
+        /* A list is a table inside a scroll view, and a clip view only
+         * ever GROWS its document view to fill itself -- it never shrinks
+         * it. So narrowing the box around a list does not reach the table
+         * at all: -setFrameSize: is not called on it, the column widths
+         * worked out for the wider box stand, and the last column ends up
+         * outside the frame. That is what cut the "Durée" column off the
+         * moment the cover art claimed a column of its own. */
+        if ([view isKindOfClass:[NSScrollView class]]) {
+            NSView *doc = [(NSScrollView *)view documentView];
+            if ([doc isKindOfClass:[VLCDialogList class]])
+                [(VLCDialogList *)doc layoutColumns];
+        }
         [view setNeedsDisplay:YES];
     }
 }
@@ -1273,7 +1298,14 @@
     }
     if (size.width < minWidth)
         size.width = minWidth;
-    if (!canFlexWidth)
+    /* Shrink back to what the widgets need only when nothing would use
+     * the extra width. A dialog whose every column is fixed by a label or
+     * a button -- but which holds a search field and a list across all of
+     * them -- was being snapped back to that width at each update: typing
+     * in the Jellyfin library refilled the list, and the window collapsed
+     * to the width of its buttons under the user's hands. It could not be
+     * widened again either, -windowWillResize: asks this same question. */
+    if (!canFlexWidth && ![self anyColumnUsesSlack])
         size.width = minWidth;
 
     /* An extension may ask for more room than its widgets strictly need:
