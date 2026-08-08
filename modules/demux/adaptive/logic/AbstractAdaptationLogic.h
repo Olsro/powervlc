@@ -49,6 +49,9 @@ namespace adaptive
                 virtual ~AbstractAdaptationLogic    () = default;
 
                 virtual BaseRepresentation* getNextRepresentation(BaseAdaptationSet *, BaseRepresentation *) = 0;
+                /* Same, honouring a quality pinned by the user (PowerVLC).
+                 * Call this one; getNextRepresentation() is the logic itself. */
+                BaseRepresentation*         getRepresentation      (BaseAdaptationSet *, BaseRepresentation *);
                 virtual void                updateDownloadRate     (const ID &, size_t,
                                                                     mtime_t, mtime_t) override;
                 virtual void                trackerEvent           (const TrackerEvent &) override {}

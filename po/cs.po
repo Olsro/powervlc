@@ -31003,8 +31003,8 @@ msgstr "Připojení k radio-browser.info selhalo — vyberte tuto službu znovu 
 #~ msgid "Custom options"
 #~ msgstr "Vlastní možnosti"
 
-#~ msgid "&Quality"
-#~ msgstr "&Kvalita"
+msgid "&Quality"
+msgstr "&Kvalita"
 
 #~ msgid "Not Used"
 #~ msgstr "Nepoužitý"
@@ -31472,3 +31472,6 @@ msgstr ""
 "Karta Crystal HD je nainstalována, ale její zařízení nelze otevřít, takže se toto video dekóduje softwarově a bude pomalejší.\n"
 "\n"
 "Obvykle to vyřeší opětovné načtení ovladače: Nápověda > Znovu načíst ovladač Crystal HD."
+
+msgid "Quality"
+msgstr "Kvalita"

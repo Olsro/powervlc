@@ -29177,8 +29177,8 @@ msgstr "連線至 radio-browser.info 失敗 — 請再次選擇此服務以重�
 #~ msgid "Custom options"
 #~ msgstr "自訂選項"
 
-#~ msgid "&Quality"
-#~ msgstr "品質(&Q)"
+msgid "&Quality"
+msgstr "品質(&Q)"
 
 #~ msgid "Not Used"
 #~ msgstr "未使用"
@@ -29628,3 +29628,6 @@ msgstr ""
 "已安裝 Crystal HD 介面卡，但無法開啟其裝置，因此這部影片改以軟體解碼，速度會較慢。\n"
 "\n"
 "通常重新載入驅動程式即可解決：說明 > 重新載入 Crystal HD 驅動程式。"
+
+msgid "Quality"
+msgstr "品質"

@@ -31222,8 +31222,8 @@ msgstr "Falha na conexão com radio-browser.info — selecione este serviço nov
 #~ msgid "Custom options"
 #~ msgstr "Opções personalizadas"
 
-#~ msgid "&Quality"
-#~ msgstr "&Qualidade"
+msgid "&Quality"
+msgstr "&Qualidade"
 
 #~ msgid "Not Used"
 #~ msgstr "Não Usado"
@@ -31689,3 +31689,6 @@ msgstr ""
 "A placa Crystal HD está instalada, mas seu dispositivo não pode ser aberto, então este vídeo está sendo decodificado por software e ficará mais lento.\n"
 "\n"
 "Geralmente isso se resolve recarregando o driver: Ajuda > Recarregar o driver Crystal HD."
+
+msgid "Quality"
+msgstr "Qualidade"

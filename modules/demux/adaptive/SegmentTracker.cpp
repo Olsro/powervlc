@@ -210,7 +210,7 @@ void SegmentTracker::getCodecsDesc(CodecDescriptionList *descs) const
 {
     BaseRepresentation *rep = current.rep;
     if(!rep)
-        rep = logic->getNextRepresentation(adaptationSet, nullptr);
+        rep = logic->getRepresentation(adaptationSet, nullptr);
     if(rep)
         rep->getCodecsDesc(descs);
 }
@@ -270,7 +270,7 @@ SegmentTracker::prepareChunk(bool switch_allowed, Position pos) const
         if(switch_allowed)
         {
             Position temp;
-            temp.rep = logic->getNextRepresentation(adaptationSet, pos.rep);
+            temp.rep = logic->getRepresentation(adaptationSet, pos.rep);
             if(temp.rep && temp.rep != pos.rep)
             {
                 /* Convert our segment number if we need to */
@@ -445,7 +445,7 @@ bool SegmentTracker::setPositionByTime(vlc_tick_t time, bool restarted, bool try
 {
     Position pos = Position(current.rep, current.number);
     if(!pos.isValid())
-        pos.rep = logic->getNextRepresentation(adaptationSet, nullptr);
+        pos.rep = logic->getRepresentation(adaptationSet, nullptr);
 
     if(!pos.rep)
         return false;
@@ -486,7 +486,7 @@ void SegmentTracker::setPosition(const Position &pos, bool restarted)
 SegmentTracker::Position SegmentTracker::getStartPosition() const
 {
     Position pos;
-    pos.rep = logic->getNextRepresentation(adaptationSet, nullptr);
+    pos.rep = logic->getRepresentation(adaptationSet, nullptr);
     if(pos.rep)
     {
         /* Ensure ephemere content is updated/loaded */
@@ -518,7 +518,7 @@ vlc_tick_t SegmentTracker::getPlaybackTime(bool b_next) const
 
     BaseRepresentation *rep = current.rep;
     if(!rep)
-        rep = logic->getNextRepresentation(adaptationSet, nullptr);
+        rep = logic->getRepresentation(adaptationSet, nullptr);
 
     if(rep &&
        rep->getPlaybackTimeDurationBySegmentNumber(b_next ? next.number : current.number, &time, &duration))
@@ -540,7 +540,7 @@ vlc_tick_t SegmentTracker::getMinAheadTime() const
 {
     BaseRepresentation *rep = current.rep;
     if(!rep)
-        rep = logic->getNextRepresentation(adaptationSet, nullptr);
+        rep = logic->getRepresentation(adaptationSet, nullptr);
     if(rep)
     {
         /* Ensure ephemere content is updated/loaded */

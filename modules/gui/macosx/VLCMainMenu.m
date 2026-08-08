@@ -76,6 +76,10 @@
     NSMenuItem *_discPopupMenuItem;     /* Playback menu */
     NSMenuItem *_voutDiscPopupMenuItem; /* right-click on the video */
 
+    /* Quality of an adaptive stream, under Video Track. Also built here:
+     * it only ever appears for HLS/DASH. */
+    NSMenuItem *_adaptiveQualityMenuItem;
+
     __strong VLCTimeSelectionPanelController *_timeSelectionPanel;
 }
 @end
@@ -156,6 +160,27 @@
             [_voutMenu insertItem:_voutDiscPopupMenuItem
                           atIndex:snapshotIndex + 2];
         }
+    }
+
+    /* An adaptive stream (HLS/DASH) offers the same programme at several
+     * qualities and picks one on its own, from a bandwidth estimate. When
+     * it changes its mind the resolution changes with it: the picture is
+     * rebuilt and the window follows. Let the user pin one instead, right
+     * below Video Track since that is the same kind of choice -- which of
+     * the pictures on offer to watch.
+     *
+     * Filled (and shown) only while an adaptive stream is playing, see
+     * -setupMenus; the demuxer publishes the list on the input. */
+    NSMenu *videoMenu = [_videotrack menu];
+    if (videoMenu) {
+        _adaptiveQualityMenuItem = [[NSMenuItem alloc] initWithTitle:_NS("Quality")
+                                                             action:nil
+                                                      keyEquivalent:@""];
+        [_adaptiveQualityMenuItem setSubmenu:
+            [[NSMenu alloc] initWithTitle:_NS("Quality")]];
+        [_adaptiveQualityMenuItem setHidden:YES];
+        [videoMenu insertItem:_adaptiveQualityMenuItem
+                      atIndex:[videoMenu indexOfItem:_videotrack] + 1];
     }
 
     /* interface switcher, below Preferences and its separator (only when
@@ -686,6 +711,21 @@
         [self setupVarMenuItem:_subtitle_track target: (vlc_object_t *)p_input
                                  var:"spu-es" selector: @selector(toggleVar:)];
 
+        /* Only an adaptive stream has qualities to choose from: asking
+         * -setupVarMenuItem: for a variable that is not there would leave
+         * the item titled and empty, and complain in the log every time a
+         * menu opens. */
+        if (_adaptiveQualityMenuItem != nil) {
+            BOOL hasQualities = (var_Type((vlc_object_t *)p_input, "adaptive-quality")
+                                 & VLC_VAR_TYPE) == VLC_VAR_INTEGER;
+            [_adaptiveQualityMenuItem setHidden:!hasQualities];
+            if (hasQualities)
+                [self setupVarMenuItem:_adaptiveQualityMenuItem
+                                target:(vlc_object_t *)p_input
+                                   var:"adaptive-quality"
+                              selector:@selector(toggleVar:)];
+        }
+
         audio_output_t *p_aout = playlist_GetAout(p_playlist);
         if (p_aout != NULL) {
             [self setupVarMenuItem:_channels target: (vlc_object_t *)p_aout
@@ -719,6 +759,7 @@
         vlc_object_release(p_input);
     } else {
         [_postprocessing setEnabled:NO];
+        [_adaptiveQualityMenuItem setHidden:YES];
     }
 }
 

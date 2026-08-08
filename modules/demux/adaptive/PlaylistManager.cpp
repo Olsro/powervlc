@@ -41,6 +41,7 @@
 #include <vlc_stream.h>
 #include <vlc_demux.h>
 #include <vlc_threads.h>
+#include <vlc_input.h>
 
 #include <algorithm>
 #include <ctime>
@@ -98,6 +99,140 @@ PlaylistManager::~PlaylistManager   ()
     vlc_mutex_destroy(&demux.lock);
     vlc_cond_destroy(&demux.cond);
     vlc_mutex_destroy(&cached.lock);
+}
+
+/* PowerVLC: offer the stream's qualities to the interfaces.
+ *
+ * The list goes onto the INPUT thread, as an integer variable with
+ * choices ("adaptive-quality", the bandwidth of the variant, 0 for
+ * automatic): that is the one object every interface already holds while
+ * something plays, and the one every generic "variable with choices" menu
+ * builder knows how to render -- exactly like "video-es" or "program".
+ * AbstractAdaptationLogic::getRepresentation() reads it back by
+ * inheritance from the demuxer, which sits below the input in the object
+ * tree. No callback, no lock, no shared state of our own.
+ *
+ * Only the main variants are listed. Finding them cannot lean on the
+ * resolution: RESOLUTION is optional in a master playlist and plenty of
+ * real ones (Pluto TV, among others) carry nothing but BANDWIDTH. So the
+ * subtitle sets are dropped by their role, and of what is left the set
+ * offering the most variants is taken -- the alternate audio or caption
+ * sets of a master playlist hold one rendition each, the ladder of
+ * qualities is the set that holds several. A stream with a single variant
+ * gets no list at all: there would be nothing to choose. */
+void PlaylistManager::exportQualities()
+{
+    input_thread_t *p_input = p_demux->p_input;
+    if(p_input == nullptr || b_preparsing || currentPeriod == nullptr)
+        return;
+
+    std::vector<BaseRepresentation *> reps;
+    bool b_reps_have_video = false;
+
+    for(BaseAdaptationSet *set : currentPeriod->getAdaptationSets())
+    {
+        if(set == nullptr ||
+           set->getRole() == Role(Role::Value::Subtitle) ||
+           set->getRole() == Role(Role::Value::Caption))
+            continue;
+
+        std::vector<BaseRepresentation *> candidates;
+        bool b_video = false;
+        for(BaseRepresentation *rep : set->getRepresentations())
+        {
+            /* The pin is a bandwidth, so a duplicate value would be
+             * ambiguous -- which is what a playlist listing the same
+             * variant twice looks like. */
+            if(rep == nullptr || rep->getBandwidth() == 0)
+                continue;
+            bool b_dup = false;
+            for(BaseRepresentation *known : candidates)
+                b_dup |= (known->getBandwidth() == rep->getBandwidth());
+            if(b_dup)
+                continue;
+            candidates.push_back(rep);
+            b_video |= (rep->getHeight() > 0);
+        }
+
+        /* a set that says it carries pictures wins over a longer one that
+         * says nothing; otherwise, the longest list */
+        if((b_video && !b_reps_have_video) ||
+           (b_video == b_reps_have_video && candidates.size() > reps.size()))
+        {
+            reps = candidates;
+            b_reps_have_video = b_video;
+        }
+    }
+
+    if(reps.size() < 2)
+        return;
+
+    /* best first, as every player lists them */
+    std::sort(reps.begin(), reps.end(),
+              [](const BaseRepresentation *a, const BaseRepresentation *b) {
+                  return a->getBandwidth() > b->getBandwidth();
+              });
+
+    /* Read before the variable shadows it: adding the first choice makes
+     * the variable snap to it (a variable with choices may not hold a
+     * value that is not one of them), so a pin asked for on the command
+     * line has to be put back once the list is complete. */
+    const int64_t i_wanted = var_InheritInteger(p_demux, "adaptive-quality");
+
+    if(var_Create(p_input, "adaptive-quality",
+                  VLC_VAR_INTEGER | VLC_VAR_HASCHOICE))
+        return;
+
+    vlc_value_t val, text;
+    text.psz_string = const_cast<char *>(_("Quality"));
+    var_Change(p_input, "adaptive-quality", VLC_VAR_SETTEXT, &text, nullptr);
+
+    val.i_int = 0;
+    text.psz_string = const_cast<char *>(_("Automatic"));
+    var_Change(p_input, "adaptive-quality", VLC_VAR_ADDCHOICE, &val, &text);
+
+    for(BaseRepresentation *rep : reps)
+    {
+        /* The bitrate is the one thing a master playlist always states,
+         * and it is also what distinguishes the entries -- the resolution,
+         * when there is one, only makes them readable. */
+        char *psz = nullptr;
+        int i_ret;
+        if(rep->getWidth() > 0 && rep->getHeight() > 0)
+            i_ret = asprintf(&psz, "%dx%d (%u kb/s)",
+                             rep->getWidth(), rep->getHeight(),
+                             (unsigned)(rep->getBandwidth() / 1000));
+        else if(rep->getHeight() > 0)
+            i_ret = asprintf(&psz, "%dp (%u kb/s)", rep->getHeight(),
+                             (unsigned)(rep->getBandwidth() / 1000));
+        else
+            i_ret = asprintf(&psz, "%u kb/s",
+                             (unsigned)(rep->getBandwidth() / 1000));
+        if(i_ret < 0 || psz == nullptr)
+            continue;
+
+        val.i_int = (int64_t) rep->getBandwidth();
+        text.psz_string = psz;
+        var_Change(p_input, "adaptive-quality", VLC_VAR_ADDCHOICE, &val, &text);
+        msg_Dbg(p_demux, "quality available: %s (pin with --adaptive-quality=%"
+                PRIu64 ")", psz, rep->getBandwidth());
+        free(psz);
+    }
+
+    for(BaseRepresentation *rep : reps)
+    {
+        if((int64_t) rep->getBandwidth() == i_wanted)
+        {
+            var_SetInteger(p_input, "adaptive-quality", i_wanted);
+            break;
+        }
+    }
+}
+
+void PlaylistManager::unexportQualities()
+{
+    if(p_demux->p_input != nullptr)
+        var_Destroy(p_demux->p_input, "adaptive-quality");
 }
 
 void PlaylistManager::unsetPeriod()

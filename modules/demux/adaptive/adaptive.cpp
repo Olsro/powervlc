@@ -81,6 +81,8 @@ static void Close   (vlc_object_t *);
 
 #define ADAPT_LOGIC_TEXT N_("Adaptive Logic")
 
+#define ADAPT_QUALITY_TEXT N_("Quality")
+
 #define ADAPT_ACCESS_TEXT N_("Use regular HTTP modules")
 #define ADAPT_ACCESS_LONGTEXT N_("Connect using HTTP access instead of custom HTTP code")
 
@@ -147,6 +149,17 @@ vlc_module_begin ()
                      ADAPT_MAXBUFFER_TEXT, nullptr, true );
         add_integer( "adaptive-lowlatency", -1, ADAPT_LOWLATENCY_TEXT, ADAPT_LOWLATENCY_LONGTEXT, true );
             change_integer_list(rgi_latency, ppsz_latency)
+        /* PowerVLC: the quality the user pinned, as the bandwidth of the
+         * variant, 0 for automatic. Declared here so that the pin can also
+         * be given on the command line and, above all, so that reading it
+         * back by inheritance from anywhere below the input has a defined
+         * fallback -- an unknown name would make config_GetInt() shout on
+         * every segment. Not in the preferences: it identifies a variant
+         * of one particular stream, it means nothing for the next one.
+         * The interfaces set it per playback, see
+         * PlaylistManager::exportQualities(). */
+        add_integer( "adaptive-quality", 0, ADAPT_QUALITY_TEXT, nullptr, true )
+            change_private()
         set_callbacks( Open, Close )
 vlc_module_end ()
 
@@ -258,6 +271,9 @@ static int Open(vlc_object_t *p_obj)
     if(VLC_SUCCESS == var_Create( p_demux, "lua", VLC_VAR_BOOL))
         var_SetBool(p_demux, "lua", false);
 
+    /* PowerVLC: let the user pin one of the stream's qualities */
+    p_manager->exportQualities();
+
     p_demux->p_sys         = reinterpret_cast<demux_sys_t *>(p_manager);
     p_demux->pf_demux      = p_manager->demux_callback;
     p_demux->pf_control    = p_manager->control_callback;
@@ -275,6 +291,7 @@ static void Close(vlc_object_t *p_obj)
     demux_t         *p_demux       = (demux_t*) p_obj;
     PlaylistManager *p_manager  = reinterpret_cast<PlaylistManager *>(p_demux->p_sys);
 
+    p_manager->unexportQualities();
     p_manager->stop();
     delete p_manager;
 }

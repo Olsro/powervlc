@@ -69,6 +69,7 @@
     NSMenu *audioTrackMenu;
     NSMenu *subtitleTrackMenu;
     NSMenu *videoTrackMenu;
+    NSMenu *qualityMenu;            /* Video > Quality ("adaptive-quality") */
     NSMenu *titleMenu;
     NSMenu *chapterMenu;
     NSMenu *programMenu;

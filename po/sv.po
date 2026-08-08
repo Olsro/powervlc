@@ -31094,8 +31094,8 @@ msgstr "Anslutningen till radio-browser.info misslyckades — välj tjänsten ig
 #~ msgid "Custom options"
 #~ msgstr "Anpassade inställningar"
 
-#~ msgid "&Quality"
-#~ msgstr "&Kvalitet"
+msgid "&Quality"
+msgstr "&Kvalitet"
 
 #~ msgid "Not Used"
 #~ msgstr "Används inte"
@@ -31565,3 +31565,6 @@ msgstr ""
 "Crystal HD-kortet är installerat men dess enhet kan inte öppnas, så den här videon avkodas i programvara och blir långsammare.\n"
 "\n"
 "Detta brukar lösas genom att läsa om drivrutinen: Hjälp > Läs om Crystal HD-drivrutinen."
+
+msgid "Quality"
+msgstr "Kvalitet"

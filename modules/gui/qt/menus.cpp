@@ -242,6 +242,7 @@ static int VideoAutoMenuBuilder( playlist_t *pl, input_thread_t *p_input,
     vout_thread_t *p_object = p_input ? input_GetVout( p_input ) : NULL;
 
     PUSH_INPUTVAR( "video-es" );
+    PUSH_INPUTVAR( "adaptive-quality" );
     PUSH_PLVAR( "fullscreen" );
     PUSH_PLVAR( "video-wallpaper" );
     PUSH_VAR( "video-snapshot" );
@@ -683,6 +684,9 @@ QMenu *VLCMenuBar::VideoMenu( intf_thread_t *p_intf, QMenu *current )
     if( current->isEmpty() )
     {
         addActionWithSubmenu( current, "video-es", qtr( "Video &Track" ) );
+        /* PowerVLC: which quality of an adaptive stream to watch; only
+         * ever populated while an HLS/DASH stream is playing */
+        addActionWithSubmenu( current, "adaptive-quality", qtr( "&Quality" ) );
 
         current->addSeparator();
         /* Surface modifiers */

@@ -55,6 +55,11 @@ namespace adaptive
             virtual ~PlaylistManager    ();
 
             bool    init(bool = false);
+
+            /* PowerVLC: publish/withdraw the "adaptive-quality" list on the
+             * input, which is how the interfaces offer the choice */
+            void    exportQualities();
+            void    unexportQualities();
             bool    start();
             bool    started() const;
             void    stop();

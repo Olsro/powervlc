@@ -31244,8 +31244,8 @@ msgstr "Verbinding met radio-browser.info mislukt — selecteer deze dienst opni
 #~ msgid "Custom options"
 #~ msgstr "Aangepaste opties"
 
-#~ msgid "&Quality"
-#~ msgstr "Kwaliteit"
+msgid "&Quality"
+msgstr "Kwaliteit"
 
 #~ msgid "Not Used"
 #~ msgstr "Niet gebruikt"
@@ -31716,3 +31716,6 @@ msgstr ""
 "De Crystal HD-kaart is geïnstalleerd maar het apparaat kan niet worden geopend, dus deze video wordt in software gedecodeerd en zal trager zijn.\n"
 "\n"
 "Dit is meestal verholpen door het stuurprogramma opnieuw te laden: Help > Crystal HD-stuurprogramma opnieuw laden."
+
+msgid "Quality"
+msgstr "Kwaliteit"

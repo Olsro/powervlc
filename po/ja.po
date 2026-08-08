@@ -30900,8 +30900,8 @@ msgstr "radio-browser.info への接続に失敗しました — 再試行する
 #~ msgid "Custom options"
 #~ msgstr "カスタムオプション"
 
-#~ msgid "&Quality"
-#~ msgstr "品質 (&Q)"
+msgid "&Quality"
+msgstr "品質 (&Q)"
 
 #~ msgid "Not Used"
 #~ msgstr "未使用"
@@ -31371,3 +31371,6 @@ msgstr ""
 "Crystal HD カードは取り付けられていますが、デバイスを開けません。このため、この映像はソフトウェアでデコードされ、動作が遅くなります。\n"
 "\n"
 "通常はドライバの再読み込みで解消します: ヘルプ > Crystal HD ドライバを再読み込み。"
+
+msgid "Quality"
+msgstr "品質"

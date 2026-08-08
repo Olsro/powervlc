@@ -31397,8 +31397,8 @@ msgstr "Verbindung zu radio-browser.info fehlgeschlagen — wählen Sie diesen D
 #~ msgid "Custom options"
 #~ msgstr "Benutzerdefinierte Optionen"
 
-#~ msgid "&Quality"
-#~ msgstr "&Qualität"
+msgid "&Quality"
+msgstr "&Qualität"
 
 #~ msgid "Not Used"
 #~ msgstr "Nicht benutzt"
@@ -31868,3 +31868,6 @@ msgstr ""
 "Die Crystal-HD-Karte ist installiert, ihr Gerät lässt sich aber nicht öffnen. Dieses Video wird daher in Software dekodiert und ist langsamer.\n"
 "\n"
 "Meist hilft es, den Treiber neu zu laden: Hilfe > Crystal-HD-Treiber neu laden."
+
+msgid "Quality"
+msgstr "Qualität"

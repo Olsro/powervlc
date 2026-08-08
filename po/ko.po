@@ -30609,8 +30609,8 @@ msgstr "radio-browser.info 연결에 실패했습니다 — 다시 시도하려�
 #~ msgid "Custom options"
 #~ msgstr "사용자 지정 옵션"
 
-#~ msgid "&Quality"
-#~ msgstr "품질"
+msgid "&Quality"
+msgstr "품질"
 
 #~ msgid "Not Used"
 #~ msgstr "사용되지 않음"
@@ -31075,3 +31075,6 @@ msgstr ""
 "Crystal HD 카드는 설치되어 있으나 장치를 열 수 없어 이 영상은 소프트웨어로 디코딩되며 더 느려집니다.\n"
 "\n"
 "보통 드라이버를 다시 불러오면 해결됩니다: 도움말 > Crystal HD 드라이버 다시 불러오기."
+
+msgid "Quality"
+msgstr "품질"

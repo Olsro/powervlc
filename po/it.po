@@ -31430,8 +31430,8 @@ msgstr "Connessione a radio-browser.info non riuscita — seleziona di nuovo que
 #~ msgid "Custom options"
 #~ msgstr "Opzioni personalizzate"
 
-#~ msgid "&Quality"
-#~ msgstr "&Qualità"
+msgid "&Quality"
+msgstr "&Qualità"
 
 #~ msgid "Not Used"
 #~ msgstr "Non utilizzato"
@@ -31900,3 +31900,6 @@ msgstr ""
 "La scheda Crystal HD è installata ma il suo dispositivo non può essere aperto: questo video viene decodificato via software e sarà più lento.\n"
 "\n"
 "Di solito si risolve ricaricando il driver: Aiuto > Ricarica il driver Crystal HD."
+
+msgid "Quality"
+msgstr "Qualità"

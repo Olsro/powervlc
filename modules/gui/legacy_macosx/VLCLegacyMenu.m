@@ -648,6 +648,11 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     [videoMenu addItem:[NSMenuItem separatorItem]];
     videoTrackMenu = [self addDynamicMenuTo:videoMenu
                                       title:_NS("Video Track")];
+    /* Which quality of an adaptive stream (HLS/DASH) to watch. Greyed out
+     * unless the stream playing offers a choice -- which, on the machines
+     * this interface runs on, is the difference between a picture that
+     * plays and one that does not. */
+    qualityMenu = [self addDynamicMenuTo:videoMenu title:_NS("Quality")];
     aspectMenu = [self addDynamicMenuTo:videoMenu title:_NS("Aspect ratio")];
     cropMenu = [self addDynamicMenuTo:videoMenu title:_NS("Crop")];
     [self addDeinterlaceQualityMenuTo:videoMenu];
@@ -964,6 +969,8 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
         *name = "spu-es";
     else if (menu == videoTrackMenu || menu == voutVideoTrackMenu)
         *name = "video-es";
+    else if (menu == qualityMenu)
+        *name = "adaptive-quality";
     else if (menu == titleMenu)
         *name = "title";
     else if (menu == chapterMenu)
@@ -1865,6 +1872,19 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
         return [self hasDiscPopupMenu];
     } else if (action == @selector(addSubtitleFile:)
             || action == @selector(inputDependentParent:)) {
+        /* Quality only means something for an adaptive stream: the demuxer
+         * publishes the list on the input, and there is none otherwise */
+        if ([item submenu] == qualityMenu) {
+            input_thread_t *p_input =
+                playlist_CurrentInput(pl_Get(p_intf));
+            BOOL b_has = NO;
+            if (p_input) {
+                b_has = (var_Type((vlc_object_t *)p_input, "adaptive-quality")
+                         & VLC_VAR_TYPE) == VLC_VAR_INTEGER;
+                vlc_object_release(p_input);
+            }
+            return b_has;
+        }
         return [self hasInput];
     } else if (action == @selector(revealInFinder:)) {
         /* only local files can be shown in the Finder */

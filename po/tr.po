@@ -31104,8 +31104,8 @@ msgstr "radio-browser.info bağlantısı başarısız — yeniden denemek için 
 #~ msgid "Custom options"
 #~ msgstr "Özel ayarlar"
 
-#~ msgid "&Quality"
-#~ msgstr "&Kalite"
+msgid "&Quality"
+msgstr "&Kalite"
 
 #~ msgid "Not Used"
 #~ msgstr "Kullanılamaz"
@@ -31575,3 +31575,6 @@ msgstr ""
 "Crystal HD kartı kurulu ancak aygıtı açılamıyor; bu nedenle bu video yazılımla çözülüyor ve daha yavaş olacak.\n"
 "\n"
 "Bu genellikle sürücüyü yeniden yükleyerek düzelir: Yardım > Crystal HD sürücüsünü yeniden yükle."
+
+msgid "Quality"
+msgstr "Kalite"

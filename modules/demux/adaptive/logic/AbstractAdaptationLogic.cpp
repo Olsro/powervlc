@@ -26,6 +26,8 @@
 #endif
 
 #include "AbstractAdaptationLogic.h"
+#include "../playlist/BaseAdaptationSet.h"
+#include "../playlist/BaseRepresentation.h"
 
 #include <limits>
 
@@ -47,4 +49,38 @@ void AbstractAdaptationLogic::setMaxDeviceResolution (int w, int h)
 {
     maxwidth = (w > 0) ? w : std::numeric_limits<int>::max();
     maxheight = (h > 0) ? h : std::numeric_limits<int>::max();
+}
+
+/* PowerVLC: the quality the user pinned, if any.
+ *
+ * Read from the object tree on every call rather than cached: the
+ * variable lives on the input thread (where the interfaces can reach it,
+ * see PlaylistManager::exportQualities) while the choice is applied here,
+ * on the manager thread. Going through the variable API means no lock and
+ * no lifetime rule of our own -- and a live playlist may be reloaded, or
+ * replaced period by period, under our feet at any time.
+ *
+ * The pin is a bandwidth, and only an EXACT match counts: the same value
+ * identifies the same variant across playlist reloads, and an adaptation
+ * set that does not carry it (the audio-only or subtitle sets of a DASH
+ * stream) is left to its own logic instead of being pinned to whatever
+ * happens to be nearest. */
+BaseRepresentation *
+AbstractAdaptationLogic::getRepresentation(BaseAdaptationSet *adaptSet,
+                                           BaseRepresentation *prevRep)
+{
+    if(adaptSet && p_obj)
+    {
+        const int64_t forced = var_InheritInteger(p_obj, "adaptive-quality");
+        if(forced > 0)
+        {
+            const std::vector<BaseRepresentation *> &reps = adaptSet->getRepresentations();
+            for(BaseRepresentation *rep : reps)
+            {
+                if(rep->getBandwidth() == (uint64_t) forced)
+                    return rep;
+            }
+        }
+    }
+    return getNextRepresentation(adaptSet, prevRep);
 }
