@@ -1531,8 +1531,44 @@ static void EsOutDecodersStopBuffering( es_out_t *out, bool b_forced )
     msg_Dbg( p_sys->p_input, "Decoder wait done in %d ms",
               (int)(mdate() - i_decoder_buffering_start)/1000 );
 
-    /* Here is a good place to destroy unused vout with every demuxer */
-    input_resource_TerminateVout( input_priv(p_sys->p_input)->p_resource );
+    /* Here is a good place to destroy unused vout with every demuxer --
+     * unless a selected video track is between two decoders and has not
+     * asked for its own yet, in which case the "unused" one is the very
+     * one it is about to ask for.
+     *
+     * That happens on every resolution change of an adaptive stream (HLS
+     * variant switch, an advertisement encoded differently): the demuxer
+     * restarts, the video ES is removed and re-added, and its decoder is
+     * reloaded. If the re-buffering that follows completes before the new
+     * decoder has seen its first picture -- a hundred milliseconds, and
+     * routine when the switch itself triggered the re-buffering -- the
+     * free vout is destroyed here and the decoder creates a brand new one
+     * a moment later. Reusing it only restarts the "vout display"; a new
+     * vout also means a new video *window*, and on macOS the interface
+     * reacts to that: the video view is torn down, the window falls back
+     * to the playlist (sometimes collapsing to its toolbar) and pops back
+     * to video a fraction of a second later, on every quality change. */
+    bool b_video_pending = false;
+    for( int i = 0; i < p_sys->i_es && !b_video_pending; i++ )
+    {
+        es_out_id_t *p_es = p_sys->es[i];
+
+        if( p_es->fmt.i_cat != VIDEO_ES || p_es->p_dec == NULL )
+            continue;
+
+        vout_thread_t *p_vout;
+        input_DecoderGetObjects( p_es->p_dec, &p_vout, NULL );
+        if( p_vout != NULL )
+            vlc_object_release( p_vout );
+        else
+            b_video_pending = true;
+    }
+
+    if( !b_video_pending )
+        input_resource_TerminateVout( input_priv(p_sys->p_input)->p_resource );
+    else
+        msg_Dbg( p_sys->p_input, "keeping the free vout: a selected video "
+                 "track has not requested one yet" );
 
     /* */
     const vlc_tick_t i_wakeup_delay = 10*1000; /* FIXME CLEANUP thread wake up time*/
