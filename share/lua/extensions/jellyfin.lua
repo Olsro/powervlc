@@ -1259,6 +1259,35 @@ function click_open_channel()
   open_playback(ch, nil)
 end
 
+-- Where the tuner pulls from, when that is somewhere we can go ourselves.
+--
+-- A tuner whose source is a remote playlist (an m3u of HLS channels, the
+-- usual free-TV setup) hands the server an ordinary http URL, and the
+-- server says so: LiveStreams/Open answers Protocol "Http", IsRemote
+-- true, and Path = the master playlist. Playing THAT instead of asking
+-- the server for a stream is what gives the player everything the
+-- channel offers -- the ladder of qualities, and the alternate audio and
+-- subtitle renditions the master declares -- none of which can survive
+-- being remuxed into one transport stream (see direct_play_url).
+--
+-- Everything else is left alone. A tuner on the server's own network
+-- (udpxy relaying multicast) or a file names something we cannot reach
+-- from here, so anything that is not an absolute http(s) URL, or that
+-- the server does not call remote, falls back to the server's stream.
+local function live_origin_url(source)
+  if type(source) ~= "table" then
+    return nil
+  end
+  local path = source.Path
+  if type(path) ~= "string" or not string.match(path, "^https?://") then
+    return nil
+  end
+  if tostring(source.Protocol or "") ~= "Http" or source.IsRemote ~= true then
+    return nil
+  end
+  return path
+end
+
 -- A tuner has to be told to tune before anything can be asked of it:
 -- PlaybackInfo hands out an OpenToken, LiveStreams/Open turns it into a
 -- live stream id, and both URLs then carry that id and the media source
@@ -1278,6 +1307,7 @@ end
 -- LiveStreams/Close answers 400 anyway).
 local function open_live_stream(channel)
   app.live_source_id, app.live_stream_id, app.live_container = nil, nil, nil
+  app.live_origin = nil
   local info, err = api_get("/Items/" .. channel.Id .. "/PlaybackInfo", {})
   local source = info and type(info.MediaSources) == "table"
                  and info.MediaSources[1] or nil
@@ -1302,6 +1332,10 @@ local function open_live_stream(channel)
   -- played untouched (see direct_play_url). Only known once opened: the
   -- item says nothing, and PlaybackInfo alone answers null.
   app.live_container = string.lower(tostring(obj.MediaSource.Container or ""))
+  -- Where the tuner actually pulls from. Opening is the only moment the
+  -- server ever says it, and it is what lets us skip the server entirely
+  -- (see origin_play_url).
+  app.live_origin = live_origin_url(obj.MediaSource)
   -- Opening probes the source, so this is also the only description of
   -- the channel there is: codec and size, where the item had none.
   return obj.MediaSource, nil
@@ -1998,9 +2032,21 @@ end
 -- (measured). There, asking for a TS with both codecs copied is the only
 -- thing VLC can open -- and Jellyfin's remux carries a single audio
 -- track and drops the subtitles, because ffmpeg is told to map one of
--- each. Nothing to be done about it from this side.
+-- each.
+--
+-- Which is why such a channel is not asked of the server at all when the
+-- server has told us where it pulls from: we follow the same playlist it
+-- would have followed. Relaying it was the wrong idea (the 404 above);
+-- going straight to the source is the right one, and it hands the player
+-- the whole master playlist -- qualities, audio and subtitle renditions
+-- included. Measured on a Pluto-backed channel: one audio and no
+-- subtitle through the server's remux, against the full master playlist
+-- opened directly.
 local function direct_play_url()
   if is_live(app.media) then
+    if app.live_origin and app.live_container == "hls" then
+      return app.live_origin
+    end
     local passthrough = app.live_container ~= nil
                     and app.live_container ~= ""
                     and app.live_container ~= "hls"
