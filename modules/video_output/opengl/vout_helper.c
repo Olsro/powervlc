@@ -895,6 +895,18 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
         free(vgl);
         return NULL;
     }
+
+    /* Name the engine in the log. The fixed-function output does it and it has
+     * been the one useful line in every bug report about a black or garbled
+     * picture; the shader output stayed mute, so a report from it could not
+     * even tell which GPU had drawn the frame. */
+    const char *gl_renderer = (const char *)vgl->vt.GetString(GL_RENDERER);
+    const char *gl_version  = (const char *)vgl->vt.GetString(GL_VERSION);
+    const char *gl_glsl = (const char *)vgl->vt.GetString(GL_SHADING_LANGUAGE_VERSION);
+    msg_Dbg(gl, "GL renderer: %s | %s | GLSL %s",
+            gl_renderer ? gl_renderer : "?", gl_version ? gl_version : "?",
+            gl_glsl ? gl_glsl : "none");
+
 #if !defined(USE_OPENGL_ES2)
     // Check for OpenGL < 2.0
     const unsigned char *ogl_version = vgl->vt.GetString(GL_VERSION);
@@ -961,6 +973,19 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
                          "HDR tone mapping disabled (it would render black)",
                      (int)max_alu);
         }
+        else
+            msg_Dbg(gl, "fragment pipeline: %d ALU instructions", (int)max_alu);
+    }
+#endif
+
+#ifdef HAVE_LIBPLACEBO
+    /* Manual override, for the engines the probe above cannot judge: a driver
+     * that hides ARB_fragment_program, or one whose reported budget does not
+     * match what it will actually run. */
+    if (vgl->supports_long_shaders && !var_InheritBool(gl, "tone-mapping-enable"))
+    {
+        vgl->supports_long_shaders = false;
+        msg_Dbg(gl, "HDR tone mapping disabled by tone-mapping-enable");
     }
 #endif
 

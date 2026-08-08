@@ -686,6 +686,14 @@ opengl_fragment_shader_init_impl(opengl_tex_converter_t *tc, GLenum tex_target,
         assert(res->num_descriptors == 0);
 
         ADD(res->glsl);
+
+        /* Trace what the tone mapper actually appended: on an engine whose
+         * fragment budget is too small this block is what turns the picture
+         * black, and the shader itself is only dumped at --verbose=4. */
+        if (res->glsl != NULL && res->glsl[0] != '\0')
+            msg_Dbg(tc->gl, "colour mapping shader: %zu bytes, %d variables "
+                    "(primaries %d, transfer %d)", strlen(res->glsl),
+                    res->num_variables, tc->fmt.primaries, tc->fmt.transfer);
     }
 #else
     if (tc->fmt.transfer == TRANSFER_FUNC_SMPTE_ST2084 ||

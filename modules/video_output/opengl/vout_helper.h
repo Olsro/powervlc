@@ -165,6 +165,8 @@ static const char * const tone_text[] = {
 #define MAX_BOOST_TEXT "Maximum brightness boost"
 #define MAX_BOOST_LONGTEXT "Maximum allowed brightness boost to compensate for dark scenes. A value of 1.0 means no brightness boost is allowed."
 
+#define TONEMAP_ENABLE_TEXT "Convert HDR and wide gamut colours"
+#define TONEMAP_ENABLE_LONGTEXT "Map HDR (PQ, HLG) and wide gamut (BT.2020) video to what the display can show. This adds a hundred-odd instructions to the conversion shader, which pre-2006 GPUs cannot run: some accept the shader and then draw a black picture. Turn this off if HDR video plays black while SDR video is fine; colours will be flat but the picture comes back. Detected automatically when the driver reports its fragment program limits."
 #define TONEMAP_WARN_TEXT "Highlight clipped pixels"
 #define TONEMAP_WARN_LONGTEXT "Debugging tool to indicate which pixels were clipped as part of the tone mapping process."
 
@@ -215,6 +217,8 @@ static const char * const dither_text[] = {
     add_integer("target-trc", PL_COLOR_TRC_UNKNOWN, TRC_TEXT, TRC_LONGTEXT, false) \
             change_integer_list(trc_values, trc_text) \
     set_section("Tone mapping", NULL) \
+    add_bool("tone-mapping-enable", true, TONEMAP_ENABLE_TEXT, \
+             TONEMAP_ENABLE_LONGTEXT, false) \
     add_integer("tone-mapping", PL_TONE_MAPPING_HABLE, \
                 TONEMAPPING_TEXT, TONEMAPPING_LONGTEXT, false) \
             change_integer_list(tone_values, tone_text) \
