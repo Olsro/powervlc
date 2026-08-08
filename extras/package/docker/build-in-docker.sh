@@ -67,12 +67,24 @@ REVISION="$(git -C "$REPO" describe --always HEAD 2>/dev/null || echo "$PVLC_VER
 # killed container, a full disk, ^C) leaves one behind -- and autopoint then
 # refuses to start FOREVER with "directory tmpwrkNNNN already exists". The
 # state that makes a rerun resume is also the state that makes it fail.
+# The compiled catalogues (po/*.gmo) get a pass of their own because they are
+# git-ignored -- so the snapshot above leaves them out -- AND because nothing
+# in the container would rebuild them: gettext hangs the .gmo off `stamp-po`,
+# which only fires when the .pot changes, so a .po edited by hand is compiled
+# on the host and NEVER recompiled by make. Without this pass the container
+# keeps whatever .gmo its persistent volume happened to have, and the build
+# silently ships a catalogue several strings short of the sources it was made
+# from (caught on the 1.2.0 round: 6138 messages in the Windows fr.mo against
+# 6143 on the Mac). They are byte-identical everywhere -- architecture plays
+# no part in a .mo -- so copying the host's is exactly right.
 SEED='set -e; git config --global --add safe.directory /src;
   ( cd /src && git ls-files -co --exclude-standard -z \
       | grep -zv "^contrib/tarballs/" \
       | rsync -0a --files-from=- /src/ /work/ );
   ( cd /src && git ls-files -co --exclude-standard -z -- contrib/tarballs \
       | rsync -0a --ignore-existing --files-from=- /src/ /work/ );
+  ( cd /src && ls po/*.gmo 2>/dev/null \
+      | rsync -a --files-from=- /src/ /work/ ) || true;
   mkdir -p /work/src; printf "%s\n" "${REVISION:-unknown}" > /work/src/revision.txt;
   rm -rf /work/tmpwrk*;
   cd /work'

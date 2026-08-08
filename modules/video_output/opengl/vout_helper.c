@@ -167,6 +167,11 @@ struct vout_display_opengl_t {
      * pipeline instead of shaders (see the detection in vout_display_opengl_New). */
     bool fixed_function;
 
+    /* The fragment pipeline can hold a long program: libplacebo's HDR tone
+     * mapper may be appended to the conversion shader (see the detection in
+     * vout_display_opengl_New). */
+    bool supports_long_shaders;
+
     /* View point */
     float f_teta;
     float f_phi;
@@ -638,7 +643,7 @@ opengl_init_program(vout_display_opengl_t *vgl, struct prgm *prgm,
 
 #ifdef HAVE_LIBPLACEBO
     // create the main libplacebo context
-    if (!subpics)
+    if (!subpics && vgl->supports_long_shaders)
     {
         tc->pl_ctx = pl_context_create(PL_API_VER, &(struct pl_context_params) {
             .log_cb    = log_cb,
@@ -769,6 +774,7 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
         return NULL;
 
     vgl->gl = gl;
+    vgl->supports_long_shaders = true;
 
 #if defined(USE_OPENGL_ES2) || defined(HAVE_GL_CORE_SYMBOLS)
 #define GET_PROC_ADDR_CORE(name) vgl->vt.name = gl##name
@@ -914,6 +920,46 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
             msg_Warn(gl, "OpenGL %s engine advertises GLSL %s but likely cannot "
                          "run it; using the fixed-function pipeline",
                      (const char *)ogl_version, (const char *)glsl_version);
+        }
+    }
+
+    /* Tone mapping (libplacebo) appends a hundred-odd instructions to the
+     * conversion shader. Shader-Model-2 hardware caps the fragment pipeline
+     * far below that -- the ATI R300 family (Radeon 9550/9600/9700, i.e. every
+     * GPU an AGP-era PowerBook/iMac G4 or G5 shipped with) allows 64 ALU
+     * instructions -- and its drivers do not always report the overflow: the
+     * program links and then draws BLACK, which is what an HDR (BT.2020/PQ/HLG)
+     * clip looks like there while SDR clips, whose shader stays short, play
+     * fine. ARB_fragment_program exposes that budget, so ask for it and keep
+     * the tone mapper only for engines that can actually run it. A driver that
+     * no longer advertises the extension (core profiles) is modern enough. */
+    if (HasExtension(extensions, "GL_ARB_fragment_program"))
+    {
+#ifndef GL_FRAGMENT_PROGRAM_ARB
+#   define GL_FRAGMENT_PROGRAM_ARB 0x8804
+#endif
+#ifndef GL_MAX_PROGRAM_NATIVE_ALU_INSTRUCTIONS_ARB
+#   define GL_MAX_PROGRAM_NATIVE_ALU_INSTRUCTIONS_ARB 0x88AB
+#endif
+        /* Not in the vtable: ARB_fragment_program is desktop-only and this is
+         * the single place that needs it. */
+        void (APIENTRY *GetProgramivARB)(GLenum, GLenum, GLint *) =
+            vlc_gl_GetProcAddress(gl, "glGetProgramivARB");
+        GLint max_alu = 0;
+        if (GetProgramivARB != NULL)
+            GetProgramivARB(GL_FRAGMENT_PROGRAM_ARB,
+                            GL_MAX_PROGRAM_NATIVE_ALU_INSTRUCTIONS_ARB,
+                            &max_alu);
+        /* Swallow the GL_INVALID_* an engine without a bound program object
+         * may raise here: it must not trip the GL_ASSERT_NOERROR() below. */
+        while (vgl->vt.GetError() != GL_NO_ERROR)
+            ;
+        if (max_alu > 0 && max_alu < 256)
+        {
+            vgl->supports_long_shaders = false;
+            msg_Warn(gl, "fragment pipeline limited to %d ALU instructions: "
+                         "HDR tone mapping disabled (it would render black)",
+                     (int)max_alu);
         }
     }
 #endif

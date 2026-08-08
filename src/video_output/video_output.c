@@ -1112,12 +1112,27 @@ static void SpuDisplayFormat(video_format_t *fmt, vout_display_t *vd)
 
     *fmt = vd->source;
     if (fmt->i_width * fmt->i_height < place.width * place.height) {
+        /* "place" is expressed in display coordinates: vout_display_PlacePicture
+         * has already applied the source rotation to it. This format still
+         * carries that rotation and the caller applies it once more
+         * (video_format_ApplyRotation) before handing it to spu_Render, so the
+         * dimensions have to be stored the other way round -- otherwise a video
+         * tagged 90/270 degrees (any portrait phone clip) gets its subpictures
+         * rendered on a canvas whose aspect is transposed, and they reach the
+         * screen squashed along one axis. */
+        unsigned width  = place.width;
+        unsigned height = place.height;
+        if (ORIENT_IS_SWAP(fmt->orientation)) {
+            unsigned store = width;
+            width  = height;
+            height = store;
+        }
         fmt->i_sar_num = vd->cfg->display.sar.num;
         fmt->i_sar_den = vd->cfg->display.sar.den;
         fmt->i_width          =
-        fmt->i_visible_width  = place.width;
+        fmt->i_visible_width  = width;
         fmt->i_height         =
-        fmt->i_visible_height = place.height;
+        fmt->i_visible_height = height;
     }
 }
 
