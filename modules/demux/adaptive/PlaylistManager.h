@@ -112,6 +112,10 @@ namespace adaptive
             std::vector<AbstractStream *>        streams;
             BasePeriod                          *currentPeriod;
             bool                                 b_preparsing;
+            /* what exportQualities() left in the variable, so that
+             * only a change made by the user is remembered */
+            int64_t                              i_exported_quality;
+            int64_t                              i_exported_maxheight;
 
             enum class TimestampSynchronizationPoint
             {

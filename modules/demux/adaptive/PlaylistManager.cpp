@@ -44,6 +44,7 @@
 #include <vlc_input.h>
 
 #include <algorithm>
+#include <functional>
 #include <ctime>
 #include <cassert>
 
@@ -70,6 +71,8 @@ PlaylistManager::PlaylistManager( demux_t *p_demux_,
     b_buffering = false;
     b_canceled = false;
     b_preparsing = false;
+    i_exported_quality = QUALITY_AUTOMATIC;
+    i_exported_maxheight = 0;
     nextPlaylistupdate = 0;
     demux.pcr_syncpoint = TimestampSynchronizationPoint::RandomAccess;
     vlc_mutex_init(&demux.lock);
@@ -242,6 +245,59 @@ void PlaylistManager::exportQualities()
         }
     }
 
+    i_exported_quality = var_GetInteger(p_input, "adaptive-quality");
+
+    /* The resolution ceiling, as its own setting rather than one more
+     * entry in the list above: it is a property of the machine, not of
+     * this stream, it is meant to be set once and forgotten, and it has
+     * to sit in the same place from one stream to the next.
+     *
+     * "adaptive-maxheight" is the option the module already had for
+     * exactly this; here it merely becomes reachable from a menu and
+     * readable while a stream plays. Only offered when the playlist
+     * states its resolutions -- nothing could honour it otherwise, which
+     * is why the menu says "if available". */
+    bool b_sized = false;
+    for(BaseRepresentation *rep : reps)
+        b_sized |= (rep->getHeight() > 0);
+
+    if(b_sized && var_Create(p_input, "adaptive-maxheight",
+                             VLC_VAR_INTEGER | VLC_VAR_HASCHOICE) == VLC_SUCCESS)
+    {
+        const int64_t i_height = var_InheritInteger(p_demux, "adaptive-maxheight");
+
+        text.psz_string = const_cast<char *>(_("Auto quality by resolution"));
+        var_Change(p_input, "adaptive-maxheight", VLC_VAR_SETTEXT, &text, nullptr);
+
+        val.i_int = 0;
+        text.psz_string = const_cast<char *>(_("Disabled"));
+        var_Change(p_input, "adaptive-maxheight", VLC_VAR_ADDCHOICE, &val, &text);
+
+        std::vector<int> ceilings = { 1080, 720, 480, 360, 240 };
+        /* keep a hand-set ceiling reachable (--adaptive-maxheight=576) */
+        if(i_height > 0 && std::find(ceilings.begin(), ceilings.end(),
+                                     (int) i_height) == ceilings.end())
+        {
+            ceilings.push_back((int) i_height);
+            std::sort(ceilings.begin(), ceilings.end(), std::greater<int>());
+        }
+
+        for(int i_ceiling : ceilings)
+        {
+            char *psz;
+            if(asprintf(&psz, _("At most %dp"), i_ceiling) < 0)
+                continue;
+            val.i_int = i_ceiling;
+            text.psz_string = psz;
+            var_Change(p_input, "adaptive-maxheight", VLC_VAR_ADDCHOICE, &val, &text);
+            free(psz);
+        }
+
+        if(i_height > 0)
+            var_SetInteger(p_input, "adaptive-maxheight", i_height);
+        i_exported_maxheight = var_GetInteger(p_input, "adaptive-maxheight");
+    }
+
     /* NOTE: no "apply now" seek on change. Re-anchoring at the current
      * position to drop the buffer filled at the old quality sounds like
      * the way to make the switch immediate, and it is what a browser
@@ -272,12 +328,16 @@ void PlaylistManager::unexportQualities()
      *
      * Written when the stream ends rather than when the menu is used: that
      * is early enough for "the next stream", it costs nothing while
-     * something plays, and it keeps the whole feature callback-free. */
+     * something plays, and it keeps the whole feature callback-free.
+     *
+     * Against what WE put in the variable, not against the stored value:
+     * a preference this playlist could not offer never made it into the
+     * variable in the first place (a ceiling on a playlist that states no
+     * resolution), and comparing with the stored value would then read as
+     * "the user chose Automatic" and quietly erase what they had set. */
     const int64_t i_current = var_GetInteger(p_input, "adaptive-quality");
-    /* against the CONFIG, not var_Inherit(): inheriting from the demuxer
-     * would find the very variable being read, one object up, and nothing
-     * would ever look changed */
-    if(i_current <= QUALITY_AUTOMATIC &&
+    if(i_current != i_exported_quality &&
+       i_current <= QUALITY_AUTOMATIC &&
        i_current != config_GetInt(p_demux, "adaptive-quality"))
     {
         msg_Dbg(p_demux, "remembering quality %" PRId64 " for the next streams",
@@ -287,6 +347,23 @@ void PlaylistManager::unexportQualities()
     }
 
     var_Destroy(p_input, "adaptive-quality");
+
+    /* Same for the resolution ceiling, which is nothing but a standing
+     * preference: whatever the user picked is what the next stream, and
+     * the next session, start with. */
+    if(var_Type(p_input, "adaptive-maxheight") != 0)
+    {
+        const int64_t i_height = var_GetInteger(p_input, "adaptive-maxheight");
+        if(i_height != i_exported_maxheight &&
+           i_height != config_GetInt(p_demux, "adaptive-maxheight"))
+        {
+            msg_Dbg(p_demux, "remembering resolution ceiling %" PRId64,
+                    i_height);
+            config_PutInt(p_demux, "adaptive-maxheight", i_height);
+            config_SaveConfigFile(p_demux);
+        }
+        var_Destroy(p_input, "adaptive-maxheight");
+    }
 }
 
 void PlaylistManager::unsetPeriod()

@@ -70,7 +70,16 @@ void AbstractAdaptationLogic::setMaxDeviceResolution (int w, int h)
  * QUALITY_LOWEST/HIGHEST mean the same as the "lowest"/"highest" values of
  * "adaptive-logic", and go through the same selector so that they keep
  * obeying the maximum device resolution -- but they can be switched while
- * a stream plays, and they apply to whatever plays next. */
+ * a stream plays, and they apply to whatever plays next.
+ *
+ * "adaptive-maxheight" is the resolution ceiling, a standing preference of
+ * the machine rather than a choice about this stream: the best variant
+ * that stays under it, from the first segment on, which is what an old
+ * machine wants and what the bottom of the ladder (a 144p nobody wants to
+ * watch) is not. It outranks the automatic logic and the two standing
+ * modes above -- but NOT a variant the user pinned by hand, which is a
+ * deliberate act about this one stream and would otherwise be impossible
+ * to obtain while the ceiling is on. */
 BaseRepresentation *
 AbstractAdaptationLogic::getRepresentation(BaseAdaptationSet *adaptSet,
                                            BaseRepresentation *prevRep)
@@ -80,6 +89,39 @@ AbstractAdaptationLogic::getRepresentation(BaseAdaptationSet *adaptSet,
         const int64_t forced = var_InheritInteger(p_obj, "adaptive-quality");
         BaseRepresentation *rep = nullptr;
 
+        if(forced > 0) /* a variant, picked by hand: it wins */
+        {
+            for(BaseRepresentation *candidate : adaptSet->getRepresentations())
+            {
+                if(candidate->getBandwidth() == (uint64_t) forced)
+                    return candidate;
+            }
+        }
+
+        /* A ceiling can only be honoured by a playlist that says how big
+         * its variants are, and plenty do not (Pluto TV carries bandwidths
+         * alone). Applying it there would let every variant through and
+         * hand back the biggest -- the opposite of what was asked -- so
+         * those streams are left to the choice below. */
+        const int64_t i_ceiling = var_InheritInteger(p_obj, "adaptive-maxheight");
+        bool b_sized = false;
+        if(i_ceiling > 0)
+        {
+            for(BaseRepresentation *candidate : adaptSet->getRepresentations())
+                b_sized |= (candidate->getHeight() > 0);
+        }
+
+        if(b_sized)
+        {
+            const int i_cap = (int) i_ceiling;
+            RepresentationSelector selector(maxwidth,
+                    (maxheight < i_cap) ? maxheight : i_cap);
+            rep = (forced == QUALITY_LOWEST) ? selector.lowest(adaptSet)
+                                             : selector.select(adaptSet);
+            if(rep)
+                return rep;
+        }
+
         if(forced == QUALITY_LOWEST || forced == QUALITY_HIGHEST)
         {
             RepresentationSelector selector(maxwidth, maxheight);
@@ -87,14 +129,6 @@ AbstractAdaptationLogic::getRepresentation(BaseAdaptationSet *adaptSet,
                                              : selector.highest(adaptSet);
             if(rep)
                 return rep;
-        }
-        else if(forced > 0)
-        {
-            for(BaseRepresentation *candidate : adaptSet->getRepresentations())
-            {
-                if(candidate->getBandwidth() == (uint64_t) forced)
-                    return candidate;
-            }
         }
     }
     return getNextRepresentation(adaptSet, prevRep);

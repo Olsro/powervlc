@@ -31808,3 +31808,12 @@ msgstr ""
 
 msgid "Quality"
 msgstr "Qualité"
+
+msgid "At most %dp"
+msgstr "Au plus %dp"
+
+msgid "Auto quality by resolution"
+msgstr "Choix auto par résolution"
+
+msgid "Auto quality by &resolution"
+msgstr "Choix auto par &résolution"

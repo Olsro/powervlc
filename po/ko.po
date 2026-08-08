@@ -31078,3 +31078,12 @@ msgstr ""
 
 msgid "Quality"
 msgstr "품질"
+
+msgid "At most %dp"
+msgstr "최대 %dp"
+
+msgid "Auto quality by resolution"
+msgstr "해상도별 자동 선택"
+
+msgid "Auto quality by &resolution"
+msgstr "해상도별 자동 선택(&R)"

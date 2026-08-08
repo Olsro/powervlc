@@ -30405,3 +30405,12 @@ msgstr ""
 
 msgid "Quality"
 msgstr "质量"
+
+msgid "At most %dp"
+msgstr "最高 %dp"
+
+msgid "Auto quality by resolution"
+msgstr "按分辨率自动选择"
+
+msgid "Auto quality by &resolution"
+msgstr "按分辨率自动选择(&R)"

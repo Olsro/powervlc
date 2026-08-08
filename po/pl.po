@@ -31555,3 +31555,12 @@ msgstr ""
 
 msgid "Quality"
 msgstr "Jakość"
+
+msgid "At most %dp"
+msgstr "Najwyżej %dp"
+
+msgid "Auto quality by resolution"
+msgstr "Automatyczny wybór według rozdzielczości"
+
+msgid "Auto quality by &resolution"
+msgstr "Automatyczny wybór według &rozdzielczości"

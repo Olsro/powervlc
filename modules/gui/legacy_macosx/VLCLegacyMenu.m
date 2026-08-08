@@ -653,6 +653,8 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
      * this interface runs on, is the difference between a picture that
      * plays and one that does not. */
     qualityMenu = [self addDynamicMenuTo:videoMenu title:_NS("Quality")];
+    maxHeightMenu = [self addDynamicMenuTo:videoMenu
+                                     title:_NS("Auto quality by resolution")];
     aspectMenu = [self addDynamicMenuTo:videoMenu title:_NS("Aspect ratio")];
     cropMenu = [self addDynamicMenuTo:videoMenu title:_NS("Crop")];
     [self addDeinterlaceQualityMenuTo:videoMenu];
@@ -971,6 +973,8 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
         *name = "video-es";
     else if (menu == qualityMenu)
         *name = "adaptive-quality";
+    else if (menu == maxHeightMenu)
+        *name = "adaptive-maxheight";
     else if (menu == titleMenu)
         *name = "title";
     else if (menu == chapterMenu)
@@ -1874,12 +1878,14 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
             || action == @selector(inputDependentParent:)) {
         /* Quality only means something for an adaptive stream: the demuxer
          * publishes the list on the input, and there is none otherwise */
-        if ([item submenu] == qualityMenu) {
+        if ([item submenu] == qualityMenu || [item submenu] == maxHeightMenu) {
+            const char *psz_var = ([item submenu] == qualityMenu)
+                                ? "adaptive-quality" : "adaptive-maxheight";
             input_thread_t *p_input =
                 playlist_CurrentInput(pl_Get(p_intf));
             BOOL b_has = NO;
             if (p_input) {
-                b_has = (var_Type((vlc_object_t *)p_input, "adaptive-quality")
+                b_has = (var_Type((vlc_object_t *)p_input, psz_var)
                          & VLC_VAR_TYPE) == VLC_VAR_INTEGER;
                 vlc_object_release(p_input);
             }

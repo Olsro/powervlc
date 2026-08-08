@@ -31692,3 +31692,12 @@ msgstr ""
 
 msgid "Quality"
 msgstr "Qualidade"
+
+msgid "At most %dp"
+msgstr "No máximo %dp"
+
+msgid "Auto quality by resolution"
+msgstr "Escolha automática por resolução"
+
+msgid "Auto quality by &resolution"
+msgstr "Escolha automática por &resolução"

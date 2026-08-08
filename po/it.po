@@ -31903,3 +31903,12 @@ msgstr ""
 
 msgid "Quality"
 msgstr "Qualità"
+
+msgid "At most %dp"
+msgstr "Al massimo %dp"
+
+msgid "Auto quality by resolution"
+msgstr "Scelta automatica per risoluzione"
+
+msgid "Auto quality by &resolution"
+msgstr "Scelta automatica per &risoluzione"

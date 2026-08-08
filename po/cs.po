@@ -31475,3 +31475,12 @@ msgstr ""
 
 msgid "Quality"
 msgstr "Kvalita"
+
+msgid "At most %dp"
+msgstr "Nejvýše %dp"
+
+msgid "Auto quality by resolution"
+msgstr "Automatická volba podle rozlišení"
+
+msgid "Auto quality by &resolution"
+msgstr "Automatická volba podle &rozlišení"

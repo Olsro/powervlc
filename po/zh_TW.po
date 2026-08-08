@@ -29631,3 +29631,12 @@ msgstr ""
 
 msgid "Quality"
 msgstr "品質"
+
+msgid "At most %dp"
+msgstr "最高 %dp"
+
+msgid "Auto quality by resolution"
+msgstr "依解析度自動選擇"
+
+msgid "Auto quality by &resolution"
+msgstr "依解析度自動選擇(&R)"

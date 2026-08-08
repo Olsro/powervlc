@@ -31740,3 +31740,12 @@ msgstr ""
 
 msgid "Quality"
 msgstr "Calidad"
+
+msgid "At most %dp"
+msgstr "Como máximo %dp"
+
+msgid "Auto quality by resolution"
+msgstr "Selección automática por resolución"
+
+msgid "Auto quality by &resolution"
+msgstr "Selección automática por &resolución"

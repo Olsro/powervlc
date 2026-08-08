@@ -31509,3 +31509,12 @@ msgstr ""
 
 msgid "Quality"
 msgstr "Качество"
+
+msgid "At most %dp"
+msgstr "Не выше %dp"
+
+msgid "Auto quality by resolution"
+msgstr "Автовыбор по разрешению"
+
+msgid "Auto quality by &resolution"
+msgstr "Автовыбор по &разрешению"

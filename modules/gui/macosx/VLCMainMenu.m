@@ -79,6 +79,7 @@
     /* Quality of an adaptive stream, under Video Track. Also built here:
      * it only ever appears for HLS/DASH. */
     NSMenuItem *_adaptiveQualityMenuItem;
+    NSMenuItem *_adaptiveMaxHeightMenuItem;
 
     __strong VLCTimeSelectionPanelController *_timeSelectionPanel;
 }
@@ -181,6 +182,20 @@
         [_adaptiveQualityMenuItem setHidden:YES];
         [videoMenu insertItem:_adaptiveQualityMenuItem
                       atIndex:[videoMenu indexOfItem:_videotrack] + 1];
+
+        /* and the standing resolution ceiling right below it: not a
+         * choice about this stream but about the machine, which is why
+         * it is a setting of its own rather than one more line in the
+         * list above */
+        _adaptiveMaxHeightMenuItem = [[NSMenuItem alloc]
+            initWithTitle:_NS("Auto quality by resolution")
+                   action:nil
+            keyEquivalent:@""];
+        [_adaptiveMaxHeightMenuItem setSubmenu:
+            [[NSMenu alloc] initWithTitle:_NS("Auto quality by resolution")]];
+        [_adaptiveMaxHeightMenuItem setHidden:YES];
+        [videoMenu insertItem:_adaptiveMaxHeightMenuItem
+                      atIndex:[videoMenu indexOfItem:_adaptiveQualityMenuItem] + 1];
     }
 
     /* interface switcher, below Preferences and its separator (only when
@@ -726,6 +741,18 @@
                               selector:@selector(toggleVar:)];
         }
 
+        /* only offered when the playlist states its resolutions */
+        if (_adaptiveMaxHeightMenuItem != nil) {
+            BOOL hasHeights = (var_Type((vlc_object_t *)p_input, "adaptive-maxheight")
+                               & VLC_VAR_TYPE) == VLC_VAR_INTEGER;
+            [_adaptiveMaxHeightMenuItem setHidden:!hasHeights];
+            if (hasHeights)
+                [self setupVarMenuItem:_adaptiveMaxHeightMenuItem
+                                target:(vlc_object_t *)p_input
+                                   var:"adaptive-maxheight"
+                              selector:@selector(toggleVar:)];
+        }
+
         audio_output_t *p_aout = playlist_GetAout(p_playlist);
         if (p_aout != NULL) {
             [self setupVarMenuItem:_channels target: (vlc_object_t *)p_aout
@@ -760,6 +787,7 @@
     } else {
         [_postprocessing setEnabled:NO];
         [_adaptiveQualityMenuItem setHidden:YES];
+        [_adaptiveMaxHeightMenuItem setHidden:YES];
     }
 }
 

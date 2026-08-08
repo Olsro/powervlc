@@ -31719,3 +31719,12 @@ msgstr ""
 
 msgid "Quality"
 msgstr "Kwaliteit"
+
+msgid "At most %dp"
+msgstr "Hoogstens %dp"
+
+msgid "Auto quality by resolution"
+msgstr "Automatische keuze op resolutie"
+
+msgid "Auto quality by &resolution"
+msgstr "Automatische keuze op &resolutie"

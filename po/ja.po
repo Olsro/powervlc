@@ -31374,3 +31374,12 @@ msgstr ""
 
 msgid "Quality"
 msgstr "品質"
+
+msgid "At most %dp"
+msgstr "最大 %dp"
+
+msgid "Auto quality by resolution"
+msgstr "解像度による自動選択"
+
+msgid "Auto quality by &resolution"
+msgstr "解像度による自動選択 (&R)"

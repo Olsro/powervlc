@@ -31578,3 +31578,12 @@ msgstr ""
 
 msgid "Quality"
 msgstr "Kalite"
+
+msgid "At most %dp"
+msgstr "En fazla %dp"
+
+msgid "Auto quality by resolution"
+msgstr "Çözünürlüğe göre otomatik seçim"
+
+msgid "Auto quality by &resolution"
+msgstr "Çözünürlüğe göre otomatik &seçim"
