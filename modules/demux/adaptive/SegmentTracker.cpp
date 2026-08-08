@@ -284,8 +284,19 @@ SegmentTracker::prepareChunk(bool switch_allowed, Position pos) const
                 if(!temp.isValid()) /* try again */
                     temp.number = temp.rep->translateSegmentNumber(pos.number, pos.rep);
 
-                /* cancel switch that would go past playlist */
-                if(temp.isValid() && temp.rep->getMinAheadTime(temp.number) == 0)
+                /* cancel switch that would go past playlist.
+                 *
+                 * A representation whose index has not been downloaded yet
+                 * has no idea what lies ahead of it: getMinAheadTime()
+                 * answers 0 because it knows nothing, not because it is
+                 * exhausted. Taking that for an answer deadlocks the
+                 * switch for good, since the index is only ever fetched
+                 * once the switch has been made (see the init_sent /
+                 * index_sent handling below) -- which is what made every
+                 * quality change silently ignored on a DASH stream built
+                 * on SegmentBase + indexRange, YouTube's among them. */
+                if(temp.isValid() && !temp.rep->needsIndex() &&
+                   temp.rep->getMinAheadTime(temp.number) == 0)
                     temp = Position();
             }
             if(temp.isValid())

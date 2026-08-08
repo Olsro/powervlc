@@ -241,6 +241,19 @@ void PlaylistManager::exportQualities()
             break;
         }
     }
+
+    /* NOTE: no "apply now" seek on change. Re-anchoring at the current
+     * position to drop the buffer filled at the old quality sounds like
+     * the way to make the switch immediate, and it is what a browser
+     * player does -- but measured here it is twice as slow (22 s against
+     * 10 s to the first picture at the new quality) and it re-buffers on
+     * top: a seek keeps the representation it was playing
+     * (SegmentTracker::setPositionByTime starts from current.rep), so the
+     * old quality is downloaded a second time before the switch happens
+     * at the next segment anyway. Whoever tries this again: making the
+     * seek honour the pin is not enough either, since a representation
+     * whose index has not been loaded cannot answer
+     * getSegmentNumberByTime() and the seek would simply fail. */
 }
 
 void PlaylistManager::unexportQualities()
@@ -248,6 +261,7 @@ void PlaylistManager::unexportQualities()
     input_thread_t *p_input = p_demux->p_input;
     if(p_input == nullptr || var_Type(p_input, "adaptive-quality") == 0)
         return;
+
 
     /* Remember a standing preference, so that it also applies to whatever
      * is played next -- picking the lowest quality once, on a machine that
