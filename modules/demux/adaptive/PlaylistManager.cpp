@@ -187,8 +187,18 @@ void PlaylistManager::exportQualities()
     text.psz_string = const_cast<char *>(_("Quality"));
     var_Change(p_input, "adaptive-quality", VLC_VAR_SETTEXT, &text, nullptr);
 
-    val.i_int = 0;
+    /* The three standing preferences first: unlike a variant, they mean
+     * something for any stream, so they are what gets remembered. */
+    val.i_int = QUALITY_AUTOMATIC;
     text.psz_string = const_cast<char *>(_("Automatic"));
+    var_Change(p_input, "adaptive-quality", VLC_VAR_ADDCHOICE, &val, &text);
+
+    val.i_int = QUALITY_LOWEST;
+    text.psz_string = const_cast<char *>(_("Lowest"));
+    var_Change(p_input, "adaptive-quality", VLC_VAR_ADDCHOICE, &val, &text);
+
+    val.i_int = QUALITY_HIGHEST;
+    text.psz_string = const_cast<char *>(_("Highest"));
     var_Change(p_input, "adaptive-quality", VLC_VAR_ADDCHOICE, &val, &text);
 
     for(BaseRepresentation *rep : reps)
@@ -219,7 +229,11 @@ void PlaylistManager::exportQualities()
         free(psz);
     }
 
-    for(BaseRepresentation *rep : reps)
+    if(i_wanted == QUALITY_LOWEST || i_wanted == QUALITY_HIGHEST)
+    {
+        var_SetInteger(p_input, "adaptive-quality", i_wanted);
+    }
+    else for(BaseRepresentation *rep : reps)
     {
         if((int64_t) rep->getBandwidth() == i_wanted)
         {
@@ -231,8 +245,34 @@ void PlaylistManager::exportQualities()
 
 void PlaylistManager::unexportQualities()
 {
-    if(p_demux->p_input != nullptr)
-        var_Destroy(p_demux->p_input, "adaptive-quality");
+    input_thread_t *p_input = p_demux->p_input;
+    if(p_input == nullptr || var_Type(p_input, "adaptive-quality") == 0)
+        return;
+
+    /* Remember a standing preference, so that it also applies to whatever
+     * is played next -- picking the lowest quality once, on a machine that
+     * cannot keep up with the highest, is a statement about the machine,
+     * not about this one stream. A pinned variant (a positive value) is a
+     * bandwidth of THIS playlist and means nothing for the next one, so it
+     * is deliberately not kept.
+     *
+     * Written when the stream ends rather than when the menu is used: that
+     * is early enough for "the next stream", it costs nothing while
+     * something plays, and it keeps the whole feature callback-free. */
+    const int64_t i_current = var_GetInteger(p_input, "adaptive-quality");
+    /* against the CONFIG, not var_Inherit(): inheriting from the demuxer
+     * would find the very variable being read, one object up, and nothing
+     * would ever look changed */
+    if(i_current <= QUALITY_AUTOMATIC &&
+       i_current != config_GetInt(p_demux, "adaptive-quality"))
+    {
+        msg_Dbg(p_demux, "remembering quality %" PRId64 " for the next streams",
+                i_current);
+        config_PutInt(p_demux, "adaptive-quality", i_current);
+        config_SaveConfigFile(p_demux);
+    }
+
+    var_Destroy(p_input, "adaptive-quality");
 }
 
 void PlaylistManager::unsetPeriod()

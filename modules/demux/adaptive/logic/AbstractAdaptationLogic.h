@@ -40,6 +40,18 @@ namespace adaptive
     {
         using namespace playlist;
 
+        /* PowerVLC: values of the "adaptive-quality" variable. A positive
+         * one is the bandwidth of one particular variant of one particular
+         * stream; these three are standing preferences, which is why they
+         * are the only ones that outlive a playback (see
+         * PlaylistManager::unexportQualities). */
+        enum
+        {
+            QUALITY_AUTOMATIC = 0,
+            QUALITY_LOWEST    = -1,
+            QUALITY_HIGHEST   = -2,
+        };
+
         class AbstractAdaptationLogic : public IDownloadRateObserver,
                                         public SegmentTrackerListenerInterface
         {

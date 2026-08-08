@@ -26,6 +26,7 @@
 #endif
 
 #include "AbstractAdaptationLogic.h"
+#include "Representationselectors.hpp"
 #include "../playlist/BaseAdaptationSet.h"
 #include "../playlist/BaseRepresentation.h"
 
@@ -60,11 +61,16 @@ void AbstractAdaptationLogic::setMaxDeviceResolution (int w, int h)
  * no lifetime rule of our own -- and a live playlist may be reloaded, or
  * replaced period by period, under our feet at any time.
  *
- * The pin is a bandwidth, and only an EXACT match counts: the same value
- * identifies the same variant across playlist reloads, and an adaptation
- * set that does not carry it (the audio-only or subtitle sets of a DASH
- * stream) is left to its own logic instead of being pinned to whatever
- * happens to be nearest. */
+ * A positive pin is a bandwidth, and only an EXACT match counts: the same
+ * value identifies the same variant across playlist reloads, and an
+ * adaptation set that does not carry it (the audio-only or subtitle sets
+ * of a DASH stream) is left to its own logic instead of being pinned to
+ * whatever happens to be nearest.
+ *
+ * QUALITY_LOWEST/HIGHEST mean the same as the "lowest"/"highest" values of
+ * "adaptive-logic", and go through the same selector so that they keep
+ * obeying the maximum device resolution -- but they can be switched while
+ * a stream plays, and they apply to whatever plays next. */
 BaseRepresentation *
 AbstractAdaptationLogic::getRepresentation(BaseAdaptationSet *adaptSet,
                                            BaseRepresentation *prevRep)
@@ -72,13 +78,22 @@ AbstractAdaptationLogic::getRepresentation(BaseAdaptationSet *adaptSet,
     if(adaptSet && p_obj)
     {
         const int64_t forced = var_InheritInteger(p_obj, "adaptive-quality");
-        if(forced > 0)
+        BaseRepresentation *rep = nullptr;
+
+        if(forced == QUALITY_LOWEST || forced == QUALITY_HIGHEST)
         {
-            const std::vector<BaseRepresentation *> &reps = adaptSet->getRepresentations();
-            for(BaseRepresentation *rep : reps)
+            RepresentationSelector selector(maxwidth, maxheight);
+            rep = (forced == QUALITY_LOWEST) ? selector.lowest(adaptSet)
+                                             : selector.highest(adaptSet);
+            if(rep)
+                return rep;
+        }
+        else if(forced > 0)
+        {
+            for(BaseRepresentation *candidate : adaptSet->getRepresentations())
             {
-                if(rep->getBandwidth() == (uint64_t) forced)
-                    return rep;
+                if(candidate->getBandwidth() == (uint64_t) forced)
+                    return candidate;
             }
         }
     }
