@@ -1443,6 +1443,20 @@ static int ThreadDisplayPicture(vout_thread_t *vout, vlc_tick_t *deadline)
         date_next = vout->p->displayed.next->date - render_delay;
         if (date_next /* + 0 FIXME */ <= date)
             drop_next_frame = true;
+        else if (date_next - date > CLOCK_FREQ * 60) {
+            /* A head picture due more than a minute from now cannot be
+             * real: even the deepest look-ahead cushion keeps its head
+             * near the present, and a broken decoder timestamp landing
+             * here would otherwise freeze the picture for good -- the
+             * head is never due, everything behind it waits, and the
+             * cushion gates the decoder shut (seen live 08/08/2026 with
+             * hardware-decoder timestamp echoes). Say so and step over
+             * it rather than waiting for an instant that never comes. */
+            msg_Warn(vout, "head picture due %"PRId64"s from now: "
+                     "broken timestamp, forcing it through",
+                     (date_next - date) / CLOCK_FREQ);
+            drop_next_frame = true;
+        }
     }
 
     /* FIXME/XXX we must redisplay the last decoded picture (because

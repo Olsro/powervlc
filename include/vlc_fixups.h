@@ -487,6 +487,57 @@ struct pollfd;
 int poll (struct pollfd *, unsigned, int);
 #endif
 
+/* Mac OS X only learned to deliver a pending cancellation to a thread that is
+ * already inside a system call in 10.5. Before that, pthread_cancel() sets the
+ * flag and nothing ever acts on it, so a thread parked in poll() with no
+ * deadline never comes back and the join that is supposed to reap it waits
+ * forever. httpd_HostDelete() does exactly that -- vlc_cancel() then
+ * vlc_join() -- and it is far from alone: about twenty call sites in the tree
+ * wait with a -1 timeout.
+ *
+ * Measured twice, same three-level deadlock both times: an iBook G3 under
+ * 10.4 (2026-08-07) and a Mac mini Intel under 10.4 (2026-08-08), the player
+ * refusing to quit for good once the browser handoff server had been started.
+ *
+ * compat/poll.c already slices its select()-based replacement for the builds
+ * that have no poll() at all (the 10.2 floor, where poll() does not exist
+ * yet). This wrapper is the same treatment for the builds that DO use the
+ * system call and can still land on a system too old to interrupt it -- which
+ * today means the i386 slice and its 10.4 floor. Targets that cannot run
+ * before 10.5 keep the bare system call and pay nothing.
+ *
+ * Keep the two in step: whatever slice length one uses, the other should use
+ * too. */
+#if defined(__APPLE__) && defined(HAVE_POLL) \
+ && defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) \
+ && (__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1050)
+# include <poll.h>
+# include <pthread.h>
+
+# define VLC_POLL_SLICE_MS 100
+
+static inline int vlc_poll_cancellable (struct pollfd *fds, unsigned nfds,
+                                        int timeout)
+{
+    pthread_testcancel ();
+
+    if (timeout >= 0)
+        return (poll) (fds, nfds, timeout);
+
+    for (;;)
+    {
+        int val = (poll) (fds, nfds, VLC_POLL_SLICE_MS);
+        if (val != 0)
+            return val;   /* ready, or an error the caller must see */
+        pthread_testcancel ();
+    }
+}
+
+/* Parenthesised uses -- (poll)(...) above, and compat/poll.c's own definition
+ * -- deliberately escape this. */
+# define poll(fds, nfds, timeout) vlc_poll_cancellable (fds, nfds, timeout)
+#endif
+
 #ifndef HAVE_IF_NAMEINDEX
 #include <errno.h>
 # ifndef HAVE_STRUCT_IF_NAMEINDEX

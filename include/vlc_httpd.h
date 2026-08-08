@@ -118,6 +118,12 @@ VLC_API void httpd_UrlDelete( httpd_url_t * );
 VLC_API char* httpd_ClientIP( const httpd_client_t *cl, char *, int * );
 VLC_API char* httpd_ServerIP( const httpd_client_t *cl, char *, int * );
 
+/* Long poll: called from inside a URL callback that leaves the answer
+ * untouched, parks the request instead of answering it. The callback is
+ * invoked again -- same client, same query -- every so often until it
+ * either answers or defers again. */
+VLC_API void httpd_ClientDefer( httpd_client_t *cl );
+
 /* High level */
 
 typedef struct httpd_file_t     httpd_file_t;

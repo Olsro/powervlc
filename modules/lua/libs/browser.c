@@ -93,6 +93,16 @@
  * against -- and fetch() still has its own deadline (30 s) above this. */
 #define HANDOFF_RELAY_STALE (CLOCK_FREQ * 20)
 
+/* How long a /next request with nothing to take is held open before it is
+ * answered empty (long poll). The page asks again the moment an answer
+ * lands, so this is the heartbeat period of an idle relay -- it used to
+ * knock 2.5 times a second, and with the core reading headers one
+ * recvmsg() per byte that came to ~1300 system calls a second on the
+ * machines this fork is for (measured by ktrace, 2026-08-08). Kept under
+ * HANDOFF_RELAY_STALE with room to spare: a parked request refreshes
+ * i_last_poll every time the callback looks in on it anyway. */
+#define HANDOFF_PARK_MAX (CLOCK_FREQ * 10)
+
 typedef struct
 {
     vlc_object_t *p_owner;   /* carries http-host/http-port for the host */
@@ -157,6 +167,14 @@ typedef struct
      * Measured on go-away/nadeko: cookie handed over one line before the
      * "timeout". */
     bool      b_relay_busy;
+    /* The /next requests currently parked (httpd_ClientDefer), so that an
+     * idle relay sits on one silent connection instead of knocking every
+     * 400 ms. Entries whose client died unseen fall out by age. */
+    struct
+    {
+        httpd_client_t *cl;
+        mtime_t         since;
+    } park[8];
     char     *psz_pending;   /* handed out on the next poll */
     uint64_t  i_seq;         /* which request that is */
     uint64_t  i_reply_seq;   /* which one came back */
@@ -470,17 +488,39 @@ static int NextCallback( httpd_callback_sys_t *opaque, httpd_client_t *cl,
     free( psz_busy );
 
     char *psz_work = NULL;
+    bool b_park = false;
 
     vlc_mutex_lock( &p_ho->lock );
-    p_ho->i_last_poll = mdate();
-    if( p_ho->b_relay_busy != b_busy )
+    const mtime_t now = mdate();
+    p_ho->i_last_poll = now;
+
+    /* Is this request one already parked here? Entries too old to be a
+     * live park are from clients that died unseen: drop them. */
+    int i_self = -1, i_free = -1;
+    for( size_t i = 0; i < sizeof(p_ho->park)/sizeof(p_ho->park[0]); i++ )
+    {
+        if( p_ho->park[i].cl == cl )
+            i_self = (int)i;
+        else if( p_ho->park[i].cl != NULL
+              && now - p_ho->park[i].since
+                     > HANDOFF_PARK_MAX + CLOCK_FREQ * 5 )
+            p_ho->park[i].cl = NULL;
+        if( p_ho->park[i].cl == NULL && i_free < 0 )
+            i_free = (int)i;
+    }
+
+    /* A fresh request speaks for the tab as it is now; a parked one said
+     * its piece when it arrived and is merely still here. Without this
+     * distinction a parked "free" poll would keep overwriting the busy
+     * state the tab knocks in while walking a check. */
+    if( i_self < 0 && p_ho->b_relay_busy != b_busy )
     {
         p_ho->b_relay_busy = b_busy;
         msg_Dbg( (vlc_object_t *)p_ho->p_owner,
                  b_busy ? "relay: the tab is working through a check"
                         : "relay: the tab is free again" );
     }
-    if( !b_busy && p_ho->psz_pending != NULL )
+    if( !b_busy && !p_ho->b_relay_busy && p_ho->psz_pending != NULL )
     {
         if( asprintf( &psz_work, "%llu %s",
                       (unsigned long long)p_ho->i_seq,
@@ -494,7 +534,37 @@ static int NextCallback( httpd_callback_sys_t *opaque, httpd_client_t *cl,
             p_ho->psz_pending = NULL;
         }
     }
+
+    if( psz_work == NULL && !b_busy )
+    {
+        /* Nothing to hand out: hold the request open rather than send
+         * the page away to ask again 400 ms later (long poll). Busy
+         * knocks are answered at once -- they carry state, not a
+         * question. With no free slot the request is answered empty,
+         * which is exactly the old behaviour. */
+        if( i_self < 0 && i_free >= 0 )
+        {
+            i_self = i_free;
+            p_ho->park[i_self].cl = cl;
+            p_ho->park[i_self].since = now;
+        }
+        if( i_self >= 0 )
+        {
+            if( now - p_ho->park[i_self].since < HANDOFF_PARK_MAX )
+                b_park = true;
+            else /* held long enough: answer empty as a heartbeat */
+                p_ho->park[i_self].cl = NULL;
+        }
+    }
+    else if( i_self >= 0 )
+        p_ho->park[i_self].cl = NULL;
     vlc_mutex_unlock( &p_ho->lock );
+
+    if( b_park )
+    {
+        httpd_ClientDefer( cl );
+        return VLC_SUCCESS;
+    }
 
     if( psz_work != NULL )
         msg_Dbg( (vlc_object_t *)p_ho->p_owner, "relay: asked %s",
@@ -653,6 +723,9 @@ static void HandoffStop( vlclua_handoff_t *p_ho )
     p_ho->b_answered = false;
     p_ho->i_last_poll = 0;
     p_ho->b_relay_busy = false;
+    /* the parked clients themselves were destroyed by httpd_UrlDelete()
+     * above ("force closing connections") */
+    memset( p_ho->park, 0, sizeof( p_ho->park ) );
     p_ho->psz_base = p_ho->psz_landing = NULL;
     p_ho->psz_thanks = p_ho->psz_empty = NULL;
     p_ho->psz_inject = NULL;

@@ -131,6 +131,10 @@ enum
 
     HTTPD_CLIENT_WAITING,
 
+    /* the URL callback asked for time (httpd_ClientDefer): the request is
+     * parked, and the callback is put to it again until it answers */
+    HTTPD_CLIENT_DEFERRED,
+
     HTTPD_CLIENT_DEAD,
 
     HTTPD_CLIENT_TLS_HS_IN,
@@ -145,6 +149,11 @@ struct httpd_client_t
     int     i_ref;
 
     bool    b_stream_mode;
+    /* the socket carries plain HTTP, not TLS: its file descriptor can be
+     * peeked at, which is what lets headers be read in one gulp below */
+    bool    b_plain;
+    /* set by httpd_ClientDefer() from inside a URL callback */
+    bool    b_defer;
     uint8_t i_state;
 
     vlc_tick_t i_timeout_date;
@@ -1190,6 +1199,8 @@ void httpd_MsgAdd(httpd_message_t *msg, const char *name, const char *psz_value,
 
 static void httpd_ClientInit(httpd_client_t *cl)
 {
+    cl->b_plain = false;
+    cl->b_defer = false;
     cl->i_state = HTTPD_CLIENT_RECEIVING;
     cl->i_buffer_size = HTTPD_CL_BUFSIZE;
     cl->i_buffer = 0;
@@ -1204,6 +1215,16 @@ static void httpd_ClientInit(httpd_client_t *cl)
 char* httpd_ClientIP(const httpd_client_t *cl, char *ip, int *port)
 {
     return net_GetPeerAddress(vlc_tls_GetFD(cl->sock), ip, port) ? NULL : ip;
+}
+
+/* Called from inside a URL callback: leave the answer untouched and the
+ * request is parked instead of answered, and the callback is invoked
+ * again -- same client, same query -- until it does answer. What this
+ * buys is a long poll: a request that has nothing to be answered with
+ * yet waits for the news instead of being sent away to ask again. */
+void httpd_ClientDefer(httpd_client_t *cl)
+{
+    cl->b_defer = true;
 }
 
 char* httpd_ServerIP(const httpd_client_t *cl, char *ip, int *port)
@@ -1243,6 +1264,59 @@ ssize_t httpd_NetRecv (httpd_client_t *cl, uint8_t *p, size_t i_len)
     return sock->readv(sock, &iov, 1);
 }
 
+/* The header parser below wants its bytes one at a time -- it must not
+ * read past the end of the headers, the body or a pipelined request stays
+ * on the socket for the states that expect to find it there. But fetching
+ * every byte with its own recvmsg() made an ordinary request cost about
+ * as many system calls as it has characters: ~1300 calls per second
+ * against the browser relay's modest poll, measured by ktrace on a Tiger
+ * machine (2026-08-08). So peek a chunk, hand the bytes out one by one
+ * from the copy, and consume from the socket exactly what was handed out.
+ * TLS cannot be peeked at -- the fd carries ciphertext -- so it keeps the
+ * byte-at-a-time path. */
+typedef struct
+{
+    uint8_t buf[1024];
+    ssize_t avail;   /* bytes peeked into buf, <= 0 until the first peek */
+    size_t  used;    /* bytes of buf handed out and not yet consumed */
+    int     fd;      /* -1: peeking not possible, read byte by byte */
+} httpd_peek_t;
+
+static ssize_t httpd_RecvByte(httpd_client_t *cl, httpd_peek_t *pk,
+                              uint8_t *c)
+{
+    if (pk->fd == -1)
+        return httpd_NetRecv(cl, c, 1);
+
+    if (pk->used >= (size_t)pk->avail) {
+        if (pk->used > 0) {
+            /* consume what was handed out; the bytes are in the socket
+             * buffer already, a single call takes them all */
+            recv(pk->fd, (char *)pk->buf, pk->used, 0);
+            pk->used = 0;
+        }
+        pk->avail = recv(pk->fd, (char *)pk->buf, sizeof (pk->buf),
+                         MSG_PEEK);
+        if (pk->avail <= 0)
+            return pk->avail;
+    }
+    *c = pk->buf[pk->used++];
+    return 1;
+}
+
+/* Consume whatever was handed out but not yet taken off the socket. Kept
+ * apart from the error paths: a successful recv() must not be allowed to
+ * clobber the errno the caller is about to look at. */
+static void httpd_PeekFlush(httpd_peek_t *pk)
+{
+    if (pk->fd != -1 && pk->used > 0) {
+        const int i_errno = errno;
+        recv(pk->fd, (char *)pk->buf, pk->used, 0);
+        pk->used = 0;
+        errno = i_errno;
+    }
+}
+
 static
 ssize_t httpd_NetSend (httpd_client_t *cl, const uint8_t *p, size_t i_len)
 {
@@ -1277,6 +1351,11 @@ msg_type[] =
 static int httpd_ClientRecv(httpd_client_t *cl)
 {
     int i_len;
+    httpd_peek_t pk = {
+        .avail = 0,
+        .used = 0,
+        .fd = cl->b_plain ? vlc_tls_GetFD(cl->sock) : -1,
+    };
 
     /* ignore leading whites */
     if (cl->query.i_proto == HTTPD_PROTO_NONE && cl->i_buffer == 0) {
@@ -1333,7 +1412,7 @@ static int httpd_ClientRecv(httpd_client_t *cl)
             cl->i_buffer_size += 1024;
         }
 
-        i_len = httpd_NetRecv (cl, &cl->p_buffer[cl->i_buffer], 1);
+        i_len = httpd_RecvByte (cl, &pk, &cl->p_buffer[cl->i_buffer]);
         if (i_len <= 0)
             break;
 
@@ -1531,10 +1610,17 @@ static int httpd_ClientRecv(httpd_client_t *cl)
                     i_len = 0; /* drop */
                 }
                 break;
-            } else
+            } else {
                 cl->i_state = HTTPD_CLIENT_RECEIVE_DONE;
+                /* full request in hand: stop here, so that a pipelined
+                 * follow-up stays on the socket instead of being read
+                 * into a buffer about to be recycled for the answer */
+                break;
+            }
         }
     }
+
+    httpd_PeekFlush(&pk);
 
     if (i_len == 0) {
         if (cl->query.i_proto != HTTPD_PROTO_NONE && cl->query.i_type != HTTPD_MSG_NONE) {
@@ -1904,8 +1990,31 @@ static void httpdLoop(httpd_host_t *host)
                                 httpd_MsgAdd(answer, "Connection", "close");
                         }
 
-                        cl->i_state = HTTPD_CLIENT_SENDING;
+                        if (cl->b_defer && cl->url != NULL) {
+                            /* the callback wants to answer later */
+                            cl->b_defer = false;
+                            cl->i_state = HTTPD_CLIENT_DEFERRED;
+                        } else
+                            cl->i_state = HTTPD_CLIENT_SENDING;
                     }
+                }
+                break;
+            }
+
+            case HTTPD_CLIENT_DEFERRED: {
+                int i_msg = cl->query.i_type;
+
+                cl->url->catch[i_msg].cb(cl->url->catch[i_msg].p_sys, cl,
+                        &cl->answer, &cl->query);
+                if (cl->b_defer) {
+                    /* still nothing to say. Parked on purpose is not
+                     * idle: the timeout must not shoot this client. */
+                    cl->b_defer = false;
+                    cl->i_timeout_date = now
+                                       + (host->timeout_sec * 1000 * 1000);
+                } else {
+                    cl->i_buffer = -1;
+                    cl->i_state = HTTPD_CLIENT_SENDING;
                 }
                 break;
             }
@@ -1977,6 +2086,13 @@ static void httpdLoop(httpd_host_t *host)
 
         if (pufd->events != 0)
             nfd++;
+        /* A deferred client is waiting for news, not for its socket: look
+         * in on it a few times a second. Anything shorter is churn --
+         * cutting that churn is why the state exists. */
+        else if (cl->i_state == HTTPD_CLIENT_DEFERRED) {
+            if (delay < 0 || delay > 100)
+                delay = 100;
+        }
         /* we will wait 20ms (not too big) if HTTPD_CLIENT_WAITING */
         else if (delay != 0)
             delay = 20;
@@ -2034,6 +2150,7 @@ static void httpdLoop(httpd_host_t *host)
         }
 
         cl = httpd_ClientNew(sk);
+        cl->b_plain = (host->p_tls == NULL);
         if (host->b_no_timeout)
             host->timeout_sec = 0;
 

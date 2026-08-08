@@ -105,6 +105,17 @@ struct demux_sys_t
         MP4_Box_t      *p_fragment_atom;
         uint64_t        i_post_mdat_offset;
         uint32_t        i_lastseqnumber;
+        /* Consecutive DemuxMoof rounds that returned SUCCESS while no
+         * track demuxed a single sample although runs were pending: the
+         * silent-starvation watchdog (see DemuxMoof). */
+        unsigned        i_starved_rounds;
+        /* Consecutive fragments walked whose parse yielded runs for NO
+         * track: every cause (tfhd naming an unknown track_ID, no trun,
+         * a walk desynchronised from the real box boundaries) is a
+         * silent `continue` in FragCreateTrunIndex, and the walk then
+         * skips fragment after fragment at full read pace without one
+         * sample sent (see DemuxFrag). */
+        unsigned        i_runless_frags;
     } context;
 
     /* */
@@ -1918,6 +1929,29 @@ static int FragSeekToTime( demux_t *p_demux, vlc_tick_t i_nztime, bool b_accurat
     }
 
     MP4ASF_ResetFrames( p_sys );
+
+    /* The index (sidx/tfra/probe) said this fragment holds the target time;
+     * the fragment's own tfdt has the last word, and when a proxy serves
+     * regenerated content the two can disagree wildly -- seen live
+     * 08/08/2026 on an Invidious companion stream: the index mapped 140.8 s
+     * to a fragment whose real time was ~40 s. Prerolling the whole gap
+     * through SET_NEXT_DISPLAY_TIME would decode minutes of video with the
+     * picture frozen and only the audio slave playing. Past a small-seek
+     * margin, say so out loud and resume from where we really landed. */
+    if( i_segment_type == ATOM_moof && b_accurate &&
+        p_sys->i_nztime != VLC_TICK_INVALID &&
+        i_nztime > p_sys->i_nztime + CLOCK_FREQ * 20 )
+    {
+        msg_Err( p_demux, "seek index landed at %"PRId64"s, %"PRId64"s short "
+                 "of the %"PRId64"s target: index and stream disagree "
+                 "(regenerated/proxied content?), resuming playback from the "
+                 "landing point instead of silently decoding the gap",
+                 SEC_FROM_VLC_TICK(p_sys->i_nztime),
+                 SEC_FROM_VLC_TICK(i_nztime - p_sys->i_nztime),
+                 SEC_FROM_VLC_TICK(i_nztime) );
+        b_accurate = false;
+    }
+
     /* And set next display time in that trun/fragment */
     if( b_accurate )
         es_out_Control( p_demux->out, ES_OUT_SET_NEXT_DISPLAY_TIME, VLC_TICK_0 + i_nztime );
@@ -4541,7 +4575,12 @@ static void FragResetContext( demux_sys_t *p_sys )
         mp4_track_t *p_track = &p_sys->track[i];
         p_track->context.i_default_sample_size = 0;
         p_track->context.i_default_sample_duration = 0;
+        p_track->context.i_seek_errors = 0;
     }
+    p_sys->context.i_starved_rounds = 0;
+    /* NOT i_runless_frags: this reset runs on every fragment transition,
+     * and runless fragments are precisely what that counter counts. It
+     * maintains itself in DemuxFrag. */
 }
 
 static int FragDemuxTrack( demux_t *p_demux, mp4_track_t *p_track,
@@ -4557,9 +4596,43 @@ static int FragDemuxTrack( demux_t *p_demux, mp4_track_t *p_track,
     uint32_t dur = p_track->context.i_default_sample_duration,
              len = p_track->context.i_default_sample_size;
 
-    if( vlc_stream_Tell(p_demux->s) != p_track->context.i_trun_sample_pos &&
-        MP4_Seek( p_demux->s, p_track->context.i_trun_sample_pos ) != VLC_SUCCESS )
-        return VLC_DEMUXER_EOF;
+    /* A sample position beyond the file can only come from a corrupted
+     * fragment; seeking there would fail slowly (the cache reads through
+     * the network chasing it), so refuse it outright. */
+    uint64_t i_stream_size = 0;
+    bool b_bogus_pos = ( vlc_stream_GetSize( p_demux->s, &i_stream_size )
+                             == VLC_SUCCESS && i_stream_size > 0 &&
+                         p_track->context.i_trun_sample_pos >= i_stream_size );
+
+    if( b_bogus_pos ||
+      ( vlc_stream_Tell(p_demux->s) != p_track->context.i_trun_sample_pos &&
+        MP4_Seek( p_demux->s, p_track->context.i_trun_sample_pos ) != VLC_SUCCESS ) )
+    {
+        /* This used to return silently with the run index untouched: the
+         * next call seeked to the same position and failed the same way,
+         * while DemuxMoof kept advancing the PCR -- so any other track (an
+         * audio slave, say) played on while this one stayed frozen for the
+         * rest of the playback, with nothing in the log. Seen live
+         * 08/08/2026 on an Invidious DASH stream after a 9 s network
+         * outage: picture frozen for good, audio fine, CPU idle.
+         *
+         * Drop the fragment's remaining runs after a few tries instead:
+         * the next moof rebuilds a fresh index at a sane position, and the
+         * track re-anchors its time base on that fragment's tfdt so the
+         * dropped samples do not leave it lagging forever. */
+        if( !b_bogus_pos && ++p_track->context.i_seek_errors < 3 )
+            return VLC_DEMUXER_EOF;
+        msg_Err( p_demux, "track[0x%x]: cannot reach trun sample position "
+                 "%"PRIu64"%s, dropping the fragment's remaining runs",
+                 p_track->i_track_ID, p_track->context.i_trun_sample_pos,
+                 b_bogus_pos ? " (beyond end of file)" : "" );
+        p_track->context.i_trun_sample = 0;
+        p_track->context.runs.i_current = p_track->context.runs.i_count;
+        p_track->context.i_seek_errors = 0;
+        p_track->context.b_resync_time = true;
+        return VLC_DEMUXER_EOS;
+    }
+    p_track->context.i_seek_errors = 0;
 
     const stime_t i_demux_max_dts = (i_max_preload < UINT_MAX) ?
                 p_track->i_time + MP4_rescale_qtime( i_max_preload, p_track->i_timescale ) :
@@ -4660,6 +4733,7 @@ static int DemuxMoof( demux_t *p_demux )
         p_sys->track[i].context.i_temp = VLC_DEMUXER_SUCCESS;
 
     /* demux up to increment amount of data on every track, or just set pcr if empty data */
+    bool b_demuxed_any = false;
     for( ;; )
     {
         mp4_track_t *tk = NULL;
@@ -4715,7 +4789,10 @@ static int DemuxMoof( demux_t *p_demux )
 
             tk->context.i_temp = i_ret;
             if( i_ret == VLC_DEMUXER_SUCCESS )
+            {
                 i_status = VLC_DEMUXER_SUCCESS;
+                b_demuxed_any = true;
+            }
             else if( i_ret == VLC_DEMUXER_FATAL )
                 i_status = VLC_DEMUXER_EOF;
         }
@@ -4723,6 +4800,54 @@ static int DemuxMoof( demux_t *p_demux )
         if( i_status != VLC_DEMUXER_SUCCESS || !tk )
             break;
     }
+
+    /* Silent-starvation watchdog. Five distinct freezes were chased on
+     * this code path (08/08/2026) and the last one still starved a
+     * selected track with runs pending while this function kept
+     * returning SUCCESS and moving the PCR -- no reads, no messages,
+     * frozen picture, the slave input playing on. Whatever the cause of
+     * the next such wedge, make it LOUD, dump the state that identifies
+     * it, and break out of it: drop the stuck fragment and re-anchor on
+     * the next one's tfdt (same recovery as the unreachable-trun path,
+     * proven on hardware).
+     *
+     * 200 rounds: a fragment preloaded whole (DEMUX_TRACK_MAX_PRELOAD,
+     * 15 s) legitimately yields up to preload/DEMUX_INCREMENT = 60 no-op
+     * rounds while the PCR catches up -- the threshold must sit far above
+     * that. 200 rounds is ~50 s of frozen video (the rounds are paced to
+     * wall time by the PCR), against forever. */
+    if( !b_demuxed_any && i_status == VLC_DEMUXER_SUCCESS )
+    {
+        if( ++p_sys->context.i_starved_rounds == 200 )
+        {
+            for( unsigned i = 0; i < p_sys->i_tracks; i++ )
+            {
+                mp4_track_t *tk = &p_sys->track[i];
+                if( !tk->b_ok || tk->b_chapters_source ||
+                    tk->context.runs.i_current >= tk->context.runs.i_count )
+                    continue;
+                msg_Err( p_demux, "track[0x%x] starved for %u rounds: "
+                         "time %"PRId64"ms vs demux %"PRId64"ms, run %u/%u "
+                         "sample %"PRIu64" pos %"PRIu64" (stream at %"PRIu64
+                         "), temp %d -- dropping the fragment to recover",
+                         tk->i_track_ID, p_sys->context.i_starved_rounds,
+                         MP4_rescale_mtime( tk->i_time, tk->i_timescale ) / 1000,
+                         p_sys->i_nztime / 1000,
+                         tk->context.runs.i_current, tk->context.runs.i_count,
+                         tk->context.i_trun_sample,
+                         tk->context.i_trun_sample_pos,
+                         vlc_stream_Tell( p_demux->s ),
+                         tk->context.i_temp );
+                tk->context.i_trun_sample = 0;
+                tk->context.runs.i_current = tk->context.runs.i_count;
+                tk->context.i_seek_errors = 0;
+                tk->context.b_resync_time = true;
+            }
+            p_sys->context.i_starved_rounds = 0;
+        }
+    }
+    else
+        p_sys->context.i_starved_rounds = 0;
 
     if( i_status != VLC_DEMUXER_EOS )
     {
@@ -4807,8 +4932,13 @@ static int FragCreateTrunIndex( demux_t *p_demux, MP4_Box_t *p_moof,
         stime_t  i_traf_start_time = p_track->i_time;
         bool     b_has_base_media_decode_time = false;
 
-        if( b_discontinuity ) /* We NEED start time offset for each track */
+        /* b_resync_time: this track dropped the tail of a broken fragment
+         * (see FragDemuxTrack) and its i_time is short of the dropped
+         * samples' duration -- re-anchor on this fragment's own time. */
+        if( b_discontinuity || p_track->context.b_resync_time )
+            /* We NEED start time offset for each track */
         {
+            p_track->context.b_resync_time = false;
             /* Find start time */
             const MP4_Box_t *p_tfdt = MP4_BoxGet( p_traf, "tfdt" );
             if( p_tfdt )
@@ -5193,6 +5323,56 @@ static int DemuxFrag( demux_t *p_demux )
                         p_sys->i_pcr = VLC_TICK_INVALID;
                     }
                     /* !Prepare chunk */
+
+                    /* A fragment that yields runs for NO track was skipped
+                     * whole, and every cause of that is a silent `continue`
+                     * in FragCreateTrunIndex -- an unknown tfhd track_ID, a
+                     * missing trun, a box walk desynchronised from the real
+                     * fragment boundaries after a flaky reconnect. One such
+                     * fragment is legitimate noise; a run of them is the
+                     * video eating its stream at full pace with a frozen
+                     * picture (measured live 08/08/2026: position and audio
+                     * at 1x, zero samples, nothing in the log). Say what
+                     * the fragment contains, then re-aim through the index:
+                     * a fresh seek to the current time lands back on a real
+                     * fragment boundary. */
+                    {
+                        bool b_has_runs = false;
+                        for( unsigned i = 0; i < p_sys->i_tracks; i++ )
+                            if( p_sys->track[i].context.runs.i_count > 0 )
+                            {
+                                b_has_runs = true;
+                                break;
+                            }
+                        if( b_has_runs )
+                            p_sys->context.i_runless_frags = 0;
+                        else if( ++p_sys->context.i_runless_frags == 10 )
+                        {
+                            const MP4_Box_t *p_tfhd =
+                                MP4_BoxGet( p_sys->context.p_fragment_atom,
+                                            "traf/tfhd" );
+                            msg_Err( p_demux, "10 fragments in a row yielded "
+                                     "no sample runs (fragment at %"PRIu64", "
+                                     "tfhd track_ID %u, %u tracks known): "
+                                     "walk desynchronised, re-seeking to "
+                                     "%"PRId64"ms to realign",
+                                     p_sys->context.p_fragment_atom->i_pos,
+                                     p_tfhd && BOXDATA(p_tfhd) ?
+                                         BOXDATA(p_tfhd)->i_track_ID : 0,
+                                     p_sys->i_tracks,
+                                     p_sys->i_nztime / 1000 );
+                            p_sys->context.i_runless_frags = 0;
+                            MP4_BoxFree( p_vroot );
+                            if( FragSeekToTime( p_demux, p_sys->i_nztime,
+                                                false ) != VLC_SUCCESS )
+                            {
+                                msg_Err( p_demux, "realign seek failed" );
+                                i_status = VLC_DEMUXER_EOF;
+                                goto end;
+                            }
+                            return VLC_DEMUXER_SUCCESS;
+                        }
+                    }
                 }
 
                 p_sys->context.i_current_box_type = p_box->i_type;

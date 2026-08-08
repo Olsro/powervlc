@@ -21,7 +21,7 @@ return {
     btn_list_instances = "List public instances",
     btn_use_selection = "Use selected instance",
     lbl_instance = "Instance:",
-    chk_proxy = "Proxy streams through the instance (recommended)",
+    chk_proxy = "Proxy streams through the instance when direct playback fails (recommended)",
     btn_connect = "Connect",
     msg_fetching_instances = "Fetching public instances...",
     msg_no_instances = "No usable instance found",

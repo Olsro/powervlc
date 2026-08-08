@@ -164,6 +164,16 @@ typedef struct
         uint64_t i_trun_sample;
         uint64_t i_trun_sample_pos;
 
+        /* Consecutive failures to reach i_trun_sample_pos. The position
+         * comes from the moof's own offsets: when it is wrong (corrupted
+         * fragment) or unreachable, retrying forever starves the track for
+         * the rest of the playback -- see FragDemuxTrack. */
+        unsigned i_seek_errors;
+        /* Re-anchor i_time from this track's next tfdt: set when samples
+         * had to be dropped (broken fragment), so the following fragment
+         * does not inherit a stale time base. */
+        bool b_resync_time;
+
         int i_temp;
     } context;
 

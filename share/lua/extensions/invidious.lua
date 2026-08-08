@@ -2236,9 +2236,21 @@ local function fallback_formats(result)
     local url = app.instance .. "/latest_version?id=" .. result.id
              .. "&itag=" .. c.itag
     if app.proxy then
-      url = url .. "&local=true"
-    end
-    if probe_stream(url) then
+      -- Direct first: without local=true the instance answers with a
+      -- redirect straight to googlevideo, which vlc.stream follows -- so
+      -- this probe tests the direct stream, and playing this URL later
+      -- streams from googlevideo (byte-stable), not through the relay.
+      -- The relay stays as the fallback when googlevideo refuses us
+      -- (IP-bound URL): see dash_formats for the whole rationale.
+      if probe_stream(url) then
+        table.insert(formats, { label = c.label, url = url })
+      else
+        url = url .. "&local=true"
+        if probe_stream(url) then
+          table.insert(formats, { label = c.label, url = url })
+        end
+      end
+    elseif probe_stream(url) then
       table.insert(formats, { label = c.label, url = url })
     end
   end
@@ -2251,13 +2263,15 @@ end
 -- one video stream per height, with its audio attached as a slave input.
 local CODEC_RANK = { avc = 1, vp0 = 2, vp9 = 2, av0 = 3 }
 
-local function dash_formats(manifest_url)
-  local body = get_body(manifest_url)
-  if not body then
-    return nil
-  end
-  local origin = string.match(manifest_url, "^(https?://[^/]+)") or ""
+-- The same request minus the "local=true" rewriting: the URLs inside the
+-- answer then point straight at googlevideo instead of being relayed.
+local function without_local(url)
+  url = string.gsub(url, "([?&])local=true&", "%1")
+  url = string.gsub(url, "[?&]local=true$", "")
+  return url
+end
 
+local function parse_dash_manifest(body, origin)
   local function absolute(url)
     url = (string.gsub(url, "&amp;", "&"))
     if not string.match(url, "^https?://") then
@@ -2294,8 +2308,99 @@ local function dash_formats(manifest_url)
     end
   end
 
+  return audio, videos
+end
+
+local function dash_formats(manifest_url)
+  local body = get_body(manifest_url)
+  if not body then
+    return nil
+  end
+  local origin = string.match(manifest_url, "^(https?://[^/]+)") or ""
+
+  local audio, videos = parse_dash_manifest(body, origin)
+
   if not audio or #videos == 0 then
     return nil
+  end
+
+  -- Prefer the direct googlevideo URLs over the relayed ones whenever they
+  -- actually answer, and keep the relay as the fallback rather than the
+  -- default. The relay is not byte-stable: the instance regenerates the
+  -- stream, and two connections for the same URL can receive different
+  -- bytes -- measured 08/08/2026, it fed the demuxer an index disagreeing
+  -- with the data and froze the picture mid-play and on seek. googlevideo
+  -- serves one immutable file. Direct URLs are usually bound to the IP of
+  -- whoever obtained them (the instance), so this only works when the
+  -- binding is loose or absent -- which is exactly what the probe tests.
+  --
+  -- Whether the instance grants direct URLs at all does not change from
+  -- one video to the next: remember the first answer and spare the slow
+  -- machines the extra manifest fetch afterwards.
+  if app.direct_streams == nil then app.direct_streams = {} end
+  if string.find(manifest_url, "local=true", 1, true) and
+     app.direct_streams[origin] ~= false then
+    -- Opportunistic by nature, so it runs under pcall: whatever goes wrong
+    -- in here (this very block once died on a Lua multiple-return trap and
+    -- took the whole "open video" flow down with it), the relayed URLs
+    -- above remain a complete, playable answer.
+    local ok, err = pcall(function()
+      local direct_body = get_body(without_local(manifest_url))
+      if not direct_body then
+        vlc.msg.dbg("[Invidious] direct manifest unavailable, "
+                    .. "keeping the instance relay")
+        return
+      end
+      -- NOT inlined into `direct_body and parse_...`: an and/or expression
+      -- truncates multiple return values to the first one.
+      local direct_audio, direct_videos =
+          parse_dash_manifest(direct_body, origin)
+      -- "Direct" only counts when the URLs actually leave the instance:
+      -- companion-based instances rewrite the BaseURLs to their own
+      -- /companion/videoplayback whether or not local=true was asked, and
+      -- swapping the relay for itself would claim a win that is not there.
+      if direct_audio and
+         string.match(direct_audio, "^(https?://[^/]+)") == origin then
+        vlc.msg.dbg("[Invidious] instance rewrites stream URLs regardless "
+                    .. "of local=true, no direct googlevideo available")
+        app.direct_streams[origin] = false
+        return
+      end
+      if not direct_audio or #direct_videos == 0 or
+         not probe_stream(direct_audio) then
+        vlc.msg.dbg("[Invidious] direct googlevideo unreachable, "
+                    .. "keeping the instance relay")
+        return
+      end
+      local function itag_of(url)
+        return string.match(url or "", "[?&]itag=(%d+)")
+      end
+      local by_itag = {}
+      for _, v in ipairs(direct_videos) do
+        local itag = itag_of(v.url)
+        if itag then
+          by_itag[itag] = v.url
+        end
+      end
+      local replaced = 0
+      for _, v in ipairs(videos) do
+        local direct = by_itag[itag_of(v.url)]
+        if direct then
+          v.url = direct
+          replaced = replaced + 1
+        end
+      end
+      if replaced > 0 then
+        audio = direct_audio
+        vlc.msg.info("[Invidious] streams: direct googlevideo ("
+                     .. replaced .. "/" .. #videos
+                     .. " qualities), instance relay kept as fallback")
+      end
+    end)
+    if not ok then
+      vlc.msg.warn("[Invidious] direct-stream lookup failed ("
+                   .. tostring(err) .. "), keeping the instance relay")
+    end
   end
 
   -- one entry per resolution, keeping the most widely decodable codec:

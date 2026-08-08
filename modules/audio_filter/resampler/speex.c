@@ -79,13 +79,19 @@ vlc_module_end ()
 
 static block_t *Resample (filter_t *, block_t *);
 
-#if defined (__powerpc__) || defined (__POWERPC__)
-/* On PowerPC, rebuilding the speex filter tables (sin() per tap) is
- * expensive, and the aout drift loop nudges the input rate a few Hz on
- * nearly every block. Keep the last programmed rates and only reprogram
- * when one drifts past a threshold: the drift loop still converges (it
- * measures the real output) but the rebuilds become rare. */
-# define PPC_RATE_HYSTERESIS 1
+/* Rebuilding the speex filter tables (sin() per tap) is expensive, and the
+ * aout drift loop nudges the input rate a few Hz on nearly every block.
+ * Keep the last programmed rates and only reprogram when one drifts past a
+ * threshold: the drift loop still converges (it measures the real output)
+ * but the rebuilds become rare.
+ *
+ * This was PowerPC-only at first -- that is where it was profiled (half a
+ * G3 core in update_filter) -- but the mechanism is not PowerPC-specific:
+ * caught again 08/08/2026 on a Core 2 Duo mini (Tiger i386), one full core
+ * melted into update_filter/sin during ordinary drift correction, at the
+ * default quality 4 whose tables cost MORE to rebuild than the PPC
+ * settings. No machine benefits from a rebuild per block. */
+#define RATE_HYSTERESIS 1
 struct resampler_sys
 {
     SpeexResamplerState *st;
@@ -94,7 +100,6 @@ struct resampler_sys
                          * resampler, so both sides must be watched */
     vlc_tick_t last_set; /* when the rates were last programmed */
 };
-#endif
 
 static int OpenResampler (vlc_object_t *obj)
 {
@@ -131,7 +136,7 @@ static int OpenResampler (vlc_object_t *obj)
         return VLC_ENOMEM;
     }
 
-#ifdef PPC_RATE_HYSTERESIS
+#ifdef RATE_HYSTERESIS
     struct resampler_sys *sys = malloc (sizeof (*sys));
     if (unlikely(sys == NULL))
     {
@@ -163,7 +168,7 @@ static int Open (vlc_object_t *obj)
 static void Close (vlc_object_t *obj)
 {
     filter_t *filter = (filter_t *)obj;
-#ifdef PPC_RATE_HYSTERESIS
+#ifdef RATE_HYSTERESIS
     struct resampler_sys *sys = (struct resampler_sys *)filter->p_sys;
     speex_resampler_destroy (sys->st);
     free (sys);
@@ -175,7 +180,7 @@ static void Close (vlc_object_t *obj)
 
 static block_t *Resample (filter_t *filter, block_t *in)
 {
-#ifdef PPC_RATE_HYSTERESIS
+#ifdef RATE_HYSTERESIS
     struct resampler_sys *sys = (struct resampler_sys *)filter->p_sys;
     SpeexResamplerState *st = sys->st;
 #else
@@ -194,7 +199,7 @@ static block_t *Resample (filter_t *filter, block_t *in)
     if (unlikely(out == NULL))
         goto error;
 
-#ifdef PPC_RATE_HYSTERESIS
+#ifdef RATE_HYSTERESIS
     /* Reprogram only when a requested rate drifts more than ~0.1% from
      * what is loaded (a filter rebuild otherwise happens nearly every
      * block: the aout drift loop nudges the INPUT rate of the resampler

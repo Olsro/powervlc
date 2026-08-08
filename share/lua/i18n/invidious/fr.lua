@@ -21,7 +21,7 @@ return {
     btn_list_instances = "Lister les instances publiques",
     btn_use_selection = "Utiliser l'instance sélectionnée",
     lbl_instance = "Instance :",
-    chk_proxy = "Relayer les flux par l'instance (recommandé)",
+    chk_proxy = "Relayer les flux par l'instance si la lecture directe échoue (recommandé)",
     btn_connect = "Connexion",
     msg_fetching_instances = "Récupération des instances publiques...",
     msg_no_instances = "Aucune instance utilisable trouvée",
