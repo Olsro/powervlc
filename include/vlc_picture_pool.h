@@ -37,6 +37,17 @@
 typedef struct picture_pool_t picture_pool_t;
 
 /**
+ * Hard ceiling on the number of pictures a pool can hold.
+ *
+ * picture_pool_NewExtended() returns NULL for anything above this, without
+ * releasing the pictures. A "vout display" that sizes its pool from a memory
+ * budget rather than a fixed count MUST clamp to it: a small picture format
+ * divides a budget of a few hundred megabytes into thousands of pictures, and
+ * the resulting NULL pool takes the whole video output down.
+ */
+#define VLC_PICTURE_POOL_MAX 1024
+
+/**
  * Picture pool configuration
  */
 typedef struct {

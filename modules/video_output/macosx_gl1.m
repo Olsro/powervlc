@@ -1919,6 +1919,20 @@ static picture_pool_t *Pool (vout_display_t *vd, unsigned requested_count)
          * measured to work. Capping to the AGP-safe range here would push
          * `want` under the viability floor and silently switch the cache back
          * off on exactly the machines it was written for. */
+        /* A pool cannot exceed VLC_PICTURE_POOL_MAX: past it
+         * picture_pool_New() returns NULL and Open() fails, i.e. NO video at
+         * all. The budget above is expressed in bytes, so a small format walks
+         * straight into that wall -- measured on a PowerBook G4 with a 320x180
+         * clip: 281 MiB of budget over a ~98 KiB picture asked for 2999 extra,
+         * 3021 in total, and the vout died with "video output creation
+         * failed". The other two callers of vout_display_CacheExtraPictures()
+         * clamp to VLCGL_PICTURE_MAX (128); this path deliberately goes deeper
+         * (see the planar note above), so clamp it to the real ceiling
+         * instead. */
+        if (want > VLC_PICTURE_POOL_MAX - requested_count - 2)
+            want = requested_count + 2 < VLC_PICTURE_POOL_MAX
+                 ? VLC_PICTURE_POOL_MAX - requested_count - 2 : 0;
+
         if (want >= 26)
         {
             count = requested_count + 2 + want;
@@ -1952,6 +1966,16 @@ static picture_pool_t *Pool (vout_display_t *vd, unsigned requested_count)
     }
     if (i >= 3) /* enough to play */
         sys->pool = picture_pool_New (i, pics);
+    if (!sys->pool && i > requested_count && requested_count >= 3)
+    {
+        /* Belt and braces behind the clamp above: losing the look-ahead cache
+         * costs some smoothness, failing here costs the picture entirely. */
+        msg_Warn (vd, "pool of %u pictures refused: retrying with %u, "
+                      "without the look-ahead cache", i, requested_count);
+        while (i > requested_count)
+            picture_Release (pics[--i]);
+        sys->pool = picture_pool_New (i, pics);
+    }
     if (!sys->pool)
         while (i > 0)
             picture_Release (pics[--i]);

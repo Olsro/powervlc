@@ -53,6 +53,10 @@
 #define POOL_MAX (POOL_WORD_BITS * POOL_WORDS)
 
 static_assert ((POOL_MAX & (POOL_MAX - 1)) == 0, "Not a power of two");
+/* Modules clamp their pool against the public constant; the two must not
+ * drift apart, or a "vout display" sizing its pool from a memory budget would
+ * clamp to a ceiling this allocator does not honour. */
+static_assert (POOL_MAX == VLC_PICTURE_POOL_MAX, "Public ceiling out of sync");
 
 struct picture_pool_t {
     int       (*pic_lock)(picture_t *);
