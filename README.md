@@ -30,19 +30,19 @@ PowerVLC also supports modern SSL, with bundled certs, making it possible to str
 
 Grab the latest build from the [**Releases page**](https://github.com/Olsro/powervlc/releases/latest), then pick the archive that matches your machine:
 
-| You have | Archive |
-| --- | --- |
-| Any Mac, one bundle for all of them | `mac-universal` |
-| PowerPC G3 | `mac-g3` |
-| PowerPC G4 (AltiVec) | `mac-g4` |
-| PowerPC G5 (AltiVec) | `mac-g5` |
-| Intel Mac on 10.4 / 10.5 | `mac-x86` |
-| Intel Mac on 10.6 and later | `mac-x64` |
-| Apple Silicon Mac | `mac-arm64` |
-| Windows 32-bit (XP SP3 and later) | `win32-nsis` or `win32-portable` |
-| Windows 64-bit | `win64-nsis` or `win64-portable` |
-| Windows on ARM | `winarm64-nsis` or `winarm64-portable` |
-| Linux x86_64 / i386 / aarch64 | `linux-*` (AppImage) |
+| You have | Archive | Required OS |
+| --- | --- | --- |
+| Any Mac, one bundle for all of them | `mac-universal` | 10.2 and later |
+| Mac PowerPC G3 | `mac-g3` | 10.2 and later |
+| Mac PowerPC G4 (AltiVec) | `mac-g4` | 10.2 and later |
+| Mac PowerPC G5 (AltiVec) | `mac-g5` | 10.2 and later |
+| Mac Intel 32-bit | `mac-x86` | 10.4 and later (up to Mojave 10.14) |
+| Mac Intel 64-bit | `mac-x64` | 10.6 and later |
+| Mac Apple Silicon | `mac-arm64` | 11.0 and later |
+| PC Windows 32-bit | `win32-nsis` or `win32-portable` | XP SP3 and later |
+| PC Windows 64-bit | `win64-nsis` or `win64-portable` | Vista and later |
+| PC Windows on ARM | `winarm64-nsis` or `winarm64-portable` | Windows 10 and later |
+| PC Linux x86_64 / i386 / aarch64 | `linux-*` (AppImage) | AppImage support required in your distro |
 
 The universal bundle runs on **every** supported Mac and architecture out of a single download — it is simply much bigger, since it carries all the slices at once. On a legacy Mac with a small disk, the per-architecture archive is the better pick.
 
