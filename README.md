@@ -4,9 +4,9 @@
 
 # PowerVLC
 
-**Your universally compatible video player, based on VLC 3.**
+Same powerful app experience, no matter if you use a 1999 PowerPC G3 running Mac OS X 10.2 "Jaguar" or a bleeding edge Apple Silicon Mac: PowerVLC pairs well with the hardware you already own.
 
-From a 1999 PowerPC G3 running Mac OS X 10.2 "Jaguar" to an Apple Silicon Mac — same app, same experience.
+PowerVLC is an open source project by **Olsro** for the community, forked from VLC 3. Providing many refinements, improvements & features benefitting for legacy to modern machines alike.
 
 [![Latest release](https://img.shields.io/github/v/release/Olsro/powervlc?display_name=release&label=latest&color=e63312)](https://github.com/Olsro/powervlc/releases/latest)
 [![macOS 10.2 and up](https://img.shields.io/badge/macOS-10.2%20%E2%86%92%2026-e63312)](#supported-systems)
