@@ -61,7 +61,10 @@ Building it yourself is documented in [BUILD-POWERVLC.md](BUILD-POWERVLC.md).
 | Windows (32 / 64 / ARM64) | XP SP3 → 11 | Qt |
 | Linux (x86_64 / i386 / aarch64) | AppImage | Qt |
 
-Windows and Linux builds are real and shipped, but they get far less testing than the Mac ones — the look-ahead cache, gapless playback and the bundled extensions all work there.
+- Modern is derived from the Mac OS X UI of VLC 3, with only a few refinements specific to the new features/improvements related to PowerVLC.
+- Legacy is a faithful recreation of the Mac OS X UI from VLC 3 using new code. It looks & feel really very close, but rely on older Mac OS X APIs to be usable down to Mac OS X 10.2 Jaguar.
+
+Personal advice: use the Modern UI if your Mac supports it, otherwise use Legacy
 
 ## How it feels on real hardware
 
