@@ -98,6 +98,9 @@ vlc_module_end ()
     vout_display_t *vd;
 }
 - (void)setVoutDisplay:(vout_display_t *)vd;
+- (void)vlcQtPublishVisibility;
+- (void)vlcQtVisibilityChanged;
+- (void)vlcQtRecomputeSurfaces;
 @end
 
 /* Per-picture payload: packed 2vuy frames are handed to the ICM as a raw
@@ -111,6 +114,11 @@ struct qt_pic_sys
     PlanarPixmapInfoYUV420 header; /* ICM planar descriptor (offsets are deltas) */
     void *base;    /* backing allocation for the three planes */
     size_t size;   /* header + planes size passed to the ICM */
+    /* Origine des trois plans et leurs pas : le rognage se contente de bouger
+     * les trois offsets du header, il n'y a rien à réallouer. */
+    uint8_t *y, *u, *v;
+    unsigned pitch_y, pitch_c;
+    unsigned crop_gen;  /* rognage déjà écrit dans le header (cf. sys->crop_gen) */
 };
 
 struct vout_display_sys_t
@@ -129,8 +137,29 @@ struct vout_display_sys_t
     bool seq_started;
     bool matrix_dirty;
 
-    unsigned src_width;   /* visible source dimensions */
+    unsigned src_width;   /* dimensions AFFICHÉES (donc ROGNÉES), AVANT rotation */
     unsigned src_height;
+    video_orientation_t orient;  /* cuite dans la matrice, cf. UpdateMatrixLocked */
+
+    /* ==== Rognage (menu « Rogner ») ======================================
+     * ⚠ Le cœur n'applique le rognage QUE sur `vd->source` ; `vd->fmt`, donc
+     * les images reçues, ne bouge pas (cf. src/video_output/display.c). Un
+     * affichage qui n'en tient pas compte voit sa fenêtre reprendre le bon
+     * format — `vout_display_PlacePicture()` travaille sur `vd->source` — mais
+     * continue de blitter l'image ENTIÈRE dedans, écrasée.
+     * Ici tout se joue en deux endroits : les dimensions décrites à l'ICM
+     * (`src_width`/`src_height`, d'où la séquence à relancer) et les trois
+     * offsets du header de chaque image, qui pointent le coin haut-gauche à
+     * blitter. `crop_gen` est incrémenté à chaque changement ; chaque image du
+     * pool réécrit son header quand elle voit passer une génération plus
+     * récente que la sienne (impossible de les parcourir : le pool ne se
+     * traverse pas).
+     * `full_*` = la zone visible de l'image décodée, l'origine par rapport à
+     * laquelle le rognage est exprimé. */
+    unsigned full_x, full_y, full_w, full_h;
+    unsigned crop_x, crop_y;   /* coin haut-gauche à blitter, dans les PLANS */
+    unsigned crop_gen;
+    bool     seq_dirty;        /* la séquence décrit une autre taille */
 
     /* The QuickDraw port covers the whole window: the blit must be offset
      * by the view's position (QD coordinates: origin top-left, y down)
@@ -181,26 +210,203 @@ struct vout_display_sys_t
     int  hw_x, hw_y, hw_w, hw_h;
     int  hw_wid;              /* numéro CGS de la fenêtre hôte, 0 = aucune */
     bool hw_place_valid;
+
+    /* Escamotage sur masquage de la vue (bouton « liste de lecture »).
+     * `hw_surf_hidden` : état courant de la surface CGS, thread du vout.
+     * `view_visible` : PUBLIÉE par le thread principal sous `place_lock`, jamais
+     * calculée ailleurs — cf. l'avertissement dans PictureDisplay. */
+    bool hw_surf_hidden;
+    bool view_visible;
+    unsigned vis_poll;    /* compteur d'images, cf. PictureDisplay */
 };
 
 /*****************************************************************************
  * Geometry: map the source rectangle onto the current placement
  *****************************************************************************/
+/* L'image arrive NON pivotée du décodeur, alors que le rectangle de placement
+ * est déjà calculé après rotation par vout_display_PlacePicture() : c'est donc
+ * à l'affichage de tourner. Ici on a de la chance — la MatrixRecord de
+ * QuickDraw est une vraie matrice 3x3, la rotation y tient dans sa partie
+ * linéaire, sans rien coûter (l'ICM la compose avec la mise à l'échelle).
+ *
+ * Écriture directe des coefficients plutôt que RotateMatrix() : les huit cas
+ * sont exacts, sans sinus ni convention de signe à deviner. Convention de la
+ * MatrixRecord : X = x*m[0][0] + y*m[1][0] + m[2][0]
+ *                Y = x*m[0][1] + y*m[1][1] + m[2][1]
+ * ⚠ Ne PAS toucher m[2][2] : c'est un Fract (1.0 = 0x40000000), pas un Fixed —
+ * SetIdentityMatrix() l'a déjà posé.
+ *
+ * Ce sont les mêmes huit cas qu'OrientTexCorner() dans macosx_gl1.m, pris dans
+ * l'autre sens : là-bas on va d'un coin AFFICHÉ vers le texel STOCKÉ, ici d'un
+ * pixel STOCKÉ vers sa position AFFICHÉE. Garder les deux d'accord. */
+static void OrientMatrixLocked (MatrixRecord *m, video_orientation_t orient,
+                                long w, long h)
+{
+    long a, b, c, d, tx, ty;
+
+    switch (orient)
+    {
+        /*                       a   b   c   d   tx  ty */
+        case ORIENT_ROTATED_90:  a= 0; b= 1; c=-1; d= 0; tx= h; ty= 0; break;
+        case ORIENT_ROTATED_180: a=-1; b= 0; c= 0; d=-1; tx= w; ty= h; break;
+        case ORIENT_ROTATED_270: a= 0; b=-1; c= 1; d= 0; tx= 0; ty= w; break;
+        case ORIENT_HFLIPPED:    a=-1; b= 0; c= 0; d= 1; tx= w; ty= 0; break;
+        case ORIENT_VFLIPPED:    a= 1; b= 0; c= 0; d=-1; tx= 0; ty= h; break;
+        case ORIENT_TRANSPOSED:  a= 0; b= 1; c= 1; d= 0; tx= 0; ty= 0; break;
+        case ORIENT_ANTI_TRANSPOSED:
+                                 a= 0; b=-1; c=-1; d= 0; tx= h; ty= w; break;
+        default:                 a= 1; b= 0; c= 0; d= 1; tx= 0; ty= 0; break;
+    }
+    m->matrix[0][0] = Long2Fix (a);
+    m->matrix[0][1] = Long2Fix (b);
+    m->matrix[1][0] = Long2Fix (c);
+    m->matrix[1][1] = Long2Fix (d);
+    m->matrix[2][0] = Long2Fix (tx);
+    m->matrix[2][1] = Long2Fix (ty);
+}
+
+/* ★★★★ ROTATION DÉSARMÉE PAR DÉFAUT (2026-08-09) — mesurée INTENABLE ici.
+ *
+ * Les coefficients ci-dessus sont JUSTES : vérifié image par image sur
+ * `XVZI6206.MOV` (iPhone, rotation −90), le cadrage se superpose au pixel à la
+ * frame source correspondante. Le problème n'est pas la justesse, c'est le prix.
+ *
+ * A/B sur le MÊME flux 640x360, seule la métadonnée de rotation change
+ * (`ffmpeg -display_rotation 90 -i … -c copy`), iBook G3 600 MHz / Rage M3 :
+ *   - sans rotation : charge 0,48, **41 % de CPU**, machine fluide ;
+ *   - avec rotation : machine quasi gelée, roue de chargement permanente,
+ *     charge montée à **18,4**, sshd incapable de terminer un échange de
+ *     bannière. Même fichier, même résolution, même décodeur.
+ * Explication : la séquence de décompression de l'ICM garde un chemin rapide
+ * tant que la matrice est une simple mise à l'échelle + translation ; dès que
+ * la partie linéaire échange les axes, QuickTime retombe sur un rééchantillon-
+ * nage général en logiciel. Le gain visuel ne vaut pas ça sur cette classe de
+ * machine, où ce vout existe précisément pour NE PAS convertir en logiciel.
+ *
+ * Gardé derrière un interrupteur pour l'A/B et pour reprendre le chantier —
+ * même dispositif que la capture exclusive désarmée dans -updateGeometry. Piste
+ * à mesurer avant de rouvrir : le coût suit-il le nombre de pixels ? Si oui, un
+ * seuil de résolution rendrait la rotation acceptable sur les petits clips de
+ * téléphone, qui sont justement le cas d'usage. ⚠ Mesurer avec un clip MINUSCULE
+ * (160x90) : à 640x360 la machine ne rend plus la main et il faut un
+ * force-quit. */
+static bool RotationArmed (void)
+{
+    static int s_rot = -1;
+    if (s_rot < 0)
+        s_rot = (access ("/tmp/qt_rotate", F_OK) == 0) ? 1 : 0;
+    return s_rot != 0;
+}
+
 static void UpdateMatrixLocked (vout_display_sys_t *sys)
 {
+    /* Dimensions APRÈS rotation : c'est elles que le rectangle de placement
+     * mesure, donc elles qui servent de dénominateur à la mise à l'échelle. */
+    long disp_w = sys->src_width, disp_h = sys->src_height;
+
+    if (!RotationArmed ())
+    {
+        /* Comportement d'avant : l'image non pivotée est simplement étirée dans
+         * le rectangle portrait. Faux, mais fluide. */
+        SetIdentityMatrix (&sys->matrix);
+        if (sys->place.width > 0 && sys->place.height > 0)
+        {
+            ScaleMatrix (&sys->matrix,
+                         FixDiv (Long2Fix (sys->place.width),
+                                 Long2Fix (sys->src_width)),
+                         FixDiv (Long2Fix (sys->place.height),
+                                 Long2Fix (sys->src_height)),
+                         0, 0);
+            TranslateMatrix (&sys->matrix,
+                             Long2Fix (sys->qd_off_x + sys->place.x),
+                             Long2Fix (sys->qd_off_y + sys->place.y));
+        }
+        return;
+    }
+
+    switch (sys->orient)
+    {
+        case ORIENT_ROTATED_90:
+        case ORIENT_ROTATED_270:
+        case ORIENT_TRANSPOSED:
+        case ORIENT_ANTI_TRANSPOSED:
+            disp_w = sys->src_height;
+            disp_h = sys->src_width;
+            break;
+        default:
+            break;
+    }
+
     SetIdentityMatrix (&sys->matrix);
+    OrientMatrixLocked (&sys->matrix, sys->orient,
+                        (long) sys->src_width, (long) sys->src_height);
     if (sys->place.width > 0 && sys->place.height > 0)
     {
         ScaleMatrix (&sys->matrix,
                      FixDiv (Long2Fix (sys->place.width),
-                             Long2Fix (sys->src_width)),
+                             Long2Fix (disp_w)),
                      FixDiv (Long2Fix (sys->place.height),
-                             Long2Fix (sys->src_height)),
+                             Long2Fix (disp_h)),
                      0, 0);
         TranslateMatrix (&sys->matrix,
                          Long2Fix (sys->qd_off_x + sys->place.x),
                          Long2Fix (sys->qd_off_y + sys->place.y));
     }
+}
+
+/* Recalcule le rectangle à blitter depuis `vd->source` — le seul que le cœur
+ * met à jour quand on rogne. Renvoie true si quelque chose a bougé : il faut
+ * alors relancer la séquence (l'ImageDescription porte la taille) et laisser
+ * les images du pool réécrire leur header.
+ *
+ * ⚠ Tout est arrondi au PAIR : en 4:2:0 un pixel chroma couvre 2x2 pixels luma.
+ * Le cœur ne garantit aucune parité — « Rogner » découpe des bandes à partir
+ * d'un rapport quelconque.
+ *
+ * Appelée sous `place_lock` (elle touche à ce que lit UpdateMatrixLocked). */
+static bool UpdateCropLocked (vout_display_t *vd)
+{
+    vout_display_sys_t *sys = vd->sys;
+    const video_format_t *src = &vd->source;
+
+    unsigned x = (src->i_x_offset > sys->full_x) ? src->i_x_offset : sys->full_x;
+    unsigned y = (src->i_y_offset > sys->full_y) ? src->i_y_offset : sys->full_y;
+    x &= ~1u;
+    y &= ~1u;
+    if (x >= sys->full_x + sys->full_w || y >= sys->full_y + sys->full_h)
+    {
+        x = sys->full_x;
+        y = sys->full_y;
+    }
+
+    unsigned max_w = sys->full_x + sys->full_w - x;
+    unsigned max_h = sys->full_y + sys->full_h - y;
+    unsigned w = (src->i_visible_width  == 0 || src->i_visible_width  > max_w)
+               ? max_w : src->i_visible_width;
+    unsigned h = (src->i_visible_height == 0 || src->i_visible_height > max_h)
+               ? max_h : src->i_visible_height;
+    w &= ~1u;
+    h &= ~1u;
+    if (w == 0 || h == 0)
+    {
+        x = sys->full_x; y = sys->full_y;
+        w = sys->full_w & ~1u; h = sys->full_h & ~1u;
+    }
+
+    if (x == sys->crop_x && y == sys->crop_y
+     && w == sys->src_width && h == sys->src_height)
+        return false;
+
+    msg_Dbg (vd, "crop: %ux%u+%u+%u out of %ux%u+%u+%u",
+             w, h, x, y, sys->full_w, sys->full_h, sys->full_x, sys->full_y);
+    sys->crop_x    = x;
+    sys->crop_y    = y;
+    sys->src_width  = w;
+    sys->src_height = h;
+    sys->crop_gen++;
+    sys->seq_dirty  = true;
+    sys->matrix_dirty = true;
+    return true;
 }
 
 /* Capture / release the display for the hardware overlay path. Vout thread
@@ -248,6 +454,11 @@ static bool EnsureSequence (vout_display_t *vd)
     vlc_mutex_lock (&sys->place_lock);
     UpdateCaptureLocked (vd);
     bool captured = sys->captured;
+    /* Relu ET consommé sous le verrou : il est posé par Control(), qui n'a pas
+     * de raison de tomber sur le fil du vout au même instant, mais le rater
+     * laisserait la séquence décrire l'ancienne taille pour de bon. */
+    bool seq_dirty = sys->seq_dirty;
+    sys->seq_dirty = false;
     vlc_mutex_unlock (&sys->place_lock);
 
     CGrafPtr port = captured ? sys->capture_port
@@ -256,8 +467,11 @@ static bool EnsureSequence (vout_display_t *vd)
         return false;
 
     /* The view can move to another window (fullscreen): the sequence is
-     * bound to a port and must follow. */
-    if (sys->seq_started && port != sys->seq_port)
+     * bound to a port and must follow.
+     * `seq_dirty` : le rognage a changé, or la taille de l'image est FIGÉE dans
+     * l'ImageDescription passée à DecompressSequenceBeginS — il n'y a pas de
+     * SetDSequence… pour ça, seule une nouvelle séquence la reprend. */
+    if (sys->seq_started && (port != sys->seq_port || seq_dirty))
     {
         CDSequenceEnd (sys->seq);
         sys->seq_started = false;
@@ -416,8 +630,23 @@ static int Open (vlc_object_t *this)
          * la MC chroma, soit un tampon de 640x386 dont le décodeur ne remplit
          * que 368 lignes : 18 lignes vertes. Invisible sur DVD, où MPEG-2 ne
          * réclame ni l'arrondi à 32 ni les 2 lignes en trop. */
+        sys->full_x = fmt.i_x_offset;
+        sys->full_y = fmt.i_y_offset;
+        sys->full_w = fmt.i_visible_width;
+        sys->full_h = fmt.i_visible_height;
+        sys->crop_x = sys->full_x;
+        sys->crop_y = sys->full_y;
         sys->src_width  = fmt.i_visible_width;
         sys->src_height = fmt.i_visible_height;
+        sys->orient     = fmt.orientation;
+        /* Un rognage peut être demandé AVANT l'ouverture (`--crop`, ou repris du
+         * média précédent) : le cœur l'a déjà appliqué à `vd->source` et
+         * n'enverra aucun CHANGE_SOURCE_CROP. */
+        UpdateCropLocked (vd);
+        sys->seq_dirty = false;   /* aucune séquence à relancer, il n'y en a pas */
+        /* Une vue neuve est visible ; le thread principal corrigera à la
+         * première publication s'il le faut. */
+        sys->view_visible = true;
 
         /* Initial placement (refined by Control/reshape) */
         vout_display_PlacePicture (&sys->place, &vd->source, vd->cfg, false);
@@ -532,7 +761,27 @@ static void QtPicDestroy (picture_t *pic)
     free (pic);
 }
 
-static picture_t *QtPicNew (const video_format_t *fmt)
+/* the ICM planar codec reads the frame through this header; offsets
+ * are deltas from the header itself, so the planes can be elsewhere.
+ * L'image décrite à l'ICM commence au coin haut-gauche à blitter : la zone
+ * visible du décodeur, rognage de l'utilisateur compris.
+ * ⚠ (cx, cy) doit être PAIR : un pixel chroma couvre 2x2 pixels luma, et un
+ * coin impair décalerait la chroma d'un demi-pixel (liseré coloré au bord).
+ * L'appelant s'en charge, cf. UpdateCropLocked(). */
+static void QtPicSetOrigin (struct qt_pic_sys *ps, unsigned cx, unsigned cy)
+{
+    const uint8_t *vy = ps->y + (size_t) cy * ps->pitch_y + cx;
+    const uint8_t *vu = ps->u + (size_t) (cy / 2) * ps->pitch_c + cx / 2;
+    const uint8_t *vv = ps->v + (size_t) (cy / 2) * ps->pitch_c + cx / 2;
+
+    ps->header.componentInfoY.offset  = (long)(vy - (uint8_t *) &ps->header);
+    ps->header.componentInfoCb.offset = (long)(vu - (uint8_t *) &ps->header);
+    ps->header.componentInfoCr.offset = (long)(vv - (uint8_t *) &ps->header);
+}
+
+static picture_t *QtPicNew (const video_format_t *fmt,
+                            unsigned crop_x, unsigned crop_y,
+                            unsigned crop_gen)
 {
     struct qt_pic_sys *ps = calloc (1, sizeof (*ps));
     if (ps == NULL)
@@ -564,24 +813,15 @@ static picture_t *QtPicNew (const video_format_t *fmt)
     uint8_t *u = y + size_y;
     uint8_t *v = u + size_c;
 
-    /* the ICM planar codec reads the frame through this header; offsets
-     * are deltas from the header itself, so the planes can be elsewhere.
-     * L'image décrite à l'ICM est la partie VISIBLE (voir Open) : les offsets
-     * pointent donc son coin haut-gauche, pas l'origine du plan. */
-    unsigned crop_x = fmt->i_x_offset & ~1u;   /* 4:2:0 : un pixel chroma
-                                                * couvre 2x2 pixels luma */
-    unsigned crop_y = fmt->i_y_offset & ~1u;
-    const uint8_t *vy = y + (size_t) crop_y * pitch_y + crop_x;
-    const uint8_t *vu = u + (size_t) (crop_y / 2) * pitch_c + crop_x / 2;
-    const uint8_t *vv = v + (size_t) (crop_y / 2) * pitch_c + crop_x / 2;
-
-    ps->header.componentInfoY.offset  = (long)(vy - (uint8_t *) &ps->header);
-    ps->header.componentInfoCb.offset = (long)(vu - (uint8_t *) &ps->header);
-    ps->header.componentInfoCr.offset = (long)(vv - (uint8_t *) &ps->header);
+    ps->y = y; ps->u = u; ps->v = v;
+    ps->pitch_y = pitch_y;
+    ps->pitch_c = pitch_c;
     ps->header.componentInfoY.rowBytes  = pitch_y;
     ps->header.componentInfoCb.rowBytes = pitch_c;
     ps->header.componentInfoCr.rowBytes = pitch_c;
     ps->size = sizeof (ps->header);
+    QtPicSetOrigin (ps, crop_x, crop_y);
+    ps->crop_gen = crop_gen;
 
     picture_resource_t rsc = {
         .p_sys = (picture_sys_t *) ps,
@@ -612,7 +852,7 @@ static picture_pool_t *Pool (vout_display_t *vd, unsigned requested_count)
     unsigned i;
     for (i = 0; i < requested_count; i++)
     {
-        pics[i] = QtPicNew (&vd->fmt);
+        pics[i] = QtPicNew (&vd->fmt, sys->crop_x, sys->crop_y, sys->crop_gen);
         if (pics[i] == NULL)
             break;
     }
@@ -653,6 +893,130 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
     dvddriver_ctx *hw = var_GetAddress (vd->obj.libvlc, DVDDRIVER_VAR_CTX);
     dvddriver_present_cb present =
         (dvddriver_present_cb) var_GetAddress (vd->obj.libvlc, DVDDRIVER_VAR_PRESENT);
+
+    /* ★★ Bouton « liste de lecture » : l'interface se contente de MASQUER la
+     * vue vidéo — sous 10.3 il n'y a pas de fenêtre hôte à retirer
+     * (`openVideoHostWindow` est gaté 10.4+), la vue reste dans la fenêtre
+     * principale. Deux choses continuaient alors de recouvrir la liste, et
+     * elles se voient sur des contenus différents :
+     *  - la surface CGS du décodeur matériel, que le WindowServer compose tant
+     *    qu'elle a une forme ⇒ sur DVD accéléré le bouton « ne faisait rien » ;
+     *  - le blit ICM lui-même, qui écrit DIRECTEMENT dans le port QuickDraw de
+     *    la FENÊTRE sans passer par la hiérarchie de vues d'AppKit ⇒ sur du
+     *    H.264 l'interface n'apparaissait qu'en partie, la vidéo repassant
+     *    devant à chaque image.
+     * Même garde que `macosx_gl1.m`, mais elle doit ici couvrir AUSSI le chemin
+     * logiciel : la vue GL de gl1 est composée par le serveur et disparaît donc
+     * toute seule avec le masquage, pas un blit QuickDraw.
+     * ⚠ En display capturé (plein écran) le dessin ne va plus dans la fenêtre
+     * mais dans le port du display : la visibilité de la vue n'y veut rien
+     * dire, on ne masque jamais.
+     *
+     * ⚠⚠⚠ La visibilité est PUBLIÉE PAR LE THREAD PRINCIPAL (-vlcQtPublishVisibility,
+     * appelée depuis -viewDidHide/-viewDidUnhide/-viewDidMoveToWindow et
+     * -updateGeometry) et seulement RELUE ici sous `place_lock`. Ne jamais
+     * interroger AppKit depuis le thread du vout : tout ce module est bâti pour
+     * que le dessin et la hiérarchie de vues ne se croisent que sous verrou
+     * (cf. `draw_lock` et `viewWillMoveToWindow:`), et sur ce banc les
+     * violations de cette règle ne se paient pas par un crash mais par un gel de
+     * la MACHINE ENTIÈRE, SSH compris — comme la capture d'écran exclusive
+     * désarmée dans -updateGeometry. */
+    /* ⚠⚠⚠ SONDAGE, pas notification. `-viewDidHide` / `-viewDidUnhide` ne
+     * remontent PAS jusqu'à nous sur 10.3 quand c'est un ANCÊTRE qui est masqué
+     * — et c'est exactement le cas du bouton, qui fait `setHidden:` sur
+     * `videoView`, notre vue-hôte (`VLCLegacySetViewHidden`, misc.m, prend la
+     * branche `setHidden:` dès 10.3). Mesuré : la liste s'affichait bien, mais
+     * le blit continuait par-dessus, la garde n'ayant jamais basculé.
+     * On demande donc au THREAD PRINCIPAL de republier l'état une image sur
+     * huit — l'interrogation d'AppKit reste chez lui, le vout ne fait
+     * qu'affranchir la demande. À 25 im/s la bascule se voit en ~300 ms, ce qui
+     * est imperceptible pour un clic, et le coût est nul. */
+    if ((sys->vis_poll++ % 8) == 0)
+        [sys->qtView performSelectorOnMainThread:@selector(vlcQtPublishVisibility)
+                                      withObject:nil
+                                   waitUntilDone:NO
+                                           modes:[NSArray arrayWithObject:
+                                                      NSDefaultRunLoopMode]];
+
+    vlc_mutex_lock (&sys->place_lock);
+    bool capture_on   = sys->captured;
+    bool view_visible = capture_on ? true : sys->view_visible;
+    vlc_mutex_unlock (&sys->place_lock);
+
+    /* La surface est resynchronisée sur `hw_surf_hidden` et non sur la seule
+     * transition de visibilité : le décodeur ouvre son contexte APRÈS le début
+     * de la lecture, donc `hw` peut apparaître alors que la vue est déjà
+     * masquée — la surface naîtrait visible et resterait par-dessus la liste. */
+    if (hw != NULL && view_visible == sys->hw_surf_hidden)
+    {
+        /* ⚠ Escamoter une surface CGS, c'est réduire sa FORME, pas jouer sur
+         * l'ordre Z : `CGSOrderSurface(-1)` rend rc=0 et ne change rien sous
+         * 10.3. Le callback s'en charge. */
+        dvddriver_hide_cb hide = (dvddriver_hide_cb)
+            var_GetAddress (vd->obj.libvlc, DVDDRIVER_VAR_HIDE);
+        msg_Dbg (vd, "escamotage de la surface : visible=%d",
+                 (int) view_visible);
+        if (hide != NULL)
+        {
+            hide (hw, !view_visible);
+            sys->hw_surf_hidden = !view_visible;
+            /* Le rappel APRÈS l'escamotage, jamais avant : `CGSSetSurfaceBounds`
+             * ne se voit à l'écran qu'une fois que le serveur a recalculé la
+             * visibilité des surfaces de la fenêtre, et seul un
+             * `-[NSWindow orderWindow:]` le déclenche. Sans lui la dernière
+             * image matérielle reste GRAVÉE. Le thread principal a déjà fait ce
+             * recalcul au moment du masquage, mais l'escamotage n'avait pas
+             * encore eu lieu — il faut donc le refaire ici. */
+            /* ⚠⚠⚠ `modes:` OBLIGATOIRE. Sans lui, la variante à 3 arguments
+             * équivaut à kCFRunLoopCommonModes, AUXQUELS AppKit ajoute le suivi
+             * d'événements : le rappel s'exécuterait au beau milieu d'un clic
+             * ou d'un déplacement de fenêtre — et il touche à la fenêtre. Même
+             * piège que celui relevé dans les fournisseurs de dialogues
+             * d'extension. */
+            [sys->qtView
+                performSelectorOnMainThread:@selector(vlcQtRecomputeSurfaces)
+                                 withObject:nil
+                              waitUntilDone:NO
+                                      modes:[NSArray arrayWithObject:
+                                                 NSDefaultRunLoopMode]];
+        }
+    }
+
+    if (!view_visible)
+    {
+        /* ★★★★ CLORE LA SÉQUENCE, arrêter de blitter ne suffit PAS.
+         * La séquence est ouverte avec `codecFlagUseImageBuffer` : l'ICM garde
+         * un tampon de l'image et la REPEINT DE LUI-MÊME à chaque mise à jour
+         * de la fenêtre. Résultat mesuré au clic sur « liste de lecture » : la
+         * garde basculait bien (trace « visibilité de la vue »), le blit
+         * s'arrêtait, et l'image restait quand même par-dessus la liste —
+         * QuickTime la restaurait derrière chaque redessin d'AppKit, y compris
+         * derrière un `-[NSWindow display]` inconditionnel. D'où l'impression
+         * d'un bouton sans effet alors que tout le reste marchait.
+         * `EnsureSequence` la rouvrira au retour, comme elle le fait déjà quand
+         * la vue change de port. */
+        bool ended = false;
+        vlc_mutex_lock (&sys->draw_lock);
+        if (sys->seq_started)
+        {
+            CDSequenceEnd (sys->seq);
+            sys->seq_started = false;
+            ended = true;
+        }
+        vlc_mutex_unlock (&sys->draw_lock);
+
+        if (ended)
+            /* Redessin APRÈS la fermeture, jamais avant : demandé plus tôt, il
+             * serait aussitôt recouvert par le tampon de l'ICM. */
+            [sys->qtView
+                performSelectorOnMainThread:@selector(vlcQtVisibilityChanged)
+                                 withObject:nil
+                              waitUntilDone:NO
+                                      modes:[NSArray arrayWithObject:
+                                                 NSDefaultRunLoopMode]];
+        picture_Release (pic);
+        return;
+    }
 
     if (hw != NULL && present != NULL && pic->context != NULL)
     {
@@ -747,6 +1111,13 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
             SetPort (port);
             ClipRect (&clip);
             struct qt_pic_sys *ps = (struct qt_pic_sys *) pic->p_sys;
+            /* Le pool ne se parcourt pas : chaque image rattrape le rognage
+             * courant la première fois qu'elle repasse ici. Trois écritures. */
+            if (ps->crop_gen != sys->crop_gen)
+            {
+                QtPicSetOrigin (ps, sys->crop_x, sys->crop_y);
+                ps->crop_gen = sys->crop_gen;
+            }
             OSErr err = DecompressSequenceFrameWhen (sys->seq,
                                                      (void *) &ps->header,
                                                      ps->size,
@@ -792,6 +1163,8 @@ static int Control (vout_display_t *vd, int query, va_list ap)
             vout_display_PlacePicture (&place, &vd->source, cfg, false);
 
             vlc_mutex_lock (&sys->place_lock);
+            if (query == VOUT_DISPLAY_CHANGE_SOURCE_CROP)
+                UpdateCropLocked (vd);
             sys->place = place;
             sys->matrix_dirty = true;
             vlc_mutex_unlock (&sys->place_lock);
@@ -816,6 +1189,123 @@ static int Control (vout_display_t *vd, int query, va_list ap)
 {
     id *ret = [value pointerValue];
     *ret = [[self alloc] init];
+}
+
+/* Publie la visibilité de la vue à l'intention du thread du vout, qui n'a pas
+ * le droit d'interroger AppKit lui-même (cf. PictureDisplay). Thread principal
+ * uniquement, appelée depuis les trois points où AppKit peut la faire changer :
+ * -viewDidHide, -viewDidUnhide (déclenchées AUSSI quand c'est un ANCÊTRE qui est
+ * masqué — c'est le cas du bouton, qui masque `videoView`, pas nous) et
+ * -viewDidMoveToWindow (le cas de 10.2, où l'interface DÉTACHE la vue faute de
+ * `setHidden:`). -updateGeometry la rafraîchit en plus par sécurité. */
+- (void)vlcQtPublishVisibility
+{
+    VLCAssertMainThread();
+    @synchronized(self) {
+        if (!vd)
+            return;
+        vout_display_sys_t *sys = vd->sys;
+
+        NSWindow *win = [self window];
+        bool hidden = false;
+        if ([self respondsToSelector:@selector(isHiddenOrHasHiddenAncestor)])
+            hidden = [self isHiddenOrHasHiddenAncestor];
+        else if ([self respondsToSelector:@selector(isHidden)])
+            hidden = [self isHidden];
+        bool visible = (win != nil && [win isVisible] && !hidden);
+
+        vlc_mutex_lock (&sys->place_lock);
+        bool changed = (sys->view_visible != visible);
+        sys->view_visible = visible;
+        vlc_mutex_unlock (&sys->place_lock);
+
+        if (!changed)
+            return;
+        msg_Dbg (vd, "visibilité de la vue : %d (masquée=%d, fenêtre=%s)",
+                 (int) visible, (int) hidden, win ? "oui" : "non");
+    }
+    /* ⚠⚠⚠ DIFFÉRÉ, jamais synchrone : cette méthode est appelée depuis
+     * -updateGeometry, donc depuis `viewDidMoveToWindow` et `setFrame:`.
+     * Toucher à la FENÊTRE (`orderWindow:`) au milieu d'un changement de
+     * géométrie de vue, c'est réentrer dans le serveur de fenêtres pendant
+     * qu'il déplace la vue — la classe de faute qui, sur ce vout, ne se paie
+     * pas par un plantage mais par un gel de la machine entière (cf. la capture
+     * exclusive désarmée dans -updateGeometry, et le verrou `draw_lock`).
+     * `performSelector:afterDelay:` programme en NSDefaultRunLoopMode SEUL : le
+     * rappel ne peut donc pas tomber non plus au milieu d'un suivi d'événements
+     * AppKit. Même remède que `resumeDrawingAfterMove` juste en dessous. */
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                        selector:@selector(vlcQtVisibilityChanged) object:nil];
+    [self performSelector:@selector(vlcQtVisibilityChanged)
+               withObject:nil afterDelay:0.0];
+}
+
+/* ⚠ Pas d'appel à `super` : ces deux méthodes n'existent qu'à partir de 10.3
+ * et l'implémentation d'AppKit ne fait rien de toute façon. Sur 10.2, où le SDK
+ * ne les déclare pas, `[super viewDidHide]` lèverait un
+ * doesNotRecognizeSelector — pour une méthode qu'AppKit n'y appelle jamais.
+ * Le cas 10.2 (vue DÉTACHÉE faute de `setHidden:`) passe par
+ * -viewDidMoveToWindow → -updateGeometry → -vlcQtPublishVisibility. */
+- (void)viewDidHide
+{
+    [self vlcQtPublishVisibility];
+}
+
+- (void)viewDidUnhide
+{
+    [self vlcQtPublishVisibility];
+}
+
+/* La visibilité de la vue vient de changer (bouton « liste de lecture »).
+ * ⚠ Pas de garde `isVisible` sur la fenêtre : c'est justement la fenêtre
+ * PRINCIPALE, toujours à l'écran, qui héberge la vue vidéo masquée. */
+- (void)vlcQtVisibilityChanged
+{
+    VLCAssertMainThread();
+    NSWindow *win = [self window];
+    if (win == nil)
+        return;
+
+    /* ⛔ NE PAS ordonner la fenêtre ici. Voir -vlcQtRecomputeSurfaces : sur 10.4
+     * `win` est la FENÊTRE HÔTE, que l'interface vient justement de retirer. */
+    if (![win isVisible])
+        return;
+
+    /* ⚠⚠ `-display`, PAS `setNeedsDisplay:` ni `displayIfNeeded`. Les pixels de
+     * la vidéo ont été écrits par QuickDraw DIRECTEMENT dans le port de la
+     * fenêtre puis poussés par `QDFlushPortBuffer` — en dehors de la
+     * comptabilité de rectangles sales d'AppKit, qui se croit donc déjà à jour
+     * sur cette zone et ne la repeint pas. Mesuré : au clic sur « liste de
+     * lecture » le blit s'arrêtait bien (la garde bascule, cf. la trace
+     * « visibilité de la vue »), mais la DERNIÈRE IMAGE restait peinte
+     * par-dessus la liste. `-display` force le redessin de toute la hiérarchie
+     * sans consulter les rectangles sales, ce qui recouvre la zone.
+     * Il n'est appelé que sur TRANSITION, donc au plus deux fois par clic. */
+    [win display];
+}
+
+/* Recalcul par le serveur de la visibilité des surfaces CGS de la fenêtre :
+ * sans lui la dernière image du décodeur MATÉRIEL reste gravée à l'écran, la
+ * surface ayant beau être réduite à une forme vide (cf.
+ * dvddriver_set_surface_hidden : c'est la FORME qui gouverne, pas l'ordre Z).
+ *
+ * ⛔ RÉSERVÉ au chemin matériel, et JAMAIS appelé sur la simple bascule
+ * logicielle. `-orderWindow:NSWindowAbove relativeTo:0` **ordonne la fenêtre à
+ * l'écran**. Sur 10.4 la vue vidéo vit dans une FENÊTRE HÔTE
+ * (`openVideoHostWindow`, gaté 10.4+) que le bouton « liste de lecture » vient
+ * de retirer : l'appeler là RESSUSCITAIT cette fenêtre, vide, par-dessus la
+ * liste — mesuré sous Tiger 10.4.11, contenu entièrement noir et titre resté
+ * celui de la vidéo. Sous 10.2/10.3 le défaut ne se voyait pas : il n'y a pas
+ * de fenêtre hôte, `win` est la fenêtre principale, déjà à l'écran.
+ * La garde `isVisible` reste par prudence : on ne ramène jamais une fenêtre
+ * que quelqu'un a retirée. */
+- (void)vlcQtRecomputeSurfaces
+{
+    VLCAssertMainThread();
+    NSWindow *win = [self window];
+    if (win == nil || ![win isVisible])
+        return;
+    [win orderWindow:NSWindowAbove relativeTo:0];
 }
 
 - (id)init
@@ -1015,6 +1505,9 @@ static int Control (vout_display_t *vd, int query, va_list ap)
          * détient encore @synchronized(self) et place_lock. */
         vout_display_SendEventDisplaySize (vd, bounds.size.width, bounds.size.height);
     }
+    /* HORS du @synchronized ci-dessus : -vlcQtVisibilityChanged y toucherait à
+     * la fenêtre alors que le thread du vout peut attendre place_lock. */
+    [self vlcQtPublishVisibility];
 }
 
 /* Keep the placement in sync when the view is resized */

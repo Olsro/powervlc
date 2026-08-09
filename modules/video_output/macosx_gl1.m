@@ -384,6 +384,18 @@ struct vout_display_sys_t
     unsigned tex_height;
     unsigned x_offset;    /* crop offsets inside the picture planes */
     unsigned y_offset;
+    /* Rognage DEMANDÉ PAR L'UTILISATEUR (menu « Rogner »), en texels et relatif
+     * au coin haut-gauche de la texture — donc déjà débarrassé de x_offset /
+     * y_offset, qui repèrent la zone visible du décodeur, elle DÉJÀ appliquée à
+     * l'envoi. Vaut la texture entière tant que rien n'est rogné.
+     * ⚠ Le rognage ne change QUE `vd->source` (cf. src/video_output/display.c) ;
+     * `vd->fmt` garde la taille des images reçues. Un affichage qui se contente
+     * de `vd->fmt` — ce que celui-ci faisait — voit donc sa FENÊTRE se remettre
+     * au bon format (le placement, lui, se calcule sur `vd->source`) alors que
+     * l'image, elle, reste entière et se retrouve simplement écrasée dedans.
+     * Écrit par le fil du vout dans Control(), relu sans verrou par OpenglDraw()
+     * comme tex_width/orient juste au-dessus — même convention. */
+    unsigned crop_x, crop_y, crop_w, crop_h;
     video_orientation_t orient; /* baked into the texture coordinates:
                                  * see OrientTexCorner() */
 
@@ -980,10 +992,67 @@ static void OrientTexCorner (video_orientation_t orient,
     }
 }
 
-static void PlanarQuad (float w, float h, const bool chroma_unit[3],
+/* Recalcule le rectangle rogné à partir de `vd->source`, seul endroit que le
+ * cœur met à jour quand l'utilisateur rogne (`VOUT_DISPLAY_CHANGE_SOURCE_CROP`,
+ * cf. src/video_output/display.c). La texture, elle, ne porte que la zone
+ * VISIBLE de l'image décodée, envoyée depuis (x_offset, y_offset) : on retire
+ * donc cette origine pour retomber en coordonnées de texture.
+ *
+ * ⚠ Tout est arrondi au pixel PAIR : en 4:2:0 comme en 4:2:2 empaqueté, un
+ * texel chroma couvre deux pixels luma, et un rectangle impair ferait échantil-
+ * lonner la chroma à un demi-texel du luma — un liseré coloré sur les bords du
+ * rognage. Le cœur ne garantit aucune parité (« Rogner » calcule des bandes à
+ * partir d'un rapport quelconque).
+ *
+ * Fil du vout uniquement (Open puis Control), comme tex_width / orient. */
+static void UpdateCrop (vout_display_t *vd)
+{
+    vout_display_sys_t *sys = vd->sys;
+    const video_format_t *src = &vd->source;
+
+    unsigned x = (src->i_x_offset > sys->x_offset)
+               ? src->i_x_offset - sys->x_offset : 0;
+    unsigned y = (src->i_y_offset > sys->y_offset)
+               ? src->i_y_offset - sys->y_offset : 0;
+
+    x &= ~1u;
+    y &= ~1u;
+    if (x >= sys->tex_width || y >= sys->tex_height)
+        x = y = 0;                       /* incohérent : on montre tout */
+
+    unsigned w = src->i_visible_width;
+    unsigned h = src->i_visible_height;
+    if (w == 0 || w > sys->tex_width - x)
+        w = sys->tex_width - x;
+    if (h == 0 || h > sys->tex_height - y)
+        h = sys->tex_height - y;
+    w &= ~1u;
+    h &= ~1u;
+    if (w == 0 || h == 0)
+    {
+        x = y = 0;
+        w = sys->tex_width;
+        h = sys->tex_height;
+    }
+
+    if (x != sys->crop_x || y != sys->crop_y
+     || w != sys->crop_w || h != sys->crop_h)
+        msg_Dbg (vd, "crop: %ux%u+%u+%u out of %ux%u",
+                 w, h, x, y, sys->tex_width, sys->tex_height);
+
+    sys->crop_x = x;
+    sys->crop_y = y;
+    sys->crop_w = w;
+    sys->crop_h = h;
+}
+
+/* (x, y, w, h) = rectangle de la texture à faire tenir dans le quad, en texels
+ * luma : c'est là que le rognage entre en jeu. Les unités chroma reçoivent le
+ * même rectangle divisé par deux (4:2:0). */
+static void PlanarQuad (float x, float y, float w, float h,
+                        const bool chroma_unit[3],
                         video_orientation_t orient)
 {
-    float cw = w * 0.5f, ch = h * 0.5f;
     float u[3], v[3];
 
     glBegin (GL_QUADS);
@@ -998,10 +1067,18 @@ static void PlanarQuad (float w, float h, const bool chroma_unit[3],
 
         OrientTexCorner (orient, dx, dy, &fx, &fy);
 
+        /* La rotation s'applique DANS le rectangle rogné : `fx`/`fy` sont la
+         * position normalisée du coin affiché à l'intérieur de la source
+         * stockée, on la ramène ensuite dans le rectangle. Même découplage que
+         * dans opengl/vout_helper.c, où la matrice d'orientation joue sur les
+         * SOMMETS et les coordonnées de texture portent le seul rognage. */
+        const float tx = x + fx * w;
+        const float ty = y + fy * h;
+
         for (int t = 0; t < 3; t++)
         {
-            u[t] = fx * (chroma_unit[t] ? cw : w);
-            v[t] = fy * (chroma_unit[t] ? ch : h);
+            u[t] = chroma_unit[t] ? tx * 0.5f : tx;
+            v[t] = chroma_unit[t] ? ty * 0.5f : ty;
         }
         glMultiTexCoord2f (GL_TEXTURE0, u[0], v[0]);
         glMultiTexCoord2f (GL_TEXTURE1, u[1], v[1]);
@@ -1048,8 +1125,12 @@ static void DrawRegions (vout_display_sys_t *sys)
 /* Context must be current. Draws the last uploaded frame. */
 static void OpenglDraw (vout_display_sys_t *sys)
 {
-    float w = (float) sys->tex_width;
-    float h = (float) sys->tex_height;
+    /* Le rectangle rogné, en texels. Sans rognage il vaut la texture entière,
+     * donc les coordonnées sont exactement celles d'avant. */
+    const float cx = (float) sys->crop_x;
+    const float cy = (float) sys->crop_y;
+    const float cw = (float) sys->crop_w;
+    const float ch = (float) sys->crop_h;
     const video_orientation_t orient = sys->orient;
 
     GL1_PROF_START (tc);
@@ -1073,7 +1154,7 @@ static void OpenglDraw (vout_display_sys_t *sys)
                 float fx, fy;
 
                 OrientTexCorner (orient, dx, dy, &fx, &fy);
-                glTexCoord2f (fx * w, fy * h);
+                glTexCoord2f (cx + fx * cw, cy + fy * ch);
                 glVertex2f (vx[corner], vy[corner]);
             }
             glEnd ();
@@ -1100,7 +1181,7 @@ static void OpenglDraw (vout_display_sys_t *sys)
                 glEnable (GL_TEXTURE_RECTANGLE_EXT);
             glBindTexture (GL_TEXTURE_RECTANGLE_EXT, tex[i]);
         }
-        PlanarQuad (w, h, chromaYUV, orient);
+        PlanarQuad (cx, cy, cw, ch, chromaYUV, orient);
         glDisable (GL_FRAGMENT_PROGRAM_ARB);
         /* DrawRegions draws with the fixed pipeline on unit 0: leaving the
          * chroma units enabled would modulate the subtitles with them. */
@@ -1143,7 +1224,7 @@ static void OpenglDraw (vout_display_sys_t *sys)
     glEnable (GL_TEXTURE_RECTANGLE_EXT);
     glBindTexture (GL_TEXTURE_RECTANGLE_EXT, tex[0]);
     CombinerStage (GL_SUBTRACT, GL_PREVIOUS, GL_SRC_COLOR, GL_CONSTANT, kR2, 2.0f);
-    PlanarQuad (w, h, chromaR, orient);
+    PlanarQuad (cx, cy, cw, ch, chromaR, orient);
 
     /* ---- G = 2 * (0.5822 Y + [0.1959(1-U) + 0.1635 + 0.4065(1-V)] - 0.5) ---- */
     static const bool chromaG[3] = { true, true, false };   /* U, V, Y */
@@ -1158,7 +1239,7 @@ static void OpenglDraw (vout_display_sys_t *sys)
     glActiveTexture (GL_TEXTURE2);
     glBindTexture (GL_TEXTURE_RECTANGLE_EXT, tex[0]);
     CombinerStage (GL_MODULATE_SIGNED_ADD_ATI, GL_TEXTURE, GL_SRC_COLOR, GL_PREVIOUS, kG2, 2.0f);
-    PlanarQuad (w, h, chromaG, orient);
+    PlanarQuad (cx, cy, cw, ch, chromaG, orient);
 
     /* ---- B = 4 * (0.2911 Y + 0.5043 U - 0.2714) ---- */
     static const bool chromaB[3] = { true, false, false };  /* U, Y, - */
@@ -1172,7 +1253,7 @@ static void OpenglDraw (vout_display_sys_t *sys)
     glActiveTexture (GL_TEXTURE2);
     glBindTexture (GL_TEXTURE_RECTANGLE_EXT, tex[0]);
     CombinerStage (GL_SUBTRACT, GL_PREVIOUS, GL_SRC_COLOR, GL_CONSTANT, kB2, 4.0f);
-    PlanarQuad (w, h, chromaB, orient);
+    PlanarQuad (cx, cy, cw, ch, chromaB, orient);
 
     /* restore sane state for the next frame / other users of the ctx */
     glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -1646,6 +1727,10 @@ static int Open (vlc_object_t *this)
         sys->tex_height = fmt.i_visible_height;
         sys->x_offset   = fmt.i_x_offset;
         sys->y_offset   = fmt.i_y_offset;
+        /* Un rognage peut être demandé AVANT l'ouverture (option `--crop`, ou
+         * simplement mémorisé du média précédent) : le cœur l'a alors déjà
+         * appliqué à `vd->source` et n'enverra aucun CHANGE_SOURCE_CROP. */
+        UpdateCrop (vd);
         /* The placement rectangle is already computed post-rotation by
          * vout_display_PlacePicture(); the picture itself arrives unrotated,
          * so the display has to do the turning. */
@@ -2391,6 +2476,9 @@ static int ControlInPool (vout_display_t *vd, int query, va_list ap)
             } else {
                 cfg = (const vout_display_cfg_t*)va_arg (ap, const vout_display_cfg_t *);
             }
+
+            if (query == VOUT_DISPLAY_CHANGE_SOURCE_CROP)
+                UpdateCrop (vd);
 
             vout_display_place_t place;
             vout_display_PlacePicture (&place, &vd->source, cfg, false);
