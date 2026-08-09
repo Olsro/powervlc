@@ -4861,7 +4861,23 @@ static int DemuxMoof( demux_t *p_demux )
         for( unsigned i = 0; i < p_sys->i_tracks; i++ )
         {
             mp4_track_t *tk = &p_sys->track[i];
-            if( tk->b_ok || tk->b_chapters_source ||
+            /* ★★★★ `!tk->b_ok` — le test était INVERSÉ.
+             *
+             * `b_ok` vaut « la piste est utilisable » (mp4.h). Tous les autres
+             * sites du fichier écartent `!tk->b_ok` ; celui-ci était le seul à
+             * écarter l'inverse, donc à ne garder que les pistes CASSÉES. Sur
+             * un fichier sain il ne restait aucune piste, `i_segment_end`
+             * gardait sa valeur sentinelle INT64_MAX, et le bloc ci-dessous
+             * était sauté : `i_nztime` cessait purement et simplement
+             * d'avancer en fin de segment.
+             *
+             * Conséquence, mesurée sur iBook G3 avec une vidéo Invidious de
+             * 18,9 s : le démultiplexeur continuait de fournir des données —
+             * image et son allaient au bout — mais son horloge restait clouée
+             * à 11 s. Or `MainLoopStatistics` en tire `DEMUX_GET_TIME` et
+             * `DEMUX_GET_POSITION` : la barre de progression et la durée
+             * affichée se figeaient là, à mi-lecture. */
+            if( !tk->b_ok || tk->b_chapters_source ||
                (!tk->b_selected && !p_sys->b_seekable) )
                 continue;
             vlc_tick_t i_track_end = MP4_rescale_mtime( tk->i_time, tk->i_timescale );
@@ -5302,7 +5318,26 @@ static int DemuxFrag( demux_t *p_demux )
                     /* Detect and Handle Passive Seek */
                     const uint32_t i_sequence_number = FragGetMoofSequenceNumber( p_sys->context.p_fragment_atom );
                     const bool b_discontinuity = ( i_sequence_number != p_sys->context.i_lastseqnumber + 1 );
-                    if( b_discontinuity )
+                    /* ⚠ Le PREMIER fragment est toujours « discontinu » :
+                     * `i_lastseqnumber` part de UINT32_MAX, donc +1 déborde à 0
+                     * et ne peut égaler aucun numéro de séquence valide.
+                     *
+                     * ⛔ NE PAS « corriger » la condition : ce vrai est
+                     * PORTEUR. `b_discontinuity` fait ré-ancrer le temps de
+                     * chaque piste sur le `tfdt` du fragment plutôt que de
+                     * poursuivre `p_track->i_time` (cf. FragCreateTrunIndex) —
+                     * et sur le premier fragment c'est précisément ce qu'il
+                     * faut, faute de temps antérieur à poursuivre. Un flux qui
+                     * ne commence pas à zéro (bord de direct, reprise en cours
+                     * de diffusion) démarrerait au mauvais instant sans lui.
+                     *
+                     * Seul le MESSAGE était trompeur : annoncer une
+                     * discontinuité sur un flux parfaitement normal envoie le
+                     * diagnostic sur une fausse piste (vécu le 2026-08-09, une
+                     * enquête entière pour conclure qu'il ne produisait rien).
+                     * On le tait donc au démarrage, sans toucher au drapeau. */
+                    if( b_discontinuity
+                     && p_sys->context.i_lastseqnumber != UINT32_MAX )
                         msg_Info( p_demux, "Fragment sequence discontinuity detected %"PRIu32" != %"PRIu32,
                                             i_sequence_number, p_sys->context.i_lastseqnumber + 1 );
                     p_sys->context.i_lastseqnumber = i_sequence_number;

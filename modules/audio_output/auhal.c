@@ -1192,8 +1192,31 @@ StartAnalog(audio_output_t *p_aout, audio_sample_format_t *fmt)
             goto error;
     }
     else
+    {
         ca_LogWarn("device driver does not support "
                    "kAudioDevicePropertyPreferredChannelLayout - using stereo");
+
+        /* ★★★★ Tenir la promesse du message ci-dessus — elle n'était écrite
+         * NULLE PART. Sans disposition de périphérique, au_Initialize prend sa
+         * branche `else` : elle garde la disposition d'ENTRÉE (« VLC keeping
+         * the same input layout ») et ouvre une unité audio à SIX canaux sur
+         * une sortie qui n'en reproduit que deux. La voie CENTRALE part alors
+         * dans le vide — et sur un DVD c'est là que vivent les dialogues.
+         *
+         * Constaté sur iBook G3 / Panther, piste anglaise AC-3 5.1 : musique
+         * et bruits de fond parfaitement audibles, dialogues absents, dès la
+         * première seconde et sans aucun déplacement. Le pilote de ces
+         * machines ne connaît pas la propriété (OSStatus -10879) et leur
+         * sortie intégrée est stéréo.
+         *
+         * On force donc le format en stéréo et on laisse le cœur faire le
+         * mixage descendant, qui lui sait replier la voie centrale sur les
+         * deux voies avant. Même parti pris que le repli pré-10.3 de
+         * MapOutputLayout(), quelques lignes plus loin dans
+         * coreaudio_common.c. */
+        fmt->i_physical_channels = AOUT_CHANS_STEREO;
+        aout_FormatPrepare(fmt);
+    }
 
     /* Do the last VLC aout setups */
     bool warn_configuration;

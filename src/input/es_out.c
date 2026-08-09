@@ -1870,8 +1870,27 @@ static vlc_tick_t EsOutGetBuffering( es_out_t *out )
         const vlc_tick_t i_consumed = i_system_duration * INPUT_RATE_DEFAULT / p_sys->i_rate - i_stream_duration;
         i_delay = p_sys->i_pts_delay - i_consumed;
     }
-    if( i_delay < 0 )
-        return 0;
+    /* ★★★ Volontairement SIGNÉ — ne PAS plafonner à zéro ici.
+     *
+     * Cette valeur n'a qu'un seul appelant, ES_OUT_SET_TIMES, qui s'en sert
+     * pour ramener le temps du DÉMULTIPLEXEUR au temps de LECTURE. En
+     * développant, `temps_demux - i_delay` vaut exactement
+     * `ref.stream + (maintenant - ref.system) - pts_delay` : c'est déjà la
+     * position dérivée de l'horloge, et elle est juste tant qu'on la laisse
+     * s'exprimer.
+     *
+     * Le plafonnement à zéro la cassait dès que le démultiplexeur prenait de
+     * l'avance PUIS s'arrêtait — le cas d'un flux court entièrement
+     * téléchargé. `i_stream_duration` reste alors figé sur le dernier PCR
+     * pendant que le temps réel avance, donc `i_consumed` finit par dépasser
+     * `i_pts_delay`, le délai devient négatif, et le plafonnement faisait
+     * rapporter le temps du démultiplexeur lui-même, immobile. Mesuré sur
+     * iBook G3 avec une vidéo Invidious de 19 s : image et son allaient au
+     * bout, mais la barre de progression restait clouée à 00:09.
+     *
+     * En le laissant négatif, le temps rapporté continue d'avancer au rythme
+     * réel une fois le démultiplexeur à sec — ce qui est précisément ce que
+     * fait la lecture. L'appelant borne le résultat à [0, durée]. */
     return i_delay;
 }
 
@@ -3946,14 +3965,24 @@ static int EsOutControlLocked( es_out_t *out, int i_query, va_list args )
             else
                 i_delay = 0;
 
+            /* `i_delay` est SIGNÉ (cf. EsOutGetBuffering) : négatif, il fait
+             * AVANCER le temps rapporté au-delà de celui du démultiplexeur,
+             * ce qui est correct quand celui-ci a fini de lire et que la
+             * lecture se poursuit sur ce qui est en file. D'où le bornage
+             * haut, qui n'était pas nécessaire tant que le délai ne pouvait
+             * que retarder. */
             i_time -= i_delay;
             if( i_time < 0 )
                 i_time = 0;
+            if( i_length > 0 && i_time > i_length )
+                i_time = i_length;
 
             if( i_length > 0 )
                 f_position -= (double)i_delay / i_length;
             if( f_position < 0 )
                 f_position = 0;
+            if( f_position > 1.0 )
+                f_position = 1.0;
 
             input_SendEventPosition( p_sys->p_input, f_position, i_time );
         }

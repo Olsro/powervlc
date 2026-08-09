@@ -73,6 +73,10 @@ typedef struct
 
     bool       b_eof;   /* eof of demuxer */
 
+    /* es_out mandataire des sources ESCLAVES : il avale leur PCR (cf.
+     * EsOutSlaveNew dans input.c). NULL pour la source maître. */
+    es_out_t  *p_slave_es_out;
+
 } input_source_t;
 
 typedef struct

@@ -83,7 +83,8 @@ static void MRLSections( const char *, int *, int *, int *, int *);
 
 static input_source_t *InputSourceNew( input_thread_t *, const char *,
                                        const char *psz_forced_demux,
-                                       bool b_in_can_fail );
+                                       bool b_in_can_fail,
+                                       bool b_slave );
 static void InputSourceDestroy( input_source_t * );
 static void InputSourceMeta( input_thread_t *, input_source_t *, vlc_meta_t * );
 
@@ -786,6 +787,24 @@ static void MainLoop( input_thread_t *p_input, bool b_interactive )
                     b_postpone = false;
             }
 
+            /* ★★★ Ne jamais dormir AU-DELÀ du prochain rafraîchissement
+             * d'interface. `i_wakeup` dérive du PCR, donc de la granularité de
+             * la SOURCE : plusieurs secondes en MP4 fragmenté, où la boucle
+             * dormait d'un bloc en sautant la vingtaine de mises à jour de
+             * position prévues entre-temps (7 relevés sur 19 s, aux seules
+             * frontières de fragment). `MainLoopStatistics()` tirant la
+             * position de l'horloge de LECTURE, la rappeler toutes les 250 ms
+             * suffit à la faire avancer sans rien demander de plus à la source.
+             *
+             * ⚠⚠⚠ APRÈS la logique de report ci-dessus, JAMAIS avant :
+             * raccourcir `i_deadline` en amont faisait basculer son test
+             * `i_deadline > now + 20 ms`, donc ABANDONNER le report du seek,
+             * traité alors que les ES tamponnaient encore. Ici on ne fait plus
+             * que RACCOURCIR une attente déjà décidée, et le cas bloquant
+             * (`i_wakeup < 0`) reste cadencé par un autre fil. */
+            if( i_wakeup > 0 && i_intf_update > 0 && i_deadline > i_intf_update )
+                i_deadline = i_intf_update;
+
             int i_type;
             vlc_value_t val;
 
@@ -1375,7 +1394,8 @@ static int Init( input_thread_t * p_input )
     input_SendEventCache( p_input, 0.0 );
 
     /* */
-    master = InputSourceNew( p_input, priv->p_item->psz_uri, NULL, false );
+    master = InputSourceNew( p_input, priv->p_item->psz_uri, NULL, false,
+                             false );
     if( master == NULL )
         goto error;
     priv->master = master;
@@ -2597,11 +2617,13 @@ static demux_t *InputDemuxNew( input_thread_t *p_input, input_source_t *p_source
 {
     input_thread_private_t *priv = input_priv(p_input );
     demux_t *p_demux = NULL;
+    es_out_t *p_es_out = p_source->p_slave_es_out != NULL
+                       ? p_source->p_slave_es_out : priv->p_es_out;
 
     /* first, try to create an access demux */
     p_demux = demux_NewAdvanced( VLC_OBJECT( p_source ), p_input,
                                  psz_access, psz_demux, psz_path,
-                                 NULL, priv->p_es_out, priv->b_preparsing );
+                                 NULL, p_es_out, priv->b_preparsing );
     if( p_demux )
     {
         MRLSections( psz_anchor,
@@ -2643,7 +2665,7 @@ static demux_t *InputDemuxNew( input_thread_t *p_input, input_source_t *p_source
     /* create a regular demux with the access stream created */
     p_demux = demux_NewAdvanced( VLC_OBJECT( p_source ), p_input,
                                  psz_access, psz_demux, psz_path,
-                                 p_stream, priv->p_es_out,
+                                 p_stream, p_es_out,
                                  priv->b_preparsing );
     if( p_demux )
         return p_demux;
@@ -2659,12 +2681,98 @@ error:
 }
 
 /*****************************************************************************
+ * es_out mandataire des sources ESCLAVES
+ *****************************************************************************
+ * Une source esclave (`input-slave`) reçoit l'es_out du MAÎTRE — donc son
+ * HORLOGE. Or un démultiplexeur ignore s'il est maître ou esclave et émet son
+ * PCR dans tous les cas ; mp4 le fait. Et l'esclave n'est calé sur le maître
+ * que très grossièrement : `SlaveDemux()` démultiplexe « jusqu'à rattraper »,
+ * ce qui dépasse d'un FRAGMENT ENTIER dès que le format est fragmenté et que
+ * `DEMUX_SET_NEXT_DEMUX_TIME` n'est pas gérée — précisément le cas de mp4, qui
+ * la fait tomber dans son `default` et rend VLC_EGENERIC.
+ *
+ * L'horloge reçoit alors alternativement le PCR de l'un et de l'autre, séparés
+ * de plusieurs secondes. Mesuré sur iBook G3 avec une vidéo Invidious, que
+ * l'extension lit en DEUX flux (vidéo sans son en maître, audio en esclave) :
+ * maître à 5,25 s pendant que l'esclave était à 9,75 s. Un PCR qui recule de
+ * 4,5 s donne « ES_OUT_SET_(GROUP_)PCR is called too late », l'horloge est
+ * remise à zéro, la position affichée retombe à 00:00, les décodeurs sont
+ * vidés — l'image se fige et redemande une première image, pendant que les
+ * secondes d'audio déjà en file finissent de s'écouler.
+ *
+ * Les horodatages des ES de l'esclave sont des temps ABSOLUS et restent
+ * valides : il n'y a que son PCR à faire taire. */
+typedef struct
+{
+    es_out_t  out;
+    es_out_t *p_parent;
+} es_out_slave_t;
+
+static es_out_id_t *EsOutSlaveAdd( es_out_t *out, const es_format_t *fmt )
+{
+    es_out_slave_t *p_slave = container_of( out, es_out_slave_t, out );
+    return es_out_Add( p_slave->p_parent, fmt );
+}
+
+static int EsOutSlaveSend( es_out_t *out, es_out_id_t *id, block_t *p_block )
+{
+    es_out_slave_t *p_slave = container_of( out, es_out_slave_t, out );
+    return es_out_Send( p_slave->p_parent, id, p_block );
+}
+
+static void EsOutSlaveDel( es_out_t *out, es_out_id_t *id )
+{
+    es_out_slave_t *p_slave = container_of( out, es_out_slave_t, out );
+    es_out_Del( p_slave->p_parent, id );
+}
+
+static int EsOutSlaveControl( es_out_t *out, int i_query, va_list args )
+{
+    es_out_slave_t *p_slave = container_of( out, es_out_slave_t, out );
+
+    switch( i_query )
+    {
+        /* ⛔ Le cœur du correctif : un esclave ne pilote PAS l'horloge. */
+        case ES_OUT_SET_PCR:
+        case ES_OUT_SET_GROUP_PCR:
+        case ES_OUT_RESET_PCR:
+            return VLC_SUCCESS;
+        default:
+            break;
+    }
+    return p_slave->p_parent->pf_control( p_slave->p_parent, i_query, args );
+}
+
+static void EsOutSlaveDestroy( es_out_t *out )
+{
+    free( container_of( out, es_out_slave_t, out ) );
+}
+
+static es_out_t *EsOutSlaveNew( es_out_t *p_parent )
+{
+    es_out_slave_t *p_slave = malloc( sizeof( *p_slave ) );
+    if( unlikely(p_slave == NULL) )
+        return NULL;
+
+    p_slave->out.pf_add     = EsOutSlaveAdd;
+    p_slave->out.pf_send    = EsOutSlaveSend;
+    p_slave->out.pf_del     = EsOutSlaveDel;
+    p_slave->out.pf_control = EsOutSlaveControl;
+    p_slave->out.pf_destroy = EsOutSlaveDestroy;
+    p_slave->out.p_sys      = NULL;
+    p_slave->p_parent       = p_parent;
+
+    return &p_slave->out;
+}
+
+/*****************************************************************************
  * InputSourceNew:
  *****************************************************************************/
 static input_source_t *InputSourceNew( input_thread_t *p_input,
                                        const char *psz_mrl,
                                        const char *psz_forced_demux,
-                                       bool b_in_can_fail )
+                                       bool b_in_can_fail,
+                                       bool b_slave )
 {
     input_thread_private_t *priv = input_priv(p_input);
     input_source_t *in = vlc_custom_create( p_input, sizeof( *in ),
@@ -2749,6 +2857,20 @@ static input_source_t *InputSourceNew( input_thread_t *p_input,
             }
         }
         TAB_CLEAN( count, tab );
+    }
+
+    /* Une source esclave n'écrit pas dans l'horloge du maître : elle passe
+     * par un es_out mandataire qui avale son PCR (cf. EsOutSlaveNew). */
+    if( b_slave )
+    {
+        in->p_slave_es_out = EsOutSlaveNew( priv->p_es_out );
+        if( unlikely(in->p_slave_es_out == NULL) )
+        {
+            free( psz_demux_var );
+            free( psz_dup );
+            vlc_object_release( in );
+            return NULL;
+        }
     }
 
     in->p_demux = InputDemuxNew( p_input, in, psz_access, psz_demux,
@@ -2894,6 +3016,10 @@ static void InputSourceDestroy( input_source_t *in )
             vlc_input_title_Delete( in->title[i] );
         TAB_CLEAN( in->i_title, in->title );
     }
+
+    /* APRÈS demux_Delete : le démultiplexeur écrit dedans jusqu'au bout. */
+    if( in->p_slave_es_out )
+        es_out_Delete( in->p_slave_es_out );
 
     vlc_object_release( in );
 }
@@ -3418,10 +3544,11 @@ static int input_SlaveSourceAdd( input_thread_t *p_input,
 
     input_source_t *p_source = InputSourceNew( p_input, psz_uri,
                                                psz_forced_demux,
-                                               b_can_fail || psz_forced_demux );
+                                               b_can_fail || psz_forced_demux,
+                                               true );
 
     if( psz_forced_demux && p_source == NULL )
-        p_source = InputSourceNew( p_input, psz_uri, NULL, b_can_fail );
+        p_source = InputSourceNew( p_input, psz_uri, NULL, b_can_fail, true );
 
     if( p_source == NULL )
     {
