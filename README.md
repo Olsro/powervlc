@@ -26,8 +26,6 @@ PowerVLC supports almost every feature & nitpick the real VLC3 does, back to Jag
 
 PowerVLC also supports modern SSL, with bundled certs, making it possible to stream HTTPS web radios smoothly even using a G3.
 
-Don't expect miracles, you will be limited by your hardware/GPU/memory bandwidth so keep your expectations reasonable and be patient. But PowerVLC will attempt to give your hardware the best it can achieve.
-
 ## Download
 
 Grab the latest build from the [**Releases page**](https://github.com/Olsro/powervlc/releases/latest), then pick the archive that matches your machine:
