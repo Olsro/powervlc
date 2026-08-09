@@ -28,9 +28,9 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
     ladder of qualities and the alternate audio and subtitle renditions
     reach the player instead of being flattened into the single transport
     stream the server would hand back. Transcoding is asked for at
-    44 100 Hz, the rate these Macs' built-in output actually runs at, so
-    the player is not left resampling every frame on a CPU with nothing
-    to spare.
+    44 100 Hz, the rate the built-in output of a legacy Mac actually runs
+    at, so the player is not left resampling every frame on a processor
+    with nothing to spare.
   - **Subsonic / Navidrome / Airsonic**: browse a music server the way a
     music player does — by album, album artist, genre, playlist or song —
     with a per-view search box, a favourites filter, star/unstar from the
@@ -228,8 +228,8 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   sets are prepended to every keyframe, the decoder is reset pre-emptively
   every few of them (timed to a keyframe, so the video output's lead hides
   the gap), and a watchdog rebuilds it within a frame or two if it wedges
-  anyway. A stream the card genuinely cannot decode goes to the software
-  decoder instead of wedging in a loop.
+  anyway — the fallback to the processor being the last resort rather than
+  a loop of wedge and reset.
 - **Accelerated DVD playback on the oldest G3s.** The GPU plug-in is now
   discovered dynamically from IOKit's own `IODVDBundleName` instead of
   being hardcoded to one family, and a second family — **`ATIRage128`** —
@@ -265,7 +265,7 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   swresample resamplers, and fixes to the existing VP8 and VP9 paths.
   Registrations are tuned per CPU from bench results rather than assumed:
   a kernel measured slower than the C code on a 7447A is not installed.
-  Measured on the 7447A: VP9 480p −7.2 %, HEVC 480p −2.0 %.
+  Decode time on that 7447A: −7.2 % on VP9 480p, −2.0 % on HEVC 480p.
 
 ### Improvements — legacy Macs
 
@@ -323,9 +323,9 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   highlight now moves with the keyboard and the mouse.
 - **Blu-ray and DVD menus ignored the mouse in windowed mode** on Mac OS
   X 10.4: AppKit routes mouse-moved events to the first responder, not to
-  the view under the pointer, and this output — the one used by cards
-  without rectangle textures, such as the iBook G3's Rage Mobility — was
-  not claiming it.
+  the view under the pointer, and the OpenGL 1 output — the one used by
+  cards without rectangle textures, such as the iBook G3's Rage Mobility
+  — was not claiming it.
 - **The interface language was not remembered** on the legacy interface:
   it is stored in NSUserDefaults, and on systems without `cfprefsd`
   nothing flushes that to disk on quit. Choosing Arabic, Hebrew or
@@ -346,7 +346,38 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   output — the one used by cards without rectangle textures — merely
   squeezed into the portrait rectangle computed for them. The fixed
   pipeline has no vertex shader to carry the orientation matrix, so the
-  rotation is now baked into the texture coordinates.
+  rotation is now baked into the texture coordinates. The QuickDraw
+  output still stretches such clips, deliberately: the rotation was
+  written and checked correct there too, but the moment the matrix swaps
+  the axes QuickTime's decompression sequence leaves its fast path for a
+  general software resampling — a 640×360 clip took an iBook G3 from
+  41 % CPU to a machine that no longer answered over SSH. It is kept
+  behind a switch, off, rather than shipped at that price.
+- **A green band across the bottom of H.264 video** on the QuickDraw
+  output, with the picture squashed vertically to make room for it: the
+  image handed to QuickTime was described with the decoder's buffer
+  dimensions rather than the visible ones, so the alignment padding — 18
+  rows of untouched, therefore green, YUV on a 640×360 stream — was
+  blitted and stretched along with the picture. DVDs never showed it,
+  MPEG-2 asking for no such padding.
+- **Cropping did nothing on either legacy output.** The core applies the
+  Crop menu to the source description only, which is what the window
+  measures itself against: the window duly took the cropped aspect ratio
+  while both outputs went on drawing the whole picture, squashed into it.
+  Both now crop for real — through the texture coordinates on the OpenGL 1
+  side, by moving the blit origin and restarting the sequence on the
+  QuickDraw side — rounded to even pixels so the chroma cannot land half a
+  pixel off and fringe the edges.
+- **The playlist button still left video on screen** on Mac OS X 10.3,
+  where the interface merely hides the video view instead of removing a
+  host window. Two things kept covering the list, on different content:
+  the hardware decoder's CGS surface, which the window server composites
+  for as long as it has a shape — so on an accelerated DVD the button
+  appeared to do nothing — and the QuickDraw blit, which writes straight
+  into the window's port without passing through AppKit's view hierarchy,
+  so an H.264 clip painted itself back over the interface at every frame.
+  Both are now suppressed while the view is hidden, from a visibility the
+  main thread publishes and the video thread only ever reads.
 - **Cover art came out with red and blue traded** on PowerPC: two separate
   upstream big-endian bugs, one handing libav a byte-swapped format id for
   a picture that carries no colour mask (which is all libpng and libjpeg
@@ -433,9 +464,9 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   script, alongside the existing ones.
 - `ACCELERATED-MPEG2-COMPATIBILITY.md` rewritten around the two admitted
   GPU families and the machines each was validated on.
-- **Diagnostics for audio sync**, which is what settled the drift work
-  above: the audio output prints a sync report once a second (how much
-  audio the filter chain was given against how much it returned, the
+- **Diagnostics for audio sync**, which is what settled the drift work of
+  this release: the audio output prints a sync report once a second (how
+  much audio the filter chain was given against how much it returned, the
   resampling in force, the delay and the drift) and dumps the preceding
   measurements when it decides to correct, while the WASAPI output
   reports the device's own position and the frames fed to it against the
