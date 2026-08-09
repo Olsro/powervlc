@@ -206,6 +206,27 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   run seeked to for ever, and fragments walked at full pace without a
   single sample sent. Each is now detected, reported and recovered from by
   re-anchoring on the next fragment.
+- **The position froze half-way through a fragmented MP4** while the film
+  played on to the end: an inverted test left no track eligible to close
+  the segment, so the demuxer's own time simply stopped advancing — and
+  the progress bar and the displayed duration, which are read from it,
+  stopped with it (measured on an 18.9 s clip whose clock stayed at 11 s).
+- **The position also advanced in jerks** on those same streams, seven
+  updates over nineteen seconds: the input loop sleeps until the next
+  timestamp the source announces, which in a fragmented format means the
+  next fragment boundary, seconds away, and it slept through every
+  interface refresh due in between. The wait is now capped at 250 ms,
+  which costs the source nothing — the position is derived from the
+  playback clock.
+- **A second input file could reset the playback clock**, so the picture
+  froze and the position fell back to 00:00 while the audio already
+  queued played on. A demuxer does not know whether it is the main source
+  or the slave and emits its timing either way; the slave is only coarsely
+  aligned, and in a fragmented format it overshoots by a whole fragment,
+  so the clock was fed two timings seconds apart in turn and treated the
+  older one as arriving too late. A slave's timing is now swallowed — its
+  stream timestamps are absolute and stay valid, only the clock is the
+  main source's business.
 - **Clicking in an extension list could crash the player.** A widget event
   travels as a raw pointer and a script is free to rebuild its widgets
   while one is still queued — which is exactly what refilling a listing
@@ -347,6 +368,14 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
 - Audio on Mac OS X 10.2 was reported as broken by a probe failing on a
   property that simply does not exist on that system — logged as an error
   at every launch while playback was in fact fine, in 5.1.
+- **Dialogue was missing from 5.1 soundtracks** on machines whose driver
+  does not report a channel layout — an iBook G3 under Panther, whose
+  built-in output is stereo. The audio unit was then opened with the
+  input's own six channels, and the centre channel, which on a DVD is
+  where the dialogue lives, went nowhere: music and effects played
+  perfectly while the actors were inaudible. The format is now forced to
+  stereo in that case and the core does the downmix, which knows to fold
+  the centre channel into the two front ones.
 - **HDR clips played black on AGP-era GPUs.** libplacebo's tone mapper
   appends a hundred-odd instructions to the conversion shader, and
   Shader-Model-2 hardware caps the fragment pipeline far below that — the
