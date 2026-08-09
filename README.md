@@ -14,7 +14,7 @@ From a 1999 PowerPC G3 running Mac OS X 10.2 "Jaguar" to an Apple Silicon Mac �
 [![Linux AppImage](https://img.shields.io/badge/Linux-AppImage-e63312)](#supported-systems)
 [![Support on Patreon](https://img.shields.io/badge/support-Patreon-e63312)](https://www.patreon.com/Olsro)
 
-[Download](#download) · [What it can achieve](#what-can-powervlc-achieve) · [Exclusive features](#extra-features-on-powervlc-that-even-the-modern-vlc-dont-havenever-had) · [Changelog](CHANGELOG-POWERVLC.md) · [FAQ](#faq)
+[Download](#download) · [What can it do concretely](#what-can-it-do-concretely) · [Exclusive features](#extra-features-on-powervlc-that-even-the-modern-vlc-dont-havenever-had) · [Changelog](CHANGELOG-POWERVLC.md) · [FAQ](#faq)
 
 </div>
 
@@ -63,7 +63,7 @@ Building it yourself is documented in [BUILD-POWERVLC.md](BUILD-POWERVLC.md).
 
 Windows and Linux builds are real and shipped, but they get far less testing than the Mac ones — the look-ahead cache, gapless playback and the bundled extensions all work there.
 
-## What can PowerVLC achieve
+## What can it do concretely
 
 Tested on real hardware I own, here's my reports. Compared to old VLC (especially 0.9.10 from 2009), expect much more stability & features, enjoy there more than 15 years of dev & bug fixes from the VLC team.
 
