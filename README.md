@@ -72,8 +72,8 @@ Building it yourself is documented in [BUILD-POWERVLC.md](BUILD-POWERVLC.md).
 	- **Subsonic / Navidrome / Airsonic** — browse a music server the way a music player does, with search, favourites, gapless playback, server-side transcoding and downloads.
 	- **Podcast discovery (iTunes)** — search Apple's public directory, open a show with its artwork and description, and subscribe in one click.
 - **Radio-Browser.info directory** in the Internet section of the sidebar: browse the community webradio database by continent and country, or jump to a random station worldwide.
-- **Invidious instances guarded by an anti-bot challenge are handed to your browser.** PowerVLC does not try to solve JavaScript proof-of-work or captchas: it opens the page in the browser you already have — even a Mac OS X 10.4 machine runs a current one — and takes back the session the browser legitimately earned. Only the *page* is ever handed over: the media itself is always fetched by the player.
-- **A PowerVLC browser add-on** is shipped with the application and installed in one click from the Help menu. It sends what the browser is playing over to the player, and it is the only way in on browsers older than Firefox 69 — the ones legacy Macs run.
+- **Invidious instances guarded by an anti-bot challenge are handed to your browser.** PowerVLC does not try to solve JavaScript proof-of-work or captchas: it opens the page in the browser you already have — even a Mac OS X 10.4 machine can run a current one (PowerFox) — and takes back the session the browser legitimately earned. Only the *page* is ever handed over: the media itself is always fetched by the player.
+- **A PowerVLC browser add-on** for legacy Firefox, that can be installed in one click from the Help menu. It offers the ability to quickly send links to PowerVLC directly with a right click from a video content/link, and helps to pass the JavaScript challenges on protected Invidious instances. This new add-on was designed to work well especially with *neo-retro* browsers like PowerFox or Basilisk.
 
 ## Philosophy of this project
 
