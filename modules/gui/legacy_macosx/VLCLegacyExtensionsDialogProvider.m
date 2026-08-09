@@ -488,16 +488,37 @@ VLC_LEGACY_WIDGET_ACCESSORS
     }
 
     layingOut = YES;
+
+    /* ★★★ Le reliquat va à la colonne la PLUS LARGE, jamais à la DERNIÈRE.
+     *
+     * La boucle de rognage ci-dessus prend soin de tailler dans la colonne la
+     * plus longue pour préserver celles qui ont besoin d'une largeur fixe et
+     * petite — une date, un compteur. Poser ensuite la dernière colonne à
+     * `available - used` défaisait tout ce travail dès que la dernière était
+     * justement une de ces colonnes courtes : elle absorbait le déficit
+     * accumulé par les planchers des autres et se retrouvait tronquée.
+     *
+     * Constaté sur iBook G3, extension « Découverte de podcasts », vue de
+     * recherche : six colonnes dont `Latest` en dernier, et la date illisible.
+     * Le même principe que la boucle ci-dessus s'applique donc jusqu'au bout —
+     * c'est la plus large qui encaisse, elle se lit depuis son début. */
+    float widths[64];
     float used = 0.f;
+    unsigned iw = 0;
     for (i = 0; i < count; i++) {
-        float width = want[i];
-        if (i + 1 == count && total > available)
-            width = available - used;   /* no rounding crumbs on the right */
-        if (width < 48.f)
-            width = 48.f;
-        [[columns objectAtIndex:i] setWidth:width];
-        used += width;
+        widths[i] = (want[i] < 48.f) ? 48.f : want[i];
+        used += widths[i];
+        if (widths[i] > widths[iw])
+            iw = i;
     }
+
+    float slack = (float)available - used;
+    if (slack != 0.f && widths[iw] + slack >= 48.f)
+        widths[iw] += slack;
+
+    for (i = 0; i < count; i++)
+        [[columns objectAtIndex:i] setWidth:widths[i]];
+
     layingOut = NO;
 }
 
