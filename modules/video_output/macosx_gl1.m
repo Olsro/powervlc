@@ -384,6 +384,8 @@ struct vout_display_sys_t
     unsigned tex_height;
     unsigned x_offset;    /* crop offsets inside the picture planes */
     unsigned y_offset;
+    video_orientation_t orient; /* baked into the texture coordinates:
+                                 * see OrientTexCorner() */
 
     /* packed mode: one texture per pool picture buffer */
     struct { const void *pixels; GLuint texture; }
@@ -950,7 +952,36 @@ cleanup:
 
 /* Draws one full quad with per-unit texture coordinates: full-resolution
  * for units sampling Y, half-resolution for units sampling chroma. */
-static void PlanarQuad (float w, float h, const bool chroma_unit[3])
+/* Maps a corner of the DISPLAYED image, (dx, dy) in [0,1] with (0,0) at the
+ * top left, onto the matching corner of the STORED texture.
+ *
+ * The fixed pipeline has no vertex shader to carry the orientation matrix, so
+ * the rotation is baked into the texture coordinates instead. Same convention
+ * as getOrientationTransformMatrix() in opengl/vout_helper.c -- that one
+ * multiplies the texture coordinates by a matrix in the vertex shader, and the
+ * eight cases below are that matrix worked out by hand. Keep the two in step.
+ *
+ * Without this every video carrying a rotation tag -- i.e. every clip filmed
+ * on a phone held upright -- was drawn unrotated and simply squeezed into the
+ * portrait rectangle vout_display_PlacePicture() had computed for it. */
+static void OrientTexCorner (video_orientation_t orient,
+                             float dx, float dy, float *tx, float *ty)
+{
+    switch (orient)
+    {
+        case ORIENT_ROTATED_90:      *tx = dy;        *ty = 1.f - dx;  break;
+        case ORIENT_ROTATED_180:     *tx = 1.f - dx;  *ty = 1.f - dy;  break;
+        case ORIENT_ROTATED_270:     *tx = 1.f - dy;  *ty = dx;        break;
+        case ORIENT_HFLIPPED:        *tx = 1.f - dx;  *ty = dy;        break;
+        case ORIENT_VFLIPPED:        *tx = dx;        *ty = 1.f - dy;  break;
+        case ORIENT_TRANSPOSED:      *tx = dy;        *ty = dx;        break;
+        case ORIENT_ANTI_TRANSPOSED: *tx = 1.f - dy;  *ty = 1.f - dx;  break;
+        default:                     *tx = dx;        *ty = dy;        break;
+    }
+}
+
+static void PlanarQuad (float w, float h, const bool chroma_unit[3],
+                        video_orientation_t orient)
 {
     float cw = w * 0.5f, ch = h * 0.5f;
     float u[3], v[3];
@@ -961,8 +992,11 @@ static void PlanarQuad (float w, float h, const bool chroma_unit[3])
         /* picture row 0 is the top of the image */
         static const float vx[4] = { -1.0f, 1.0f, 1.0f, -1.0f };
         static const float vy[4] = {  1.0f, 1.0f, -1.0f, -1.0f };
-        float fx = (corner == 1 || corner == 2) ? 1.0f : 0.0f;
-        float fy = (corner >= 2) ? 1.0f : 0.0f;
+        float dx = (corner == 1 || corner == 2) ? 1.0f : 0.0f;
+        float dy = (corner >= 2) ? 1.0f : 0.0f;
+        float fx, fy;
+
+        OrientTexCorner (orient, dx, dy, &fx, &fy);
 
         for (int t = 0; t < 3; t++)
         {
@@ -1016,6 +1050,7 @@ static void OpenglDraw (vout_display_sys_t *sys)
 {
     float w = (float) sys->tex_width;
     float h = (float) sys->tex_height;
+    const video_orientation_t orient = sys->orient;
 
     GL1_PROF_START (tc);
     glClear (GL_COLOR_BUFFER_BIT);
@@ -1025,13 +1060,22 @@ static void OpenglDraw (vout_display_sys_t *sys)
     {
         if (sys->draw_tex != 0)
         {
+            static const float vx[4] = { -1.0f, 1.0f, 1.0f, -1.0f };
+            static const float vy[4] = {  1.0f, 1.0f, -1.0f, -1.0f };
+
             glBindTexture (GL_TEXTURE_RECTANGLE_EXT, sys->draw_tex);
             glBegin (GL_QUADS);
-                /* picture row 0 is the top of the image */
-                glTexCoord2f (0.0f, 0.0f); glVertex2f (-1.0f,  1.0f);
-                glTexCoord2f (w,    0.0f); glVertex2f ( 1.0f,  1.0f);
-                glTexCoord2f (w,    h);    glVertex2f ( 1.0f, -1.0f);
-                glTexCoord2f (0.0f, h);    glVertex2f (-1.0f, -1.0f);
+            /* picture row 0 is the top of the image */
+            for (int corner = 0; corner < 4; corner++)
+            {
+                float dx = (corner == 1 || corner == 2) ? 1.0f : 0.0f;
+                float dy = (corner >= 2) ? 1.0f : 0.0f;
+                float fx, fy;
+
+                OrientTexCorner (orient, dx, dy, &fx, &fy);
+                glTexCoord2f (fx * w, fy * h);
+                glVertex2f (vx[corner], vy[corner]);
+            }
             glEnd ();
         }
         DrawRegions (sys);
@@ -1056,7 +1100,7 @@ static void OpenglDraw (vout_display_sys_t *sys)
                 glEnable (GL_TEXTURE_RECTANGLE_EXT);
             glBindTexture (GL_TEXTURE_RECTANGLE_EXT, tex[i]);
         }
-        PlanarQuad (w, h, chromaYUV);
+        PlanarQuad (w, h, chromaYUV, orient);
         glDisable (GL_FRAGMENT_PROGRAM_ARB);
         /* DrawRegions draws with the fixed pipeline on unit 0: leaving the
          * chroma units enabled would modulate the subtitles with them. */
@@ -1099,7 +1143,7 @@ static void OpenglDraw (vout_display_sys_t *sys)
     glEnable (GL_TEXTURE_RECTANGLE_EXT);
     glBindTexture (GL_TEXTURE_RECTANGLE_EXT, tex[0]);
     CombinerStage (GL_SUBTRACT, GL_PREVIOUS, GL_SRC_COLOR, GL_CONSTANT, kR2, 2.0f);
-    PlanarQuad (w, h, chromaR);
+    PlanarQuad (w, h, chromaR, orient);
 
     /* ---- G = 2 * (0.5822 Y + [0.1959(1-U) + 0.1635 + 0.4065(1-V)] - 0.5) ---- */
     static const bool chromaG[3] = { true, true, false };   /* U, V, Y */
@@ -1114,7 +1158,7 @@ static void OpenglDraw (vout_display_sys_t *sys)
     glActiveTexture (GL_TEXTURE2);
     glBindTexture (GL_TEXTURE_RECTANGLE_EXT, tex[0]);
     CombinerStage (GL_MODULATE_SIGNED_ADD_ATI, GL_TEXTURE, GL_SRC_COLOR, GL_PREVIOUS, kG2, 2.0f);
-    PlanarQuad (w, h, chromaG);
+    PlanarQuad (w, h, chromaG, orient);
 
     /* ---- B = 4 * (0.2911 Y + 0.5043 U - 0.2714) ---- */
     static const bool chromaB[3] = { true, false, false };  /* U, Y, - */
@@ -1128,7 +1172,7 @@ static void OpenglDraw (vout_display_sys_t *sys)
     glActiveTexture (GL_TEXTURE2);
     glBindTexture (GL_TEXTURE_RECTANGLE_EXT, tex[0]);
     CombinerStage (GL_SUBTRACT, GL_PREVIOUS, GL_SRC_COLOR, GL_CONSTANT, kB2, 4.0f);
-    PlanarQuad (w, h, chromaB);
+    PlanarQuad (w, h, chromaB, orient);
 
     /* restore sane state for the next frame / other users of the ctx */
     glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -1602,6 +1646,10 @@ static int Open (vlc_object_t *this)
         sys->tex_height = fmt.i_visible_height;
         sys->x_offset   = fmt.i_x_offset;
         sys->y_offset   = fmt.i_y_offset;
+        /* The placement rectangle is already computed post-rotation by
+         * vout_display_PlacePicture(); the picture itself arrives unrotated,
+         * so the display has to do the turning. */
+        sys->orient     = fmt.orientation;
 
         if (vlc_gl_MakeCurrent(sys->gl) != VLC_SUCCESS)
         {
