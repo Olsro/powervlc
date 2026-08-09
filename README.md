@@ -56,7 +56,7 @@ Building it yourself is documented in [BUILD-POWERVLC.md](BUILD-POWERVLC.md).
 | --- | --- | --- |
 | Mac OS X PowerPC (G3 / G4 / G5) | 10.2 "Jaguar" → 10.5 "Leopard" | Legacy |
 | Mac OS X / macOS Intel 32-bit | 10.4 → 10.6 | Legacy |
-| macOS Intel 64-bit | 10.6 → 26 | Legacy or Modern |
+| macOS Intel 64-bit | 10.6 → 26 | Legacy or Modern (10.7+ required for Modern) |
 | macOS Apple Silicon | 11.0 → 26 | Legacy or Modern |
 | Windows (32 / 64 / ARM64) | XP SP3 → 11 | Qt |
 | Linux (x86_64 / i386 / aarch64) | AppImage | Qt |
