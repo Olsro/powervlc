@@ -210,6 +210,19 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   travels as a raw pointer and a script is free to rebuild its widgets
   while one is still queued — which is exactly what refilling a listing
   does; the queue is now purged of the events naming a widget being freed.
+- **Playing an item without saying where it lives sent playback off into
+  another list when it ended.** That is the only call an extension has,
+  and several core paths use it too — “add and play”, the hotkeys, the
+  D-Bus tracklist: the item was played from the context node of the
+  *previous* playback, and since the queue of what comes next is built by
+  walking the leaves under that node, the follow-on came from wherever
+  the user had been before. Seen with a video started from the Invidious
+  extension, which carried on into a Radio-Browser station played half an
+  hour earlier. The item's own root is now used.
+- A text box built by an extension wrapped its contents on the macOS
+  interfaces, so a long URL — the copy-the-link box of the Invidious and
+  Jellyfin views — showed several lines of which only one was visible. A
+  text field is single-line by contract: it now scrolls instead.
 
 ### New features — legacy Macs
 
