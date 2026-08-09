@@ -14,7 +14,7 @@ PowerVLC is an open source project by **Olsro** for the community, forked from V
 [![Linux AppImage](https://img.shields.io/badge/Linux-AppImage-e63312)](#supported-systems)
 [![Support on Patreon](https://img.shields.io/badge/support-Patreon-e63312)](https://www.patreon.com/Olsro)
 
-[Download](#download) · [How it feels on real hardware](MACOS_REAL_HARDWARE_FEELINGS.md) · [Exclusive features](#extra-features-on-powervlc-that-even-the-modern-vlc-dont-havenever-had) · [Changelog](CHANGELOG-POWERVLC.md) · [FAQ](#faq)
+[Download](#download) · [How it feels on real hardware](MACOS_REAL_HARDWARE_FEELINGS.md) · [Exclusive features](#extra-features-on-powervlc-that-even-the-modern-vlc-dont-havenever-had) · [Changelog](CHANGELOG-POWERVLC.md) · [FAQ](FAQ-POWERVLC.md)
 
 </div>
 
@@ -35,7 +35,7 @@ Grab the latest build from the [**Releases page**](https://github.com/Olsro/powe
 | Any Mac, one bundle for all of them | `mac-universal` |
 | PowerPC G3 | `mac-g3` |
 | PowerPC G4 (AltiVec) | `mac-g4` |
-| PowerPC G5 | `mac-g5` |
+| PowerPC G5 (AltiVec) | `mac-g5` |
 | Intel Mac on 10.4 / 10.5 | `mac-x86` |
 | Intel Mac on 10.6 and later | `mac-x64` |
 | Apple Silicon Mac | `mac-arm64` |
@@ -107,30 +107,6 @@ I have personally tested PowerVLC on my own machines. See the results here: [MAC
 - **Universality**: I provide a universal binary, compatible with all MacOS versions starting 10.2 & architectures (ppc, intel x86, intel x86_64, apple silicon arm64).
 - **Compiled with AltiVec instructions** for G4 and G5 processors so you can get the best performance possible there.
 
-## FAQ
-
-### Why the name PowerVLC?
-Because it supports PowerPC Macs and I got inspired by PowerFox which is also a very high quality project to keep old machines alive.
-
-### Is this really VLC3? How is that possible? Did VideoLAN abandon old Mac OS because they were lazy?
-In reality, the Legacy UI that you will use and that feels the same has been recoded from scratch in AppKit to be compatible with 10.2+. Many edge cases & tests had to be done on real machines. AI helped, but even with AI, VLC is still one of the most complex applications in the world. Considering the amount of implied work, their decision to drop some compatibility over time is totally understandable. Supporting older systems is not magical, there's plenty of edge cases & API support each time you target one more older system with all the related machines. Things get even more complicated by adding other architectures: Intel x86 / PPC / PPC AltiVec. It's impressive they could still keep up at maintaining Windows XP compatibility as of this day.
-
-Even Mac OS X 10.5 and 10.6 that feel mostly the same graphically had many internal differences in reality.
-
-PowerVLC is derived from the whole VLC3 source code and crafted with love for you to feel the same, but internally many things had to be improved so it feels great & powerful on your legacy hardware & OS. And some things had to be heavily recoded & changed internally so it can just work as intended on this hardware, even if you probably won't feel it because everything has been carefully tested for you to feel the same at usage.
-
-### When VLC4 is released, do you plan to rebase on VLC4?
-The UI will be completely moved to much more modern tech on VLC4. I plan only to take what users really want & technical "under-the-hood" improvements provided by VLC4. VLC4 is not even released at this point, but as of today I plan to keep on the legacy of VLC3 visually and in terms of user experience just like how PowerFox remained on the legacy of the Firefox Australis user experience.
-
-### What about upstream VLC?
-I don't have the time to invest on making those improvements available on upstream VLC, though I allow anyone to submit patches on my behalf if you've got interest in any of them. Just credit me and the name of this fork (PowerVLC) on the description of your commits & pull requests. No gatekeeping there, sharing is caring.
-
-### Supporting MacOS Classic (9) or X 10.0/10.1?
-Not planned.
-
-### Current quality level
-I believe most features will work, with some obvious limitations on old systems. Though there's real chances things will work bad for you on your specific machine, which is also why I encourage donations which will afford me to get more legacy Macs models to test on.
-
 ## Retro machines general usage tricks
 
 - Use also some other *neo-retro* projects like Basilisk (10.7+) or PowerFox (10.4+) so you can find radio streams links to send on to PowerVLC from the modern web; enjoy synergies.
@@ -144,6 +120,8 @@ I believe most features will work, with some obvious limitations on old systems.
 | Document | What's inside |
 | --- | --- |
 | [CHANGELOG-POWERVLC.md](CHANGELOG-POWERVLC.md) | Everything that changed, release by release |
+| [FAQ-POWERVLC.md](FAQ-POWERVLC.md) | Frequently asked questions about the fork |
+| [MACOS_REAL_HARDWARE_FEELINGS.md](MACOS_REAL_HARDWARE_FEELINGS.md) | How it feels on each machine I tested |
 | [BUILD-POWERVLC.md](BUILD-POWERVLC.md) | Building every target, and the universal bundle |
 | [ACCELERATED-MPEG2-COMPATIBILITY.md](ACCELERATED-MPEG2-COMPATIBILITY.md) | Which GPUs get accelerated DVD playback, and why |
 | [MACOS_INCOMPATIBILITIES.md](MACOS_INCOMPATIBILITIES.md) | What each old macOS version can and cannot do |
