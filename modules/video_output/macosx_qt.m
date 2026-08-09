@@ -405,8 +405,19 @@ static int Open (vlc_object_t *this)
         fmt.i_chroma = VLC_CODEC_I420;
         fmt.i_rmask = fmt.i_gmask = fmt.i_bmask = 0;
 
-        sys->src_width  = fmt.i_width;
-        sys->src_height = fmt.i_height;
+        /* ⚠ Les dimensions VISIBLES, jamais celles du tampon : `i_width` et
+         * `i_height` portent l'alignement que réclame le décodeur, et les
+         * lignes de remplissage ne sont JAMAIS écrites. Décrire l'image à la
+         * taille du tampon les donne à blitter à l'ICM, qui les étire dans le
+         * rectangle calculé pour l'image visible : image tassée à la verticale
+         * et BANDE VERTE en bas (du YUV à zéro), largeur pleine. Mesuré sur
+         * une vidéo Invidious 640x360 en H.264 — avcodec_align_dimensions2()
+         * arrondit la hauteur à 32 et ajoute 2 lignes pour la sur-lecture de
+         * la MC chroma, soit un tampon de 640x386 dont le décodeur ne remplit
+         * que 368 lignes : 18 lignes vertes. Invisible sur DVD, où MPEG-2 ne
+         * réclame ni l'arrondi à 32 ni les 2 lignes en trop. */
+        sys->src_width  = fmt.i_visible_width;
+        sys->src_height = fmt.i_visible_height;
 
         /* Initial placement (refined by Control/reshape) */
         vout_display_PlacePicture (&sys->place, &vd->source, vd->cfg, false);
@@ -554,10 +565,19 @@ static picture_t *QtPicNew (const video_format_t *fmt)
     uint8_t *v = u + size_c;
 
     /* the ICM planar codec reads the frame through this header; offsets
-     * are deltas from the header itself, so the planes can be elsewhere */
-    ps->header.componentInfoY.offset  = (long)(y - (uint8_t *) &ps->header);
-    ps->header.componentInfoCb.offset = (long)(u - (uint8_t *) &ps->header);
-    ps->header.componentInfoCr.offset = (long)(v - (uint8_t *) &ps->header);
+     * are deltas from the header itself, so the planes can be elsewhere.
+     * L'image décrite à l'ICM est la partie VISIBLE (voir Open) : les offsets
+     * pointent donc son coin haut-gauche, pas l'origine du plan. */
+    unsigned crop_x = fmt->i_x_offset & ~1u;   /* 4:2:0 : un pixel chroma
+                                                * couvre 2x2 pixels luma */
+    unsigned crop_y = fmt->i_y_offset & ~1u;
+    const uint8_t *vy = y + (size_t) crop_y * pitch_y + crop_x;
+    const uint8_t *vu = u + (size_t) (crop_y / 2) * pitch_c + crop_x / 2;
+    const uint8_t *vv = v + (size_t) (crop_y / 2) * pitch_c + crop_x / 2;
+
+    ps->header.componentInfoY.offset  = (long)(vy - (uint8_t *) &ps->header);
+    ps->header.componentInfoCb.offset = (long)(vu - (uint8_t *) &ps->header);
+    ps->header.componentInfoCr.offset = (long)(vv - (uint8_t *) &ps->header);
     ps->header.componentInfoY.rowBytes  = pitch_y;
     ps->header.componentInfoCb.rowBytes = pitch_c;
     ps->header.componentInfoCr.rowBytes = pitch_c;
