@@ -48,26 +48,6 @@ The universal bundle runs on **every** supported Mac and architecture out of a s
 
 Building it yourself is documented in [BUILD-POWERVLC.md](BUILD-POWERVLC.md).
 
-### Supported systems
-
-| Platform | Range | Interface |
-| --- | --- | --- |
-| Mac OS X PowerPC (G3 / G4 / G5) | 10.2 "Jaguar" → 10.5 "Leopard" | Legacy |
-| Mac OS X / macOS Intel 32-bit | 10.4 → 10.6 | Legacy |
-| macOS Intel 64-bit | 10.6 → 26 | Legacy or Modern (10.7+ required for Modern) |
-| macOS Apple Silicon | 11.0 → 26 | Legacy or Modern |
-| Windows (32 / 64 / ARM64) | XP SP3 → 11 | Qt |
-| Linux (x86_64 / i386 / aarch64) | AppImage | Qt |
-
-- Modern is derived from the Mac OS X UI of VLC 3, with only a few refinements specific to the new features/improvements related to PowerVLC.
-- Legacy is a faithful recreation of the Mac OS X UI from VLC 3 using new code. It looks & feel really very close, but rely on older Mac OS X APIs to be usable down to Mac OS X 10.2 Jaguar.
-
-Personal advice: use the Modern UI if your Mac supports it, otherwise use Legacy
-
-## How it feels on real hardware
-
-I have personally tested PowerVLC on my own machines. See the results here: [MACOS_REAL_HARDWARE_FEELINGS.md](MACOS_REAL_HARDWARE_FEELINGS.md)
-
 ## Extra features on PowerVLC that even the modern VLC don't have/never had
 
 - **Look-ahead cache.** An optional cache based on decoded frames. If you accept some slowdown & a lot of (configurable) extra RAM usage, you can get smooth playback on content your machine can't exactly decode real time reliably (for example h.264 720p on a Mac Mini G4). The playback will need to stop from time to time in order to do the buffering, but will be 100% smooth all the rest of the time.
