@@ -200,6 +200,25 @@ struct VLCLegacySortCtx
     BOOL ascending;
 };
 
+/* ⚠ Un `NSTextField` construit PAR PROGRAMME n'a pas les réglages qu'Interface
+ * Builder pose sur les champs d'un nib : sa cellule ENROULE par défaut. Une URL
+ * un peu longue s'y affichait donc sur plusieurs lignes, dont une seule tenait
+ * dans la hauteur du champ — constaté sur la zone de copie du lien de la vue
+ * « Invidious Video », reproduit sous Jaguar. Un champ de saisie est
+ * mono-ligne par contrat : on le dit explicitement.
+ * `wraps:NO` + `scrollable:YES` est l'idiome d'époque — le texte trop long
+ * défile horizontalement au lieu de se replier. ⛔ Pas de
+ * `setUsesSingleLineMode:`, qui est 10.6+ alors que cette interface descend
+ * jusqu'à 10.2. */
+static void VLCLegacyMakeSingleLine(NSTextField *field)
+{
+    NSCell *cell = [field cell];
+    if (cell == nil)
+        return;
+    [cell setWraps:NO];
+    [cell setScrollable:YES];
+}
+
 static NSString *VLCLegacyCell(id row, NSString *key, int column)
 {
     NSArray *cells = [row objectForKey:key];
@@ -850,8 +869,22 @@ static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
         size = cell ? [cell cellSize] : [view frame].size;
         /* an empty entry field asks for nothing at all */
         if ([view isKindOfClass:[NSTextField class]]
-         && [(NSTextField *)view isEditable] && size.width < 220)
-            size.width = 220;
+         && [(NSTextField *)view isEditable]) {
+            if (size.width < 220)
+                size.width = 220;
+            /* ⚠ …et depuis qu'ils sont mono-ligne (VLCLegacyMakeSingleLine),
+             * ils en réclament BEAUCOUP trop : `-cellSize` sur une cellule qui
+             * n'enroule pas rend la largeur du contenu ENTIER sur une ligne.
+             * Une URL de lecture directe fait plusieurs milliers de pixels, et
+             * c'est cette valeur qui servirait de largeur naturelle à la
+             * colonne. Tant que la cellule enroulait, `-cellSize` répondait
+             * pour la largeur qu'elle avait alors, donc bornée d'elle-même.
+             * Un champ de saisie n'a pas besoin d'être aussi large que son
+             * contenu : il défile. On plafonne la largeur NATURELLE ; la place
+             * en trop lui revient de toute façon par `columnSlack`. */
+            if (size.width > 420)
+                size.width = 420;
+        }
         /* A rounded bezel clips its last glyph at the fitted width. How
          * much it eats is not the same on every release -- on 10.2 the
          * cell's own answer left "< Retour" cut -- so rather than pad a
@@ -1654,6 +1687,7 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
         [field setWidget:widget];
         [field setEditable:YES];
         [field setBezeled:YES];
+        VLCLegacyMakeSingleLine(field);
         [[NSNotificationCenter defaultCenter]
             addObserver:self
                selector:@selector(syncTextField:)
@@ -1671,6 +1705,7 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
         [field setWidget:widget];
         [field setEditable:YES];
         [field setBezeled:YES];
+        VLCLegacyMakeSingleLine(field);
         [[NSNotificationCenter defaultCenter]
             addObserver:self
                selector:@selector(syncTextField:)

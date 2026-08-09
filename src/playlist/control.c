@@ -49,6 +49,24 @@ void playlist_AssertLocked( playlist_t *pl )
     vlc_assert_locked( &pl_priv(pl)->lock );
 }
 
+/**
+ * La racine dans laquelle vit un élément : on remonte les parents jusqu'à celui
+ * dont le père est la racine cachée. Rend p_playing, p_media_library, ou le
+ * nœud d'un service de découverte. NULL si l'élément n'est rattaché à rien.
+ */
+static playlist_item_t *ItemRoot( playlist_t *p_playlist,
+                                  playlist_item_t *p_item )
+{
+    playlist_item_t *p_node = p_item;
+
+    while( p_node != NULL && p_node->p_parent != NULL
+        && p_node->p_parent != &p_playlist->root )
+        p_node = p_node->p_parent;
+
+    return ( p_node != NULL && p_node->p_parent == &p_playlist->root )
+         ? p_node : NULL;
+}
+
 static void playlist_vaControl( playlist_t *p_playlist, int i_query,
                                 bool locked, va_list args )
 {
@@ -74,8 +92,29 @@ static void playlist_vaControl( playlist_t *p_playlist, int i_query,
 
         assert( locked || (p_item == NULL && p_node == NULL) );
 
+        if ( p_node == NULL && p_item != NULL )
+        {
+            /* ★★★ Un élément SANS nœud : prendre sa PROPRE racine, pas le nœud
+             * de contexte courant. Ce dernier date de la lecture précédente et
+             * n'a aucune raison de contenir l'élément demandé — le cœur bâtit
+             * pourtant sa file `current` en parcourant les feuilles SOUS lui,
+             * si bien que l'élément se lit puis l'enchaînement part AILLEURS.
+             * Constaté : une vidéo lancée depuis l'extension Invidious
+             * (`vlc.playlist.gotoitem` → playlist_ViewPlay(NULL, item), le seul
+             * chemin dont dispose une extension) enchaînait, une fois finie,
+             * sur la première entrée de Radio-Browser.info — « Play a random
+             * station Global » — parce qu'une station y avait été jouée plus
+             * tôt et que le nœud de contexte y était resté.
+             * Même famille que le non-enchaînement des pistes de médiathèque
+             * corrigé côté interface, où le correctif consistait déjà à passer
+             * la racine réelle de la feuille. Ici on ne peut pas le demander à
+             * l'appelant : `vlclua_playlist_gotoitem` ne connaît que l'id. */
+            p_node = ItemRoot( p_playlist, p_item );
+        }
         if ( p_node == NULL )
         {
+            /* Aucun élément demandé (ou élément détaché) : la sémantique
+             * historique s'applique — « nœud nul, on garde le même ». */
             p_node = get_current_status_node( p_playlist );
             assert( p_node );
         }

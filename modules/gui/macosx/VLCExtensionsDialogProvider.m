@@ -82,6 +82,19 @@ static NSView *createControlFromWidget(extension_widget_t *widget, id self)
                 [field setAutoresizingMask:NSViewWidthSizable];
                 [field setFont:[NSFont systemFontOfSize:0]];
                 [[field cell] setControlSize:NSRegularControlSize];
+                /* Un champ de saisie est mono-ligne par contrat. Sans le dire,
+                 * la cellule d'un NSTextField construit par programme ENROULE,
+                 * et une URL un peu longue — la zone de copie du lien des
+                 * extensions Invidious et Jellyfin — s'affiche sur plusieurs
+                 * lignes dont une seule tient dans la hauteur du champ.
+                 * ⛔ Pas `setUsesSingleLineMode:` : elle est **10.10+** alors
+                 * que cette tranche vise 10.7, et `-Wunguarded-availability`
+                 * casse le build arm64. `wraps:NO` + `scrollable:YES` existe
+                 * depuis toujours, fait le même travail ici (le texte défile
+                 * au lieu de se replier) et c'est déjà l'idiome du
+                 * fournisseur legacy. */
+                [[field cell] setWraps:NO];
+                [[field cell] setScrollable:YES];
                 [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(syncTextField:)  name:NSControlTextDidChangeNotification object:field];
                 /* Enter validates the field, like any search box */
                 [field setTarget:self];
@@ -95,6 +108,8 @@ static NSView *createControlFromWidget(extension_widget_t *widget, id self)
                 [field setAutoresizingMask:NSViewWidthSizable];
                 [field setFont:[NSFont systemFontOfSize:0]];
                 [[field cell] setControlSize:NSRegularControlSize];
+                [[field cell] setWraps:NO];          /* cf. le champ texte */
+                [[field cell] setScrollable:YES];
                 [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(syncTextField:)  name:NSControlTextDidChangeNotification object:field];
                 [field setTarget:self];
                 [field setAction:@selector(textFieldActivated:)];
