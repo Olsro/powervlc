@@ -13,11 +13,24 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
     playlists, and play at the quality you pick. Instances that have shut
     their JSON API down are read from their HTML pages instead, and the
     DASH manifest is rebuilt locally, so a working instance stays working.
-  - **Jellyfin**: browse a server (movies, series, seasons, episodes) and
-    play either the original file or an HLS stream transcoded at the
-    chosen quality. Sign in with an API key or with a username and
-    password; the flow follows the JellyDinosaur front-end, and PowerVLC
-    announces itself under its own name in the server's session list.
+    The media itself is fetched straight from Google's servers rather than
+    relayed through the instance — one hop less on a machine that has none
+    to spare.
+  - **Jellyfin**: browse a server (movies, series, seasons, episodes,
+    and the live TV line-up) and play either the original file or an HLS
+    stream transcoded at the chosen quality. Sign in with an API key or
+    with a username and password; the flow follows the JellyDinosaur
+    front-end, and PowerVLC announces itself under its own name in the
+    server's session list. Live channels are ordered the way a remote
+    control numbers them, searchable, and show what is on right now when
+    the server has a guide; a channel the server itself pulls from a
+    remote playlist is opened at that playlist directly, so the whole
+    ladder of qualities and the alternate audio and subtitle renditions
+    reach the player instead of being flattened into the single transport
+    stream the server would hand back. Transcoding is asked for at
+    44 100 Hz, the rate these Macs' built-in output actually runs at, so
+    the player is not left resampling every frame on a CPU with nothing
+    to spare.
   - **Subsonic / Navidrome / Airsonic**: browse a music server the way a
     music player does — by album, album artist, genre, playlist or song —
     with a per-view search box, a favourites filter, star/unstar from the
@@ -37,7 +50,11 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   10.4 machine runs a current one — and takes back the session the
   browser legitimately earned, through a one-shot loopback server behind
   an unguessable path. Only the *page* is ever handed over: the media
-  itself is always fetched by the player.
+  itself is always fetched by the player. The page holds one request open
+  until there is something to take rather than knocking on the player
+  several times a second, which on these machines matters: a second
+  guarded video reuses the same handover, and a tab busy walking a
+  challenge says so instead of looking like an idle relay.
 - **PowerVLC browser add-on**, shipped with the application and installed
   in one click from the Help menu (“Install the PowerVLC add-on in your
   browser…”). It sends what the browser is playing over to the player,
@@ -48,7 +65,9 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   worldwide, per continent, or within the country you are browsing. A new
   `radiobrowser://` access resolves a fresh station at every activation
   and defeats the mirrors' caching, so pressing it again really does give
-  another station.
+  another station — and the station drawn is checked before it is handed
+  over, since the directory's “broken” flag only reflects its own last
+  sweep and a dead one would end the entry rather than draw again.
 - **Searches ignore accents, ligatures and typographic punctuation**:
   typing `au coeur de l'histoire` now finds *Au Cœur de l’Histoire*. Case
   folding is applied to both sides in the core (new `vlc_strfold()`), so
@@ -69,6 +88,18 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   module, which only knows the bare VP8 bitstream and fails on every
   actual `.webp` file, so servers handing out WebP artwork showed no
   artwork at all.
+- **The quality of an adaptive stream can be pinned by hand**, from a new
+  Quality submenu under Video Track present in all three interfaces:
+  automatic, lowest, highest, or one named variant of that stream. Left
+  alone, HLS and DASH pick a quality from a bandwidth estimate and change
+  their mind mid-programme — which on these machines means being handed a
+  resolution the processor cannot decode. Beside it sits a standing
+  **resolution ceiling** (“Auto quality by resolution”, the module's own
+  `adaptive-maxheight`, until now reachable only from the command line):
+  that one is a property of the machine rather than of the stream, so it
+  is set once and applies to everything played afterwards. Both can be
+  changed while the stream is playing, and the lowest/highest choices keep
+  obeying the ceiling.
 
 ### Improvements — all platforms (modern machines included)
 
@@ -112,6 +143,73 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   covers Windows: the portable archive no longer pays a full plugin scan
   at every start, and a third-party plugin dropped into `plugins/` is
   scanned once instead of at every launch.
+- **Audio drift is no longer corrected audibly on a single reading.**
+  Flushing the output or padding it with silence is heard, and one late
+  measurement — one scheduling hiccup — used to be enough to order it;
+  three consecutive ones are now required (`aout-drift-confirm`). How the
+  correction is made is decided per stream (`aout-drift-silence`): an
+  audio-only stream has nothing to stay in step with, so the resampler
+  absorbs the offset inaudibly, while a stream with video keeps the
+  silence padding that holds the picture and the sound together. The input
+  pushes the change when a programme declares its video track late, so a
+  transport stream is not stuck with the audio-only policy for good.
+- **The cheap resampler is now chosen by architecture rather than
+  everywhere.** Speex with a short filter is worth its lower stopband on
+  the PowerPC and 32-bit x86 slices, where libsamplerate's SINC costs real
+  CPU (measured on a 1.42 GHz Mac mini G4: 4 s of extra work per 115 s of
+  audio); modern targets pay nothing for SINC and keep VLC's own ranking.
+  And the choice is made in one place only — the module priority used to
+  say the same thing a second time, and the two disagreed.
+- **Extension dialogs stay where they are put.** Changing view inside an
+  extension deletes the dialog and builds the next one, so a window the
+  user thinks of as one window is really a succession of them, each
+  centred afresh: moving it meant nothing. The position now carries over,
+  in the Qt provider as in the macOS ones, and falls back to centring if
+  the remembered spot no longer lands on any screen.
+- Every line of the log file is stamped with the time elapsed since the
+  first one, and on Windows the file is unbuffered: the C runtime treats
+  line buffering as full buffering there, so a crash used to take the last
+  few kilobytes with it — precisely the part worth reading.
+
+### Fixes — all platforms (modern machines included)
+
+- **Subtitles on a rotated video came out squashed.** The canvas they are
+  rendered on had the rotation applied to it twice, so any clip filmed on
+  a phone held upright got its subpictures stretched along one axis.
+- **Semi-transparent pixels of a PNG were rendered too dark.** libpng was
+  asked for alpha-premultiplied colour and every consumer downstream
+  multiplied by the alpha a second time: a cover at alpha 128 over white
+  landed on 191 instead of 255.
+- **A video output could fail to start at all** on a small picture format:
+  the look-ahead cache sizes its picture pool from a memory budget, and a
+  few hundred megabytes divided by a small picture asks for thousands of
+  them — past the allocator's ceiling, where it returns nothing and the
+  video output dies with it (measured on a PowerBook G4: a 320×180 clip
+  asked for 3021 pictures and played no video whatsoever). The budget is
+  now clamped, and the ceiling is a public constant so the two cannot
+  drift apart again.
+- **A single broken timestamp could freeze the picture for good.** A
+  picture dated a minute or more into the future sits at the head of the
+  queue, is never due, holds everything behind it and gates the decoder
+  shut while the audio plays on. Such a date is now called out and stepped
+  over.
+- **Changing quality on an adaptive stream flickered the whole window** on
+  macOS: the video track is removed and re-added, and if re-buffering
+  finished before the new decoder asked for its output the free one was
+  destroyed a moment before it was needed — a new output means a new
+  window, so the interface fell back to the playlist and popped back to
+  video at every switch.
+- **A fragmented MP4 could freeze the picture while the audio played on,
+  with nothing in the log** — seen live on Invidious DASH streams after a
+  network outage. Three separate silent stalls: a fragment index whose
+  positions disagree with the fragments' own timestamps, an unreachable
+  run seeked to for ever, and fragments walked at full pace without a
+  single sample sent. Each is now detected, reported and recovered from by
+  re-anchoring on the next fragment.
+- **Clicking in an extension list could crash the player.** A widget event
+  travels as a raw pointer and a script is free to rebuild its widgets
+  while one is still queued — which is exactly what refilling a listing
+  does; the queue is now purged of the events naming a widget being freed.
 
 ### New features — legacy Macs
 
@@ -123,7 +221,15 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   the Help menu (no version of macOS before 10.15 lets userspace map a
   PCIe device's registers, so there is no way around a kext here), and
   the client and the driver now agree on an ABI token so a mismatched
-  pair refuses to talk instead of corrupting kernel memory.
+  pair refuses to talk instead of corrupting kernel memory. 1080p is
+  held, which took working around a chip that leaks an internal resource
+  on every keyframe of complex content and then stalls silently — it goes
+  on accepting input, delivers nothing, and reports no error: parameter
+  sets are prepended to every keyframe, the decoder is reset pre-emptively
+  every few of them (timed to a keyframe, so the video output's lead hides
+  the gap), and a watchdog rebuilds it within a frame or two if it wedges
+  anyway. A stream the card genuinely cannot decode goes to the software
+  decoder instead of wedging in a loop.
 - **Accelerated DVD playback on the oldest G3s.** The GPU plug-in is now
   discovered dynamically from IOKit's own `IODVDBundleName` instead of
   being hardcoded to one family, and a second family — **`ATIRage128`** —
@@ -144,10 +250,22 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   10.2 through 10.4 — including Jaguar, whose driver parses the raw
   subpicture packet itself and therefore needs the highlight palette
   written back into it.
-- **HEVC gets AltiVec on PowerPC**: SAO, IDCT and motion compensation.
-  Paired with a new H.264 chroma motion-compensation routine (the single
-  hottest function in the measured H.264 profile, 10.4 % of decode time
-  on its own).
+- **HEVC gets AltiVec on PowerPC**: SAO, the inverse transform, motion
+  compensation — including the whole-pel cases and residual addition —
+  measured on a 1.42 GHz 7447A at 16.8 → 26.9 fps on 854×480 10-bit
+  content (+60 %), with output bit-identical to the C reference on every
+  sample. Paired with a new H.264 chroma motion-compensation routine (the
+  single hottest function in the measured H.264 profile, 10.4 % of decode
+  time on its own).
+- **A large AltiVec series imported into ffmpeg for PowerPC**, on top of
+  the fork's own H.264 and HEVC work: a VP9 decoder (DSP, loop filters and
+  the 4×4 to 32×32 inverse transforms), a split-radix FFT backend for
+  av_tx, Opus and AAC kernels (SBR, parametric stereo, postfilter), H.264
+  16×16 intra prediction, byte-precise `emulated_edge_mc`, the
+  swresample resamplers, and fixes to the existing VP8 and VP9 paths.
+  Registrations are tuned per CPU from bench results rather than assumed:
+  a kernel measured slower than the C code on a 7447A is not installed.
+  Measured on the 7447A: VP9 480p −7.2 %, HEVC 480p −2.0 %.
 
 ### Improvements — legacy Macs
 
@@ -178,6 +296,13 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   watchdog, so a legitimately silent menu never trips it.
 - The Crystal HD card can be switched off from the legacy Preferences
   window like any other decoder.
+- **AAC is decoded by libavcodec rather than faad2** on the legacy slices:
+  libfaad2's inverse filterbank is what AAC playback actually costs there.
+  Measured on a 700 MHz iBook G3, 48 kHz stereo 256 kb/s: 17.0 s of CPU
+  per 60 s of media through faad2 against 15.2 s through libavcodec — 3 %
+  of the machine handed back to the video decoder. faad2 stays as the
+  fallback for the streams libavcodec turns down, and the modern slices
+  keep the historic order.
 
 ### Fixes — legacy Macs
 
@@ -209,6 +334,30 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
 - Audio on Mac OS X 10.2 was reported as broken by a probe failing on a
   property that simply does not exist on that system — logged as an error
   at every launch while playback was in fact fine, in 5.1.
+- **HDR clips played black on AGP-era GPUs.** libplacebo's tone mapper
+  appends a hundred-odd instructions to the conversion shader, and
+  Shader-Model-2 hardware caps the fragment pipeline far below that — the
+  ATI R300 family, i.e. every GPU an AGP-era PowerBook or iMac G4 and G5
+  shipped with, allows 64 ALU instructions. The driver does not always
+  report the overflow: the program links and then draws black, while SDR
+  clips, whose shader stays short, play fine. The budget is now read from
+  the driver and the tone mapper kept only where it can actually run.
+- **Videos carrying a rotation tag were not rotated** by the OpenGL 1
+  output — the one used by cards without rectangle textures — merely
+  squeezed into the portrait rectangle computed for them. The fixed
+  pipeline has no vertex shader to carry the orientation matrix, so the
+  rotation is now baked into the texture coordinates.
+- **Cover art came out with red and blue traded** on PowerPC: two separate
+  upstream big-endian bugs, one handing libav a byte-swapped format id for
+  a picture that carries no colour mask (which is all libpng and libjpeg
+  produce), the other naming bit-order formats where byte order was meant.
+  Little-endian builds never went down either branch, which is why it went
+  unnoticed upstream.
+- **A thread parked in the replacement `poll()` could never be cancelled**
+  before Mac OS X 10.5, which delivers cancellation to a thread already
+  inside a system call where earlier releases do not — so quitting could
+  wait for ever on any subsystem stopped that way, the HTTP server among
+  them. It now sleeps in slices and tests for cancellation between them.
 
 ### Fixes — Windows and Linux
 
@@ -227,6 +376,17 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
 - The Windows release archives could contain the installers of previous
   versions, swept up by a glob over an output directory that keeps every
   artifact ever built.
+- **The Windows and Linux builds could ship stale translations.** The
+  compiled catalogues are git-ignored, so the snapshot handed to the build
+  container left them out, and nothing inside would rebuild them — gettext
+  only recompiles a `.po` when the template changes, so a catalogue edited
+  by hand is compiled on the host and never again. The container then kept
+  whatever its persistent volume happened to hold: caught on the 1.2.0
+  round with 6138 messages in the Windows French catalogue against 6143 on
+  the Mac.
+- Playlist item icons in the Qt interface keep the orange accent of the
+  source selector they sit next to, instead of the red used by the menus
+  and the Open dialog.
 
 ### New features — Windows
 
@@ -273,6 +433,16 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   script, alongside the existing ones.
 - `ACCELERATED-MPEG2-COMPATIBILITY.md` rewritten around the two admitted
   GPU families and the machines each was validated on.
+- **Diagnostics for audio sync**, which is what settled the drift work
+  above: the audio output prints a sync report once a second (how much
+  audio the filter chain was given against how much it returned, the
+  resampling in force, the delay and the drift) and dumps the preceding
+  measurements when it decides to correct, while the WASAPI output
+  reports the device's own position and the frames fed to it against the
+  same wall clock — the drift alone can never tell a sound card running
+  off-rate from a chain losing audio. A new `--wasapi-dump-file` writes
+  the exact bytes handed to the device, so the waveform can be examined
+  off the machine.
 
 ## 1.1.0 (2026-08-02)
 
