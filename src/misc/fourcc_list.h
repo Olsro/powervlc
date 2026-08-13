@@ -28,6 +28,7 @@ static const staticentry_t p_list_video[] = {
         A("m1v "),
         A("mpg1"),
         A("BW10"),
+        E("m1v1", "Apple MPEG-1 Camcorder (MPEG-1 Video)"),
         E("XMPG", "Xing MPEG-1 Intra"),
 
     B(VLC_CODEC_MPGV, "MPEG-1/2 Video"),
@@ -40,6 +41,10 @@ static const staticentry_t p_list_video[] = {
         A("H262"),
 
         E("PIM1", "Pinnacle DC1000 (MPEG-1 Video)"),
+
+        /* What ffmpeg's mov muxer writes for MPEG-2 in a .mov container,
+         * e.g. "ffmpeg -i in -c:v mpeg2video -f mov out.mov". */
+        E("m2v1", "Apple MPEG-2 Camcorder (MPEG-2 Video)"),
 
         E("hdv1", "HDV 720p30 (MPEG-2 Video)"),
         E("hdv2", "Sony HDV 1080i60 (MPEG-2 Video)"),

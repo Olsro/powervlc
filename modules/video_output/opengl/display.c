@@ -42,6 +42,13 @@ static void Close (vlc_object_t *);
 #define PROVIDER_LONGTEXT N_( \
     "Extension through which to use the Open Graphics Library (OpenGL).")
 
+#define SOFTWARE_TEXT N_("Use OpenGL even without hardware acceleration")
+#define SOFTWARE_LONGTEXT N_( \
+    "By default this output steps aside when OpenGL is served by a software " \
+    "rasteriser such as llvmpipe, so that an output backed by the display " \
+    "hardware (XVideo) can convert and scale the picture instead, which " \
+    "costs far less processor time. Enable this to use OpenGL regardless.")
+
 vlc_module_begin ()
 #if defined (USE_OPENGL_ES2)
 # define API VLC_OPENGL_ES2
@@ -68,6 +75,11 @@ vlc_module_begin ()
     add_module ("gl", "opengl", NULL,
                 GL_TEXT, PROVIDER_LONGTEXT, true)
 #endif
+    /* Named after the module (gl-software / gles2-software): both plugins are
+     * built from this file and may be installed side by side, so they cannot
+     * share one config item name. */
+    add_bool (MODULE_VARNAME "-software", false,
+              SOFTWARE_TEXT, SOFTWARE_LONGTEXT, true)
     add_glopts ()
 vlc_module_end ()
 
@@ -77,6 +89,32 @@ struct vout_display_sys_t
     vlc_gl_t *gl;
     picture_pool_t *pool;
 };
+
+/**
+ * Is this picture format a hardware surface?
+ *
+ * Such a picture never reaches system memory: it is a handle to a buffer owned
+ * by the decoder's GPU stack, and this module -- through its glconv_* helpers
+ * -- is the only output able to take one. Any other output forces the core to
+ * insert a readback-and-convert chain first.
+ */
+static bool IsHardwareSurface (vlc_fourcc_t chroma)
+{
+    switch (chroma)
+    {
+        case VLC_CODEC_VAAPI_420:
+        case VLC_CODEC_VAAPI_420_10BPP:
+        case VLC_CODEC_VDPAU_VIDEO_420:
+        case VLC_CODEC_VDPAU_VIDEO_422:
+        case VLC_CODEC_VDPAU_VIDEO_444:
+        case VLC_CODEC_VDPAU_OUTPUT:
+        case VLC_CODEC_ANDROID_OPAQUE:
+        case VLC_CODEC_MMAL_OPAQUE:
+            return true;
+        default:
+            return false;
+    }
+}
 
 /* Display callbacks */
 static picture_pool_t *Pool (vout_display_t *, unsigned);
@@ -141,6 +179,41 @@ static int Open (vlc_object_t *obj)
 
     if (vlc_gl_MakeCurrent (sys->gl))
         goto error;
+
+    /* Decline a software rasteriser unless asked to take it.
+     *
+     * This module outranks every other X11/Wayland output (270/265 against 200
+     * for xcb_xv and 100 for xcb_x11), so it wins even when Mesa has fallen
+     * back to llvmpipe and every pixel is converted and scaled on the CPU.
+     * That is not hypothetical: Mesa 25 dropped the DRI2 path, and
+     * xf86-video-intel only offers DRI2 on gen3, so an ordinary Debian 13 on
+     * a 945GME lands on llvmpipe. Measured there on 52 s of 854x480 H.264
+     * (Atom N270): 91.3 s of CPU through this module against 39.9 s through
+     * xcb_xv -- 2.3x, on the kind of machine that can least afford it.
+     * Declining lets the module system fall through to an output that hands
+     * the conversion to the display hardware.
+     *
+     * Only this module is affected: the check lives here and not in
+     * vout_display_opengl_New(), which macOS and Windows also call and where
+     * bailing out would leave them with no video output at all.
+     *
+     * A hardware surface is the one case where stepping aside costs more than
+     * it saves: no other output can take one, so the core answers by inserting
+     * a readback-and-convert chain. Observed while VLC was probing VDPAU on the
+     * netbook -- declining a VAOP picture handed the job to xcb_x11 behind a
+     * software VAOP -> I420 -> RV32 bicubic swscale, which is worse than the
+     * software OpenGL it was avoiding. The saving only exists when a cheaper
+     * non-GL path genuinely exists, i.e. for pictures already in memory. */
+    if (!var_InheritBool (vd, MODULE_VARNAME "-software")
+     && !IsHardwareSurface (vd->fmt.i_chroma)
+     && vout_display_opengl_IsSoftware (sys->gl))
+    {
+        msg_Dbg (vd, "declining: OpenGL is software-rasterised here, and a "
+                     "hardware output is likely cheaper (use --"
+                     MODULE_VARNAME "-software to force OpenGL anyway)");
+        vlc_gl_ReleaseCurrent (sys->gl);
+        goto error;
+    }
 
     sys->vgl = vout_display_opengl_New (&vd->fmt, &spu_chromas, sys->gl,
                                         &vd->cfg->viewpoint);

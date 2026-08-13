@@ -87,6 +87,14 @@ static int IntfShowCB( vlc_object_t *p_this, const char *psz_variable,
                        vlc_value_t old_val, vlc_value_t new_val, void *param );
 static int IntfBossCB( vlc_object_t *p_this, const char *psz_variable,
                        vlc_value_t old_val, vlc_value_t new_val, void *param );
+static int IntfRevealControlsCB( vlc_object_t *p_this, const char *psz_variable,
+                                 vlc_value_t old_val, vlc_value_t new_val,
+                                 void *param );
+#ifdef _WIN32
+static int IntfVideoDragCB( vlc_object_t *p_this, const char *psz_variable,
+                            vlc_value_t old_val, vlc_value_t new_val,
+                            void *param );
+#endif
 static int IntfRaiseMainCB( vlc_object_t *p_this, const char *psz_variable,
                            vlc_value_t old_val, vlc_value_t new_val,
                            void *param );
@@ -151,6 +159,22 @@ MainInterface::MainInterface( intf_thread_t *_p_intf ) : QVLCMW( _p_intf )
 
     /* Should the UI stays on top of other windows */
     b_interfaceOnTop = var_InheritBool( p_intf, "video-on-top" );
+
+    /* "Hide controls during playback" (Video menu) */
+    b_autoHideControls = var_InheritBool( p_intf, "qt-hide-controls" );
+    b_controlsHiddenPlayback = false;
+    b_hiddenDragActive = false;
+    b_hiddenDragAnchored = false;
+    lastVideoZoom = 0.;
+    b_videoDrivenResize = false;
+    b_hiddenDragIsResize = false;
+    hiddenDragResizeH = hiddenDragResizeV = 0;
+    i_autoHideOutsideTicks = i_autoHideRevealTicks = 0;
+    autoHideControlsTimer = new QTimer( this );
+    autoHideControlsTimer->setInterval( 500 );
+    connect( autoHideControlsTimer, &QTimer::timeout,
+             this, &MainInterface::autoHideControlsTick );
+    autoHideControlsTimer->start();
 
     /**************************
      *  UI and Widgets design
@@ -233,6 +257,10 @@ MainInterface::MainInterface( intf_thread_t *_p_intf ) : QVLCMW( _p_intf )
 
     connect( this, &MainInterface::askBoss, this, &MainInterface::setBoss );
     connect( this, &MainInterface::askRaise, this, &MainInterface::setRaise );
+    connect( this, &MainInterface::askRevealControls,
+             this, &MainInterface::revealControlsPlayback );
+    connect( this, &MainInterface::askVideoDrag,
+             this, &MainInterface::videoDragRelayed );
 
 
     connect( THEDP, &DialogsProvider::releaseMouseEvents, this, &MainInterface::voutReleaseMouseEvents ) ;
@@ -248,6 +276,28 @@ MainInterface::MainInterface( intf_thread_t *_p_intf ) : QVLCMW( _p_intf )
 
     /* Register callback for the intf-popupmenu variable */
     var_AddCallback( p_intf->obj.libvlc, "intf-popupmenu", PopupMenuCB, p_intf );
+
+    /* "Hide controls during playback" plumbing shared with the core: the
+     * bool tells it the controls are gone (fullscreen-style OSD, video
+     * double-click rerouted), the trigger is the core asking for them
+     * back */
+    var_Create( p_intf->obj.libvlc, "intf-controls-hidden", VLC_VAR_BOOL );
+    var_Create( p_intf->obj.libvlc, "intf-reveal-controls", VLC_VAR_VOID );
+    var_AddCallback( p_intf->obj.libvlc, "intf-reveal-controls",
+                     IntfRevealControlsCB, p_intf );
+
+#ifdef _WIN32
+    /* ⚠ On Windows the vout builds a child window of its own inside the
+     * one we hand it and answers the mouse in its own thread: VideoWidget
+     * never sees a single event there, so dragging the picture could not
+     * move the window -- and with the controls auto-hidden there is no
+     * frame left to grab either. Asking the core for the relay (the
+     * variable existing IS the request) is the only channel; everywhere
+     * else the widget's own events are used and this stays unregistered. */
+    var_Create( p_intf->obj.libvlc, "intf-video-drag", VLC_VAR_INTEGER );
+    var_AddCallback( p_intf->obj.libvlc, "intf-video-drag",
+                     IntfVideoDragCB, p_intf );
+#endif
 
 
     /* Final Sizing, restoration and placement of the interface */
@@ -307,6 +357,14 @@ MainInterface::~MainInterface()
     var_DelCallback( p_intf->obj.libvlc, "intf-show", IntfRaiseMainCB, p_intf );
     var_DelCallback( p_intf->obj.libvlc, "intf-toggle-fscontrol", IntfShowCB, p_intf );
     var_DelCallback( p_intf->obj.libvlc, "intf-popupmenu", PopupMenuCB, p_intf );
+    var_DelCallback( p_intf->obj.libvlc, "intf-reveal-controls",
+                     IntfRevealControlsCB, p_intf );
+#ifdef _WIN32
+    var_DelCallback( p_intf->obj.libvlc, "intf-video-drag",
+                     IntfVideoDragCB, p_intf );
+    var_Destroy( p_intf->obj.libvlc, "intf-video-drag" );
+#endif
+    var_SetBool( p_intf->obj.libvlc, "intf-controls-hidden", false );
 
     p_intf->p_sys->p_mi = NULL;
 }
@@ -763,6 +821,12 @@ void MainInterface::getVideoSlot( struct vout_window_t *p_wnd,
     *res = videoWidget->request( p_wnd );
     if( *res ) /* The videoWidget is available */
     {
+        /* first source for the picture ratio the bare window is kept at
+         * ("Hide controls during playback"); setVideoSize() refreshes it
+         * afterwards, but only ever gets called with autoresize on */
+        if( i_width > 0 && i_height > 0 )
+            videoNativeSize = QSize( i_width, i_height );
+
         setVideoFullScreen( fullscreen );
 
         /* Consider the video active now */
@@ -816,6 +880,35 @@ void MainInterface::releaseVideoSlot( bool forced )
 // The provided size is in physical pixels, coming from the core.
 void MainInterface::setVideoSize( unsigned int w, unsigned int h )
 {
+    /* Everything below works in LOGICAL pixels: the picture box, the
+     * window geometry and the video widget all do, and mixing the two
+     * units on a HiDPI screen would put the box off by the scale
+     * factor. */
+#if HAS_QT56
+    float factor = videoWidget ? videoWidget->devicePixelRatioF() : 1.0f;
+#else
+    float factor = 1.0f;
+#endif
+    QSize requested( qRound( (float)w / factor ), qRound( (float)h / factor ) );
+    if( requested.width() > 0 && requested.height() > 0 )
+        videoNativeSize = requested;
+
+    if( b_controlsHiddenPlayback )
+    {
+        hiddenWindowFollowVideoSize( requested );
+        return;
+    }
+
+    /* see pictureSizeForRequest(): the bare window is the picture
+     * itself, the decorated one keeps its chrome around it, but both
+     * follow the same rule */
+    QSize picture = pictureSizeForRequest( requested,
+        videoWidget ? videoWidget->size() : QSize() );
+    if( picture.width() <= 0 || picture.height() <= 0 )
+        return;
+    w = picture.width();
+    h = picture.height();
+
     if (!isFullScreen() && !isMaximized() )
     {
         /* Resize video widget to video size, or keep it at the same
@@ -826,45 +919,80 @@ void MainInterface::setVideoSize( unsigned int w, unsigned int h )
          */
         if (b_autoresize)
         {
-            QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
-#if HAS_QT56
-            float factor = videoWidget->devicePixelRatioF();
-#else
-            float factor = 1.0f;
-#endif
-            if( (float)h / factor > screen.height() )
+            /* A picture bigger than the screen has to be scaled down to
+             * what is left once the window's own furniture is counted.
+             *
+             * ⚠ Upstream looked at the HEIGHT alone and then took the full
+             * screen WIDTH: a 1080p film opened a window as wide as the
+             * screen plus its frame borders, as tall as the work area plus
+             * whatever its chrome estimate was short of, and the picture
+             * inside it was letterboxed for good measure. And nothing ever
+             * moved the window afterwards, so one that already sat low on
+             * the screen simply grew under the task bar (reported on
+             * Windows XP with Big Buck Bunny, 13/08/2026).
+             *
+             * The furniture is measured, not estimated: the difference
+             * between the whole window, frame included, and the widget the
+             * video lives in IS everything else, whatever it is made of --
+             * the same measurement the auto-hidden window is built on. */
+            const QRect available = availableScreenGeometry();
+            const QSize chrome = frameGeometry().size() - stackCentralW->size();
+            const QSize box( available.width() - chrome.width(),
+                             available.height() - chrome.height() );
+
+            if( box.width() > 0 && box.height() > 0
+             && ( (int)w > box.width() || (int)h > box.height() ) )
             {
-                w = screen.width();
-                h = screen.height();
-                if( !b_minimalView )
-                {
-                    if( menuBar()->isVisible() )
-                        h -= menuBar()->height();
-                    if( controls->isVisible() )
-                        h -= controls->height();
-#ifndef QT_NO_STATUSBAR
-                    if( statusBar()->isVisible() )
-                        h -= statusBar()->height();
-#endif
-                    if( inputC->isVisible() )
-                        h -= inputC->height();
-                }
-                h -= style()->pixelMetric(QStyle::PM_TitleBarHeight);
-                h -= style()->pixelMetric(QStyle::PM_LayoutBottomMargin);
-                h -= 2 * style()->pixelMetric(QStyle::PM_DefaultFrameWidth);
+                const double fit = qMin( (double)box.width() / (double)w,
+                                         (double)box.height() / (double)h );
+                w = qMax( 1, (int)( w * fit ) );
+                h = qMax( 1, (int)( h * fit ) );
+                /* what the user is now watching in: a later crop or aspect
+                 * change is fitted into this, not into the full picture */
+                pictureBox = QSize( w, h );
             }
-            else
-            {
-                // Convert the size in logical pixels
-                w = qRound( (float)w / factor );
-                h = qRound( (float)h / factor );
-                msg_Dbg( p_intf, "Logical video size: %ux%u", w, h );
-            }
-            videoWidget->setSize( w, h );
+            msg_Dbg( p_intf, "Logical video size: %ux%u", w, h );
+
+            setVideoWidgetSizeFromRequest( QSize( w, h ) );
+            /* ... and put back on screen whatever the resize did */
+            QTimer::singleShot( 0, this, &MainInterface::keepInsideScreen );
         }
         else
-            videoWidget->setSize( videoWidget->width(), videoWidget->height() );
+            setVideoWidgetSizeFromRequest( videoWidget->size() );
     }
+}
+
+/* Resizing the video widget because the VOUT asked for it, as opposed to
+ * the user dragging the window frame. Qt has no equivalent of AppKit's
+ * -windowWillResize:toSize: (which only the user reaches), and
+ * resizeEvent() fires on both, so our own resizes are flagged here for
+ * resizeEvent() to skip: the picture box must remember what the USER
+ * chose, never what a crop asked for. The flag is dropped on the next
+ * turn of the event loop, once the layout has settled. */
+void MainInterface::setVideoWidgetSizeFromRequest( const QSize &size )
+{
+    if( !videoWidget )
+        return;
+    lastVideoRequestSize = size;
+    b_videoDrivenResize = true;
+    videoWidget->setSize( size.width(), size.height() );
+    QTimer::singleShot( 0, this, [this]() { b_videoDrivenResize = false; } );
+}
+
+void MainInterface::resizeEvent( QResizeEvent *event )
+{
+    QVLCMW::resizeEvent( event );
+
+    /* the user resized the decorated window by hand (frame drag, tiling,
+     * maximise): that is the box a later crop has to fit into. The bare
+     * window records its own box while it is being dragged. */
+    if( b_videoDrivenResize || b_controlsHiddenPlayback || !videoWidget )
+        return;
+    if( stackCentralW->currentWidget() != videoWidget )
+        return;
+    if( videoWidget->size() == lastVideoRequestSize )
+        return;
+    pictureBox = videoWidget->size();
 }
 
 void MainInterface::videoSizeChanged( int w, int h )
@@ -967,6 +1095,9 @@ void MainInterface::setInterfaceAlwaysOnTop( bool on_top )
         setWindowFlags( newflags );
         show(); /* necessary to apply window flags */
     }
+    /* the same switch now lives in two menus (View, and Video right above
+     * "Hide Controls" as on the mac): whichever is used, both follow */
+    emit alwaysOnTopToggled( on_top );
 }
 
 /* Asynchronous call from WindowControl function */
@@ -1214,6 +1345,531 @@ void MainInterface::toggleMinimalView( bool b_minimal )
     emit minimalViewToggled( b_minimalView );
 }
 
+/*****************************************************************************
+ * "Hide controls during playback" (Video menu, qt-hide-controls)
+ *****************************************************************************/
+
+void MainInterface::setAutoHideControls( bool enable )
+{
+    if( b_autoHideControls == enable )
+        return;
+    b_autoHideControls = enable;
+    config_PutInt( p_intf, "qt-hide-controls", enable );
+    if( !enable )
+        revealControlsPlayback();
+    i_autoHideOutsideTicks = 0;
+    emit autoHideControlsToggled( enable );
+}
+
+bool MainInterface::shouldAutoHideControls()
+{
+    if( !b_autoHideControls || b_controlsHiddenPlayback )
+        return false;
+    if( isFullScreen() || b_videoFullScreen || b_minimalView )
+        return false;
+    /* the video being on show is the whole condition: a pause hides just
+     * as well (the OSD is the feedback then), the playlist view never
+     * does */
+    if( !videoWidget || stackCentralW->currentWidget() != videoWidget )
+        return false;
+    return THEMIM->getInput() != NULL;
+}
+
+/* 500 ms tick, running for the interface's lifetime. Hiding waits for
+ * the mouse to have been outside the window for 3 s; revealing waits for
+ * the video to have been gone for 2.5 s, since the gaps of a loop
+ * restart or of an item transition are shorter than that and must not
+ * count. Coming back over the window never reveals by itself: that takes
+ * a double click on the video. */
+void MainInterface::autoHideControlsTick()
+{
+    if( b_controlsHiddenPlayback )
+    {
+        if( !b_autoHideControls || isFullScreen() || b_videoFullScreen )
+        {
+            revealControlsPlayback();
+            return;
+        }
+        bool videoShown = videoWidget
+            && stackCentralW->currentWidget() == videoWidget
+            && THEMIM->getInput() != NULL;
+        if( videoShown )
+            i_autoHideRevealTicks = 0;
+        else if( ++i_autoHideRevealTicks >= 5 )
+            revealControlsPlayback();
+        return;
+    }
+
+    i_autoHideRevealTicks = 0;
+    if( !shouldAutoHideControls() || geometry().contains( QCursor::pos() ) )
+    {
+        i_autoHideOutsideTicks = 0;
+        return;
+    }
+    if( ++i_autoHideOutsideTicks >= 6 )
+        hideControlsPlayback();
+}
+
+/* Where the picture actually sits on screen, in global coordinates: the
+ * video widget minus the letterbox bands the vout draws inside it. The
+ * bare window is shrunk onto exactly that, so the picture neither moves
+ * nor changes size when the decorations go away, bands included.
+ * TODO(linux-windows round): verify setWindowFlags() does not disturb
+ * the embedded vout on X11/Win32 (the native window is recreated). */
+QRect MainInterface::pictureGeometryOnScreen() const
+{
+    if( !videoWidget )
+        return QRect();
+
+    QRect rect( videoWidget->mapToGlobal( QPoint( 0, 0 ) ),
+                videoWidget->size() );
+    if( videoNativeSize.width() <= 0 || videoNativeSize.height() <= 0
+     || rect.width() <= 0 || rect.height() <= 0 )
+        return rect;
+
+    double scale = qMin( (double)rect.width() / videoNativeSize.width(),
+                         (double)rect.height() / videoNativeSize.height() );
+    QSize picture( qRound( videoNativeSize.width() * scale ),
+                   qRound( videoNativeSize.height() * scale ) );
+    rect.translate( ( rect.width() - picture.width() ) / 2,
+                    ( rect.height() - picture.height() ) / 2 );
+    rect.setSize( picture );
+    return rect;
+}
+
+/* Every picture transformation -- zoom, crop, aspect ratio, the rotation
+ * of the video effects, or simply another item -- reaches the interface
+ * as the vout asking for a window size, and that is also what a plain
+ * restart does. Telling them apart: a restart asks for the size it asked
+ * for last time and is ignored, so the size the user settled on survives
+ * every loop; a request that keeps the picture SHAPE and only changes
+ * its scale is a zoom (Half/Normal/Double, or the matching hotkeys), an
+ * explicit "make it this big", taken as is; a request that changes the
+ * SHAPE (crop, aspect ratio, rotation, another item) is fitted inside
+ * the box the user is watching in, so it never grows -- cropping a
+ * half-size window would otherwise blow it up to full screen, because
+ * the core drops the zoom factor on a crop change and then asks for the
+ * natural size. The box only follows what the user asks for (a zoom, a
+ * hand resize), never a shape change, so going 16:9 -> 4:3 -> 16:9 lands
+ * back on the very same window instead of shrinking every time. */
+/* The zoom factor the vout is currently applying, 0 when there is no
+ * video to ask. */
+double MainInterface::currentVideoZoom()
+{
+    input_thread_t *p_input = THEMIM->getInput();
+    vout_thread_t *p_vout = p_input != NULL ? input_GetVout( p_input ) : NULL;
+    if( p_vout == NULL )
+        return 0.;
+
+    const double zoom = var_GetFloat( p_vout, "zoom" );
+    vlc_object_release( p_vout );
+    return zoom;
+}
+
+QSize MainInterface::pictureSizeForRequest( const QSize &requested,
+                                            const QSize &area )
+{
+    if( requested.width() <= 0 || requested.height() <= 0 )
+        return QSize();
+
+    QSize previous = lastRequestedVideoSize;
+    lastRequestedVideoSize = requested;
+    if( previous == requested )
+        return QSize();
+
+    /* Half / Normal / Double, and the hotkeys that do the same, all go
+     * through the vout's "zoom": that is how a scale change the *user*
+     * asked for is told apart from one the stream decided on its own. */
+    const double zoom = currentVideoZoom();
+    const double previousZoom = lastVideoZoom;
+    lastVideoZoom = zoom;
+
+    double ratio = (double)requested.width() / requested.height();
+    bool sameShape = ( previous.width() > 0 && previous.height() > 0
+        && qAbs( ratio - (double)previous.width() / previous.height() )
+           <= ratio * 0.005 );
+
+    /* the very first request opens the window at the size of the media,
+     * as it always did */
+    if( previous.width() <= 0 || previous.height() <= 0 )
+    {
+        pictureBox = requested;
+        return requested;
+    }
+
+    if( sameShape )
+    {
+        /* ⚠ Same shape, another size, and nobody asked to zoom: this is
+         * an adaptive stream switching variant, which it does several
+         * times a programme. Following it made the window take the pixel
+         * size of each variant and, one step up after another, end up
+         * filling the screen on its own. The window belongs to the
+         * viewer; only a shape change re-fits it (below). */
+        if( zoom <= 0. || zoom == previousZoom )
+            return QSize();
+
+        pictureBox = requested;
+        return requested;
+    }
+
+    QSize box = ( pictureBox.width() > 0 && pictureBox.height() > 0 )
+        ? pictureBox : area;
+    if( box.width() <= 0 || box.height() <= 0 )
+        return requested;
+    double fit = qMin( (double)box.width() / requested.width(),
+                       (double)box.height() / requested.height() );
+    return QSize( qRound( requested.width() * fit ),
+                  qRound( requested.height() * fit ) );
+}
+
+void MainInterface::hiddenWindowFollowVideoSize( const QSize &requested )
+{
+    if( !b_controlsHiddenPlayback )
+        return;
+
+    QRect frame = geometry();
+    QSize picture = pictureSizeForRequest( requested, frame.size() );
+    if( picture.width() <= 0 || picture.height() <= 0 )
+        return;
+
+    /* keep it on the screen, at the ratio it just took */
+    QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
+    double fit = qMin( 1., qMin( (double)screen.width() / picture.width(),
+                                 (double)screen.height() / picture.height() ) );
+    if( fit < 1. )
+        picture = QSize( qRound( picture.width() * fit ),
+                         qRound( picture.height() * fit ) );
+    if( picture.width() < 160 || picture.height() < 90 )
+        return;
+
+    /* grow or shrink from the top left corner, where the eye is */
+    frame.setSize( picture );
+    setGeometry( frame );
+}
+
+void MainInterface::hideControlsPlayback()
+{
+    if( b_controlsHiddenPlayback || !shouldAutoHideControls()
+     || geometry().contains( QCursor::pos() ) )
+        return;
+
+    QRect picture = pictureGeometryOnScreen();
+    /* a video widget caught mid-relayout or mid-teardown (playback
+     * ending, the playlist view coming and going) measures next to
+     * nothing: shrinking the window onto that would leave a sliver
+     * behind and there would be no picture to watch anyway */
+    if( picture.width() < 160 || picture.height() < 90 )
+        return;
+
+    b_controlsHiddenPlayback = true;
+    geometryBeforeHidingControls = geometry();
+    lastRequestedVideoSize = videoNativeSize;
+    pictureBox = picture.size();
+
+    setMinimalView( true );
+    setWindowFlags( windowFlags() | Qt::FramelessWindowHint );
+    show();
+
+    /* fit the window around the picture: both steps work from the
+     * difference between the window and the video widget, so whatever
+     * margins the style leaves are taken care of */
+    QCoreApplication::processEvents( QEventLoop::ExcludeUserInputEvents );
+    resize( size() + ( picture.size() - videoWidget->size() ) );
+    QCoreApplication::processEvents( QEventLoop::ExcludeUserInputEvents );
+    move( pos() + ( picture.topLeft()
+                    - videoWidget->mapToGlobal( QPoint( 0, 0 ) ) ) );
+
+    hiddenControlsInitialGeometry = geometry();
+    var_SetBool( p_intf->obj.libvlc, "intf-controls-hidden", true );
+}
+
+void MainInterface::revealControlsPlayback()
+{
+    if( !b_controlsHiddenPlayback )
+        return;
+    b_controlsHiddenPlayback = false;
+    b_hiddenDragActive = false;
+
+    /* what was there before, carrying over whatever the user moved or
+     * resized the bare window to meanwhile */
+    QRect hidden = geometry();
+    QRect restored = geometryBeforeHidingControls;
+    restored.translate( hidden.x() - hiddenControlsInitialGeometry.x(),
+                        hidden.y() - hiddenControlsInitialGeometry.y() );
+    restored.setSize( restored.size()
+        + ( hidden.size() - hiddenControlsInitialGeometry.size() ) );
+
+    /* ⚠ hide() FIRST, and only here. Qt recreates the native window when
+     * the frameless hint is ADDED, so the bare window loses its
+     * decorations on its own; taking the hint away again does not go
+     * through that path and the window manager is never told -- measured
+     * on the Qt bench: after leaving the mode the controls and the menu
+     * bar were back but _MOTIF_WM_HINTS still asked for no decoration at
+     * all, leaving a title-bar-less window. Hiding by hand forces the
+     * recreation the WM needs to redecorate. */
+    hide();
+    setWindowFlags( windowFlags() & ~Qt::FramelessWindowHint );
+    show();
+    setMinimalView( b_minimalView );
+
+    QCoreApplication::processEvents( QEventLoop::ExcludeUserInputEvents );
+    setGeometry( restored );
+
+    var_SetBool( p_intf->obj.libvlc, "intf-controls-hidden", false );
+
+    /* the delay restarts from zero: the mouse being outside already is
+     * not enough to hide again right away */
+    i_autoHideOutsideTicks = 0;
+}
+
+/*****************************************************************************
+ * Moving and resizing the bare window
+ *
+ * Frameless means the window manager has no frame left to grab: the video
+ * widget hands its mouse over instead. A drag started in a corner resizes
+ * (the window IS the picture, so its ratio is kept and the opposite corner
+ * stays put), anywhere else moves. Same deal as the two mac interfaces.
+ *****************************************************************************/
+
+#define HIDDEN_CORNER_ZONE 24
+
+/* Dragging the picture always moves the window, controls hidden or not:
+ * it is the natural grab area. Only the auto-hidden state adds the corner
+ * resize zones, since the window manager frame is gone there. */
+bool MainInterface::beginHiddenControlsDrag( const QPoint &globalPos )
+{
+    /* A maximized window is where the window manager put it, and dragging
+     * its picture must not tear it off that -- no more than dragging a
+     * maximized window by its title bar does on this platform. Fullscreen,
+     * likewise, has nowhere to go. */
+    if( b_videoFullScreen || isFullScreen() || isMaximized() )
+    {
+        b_hiddenDragActive = false;
+        return false;
+    }
+
+    hiddenDragStartMouse = globalPos;
+    /* ⚠ pos() is the FRAME corner, geometry() the client one, and they are
+     * a title bar apart on a decorated window. move() places the frame:
+     * feeding it geometry().topLeft() dropped the window by exactly the
+     * height of its title bar at the first step of every drag, before it
+     * started following the pointer properly. setGeometry(), used by the
+     * corner resize below, takes the client rect instead -- hence the two
+     * anchors. */
+    hiddenDragStartPos = pos();
+    hiddenDragStartGeometry = geometry();
+    b_hiddenDragActive = true;
+    b_hiddenDragAnchored = false;
+
+    if( !b_controlsHiddenPlayback )
+    {
+        hiddenDragResizeH = 0;
+        hiddenDragResizeV = 0;
+        b_hiddenDragIsResize = false;
+        return true;
+    }
+
+    hiddenDragResizeH =
+        ( globalPos.x() - hiddenDragStartGeometry.left() <= HIDDEN_CORNER_ZONE ) ? -1 :
+        ( ( hiddenDragStartGeometry.right() - globalPos.x() <= HIDDEN_CORNER_ZONE ) ? 1 : 0 );
+    hiddenDragResizeV =
+        ( globalPos.y() - hiddenDragStartGeometry.top() <= HIDDEN_CORNER_ZONE ) ? -1 :
+        ( ( hiddenDragStartGeometry.bottom() - globalPos.y() <= HIDDEN_CORNER_ZONE ) ? 1 : 0 );
+    b_hiddenDragIsResize = ( hiddenDragResizeH != 0 && hiddenDragResizeV != 0 );
+
+    return true;
+}
+
+/* What the window may occupy: the screen it is ON (not the primary one),
+ * minus the task bar and any other reserved strip. */
+QRect MainInterface::availableScreenGeometry() const
+{
+    const QScreen *scr = windowHandle() != NULL ? windowHandle()->screen()
+                                                : QGuiApplication::primaryScreen();
+    return scr != NULL ? scr->availableGeometry() : QRect();
+}
+
+/* A window that just grew -- because a bigger picture arrived, because the
+ * playlist opened -- keeps the corner it had, so it grows downwards and to
+ * the right, straight under the task bar. Nothing upstream brings it back;
+ * this does, moving it as little as possible and never resizing it (the
+ * size is the caller's business). */
+void MainInterface::keepInsideScreen()
+{
+    const QRect available = availableScreenGeometry();
+    const QRect frame = frameGeometry();
+
+    if( available.isEmpty() || frame.isEmpty() || isFullScreen()
+     || isMaximized() || b_videoFullScreen )
+        return;
+
+    QPoint corner = frame.topLeft();
+    if( frame.width() <= available.width() && frame.right() > available.right() )
+        corner.setX( available.right() - frame.width() + 1 );
+    if( frame.height() <= available.height() && frame.bottom() > available.bottom() )
+        corner.setY( available.bottom() - frame.height() + 1 );
+    /* a window too big for the screen is pinned to the top left corner,
+     * where the menu bar and the controls at least stay reachable */
+    if( corner.x() < available.left() )
+        corner.setX( available.left() );
+    if( corner.y() < available.top() )
+        corner.setY( available.top() );
+
+    if( corner != frame.topLeft() )
+        move( corner );   /* move() places the FRAME, like frameGeometry() */
+}
+
+/* Keeps enough of the window on the screen to grab it again: with the
+ * controls hidden the picture is the whole grab area, so a window dragged
+ * fully past an edge could not be brought back at all. Dragging it partly
+ * out stays allowed, as everywhere else. */
+QPoint MainInterface::dragOriginKeptReachable( const QPoint &origin )
+{
+    const QRect visible = availableScreenGeometry();
+    if( visible.isEmpty() )
+        return origin;
+
+    QPoint kept = origin;
+    const int margin = qMin( 120, width() );
+    const int vmargin = qMin( 60, height() );
+
+    if( kept.x() + width() < visible.left() + margin )
+        kept.setX( visible.left() + margin - width() );
+    if( kept.x() > visible.right() - margin )
+        kept.setX( visible.right() - margin );
+
+    if( kept.y() < visible.top() )
+        kept.setY( visible.top() );
+    if( kept.y() > visible.bottom() - vmargin )
+        kept.setY( visible.bottom() - vmargin );
+
+    return kept;
+}
+
+/* ⚠⚠ Whether the button is REALLY still down, which neither the vout nor
+ * Qt can be trusted about here.
+ *
+ * The vout owns the mouse messages of the video window and follows the
+ * buttons through them -- but any window that grabs the pointer takes
+ * those messages away, and a context menu is enough. The vout then never
+ * sees the release, goes on believing the button is held, and a "drag" is
+ * relayed for every motion that follows: the window trailed the bare
+ * pointer around the screen, which is what "right click, then click the
+ * video" did. Qt's own QMouseEvent::buttons() comes from the same
+ * interrupted stream and is no better.
+ *
+ * A grab cannot fool the physical key state. Reading the button that is
+ * PRIMARY for this user: swapping the buttons swaps the virtual keys too. */
+bool MainInterface::dragButtonStillHeld() const
+{
+#ifdef _WIN32
+    const int vk = GetSystemMetrics( SM_SWAPBUTTON ) ? VK_RBUTTON : VK_LBUTTON;
+    return ( GetAsyncKeyState( vk ) & 0x8000 ) != 0;
+#else
+    return true;
+#endif
+}
+
+void MainInterface::dragHiddenControlsTo( const QPoint &globalPos )
+{
+    if( !b_hiddenDragActive )
+        return;
+
+    if( !dragButtonStillHeld() )
+    {
+        /* the gesture ended somewhere nobody told us about */
+        endHiddenControlsDrag();
+        return;
+    }
+
+    /* ⚠ The FIRST move of a drag re-takes the anchor instead of acting on
+     * it. A press whose release never came back to us leaves the drag
+     * armed with an anchor belonging to another gesture entirely, and the
+     * next move then teleports the window by the distance between two
+     * unrelated pointer positions. That is what "click a menu, then click
+     * the video" did on Windows -- the menu's mouse grab hands us events
+     * the vout normally keeps, so the press and the release do not come
+     * from the same place. It is also what the two macOS interfaces were
+     * bitten by (there the fix was to follow the event deltas).
+     * Re-anchoring costs the couple of pixels between the press and the
+     * first move, and makes the jump impossible by construction. */
+    if( !b_hiddenDragAnchored )
+    {
+        b_hiddenDragAnchored = true;
+        hiddenDragStartMouse = globalPos;
+        hiddenDragStartPos = pos();
+        hiddenDragStartGeometry = geometry();
+        return;
+    }
+
+    QPoint delta = globalPos - hiddenDragStartMouse;
+
+    if( !b_hiddenDragIsResize )
+    {
+        move( dragOriginKeptReachable( hiddenDragStartPos + delta ) );
+        return;
+    }
+
+    /* one dimension drives, the picture ratio gives the other */
+    int width = hiddenDragStartGeometry.width()
+              + delta.x() * hiddenDragResizeH;
+    if( width < 160 )
+        width = 160;
+    double ratio = ( videoNativeSize.width() > 0
+                     && videoNativeSize.height() > 0 )
+        ? (double)videoNativeSize.height() / videoNativeSize.width()
+        : (double)hiddenDragStartGeometry.height()
+          / hiddenDragStartGeometry.width();
+
+    QRect rect = hiddenDragStartGeometry;
+    rect.setWidth( width );
+    rect.setHeight( qRound( width * ratio ) );
+    if( hiddenDragResizeH < 0 )
+        rect.moveRight( hiddenDragStartGeometry.right() );
+    if( hiddenDragResizeV < 0 )
+        rect.moveBottom( hiddenDragStartGeometry.bottom() );
+
+    setGeometry( rect );
+    /* resizing by hand redefines the box a later crop fits into */
+    pictureBox = rect.size();
+}
+
+void MainInterface::endHiddenControlsDrag()
+{
+    b_hiddenDragActive = false;
+}
+
+void MainInterface::emitRevealControls()
+{
+    emit askRevealControls();
+}
+
+/* Relayed by the core from the vout thread (Windows): hop to the GUI
+ * thread, where the pointer position can be read and the window moved. */
+void MainInterface::emitVideoDrag( int phase )
+{
+    emit askVideoDrag( phase );
+}
+
+/* No coordinates come with the relay: the vout knows the picture, not the
+ * screen. QCursor::pos() is read here instead -- by the time this runs the
+ * pointer is where it is NOW, which is exactly what the drag needs. */
+void MainInterface::videoDragRelayed( int phase )
+{
+    switch( phase )
+    {
+    case 1: /* pressed */
+        beginHiddenControlsDrag( QCursor::pos() );
+        break;
+    case 2: /* moved */
+        dragHiddenControlsTo( QCursor::pos() );
+        break;
+    default: /* released */
+        endHiddenControlsDrag();
+        break;
+    }
+}
+
 /* toggling advanced controls buttons */
 void MainInterface::toggleAdvancedButtons()
 {
@@ -1351,6 +2007,35 @@ void MainInterface::toggleUpdateSystrayMenuWhenVisible()
 
 void MainInterface::resizeWindow(int w, int h)
 {
+    /* Never ask for a window the screen cannot hold.
+     *
+     * setVideoSize() already caps the size it hands to the video widget, but it
+     * is not the only road here: videoSizeChanged() -> resizeStack() arrives
+     * with the video's NATIVE size and no cap at all. Starting a 720p file on a
+     * 1024x600 netbook therefore grew the window to 1280x794 for a fraction of
+     * a second before the cap brought it back to 1024x532 -- and that was
+     * enough. Faced with a window taller than the screen, the window manager
+     * slides it up; when the window then shrinks, the position stays put, so
+     * the title bar ends up above the top edge, out of reach of the mouse.
+     * Qt saves that geometry on exit, so every later run started off-screen
+     * too. Capping here, at the single choke point through which every resize
+     * passes, means the oversized transient never happens.
+     *
+     * The screen is the one the window is actually on, not the primary one:
+     * they differ as soon as there are two monitors. */
+    const QScreen *scr = windowHandle() != NULL ? windowHandle()->screen()
+                                               : QGuiApplication::primaryScreen();
+    if( scr != NULL )
+    {
+        const QRect avail = scr->availableGeometry();
+        /* The frame is drawn by the window manager and is not part of the
+         * size we set here; leave room for it, or the decorated window still
+         * overflows. It only becomes measurable once the window is mapped. */
+        const QSize deco = frameGeometry().size() - geometry().size();
+        w = qMin( w, avail.width()  - qMax( 0, deco.width()  ) );
+        h = qMin( h, avail.height() - qMax( 0, deco.height() ) );
+    }
+
 #if ! HAS_QT510 && defined(QT5_HAS_X11)
     if( QX11Info::isPlatformX11() )
     {
@@ -1822,6 +2507,35 @@ static int IntfRaiseMainCB( vlc_object_t *, const char *,
 
     return VLC_SUCCESS;
 }
+
+/*****************************************************************************
+ * IntfRevealControlsCB: the core saw a double click on the video while the
+ * windowed controls were auto-hidden ("intf-reveal-controls").
+ *****************************************************************************/
+static int IntfRevealControlsCB( vlc_object_t *, const char *,
+                                 vlc_value_t, vlc_value_t, void *param )
+{
+    intf_thread_t *p_intf = (intf_thread_t *)param;
+    p_intf->p_sys->p_mi->emitRevealControls();
+
+    return VLC_SUCCESS;
+}
+
+#ifdef _WIN32
+/*****************************************************************************
+ * IntfVideoDragCB: the core relaying a left drag on the video, which the
+ * vout's own child window would otherwise have kept to itself
+ * ("intf-video-drag": 1 pressed, 2 moved, 3 released).
+ *****************************************************************************/
+static int IntfVideoDragCB( vlc_object_t *, const char *,
+                            vlc_value_t, vlc_value_t newval, void *param )
+{
+    intf_thread_t *p_intf = (intf_thread_t *)param;
+    p_intf->p_sys->p_mi->emitVideoDrag( newval.i_int );
+
+    return VLC_SUCCESS;
+}
+#endif
 
 /*****************************************************************************
  * IntfBossCB: callback triggered by the intf-boss libvlc variable.

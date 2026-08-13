@@ -83,6 +83,10 @@ protected:
 
 private:
     int qtMouseButton2VLC( Qt::MouseButton );
+    /* non-NULL only while the window is bare ("Hide controls during
+     * playback"): the video then carries the move/resize handles the
+     * window manager no longer provides */
+    class MainInterface *bareWindowInterface();
     intf_thread_t *p_intf;
     vout_window_t *p_window;
 

@@ -47,7 +47,9 @@ class SeekPoints;
 class QPropertyAnimation;
 class QCommonStyle;
 class TimeTooltip;
+class SeekThumbnailer;
 class QSequentialAnimationGroup;
+class QImage;
 
 /* Input Slider derived from QSlider */
 class SeekSlider : public QSlider
@@ -124,17 +126,49 @@ private:
 
     WheelToVLCConverter wheelEventConverter;
 
+    /* PowerVLC clip creation mode: the regular handle holds the clip
+     * start, a second handle holds the clip end, a thin marker follows
+     * the playback position. */
+    bool b_clipMode;
+    int activeClipKnob;      /* 0 none, 1 start, 2 end, 3 scrub */
+    float f_clipMarker;      /* playback position fraction, 0..1 */
+    /* the preview seek behind a dragged bound is paced, with a trailing
+     * shot so that a single pixel nudge is previewed too (see
+     * -clipSeekPreview) */
+    QTimer *clipPreviewTimer;
+    bool b_clipPreviewPending;
+    float f_clipPreviewFraction;
+
+    void clipKnobInteract( int xPos );
+    void clipSeekPreview( float fraction );
+    void paintClipExtras( QPainter &painter );
+
+    /* PowerVLC hover previews (qt-hover-thumbnails): the tooltip carries a
+     * small image of the hovered position, decoded on the side. */
+    SeekThumbnailer *thumbnailer;
+    QTimer *thumbnailTimer;  /* the hover has to settle before we decode */
+    double hoverFraction;    /* position the tooltip is currently showing */
+
+    void updateHoverPreview();
+
 public slots:
     void setPosition( float, int64_t, int );
     void setSeekable( bool b ) { b_seekable = b ; }
     void updateBuffering( float );
     void hideHandle();
+    /* PowerVLC clip creation mode: sync with InputManager's state */
+    void updateClipCreationMode();
 
 private slots:
     void startSeekTimer();
     void updatePos();
     void inputUpdated( bool );
     void startAnimLoading();
+    /* PowerVLC hover previews */
+    void requestHoverThumbnail();
+    void hoverThumbnailReady( const QImage &, double fraction );
+    /* PowerVLC clip creation: trailing shot of the paced preview seek */
+    void clipPreviewTimeout();
 
 signals:
     void sliderDragged( float );

@@ -116,9 +116,10 @@ private:
     }
     static QMenu *RebuildNavigMenu( intf_thread_t *, QMenu *, bool b_keep = false );
 
-    static QMenu *VideoMenu( intf_thread_t *, QMenu * );
-    static QMenu *VideoMenu( intf_thread_t *p_intf, QWidget *parent ) {
-        return VideoMenu( p_intf, new QMenu( parent ) );
+    static QMenu *VideoMenu( intf_thread_t *, QMenu *, MainInterface * = NULL );
+    static QMenu *VideoMenu( intf_thread_t *p_intf, QWidget *parent,
+                             MainInterface *mi = NULL ) {
+        return VideoMenu( p_intf, new QMenu( parent ), mi );
     }
     static QMenu *SubtitleMenu( intf_thread_t *, QMenu *current, bool b_popup = false );
     static QMenu *SubtitleMenu( intf_thread_t *p_intf, QWidget *parent) {

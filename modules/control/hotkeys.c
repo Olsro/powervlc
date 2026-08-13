@@ -83,6 +83,7 @@ static void DisplayVolume( vout_thread_t *, int, float );
 static void DisplayRate ( vout_thread_t *, float );
 static float AdjustRateFine( vlc_object_t *, const int );
 static void ClearChannels  ( vout_thread_t *, int );
+static bool OSDIsAlone( vout_thread_t * );
 
 #define DisplayMessage(vout, ...) \
     do { \
@@ -91,6 +92,22 @@ static void ClearChannels  ( vout_thread_t *, int );
     } while(0)
 #define DisplayIcon(vout, icon) \
     do { if(vout) vout_OSDIcon(vout, VOUT_SPU_CHANNEL_OSD, icon); } while(0)
+
+/* True when the video is the only thing on screen: the OSD sliders are
+ * then the only place a position or a volume shows, so they are drawn.
+ * Historically that meant fullscreen; it is also the case while an
+ * interface auto-hides its windowed controls and raises the libvlc
+ * "intf-controls-hidden" bool. The messages and the icons are NOT
+ * conditioned on it -- upstream draws them windowed too. */
+static bool OSDIsAlone( vout_thread_t *p_vout )
+{
+    if( var_GetBool( p_vout, "fullscreen" ) )
+        return true;
+
+    vlc_object_t *libvlc = VLC_OBJECT(p_vout->obj.libvlc);
+    return var_Type( libvlc, "intf-controls-hidden" ) != 0
+        && var_GetBool( libvlc, "intf-controls-hidden" );
+}
 
 /*****************************************************************************
  * Module descriptor
@@ -942,6 +959,31 @@ static int PutAction( intf_thread_t *p_intf, input_thread_t *p_input,
                     break;
             }
 
+            /* PowerVLC clip creation mode: the interface driving the mode
+             * creates "clip-frame-step" on the input and listens to it;
+             * the jump shortcuts then resize the clip through its
+             * selected bound instead of seeking (the interface owns the
+             * bound state, so the redirection has to go through it).
+             * Value convention: +1/-1 = one FRAME (extrashort/short
+             * steps, surgical trimming), anything else = signed offset
+             * in microseconds (medium/long jumps keep their size). */
+            if( var_Type( p_input, "clip-frame-step" ) != 0 )
+            {
+                int64_t value;
+                if( !strcmp( varname, "extrashort-jump-size" )
+                 || !strcmp( varname, "short-jump-size" ) )
+                    value = sign;
+                else
+                {
+                    vlc_tick_t size = var_InheritInteger( p_input, varname );
+                    if( size <= 0 )
+                        break;
+                    value = (int64_t)sign * size * CLOCK_FREQ;
+                }
+                var_SetInteger( p_input, "clip-frame-step", value );
+                break;
+            }
+
             vlc_tick_t it = var_InheritInteger( p_input, varname );
             if( it < 0 )
                 break;
@@ -988,11 +1030,29 @@ static int PutAction( intf_thread_t *p_intf, input_thread_t *p_input,
             break;
         case ACTIONID_NAV_LEFT:
             if( p_input )
+            {
+                /* PowerVLC clip creation mode: the bare arrows nudge the
+                 * selected clip bound by one frame, like the step
+                 * shortcuts (see the jump actions above); the disc-menu
+                 * navigation is meaningless while trimming a clip */
+                if( var_Type( p_input, "clip-frame-step" ) != 0 )
+                {
+                    var_SetInteger( p_input, "clip-frame-step", -1 );
+                    break;
+                }
                 input_Control( p_input, INPUT_NAV_LEFT, NULL );
+            }
             break;
         case ACTIONID_NAV_RIGHT:
             if( p_input )
+            {
+                if( var_Type( p_input, "clip-frame-step" ) != 0 )
+                {
+                    var_SetInteger( p_input, "clip-frame-step", 1 );
+                    break;
+                }
                 input_Control( p_input, INPUT_NAV_RIGHT, NULL );
+            }
             break;
 
         /* Video Output actions */
@@ -1494,7 +1554,7 @@ static void DisplayPosition( vout_thread_t *p_vout, int slider_chan,
         DisplayMessage( p_vout, "%s", psz_time );
     }
 
-    if( var_GetBool( p_vout, "fullscreen" ) )
+    if( OSDIsAlone( p_vout ) )
     {
         vlc_value_t pos;
         var_Get( p_input, "position", &pos );
@@ -1509,7 +1569,7 @@ static void DisplayVolume( vout_thread_t *p_vout, int slider_chan, float vol )
         return;
     ClearChannels( p_vout, slider_chan );
 
-    if( var_GetBool( p_vout, "fullscreen" ) )
+    if( OSDIsAlone( p_vout ) )
         vout_OSDSlider( p_vout, slider_chan,
                         lroundf(vol * 100.f), OSD_VERT_SLIDER );
     DisplayMessage( p_vout, _( "Volume %ld%%" ), lroundf(vol * 100.f) );

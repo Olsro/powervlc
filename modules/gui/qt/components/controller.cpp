@@ -370,6 +370,9 @@ QWidget *AbstractController::createWidget( buttonType_e button, int options )
         /* Give hint to disable slider's interactivity when useless */
         connect( THEMIM->getIM(), &InputManager::inputCanSeek,
                  slider, &SeekSlider::setSeekable );
+        /* PowerVLC clip creation mode: second knob on the seek bar */
+        connect( THEMIM->getIM(), &InputManager::clipCreationModeChanged,
+                 slider, &SeekSlider::updateClipCreationMode );
         widget = slider;
         }
         break;

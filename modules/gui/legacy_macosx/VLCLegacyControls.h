@@ -88,10 +88,87 @@ NSBezierPath *VLCLegacyRoundedRectPath(NSRect rect, float radius);
     BOOL alwaysDark;     /* fullscreen panel: dark regardless of theme */
     BOOL indefinite;     /* buffering: animated blue band, hidden knob */
     float animationPosition;
+
+    /* clip creation mode: a second knob holds the clip end, the regular
+     * knob holds the clip start, a thin marker follows the playback.
+     * Values in the cell unit (0..1 for the time slider). */
+    BOOL clipKnobsActive;
+    double clipEndValue;
+    double playbackMarkerValue;
+    int activeClipKnob;  /* 0 none, 1 start, 2 end, 3 scrub */
+
+    /* chapter separators on the track (normalized 0..1 fractions) and
+     * their names for the hover tooltip; nil when the media has none */
+    NSArray *chapterFractions;
+    NSArray *chapterNames;
 }
 - (void)setKnobInset:(float)inset;
 - (void)setVolumeStyle:(BOOL)volume;
 - (void)setAlwaysDark:(BOOL)dark;
 - (void)setIndefinite:(BOOL)flag;
 - (BOOL)indefinite;
+
+- (float)knobDiameter;
+- (void)setChapterFractions:(NSArray *)fractions names:(NSArray *)names;
+- (NSArray *)chapterFractions;
+- (NSArray *)chapterNames;
+- (void)setClipKnobsActive:(BOOL)active;
+- (BOOL)clipKnobsActive;
+- (void)setClipEndValue:(double)value;
+- (double)clipEndValue;
+- (void)setPlaybackMarkerValue:(double)value;
+- (double)playbackMarkerValue;
+- (void)setActiveClipKnob:(int)knob;
+- (int)activeClipKnob;
+- (NSRect)clipEndKnobRect;
+/* half < 0 left half disc, 0 full disc, > 0 right half (clip bounds) */
+- (void)drawKnobInRect:(NSRect)knobRect half:(int)half;
 @end
+
+@class VLCLegacySeekTooltipWindow;
+
+/* Seek slider handling the two clip bounds knobs: outside the clip mode
+ * it is a plain NSSlider. Also owns the hover tooltip (hovered time,
+ * chapter name, optional preview thumbnail).
+ *
+ * Jaguar floor: no NSTrackingArea (10.5+) — a classic tracking rect
+ * detects enter/exit and a 10 Hz timer follows the mouse while inside
+ * (-mouseMoved: is delivered to the first responder, not to the view
+ * under the cursor, so it cannot be relied upon here). */
+@interface VLCLegacySeekSlider : NSSlider
+{
+    NSTrackingRectTag hoverTrackingTag;
+    NSTimer *hoverTimer;             /* follows the mouse while inside */
+    NSPoint lastHoverPoint;          /* last point the tooltip was built
+                                      * for: the 10 Hz follow timer must
+                                      * not re-arm the debounce while the
+                                      * mouse sits still */
+    BOOL hasLastHoverPoint;
+    NSTimer *thumbnailDebounceTimer; /* 1 s of quiet before a request */
+    VLCLegacySeekTooltipWindow *tooltipWindow;
+    BOOL hovering;
+    double hoverFraction;
+    double mediaDuration;            /* seconds; 0 = no tooltip */
+    NSImage *hoverThumbnail;
+    double hoverThumbnailFraction;
+    id hoverDelegate;                /* assign; informal protocol below */
+}
+- (double)valueForLocationX:(float)x;
+
+- (void)setMediaDuration:(double)seconds;
+/* the delegate is NOT retained (it owns the slider) */
+- (void)setHoverDelegate:(id)delegate;
+- (void)hideHoverTooltip;
+/* thumbnail provider answer; ignored when the mouse moved elsewhere */
+- (void)setHoverThumbnail:(NSImage *)image forFraction:(double)fraction;
+@end
+
+/* Informal hover delegate protocol:
+ * - (void)seekSlider:(VLCLegacySeekSlider *)slider
+ *       hoverThumbnailWantedAtFraction:(double)fraction;
+ * fired once the mouse has settled for a second; reply (possibly later,
+ * possibly never) with -setHoverThumbnail:forFraction:.
+ * - (void)seekSlider:(VLCLegacySeekSlider *)slider
+ *       clipStepFrames:(int)direction;
+ * bare arrow key pressed while the slider is the first responder in
+ * clip mode: nudge the selected bound by one frame. */

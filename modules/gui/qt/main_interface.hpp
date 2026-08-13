@@ -39,6 +39,7 @@
 class QSettings;
 class QCloseEvent;
 class QKeyEvent;
+class QResizeEvent;
 class QLabel;
 class QEvent;
 class VideoWidget;
@@ -110,6 +111,9 @@ protected:
     void closeEvent( QCloseEvent *) Q_DECL_OVERRIDE;
     void keyPressEvent( QKeyEvent *) Q_DECL_OVERRIDE;
     void wheelEvent( QWheelEvent * ) Q_DECL_OVERRIDE;
+    /* "Hide controls during playback": tells a hand resize of the window
+     * from one we asked for ourselves (see setVideoWidgetSizeFromRequest) */
+    void resizeEvent( QResizeEvent * ) Q_DECL_OVERRIDE;
     bool eventFilter(QObject *, QEvent *) Q_DECL_OVERRIDE;
     virtual void toggleUpdateSystrayMenuWhenVisible();
     void resizeWindow(int width, int height);
@@ -193,6 +197,54 @@ protected:
     bool                 b_hasPausedWhenMinimized;
     bool                 b_statusbarVisible;
 
+    /* "Hide controls during playback" (Video menu, qt-hide-controls):
+     * once the mouse has left the window for a few seconds during
+     * windowed playback, the controls, the menu bar and the window frame
+     * go away and the window shrinks onto the video, which keeps its
+     * exact size and position on screen. A double click on the video
+     * (rerouted by the core through "intf-reveal-controls") brings
+     * everything back. */
+    /* Polled rather than driven by enter/leave events: those fire on the
+     * main window as soon as the pointer moves onto the video child
+     * widget, which is precisely where it spends its time here. */
+    QTimer              *autoHideControlsTimer;    ///< 500 ms, always on
+    int                  i_autoHideOutsideTicks;   ///< mouse outside
+    int                  i_autoHideRevealTicks;    ///< video gone
+    bool                 b_autoHideControls;       ///< the master switch
+    bool                 b_controlsHiddenPlayback; ///< currently hidden
+    bool shouldAutoHideControls();
+    QRect pictureGeometryOnScreen() const;
+    void hiddenWindowFollowVideoSize( const QSize & );
+    QSize pictureSizeForRequest( const QSize &requested, const QSize &area );
+    double currentVideoZoom();
+    QPoint dragOriginKeptReachable( const QPoint &origin );
+    bool dragButtonStillHeld() const;
+    /* the work area of the screen the window is on -- task bar excluded */
+    QRect availableScreenGeometry() const;
+    void setVideoWidgetSizeFromRequest( const QSize & );
+    /* geometry bookkeeping: the bare window is exactly the picture, and
+     * revealing puts back what was there before, carrying over whatever
+     * the user moved or resized it to meanwhile */
+    QSize                videoNativeSize;          ///< ratio of the picture
+    QSize                lastRequestedVideoSize;   ///< spots a plain restart
+    double               lastVideoZoom;            ///< spots a zoom the user asked for
+    QSize                pictureBox;               ///< a shape change fits in
+    QSize                lastVideoRequestSize;     ///< size we asked for
+    bool                 b_videoDrivenResize;      ///< ours, not the user's
+    QRect                geometryBeforeHidingControls;
+    QRect                hiddenControlsInitialGeometry;
+    /* the bare window has no frame left for the window manager to grab:
+     * a drag started in a CORNER resizes it (picture ratio kept, opposite
+     * corner anchored), anywhere else moves it */
+    QPoint               hiddenDragStartMouse;
+    QPoint               hiddenDragStartPos;       ///< FRAME corner, for move()
+    QRect                hiddenDragStartGeometry;  ///< client rect, for setGeometry()
+    bool                 b_hiddenDragActive;
+    bool                 b_hiddenDragAnchored;     ///< a move has anchored it
+    bool                 b_hiddenDragIsResize;
+    int                  hiddenDragResizeH;        ///< -1 left, +1 right
+    int                  hiddenDragResizeV;        ///< -1 top, +1 bottom
+
     static const Qt::Key kc[10]; /* easter eggs */
     int i_kc_offset;
 
@@ -218,6 +270,20 @@ public slots:
 
     void emitBoss();
     void emitRaise();
+
+    /* "Hide controls during playback" */
+    void setAutoHideControls( bool );
+    bool autoHideControlsEnabled() { return b_autoHideControls; }
+    void emitRevealControls();
+    /* the core relaying a drag on the picture, where the vout took the
+     * mouse messages before any widget could see them (Windows) */
+    void emitVideoDrag( int phase );
+    /* the video widget hands its mouse over while the window is bare:
+     * begin returns false when there is nothing to drag */
+    bool controlsHiddenForPlayback() const { return b_controlsHiddenPlayback; }
+    bool beginHiddenControlsDrag( const QPoint &globalPos );
+    void dragHiddenControlsTo( const QPoint &globalPos );
+    void endHiddenControlsDrag();
 
     virtual void reloadPrefs();
     void toolBarConfUpdated();
@@ -262,6 +328,14 @@ protected slots:
     void resumePlayback();
     void onInputChanged( bool );
 
+    /* "Hide controls during playback" */
+    void autoHideControlsTick();
+    void hideControlsPlayback();
+    void revealControlsPlayback();
+    void videoDragRelayed( int phase );
+    /* brings a window that just grew back inside the work area */
+    void keepInsideScreen();
+
 signals:
     void askGetVideo( struct vout_window_t *, unsigned, unsigned, bool,
                       bool * );
@@ -275,6 +349,10 @@ signals:
     void askToQuit();
     void askBoss();
     void askRaise();
+    void askRevealControls();
+    void askVideoDrag( int phase );
+    void autoHideControlsToggled( bool );
+    void alwaysOnTopToggled( bool );
     void kc_pressed(); /* easter eggs */
 };
 

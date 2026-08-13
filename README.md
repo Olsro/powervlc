@@ -14,7 +14,7 @@ PowerVLC is an open source project by **Olsro** for the community, forked from V
 [![Linux AppImage](https://img.shields.io/badge/Linux-AppImage-e63312)](#supported-systems)
 [![Support on Patreon](https://img.shields.io/badge/support-Patreon-e63312)](https://www.patreon.com/Olsro)
 
-[Download](#download) · [How it feels on real hardware](MACOS_REAL_HARDWARE_FEELINGS.md) · [Exclusive features](#extra-features-on-powervlc-that-even-the-modern-vlc-dont-havenever-had) · [Changelog](CHANGELOG-POWERVLC.md) · [FAQ](FAQ-POWERVLC.md)
+[Download](#download) · [How it feels on real Macs](MACOS_REAL_HARDWARE_FEELINGS.md) · [On a Linux netbook](LINUX_REAL_HARDWARE_TESTS.md) · [Exclusive features](#extra-features-on-powervlc-that-even-the-modern-vlc-dont-havenever-had) · [Changelog](CHANGELOG-POWERVLC.md) · [FAQ](FAQ-POWERVLC.md)
 
 </div>
 
@@ -102,6 +102,7 @@ Building it yourself is documented in [BUILD-POWERVLC.md](BUILD-POWERVLC.md).
 | [CHANGELOG-POWERVLC.md](CHANGELOG-POWERVLC.md) | Everything that changed, release by release |
 | [FAQ-POWERVLC.md](FAQ-POWERVLC.md) | Frequently asked questions about the fork |
 | [MACOS_REAL_HARDWARE_FEELINGS.md](MACOS_REAL_HARDWARE_FEELINGS.md) | How it feels on each machine I tested |
+| [LINUX_REAL_HARDWARE_TESTS.md](LINUX_REAL_HARDWARE_TESTS.md) | Running it on an old Linux netbook, and the one setup step it needs |
 | [BUILD-POWERVLC.md](BUILD-POWERVLC.md) | Building every target, and the universal bundle |
 | [ACCELERATED-MPEG2-COMPATIBILITY.md](ACCELERATED-MPEG2-COMPATIBILITY.md) | Which GPUs get accelerated DVD playback, and why |
 | [MACOS_INCOMPATIBILITIES.md](MACOS_INCOMPATIBILITIES.md) | What each old macOS version can and cannot do |

@@ -584,7 +584,7 @@
                                     <action selector="toggleFullscreen:" target="-2" id="Fi9-oO-uoV"/>
                                 </connections>
                             </menuItem>
-                            <menuItem title="Float on Top" id="1499">
+                            <menuItem title="Float on Top" keyEquivalent="t" id="1499">
                                 <connections>
                                     <action selector="floatOnTop:" target="-2" id="ACT-YY-MHk"/>
                                 </connections>

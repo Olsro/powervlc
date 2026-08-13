@@ -23,6 +23,8 @@
 #endif
 
 #import "VLCLegacyCoreInteraction.h"
+#import "VLCLegacyMainWindow.h"
+#import "VLCLegacyVoutWindow.h"
 #import "VLCLegacyAppleRemote.h"
 #import "VLCLegacyMediaKeys.h"
 #import "VLCLegacySystemVolume.h"
@@ -31,11 +33,15 @@
 #include <vlc_playlist.h>
 #include <vlc_input.h>
 #include <vlc_vout.h>
+#include <vlc_vout_osd.h>
 #include <vlc_actions.h>
 #include <vlc_url.h>
 #include <vlc_modules.h>
 #include <vlc_configuration.h>
 #include <vlc_charset.h>
+
+/* gettext through the bundle, like the other legacy files */
+#define _NS(s) ((NSString *)[NSString stringWithUTF8String:vlc_gettext(s)])
 
 #include <sys/sysctl.h>
 #if defined(__ppc__) || defined(__ppc64__) || defined(__POWERPC__)
@@ -56,6 +62,54 @@ bool VLCLegacyBestDeinterlaceAvailable(void)
 #endif
 }
 
+/* the core hotkeys module redirects the jump actions to this input
+ * variable while the clip creation mode is active (keys pressed on the
+ * video window go straight to the hotkeys module, never through the
+ * interface). Value convention: +-1 = one frame, else signed
+ * microseconds. Fired from the hotkeys thread: hop to the main thread,
+ * where the clip state lives, through every runloop mode the panel may
+ * sit in. */
+static int VLCLegacyClipStepCallback(vlc_object_t *p_this,
+    const char *psz_var, vlc_value_t oldval, vlc_value_t newval,
+    void *p_data)
+{
+    VLC_UNUSED(p_this); VLC_UNUSED(psz_var); VLC_UNUSED(oldval);
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    [(VLCLegacyCoreInteraction *)p_data
+        performSelectorOnMainThread:@selector(clipStepFromCallback:)
+                         withObject:[NSNumber numberWithLongLong:newval.i_int]
+                      waitUntilDone:NO
+                              modes:[NSArray arrayWithObjects:
+                                     NSDefaultRunLoopMode,
+                                     NSEventTrackingRunLoopMode,
+                                     NSModalPanelRunLoopMode, nil]];
+    [pool release];
+    return VLC_SUCCESS;
+}
+
+/* the core saw a double click on the video while the windowed controls
+ * were auto-hidden ("intf-reveal-controls", src/video_output/event.h):
+ * hop to the main thread and bring them back. ⚠ the three explicit modes:
+ * NSRunLoopCommonModes is 10.5+, and without the tracking/modal modes the
+ * call sits until the current drag ends. */
+static int VLCLegacyRevealControlsCallback(vlc_object_t *p_this,
+    const char *psz_var, vlc_value_t oldval, vlc_value_t newval,
+    void *p_data)
+{
+    (void)p_this; (void)psz_var; (void)oldval; (void)newval;
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    VLCLegacyCoreInteraction *core = (VLCLegacyCoreInteraction *)p_data;
+    [core performSelectorOnMainThread:@selector(revealControlsFromCore)
+                           withObject:nil
+                        waitUntilDone:NO
+                                modes:[NSArray arrayWithObjects:
+                                          NSDefaultRunLoopMode,
+                                          NSEventTrackingRunLoopMode,
+                                          NSModalPanelRunLoopMode, nil]];
+    [pool release];
+    return VLC_SUCCESS;
+}
+
 @implementation VLCLegacyCoreInteraction
 
 - (id)initWithIntf:(intf_thread_t *)intf
@@ -65,8 +119,129 @@ bool VLCLegacyBestDeinterlaceAvailable(void)
         /* startup state is "stopped": no resume must fire before the
          * first play->stop transition is seen by the poll timer */
         lastPlaylistStatus = PLAYLIST_STOPPED;
+
+        /* "Hide controls during playback" plumbing shared with the
+         * core: the bool tells it the controls are gone (fullscreen
+         * OSD, video double-click rerouted), the trigger is the core
+         * asking for them back. */
+        b_autoHideControls =
+            var_InheritBool(p_intf, "legacy-macosx-hide-controls");
+        var_Create(p_intf->obj.libvlc, "intf-controls-hidden",
+                   VLC_VAR_BOOL);
+        var_Create(p_intf->obj.libvlc, "intf-reveal-controls",
+                   VLC_VAR_VOID);
+        var_AddCallback(p_intf->obj.libvlc, "intf-reveal-controls",
+                        VLCLegacyRevealControlsCallback, self);
     }
     return self;
+}
+
+- (void)shutdownAutoHide
+{
+    var_DelCallback(p_intf->obj.libvlc, "intf-reveal-controls",
+                    VLCLegacyRevealControlsCallback, self);
+    var_SetBool(p_intf->obj.libvlc, "intf-controls-hidden", false);
+}
+
+/*****************************************************************************
+ * Hide controls during playback
+ *****************************************************************************/
+
+- (BOOL)autoHideControls
+{
+    return b_autoHideControls;
+}
+
+- (void)setAutoHideControls:(BOOL)enabled
+{
+    if (b_autoHideControls == enabled)
+        return;
+    b_autoHideControls = enabled;
+    config_PutInt(p_intf, "legacy-macosx-hide-controls", enabled);
+    /* the window poll applies the new state on its next tick */
+}
+
+- (BOOL)controlsHiddenForPlayback
+{
+    return b_controlsHiddenForPlayback;
+}
+
+- (void)setControlsHiddenForPlayback:(BOOL)hidden
+{
+    b_controlsHiddenForPlayback = hidden;
+    var_SetBool(p_intf->obj.libvlc, "intf-controls-hidden", hidden);
+}
+
+/* the core saw a double click on the video while the controls were
+ * auto-hidden (src/video_output/event.h): back to the main thread, then
+ * bring them back */
+- (void)revealControlsFromCore
+{
+    extern VLCLegacyMainWindow *VLCLegacyGetMainWindow(void);
+    [VLCLegacyGetMainWindow() revealControlsForPlayback];
+    /* ⚠ Vidéo en fenêtre SÉPARÉE : c'est cette fenêtre-là qui a rétracté sa
+     * barre. Et il faut les DEUX chemins — le double-clic remonte la chaîne
+     * des répondeurs jusqu'à la fenêtre sur le vout moderne (vérifié arm64),
+     * mais le vout d'époque le rapporte au CŒUR, qui déclenche ceci (le
+     * masquage paraissait sinon irréversible sur l'iBook G3). */
+    [VLCLegacyCurrentVoutWindow() revealControlsForPlayback];
+}
+
+/* While the controls are hidden the keyboard is the only control
+ * surface: mirror on the video what the invisible interface would have
+ * shown, with the same OSD the core hotkeys use in fullscreen. Actions
+ * going through the core hotkeys (seeks, wheel volume) already display
+ * theirs. */
+- (void)osdDisplayVolume
+{
+    if (!b_controlsHiddenForPlayback)
+        return;
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (!p_input)
+        return;
+    vout_thread_t *p_vout = input_GetVout(p_input);
+    vlc_object_release(p_input);
+    if (!p_vout)
+        return;
+    float volume = playlist_VolumeGet(pl_Get(p_intf));
+    if (volume >= 0.) {
+        long percent = lroundf(volume * 100.f);
+        vout_OSDSlider(p_vout, VOUT_SPU_CHANNEL_OSD,
+                       (int)percent, OSD_VERT_SLIDER);
+        vout_OSDMessage(p_vout, VOUT_SPU_CHANNEL_OSD, _("Volume %ld%%"),
+                        percent);
+    }
+    vlc_object_release(p_vout);
+}
+
+- (void)osdDisplayIcon:(short)icon
+{
+    if (!b_controlsHiddenForPlayback)
+        return;
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (!p_input)
+        return;
+    vout_thread_t *p_vout = input_GetVout(p_input);
+    vlc_object_release(p_input);
+    if (!p_vout)
+        return;
+    vout_OSDIcon(p_vout, VOUT_SPU_CHANNEL_OSD, icon);
+    vlc_object_release(p_vout);
+}
+
+- (void)osdDisplayMessage:(const char *)message
+{
+    if (!b_controlsHiddenForPlayback)
+        return;
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (!p_input)
+        return;
+    vout_thread_t *p_vout = input_GetVout(p_input);
+    vlc_object_release(p_input);
+    if (!p_vout)
+        return;
+    vout_OSDMessage(p_vout, VOUT_SPU_CHANNEL_OSD, "%s", message);
+    vlc_object_release(p_vout);
 }
 
 - (intf_thread_t *)intf
@@ -92,12 +267,37 @@ bool VLCLegacyBestDeinterlaceAvailable(void)
     if (b_empty)
         return;
 
+    /* resuming after the automatic end-bound pause replays the clip
+     * from its start bound instead of continuing past the end */
+    if (b_clipCreationMode && clipPausedAtEnd) {
+        input_thread_t *p_input = playlist_CurrentInput(p_playlist);
+        if (p_input) {
+            if (var_GetInteger(p_input, "state") == PAUSE_S) {
+                clipPausedAtEnd = 0;
+                var_SetFloat(p_input, "position", (float)clipStartPos);
+                clipLastPollPos = clipStartPos;
+            }
+            vlc_object_release(p_input);
+        }
+    }
+
     /* NOTE: Play/Pause deliberately does NOT skip the video-cache-mb
      * fill wait (it used to, via INPUT_SET_VIDEO_CACHE_SKIP): playback
      * must never start before the look-ahead cache reached its
      * threshold. A pause during the wait is harmless -- the cache
      * keeps filling while paused. */
+    int64_t state = -1;
+    if (b_controlsHiddenForPlayback) {
+        input_thread_t *p_input = playlist_CurrentInput(p_playlist);
+        if (p_input) {
+            state = var_GetInteger(p_input, "state");
+            vlc_object_release(p_input);
+        }
+    }
     playlist_TogglePause(p_playlist);
+    if (state != -1)
+        [self osdDisplayIcon:(state != PAUSE_S ? OSD_PAUSE_ICON
+                                               : OSD_PLAY_ICON)];
 }
 
 - (void)stop
@@ -108,15 +308,23 @@ bool VLCLegacyBestDeinterlaceAvailable(void)
 - (void)next
 {
     playlist_Next(pl_Get(p_intf));
+    [self osdDisplayMessage:_("Next")];
 }
 
 - (void)previous
 {
     playlist_Prev(pl_Get(p_intf));
+    [self osdDisplayMessage:_("Previous")];
 }
 
 - (void)jumpWithSeconds:(int)seconds
 {
+    /* in clip creation mode the step shortcuts become one-FRAME nudges
+     * of the last-selected bound knob (surgical trimming) */
+    if (b_clipCreationMode) {
+        [self clipStepFrames:(seconds >= 0 ? 1 : -1)];
+        return;
+    }
     input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
     if (!p_input)
         return;
@@ -207,6 +415,413 @@ bool VLCLegacyBestDeinterlaceAvailable(void)
 }
 
 /*****************************************************************************
+ * Clip creation mode (port of -[VLCCoreInteraction toggleClipCreationMode]):
+ * both seek bar knobs define the clip bounds with instant preview; Record
+ * then saves exactly that range, bounded core-side by the
+ * "record-clip-position" / "record-stop-time" input variables.
+ *****************************************************************************/
+
+- (BOOL)clipCreationMode { return b_clipCreationMode; }
+- (double)clipStartPosition { return clipStartPos; }
+- (double)clipEndPosition { return clipEndPos; }
+- (BOOL)clipRecordingActive { return b_clipRecordingActive; }
+- (int)clipSelectedKnob { return clipSelectedKnob; }
+- (void)setClipSelectedKnob:(int)knob { clipSelectedKnob = knob; }
+
+- (void)setClipStartPosition:(double)pos
+{
+    if (pos < 0.) pos = 0.;
+    else if (pos > 1.) pos = 1.;
+    clipStartPos = pos;
+    clipLastInteraction = [NSDate timeIntervalSinceReferenceDate];
+    clipPausedAtEnd = 0;
+}
+
+- (void)setClipEndPosition:(double)pos
+{
+    if (pos < 0.) pos = 0.;
+    else if (pos > 1.) pos = 1.;
+    clipEndPos = pos;
+    clipLastInteraction = [NSDate timeIntervalSinceReferenceDate];
+    clipPausedAtEnd = 0;
+
+    /* follow a live adjustment of the end bound during a clip recording */
+    if (b_clipRecordingActive) {
+        input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+        if (p_input) {
+            int64_t duration = var_GetInteger(p_input, "length");
+            if (duration > 0)
+                var_SetInteger(p_input, "record-stop-time",
+                               (int64_t)(pos * (double)duration));
+            vlc_object_release(p_input);
+        }
+    }
+}
+
+- (void)toggleClipCreationMode
+{
+    if (b_clipCreationMode) {
+        [self exitClipCreationMode];
+        return;
+    }
+
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (!p_input)
+        return;
+    if (!var_GetBool(p_input, "can-seek")) {
+        vlc_object_release(p_input);
+        return;
+    }
+
+    double pos = var_GetFloat(p_input, "position");
+    int64_t duration = var_GetInteger(p_input, "length");
+    /* the mode is bound to this input: hold it so the poll can detect a
+     * change of item by pointer identity */
+    clipInput = p_input; /* transfers the reference */
+
+    /* the hotkeys module redirects the jump shortcuts here while the
+     * variable exists (see VLCLegacyClipStepCallback) */
+    var_Create(p_input, "clip-frame-step",
+               VLC_VAR_INTEGER | VLC_VAR_ISCOMMAND);
+    var_AddCallback(p_input, "clip-frame-step",
+                    VLCLegacyClipStepCallback, self);
+
+    /* place the end knob right next to the start knob: 10 seconds ahead,
+     * bounded to stay between 1% and 5% of the item */
+    double delta = 0.05;
+    if (duration > 0) {
+        delta = (double)(10 * CLOCK_FREQ) / (double)duration;
+        if (delta > 0.05) delta = 0.05;
+        else if (delta < 0.01) delta = 0.01;
+    }
+
+    if (pos < 0.) pos = 0.;
+    else if (pos > 1.) pos = 1.;
+    clipStartPos = pos;
+    clipEndPos = pos + delta;
+    if (clipEndPos > 1.) clipEndPos = 1.;
+    clipLastPollPos = -1.;
+    /* frame-step shortcuts default to the end bound */
+    clipSelectedKnob = 2;
+    clipPausedAtEnd = 0;
+    b_clipCreationMode = YES;
+}
+
+/* move the last-selected clip bound by a signed amount of seconds and
+ * preview it (accurate seek shows the very frame, even while paused) */
+- (void)clipNudgeSelectedBoundBySeconds:(double)seconds
+{
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (!p_input)
+        return;
+
+    int64_t duration = var_GetInteger(p_input, "length");
+    if (duration <= 0) {
+        vlc_object_release(p_input);
+        return;
+    }
+
+    double step = seconds * (double)CLOCK_FREQ / (double)duration;
+    double target;
+    if (clipSelectedKnob == 1) {
+        target = clipStartPos + step;
+        if (target < 0.) target = 0.;
+        if (target > clipEndPos) target = clipEndPos;
+        clipStartPos = target;
+    } else {
+        target = clipEndPos + step;
+        if (target < clipStartPos) target = clipStartPos;
+        if (target > 1.) target = 1.;
+        /* through the setter: follows a live record-stop-time */
+        [self setClipEndPosition:target];
+    }
+    clipLastInteraction = [NSDate timeIntervalSinceReferenceDate];
+    clipPausedAtEnd = 0;
+
+    var_SetFloat(p_input, "position", (float)target);
+    vlc_object_release(p_input);
+}
+
+/* one-frame nudge, for surgical trimming; falls back to 25 fps when the
+ * demux did not expose the video frame rate */
+- (void)clipStepFrames:(int)direction
+{
+    double frameSec = 1. / 25.;
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (p_input) {
+        input_item_t *p_item = input_GetItem(p_input);
+        if (p_item) {
+            vlc_mutex_lock(&p_item->lock);
+            int i;
+            for (i = 0; i < p_item->i_es; i++) {
+                const es_format_t *fmt = p_item->es[i];
+                if (fmt->i_cat == VIDEO_ES && fmt->video.i_frame_rate > 0
+                    && fmt->video.i_frame_rate_base > 0) {
+                    frameSec = (double)fmt->video.i_frame_rate_base
+                             / (double)fmt->video.i_frame_rate;
+                    break;
+                }
+            }
+            vlc_mutex_unlock(&p_item->lock);
+        }
+        vlc_object_release(p_input);
+    }
+    [self clipNudgeSelectedBoundBySeconds:direction * frameSec];
+}
+
+/* handles a jump redirected by the core hotkeys module (main thread) */
+- (void)clipStepFromCallback:(NSNumber *)value
+{
+    long long v = [value longLongValue];
+    if (v == 1 || v == -1)
+        [self clipStepFrames:(int)v];
+    else
+        [self clipNudgeSelectedBoundBySeconds:(double)v / CLOCK_FREQ];
+}
+
+- (void)exitClipCreationMode
+{
+    if (!b_clipCreationMode)
+        return;
+
+    /* a running extraction has no reason to survive the mode */
+    if (p_clipExport)
+        [self finishClipExportCancelled:YES];
+
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (p_input) {
+        var_SetInteger(p_input, "record-stop-time", 0);
+        var_SetInteger(p_input, "record-start-time", 0);
+        if (b_clipRecordingActive)
+            var_SetBool(p_input, "record", false);
+        vlc_object_release(p_input);
+    }
+    b_clipRecordingActive = NO;
+    b_clipCreationMode = NO;
+    if (clipInput) {
+        /* stop redirecting the jump hotkeys — on the input the mode was
+         * entered on, which we still hold */
+        if (var_Type(clipInput, "clip-frame-step") != 0) {
+            var_DelCallback(clipInput, "clip-frame-step",
+                            VLCLegacyClipStepCallback, self);
+            var_Destroy(clipInput, "clip-frame-step");
+        }
+        vlc_object_release(clipInput);
+        clipInput = NULL;
+    }
+}
+
+/* Message on the video and in the log: a fast extraction is over in a
+ * blink and the user needs to be told where it went. */
+- (void)clipExportNotify:(NSString *)message
+{
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (p_input) {
+        vout_thread_t *p_vout = input_GetVout(p_input);
+        vlc_object_release(p_input);
+        if (p_vout) {
+            vout_OSDMessage(p_vout, VOUT_SPU_CHANNEL_OSD, "%s",
+                            [message UTF8String]);
+            vlc_object_release(p_vout);
+        }
+    }
+    msg_Info(p_intf, "%s", [message UTF8String]);
+}
+
+/* Starts the fast extraction of [A..B] on a second headless input, at disk
+ * speed and without touching the playback. NO when the core cannot extract
+ * from this input (live stream, unknown length): the caller then falls
+ * back to the realtime recording. */
+- (BOOL)startClipExportForInput:(input_thread_t *)p_input
+{
+    if (p_clipExport)
+        return YES;
+
+    int64_t duration = var_GetInteger(p_input, "length");
+    if (duration <= 0)
+        return NO;
+
+    p_clipExport = input_ClipExportNew(p_intf, p_input,
+                                       (vlc_tick_t)(clipStartPos * (double)duration),
+                                       (vlc_tick_t)(clipEndPos * (double)duration));
+    if (!p_clipExport)
+        return NO;
+
+    [self clipExportNotify:_NS("Exporting clip…")];
+    return YES;
+}
+
+- (void)finishClipExportCancelled:(BOOL)cancelled
+{
+    if (!p_clipExport)
+        return;
+
+    char *psz_file = input_ClipExportFinish(p_clipExport);
+    p_clipExport = NULL;
+
+    if (cancelled) {
+        [self clipExportNotify:_NS("Clip export cancelled")];
+    } else if (psz_file) {
+        NSString *path = [NSString stringWithUTF8String:psz_file];
+        [self clipExportNotify:[NSString stringWithFormat:@"%@ %@",
+                                _NS("Clip saved:"), [path lastPathComponent]]];
+    } else {
+        [self clipExportNotify:_NS("Clip export failed")];
+    }
+    free(psz_file);
+}
+
+- (BOOL)clipExportInProgress
+{
+    return p_clipExport != NULL;
+}
+
+/* the extraction input is a child of the interface: it cannot outlive it */
+- (void)shutdownClipExport
+{
+    if (p_clipExport)
+        [self finishClipExportCancelled:YES];
+}
+
+- (void)recordClipToggle
+{
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (!p_input)
+        return;
+
+    if (p_clipExport) {
+        /* a fast extraction is running: give it up */
+        [self finishClipExportCancelled:YES];
+    } else if (b_clipRecordingActive) {
+        /* cancel the running clip recording */
+        var_SetInteger(p_input, "record-stop-time", 0);
+        var_SetInteger(p_input, "record-start-time", 0);
+        var_SetBool(p_input, "record", false);
+        b_clipRecordingActive = NO;
+    } else if ([self startClipExportForInput:p_input]) {
+        /* extracted at disk speed by a second input; the playback the
+         * user is watching is not disturbed at all */
+    } else {
+        /* arm the demux-paced stop bound, then let the core seek to the
+         * clip start and start recording in ONE input control */
+        int64_t duration = var_GetInteger(p_input, "length");
+        var_SetInteger(p_input, "record-stop-time",
+                       duration > 0
+                           ? (int64_t)(clipEndPos * (double)duration) : 0);
+        var_SetInteger(p_input, "record-start-time",
+                       duration > 0
+                           ? (int64_t)(clipStartPos * (double)duration) : 0);
+        var_SetFloat(p_input, "record-clip-position", (float)clipStartPos);
+        b_clipRecordingActive = YES;
+        clipPausedAtEnd = 0; /* the record control seeks by itself */
+        b_clipRecordWaitingForStart = YES;
+        if (var_GetInteger(p_input, "state") == PAUSE_S)
+            playlist_TogglePause(pl_Get(p_intf));
+    }
+    vlc_object_release(p_input);
+}
+
+- (void)updateClipModeForInput:(input_thread_t *)p_input
+{
+    /* collect a finished fast extraction (polled on the window's timer,
+     * which keeps ticking even with the playback paused) */
+    if (p_clipExport && !input_ClipExportIsRunning(p_clipExport))
+        [self finishClipExportCancelled:NO];
+
+    if (!b_clipCreationMode)
+        return;
+
+    /* the mode is bound to the item it was entered on */
+    if (!p_input || p_input != clipInput
+        || var_GetInteger(p_input, "state") == END_S) {
+        [self exitClipCreationMode];
+        return;
+    }
+
+    /* the record state may have been ended core-side (record-stop-time) */
+    if (b_clipRecordingActive && !var_GetBool(p_input, "record")) {
+        b_clipRecordingActive = NO;
+        b_clipRecordWaitingForStart = NO;
+    }
+
+    double pos = var_GetFloat(p_input, "position");
+    int state = (int)var_GetInteger(p_input, "state");
+
+    /* end-bound pause state machine: 1 = pause requested, 2 = confirmed
+     * (playlist_Pause is asynchronous — without the intermediate state a
+     * naive check would bounce the playback to the start instantly);
+     * playing again from 2 replays the clip from its start bound, also
+     * for resume paths that skip togglePlayPause (hotkeys...) */
+    if (clipPausedAtEnd == 1 && state == PAUSE_S)
+        clipPausedAtEnd = 2;
+    else if (clipPausedAtEnd == 2 && state == PLAYING_S) {
+        clipPausedAtEnd = 0;
+        var_SetFloat(p_input, "position", (float)clipStartPos);
+        clipLastPollPos = clipStartPos;
+        return;
+    }
+
+    /* one second as a fraction of the media, 0 when the length is unknown */
+    int64_t i_length = var_GetInteger(p_input, "length");
+    double posPerSec = i_length > 0 ? (double)CLOCK_FREQ / (double)i_length : 0.;
+
+    /* A bound sitting at the very END of the media cannot be caught by the
+     * poll: nothing is ever sampled between it and EOF, so the input runs
+     * out, the item ends and the mode goes with it. Pause a hair earlier in
+     * that case -- but NEVER while recording, where the exact stop belongs
+     * to the core (record-stop-time, on the raw demux clock) and pulling the
+     * preview back would truncate the clip. */
+    double endBound = clipEndPos;
+    if (!b_clipRecordingActive && posPerSec > 0.) {
+        double lastSafe = 1. - 0.5 * posPerSec;
+        if (endBound > lastSafe)
+            endBound = lastSafe;
+    }
+
+    /* The playback must never run OUTSIDE [A..B]: before A it is pulled
+     * back to A, at B it pauses (and playing again replays from A, through
+     * the state machine above). This is a LEVEL test, not the crossing it
+     * used to be -- previewing the B frame and then playing past it was
+     * allowed by design and no longer is. Suppressed right after a knob
+     * interaction: dragging a bound seeks repeatedly around it and must not
+     * leave the player paused. */
+    /* A clip recording is armed while the playback usually sits AT the
+     * end bound (the B knob was just previewed, or the end-bound pause is
+     * holding there). The seek back to the clip start is part of the
+     * record control and takes a moment: until the position has come back
+     * inside the clip, the end-bound test below would fire on the stale
+     * position and kill the recording on the spot -- an empty or
+     * header-only file. */
+    BOOL interacting =
+        ([NSDate timeIntervalSinceReferenceDate] - clipLastInteraction) < 0.5;
+    if (b_clipRecordWaitingForStart) {
+        if (!b_clipRecordingActive || pos < endBound)
+            b_clipRecordWaitingForStart = NO;
+        if (b_clipRecordWaitingForStart) {
+            clipLastPollPos = pos;
+            return;
+        }
+    }
+    if (!interacting && state == PLAYING_S) {
+        if (posPerSec > 0. && pos < clipStartPos - 0.25 * posPerSec) {
+            var_SetFloat(p_input, "position", (float)clipStartPos);
+            clipLastPollPos = clipStartPos;
+            return;
+        }
+        if (pos >= endBound) {
+            if (b_clipRecordingActive) {
+                /* backstop -- the core normally ended it at the bound */
+                var_SetBool(p_input, "record", false);
+                b_clipRecordingActive = NO;
+            }
+            playlist_Pause(pl_Get(p_intf));
+            clipPausedAtEnd = 1;
+        }
+    }
+    clipLastPollPos = pos;
+}
+
+/*****************************************************************************
  * A->B loop (port of -[VLCCoreInteraction setAtoB]/updateAtoB)
  *****************************************************************************/
 
@@ -249,6 +864,10 @@ bool VLCLegacyBestDeinterlaceAvailable(void)
 
 - (void)jumpExtraShort:(BOOL)forward
 {
+    if (b_clipCreationMode) {
+        [self clipStepFrames:(forward ? 1 : -1)];
+        return;
+    }
     input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
     if (!p_input)
         return;
@@ -272,6 +891,7 @@ bool VLCLegacyBestDeinterlaceAvailable(void)
 - (void)stepVolume:(int)direction
 {
     VLCLegacyStepVolume(p_intf, direction, false);
+    [self osdDisplayVolume];
 }
 
 - (void)volumeUp
@@ -287,6 +907,10 @@ bool VLCLegacyBestDeinterlaceAvailable(void)
 - (void)toggleMute
 {
     playlist_MuteToggle(pl_Get(p_intf));
+    if (playlist_MuteGet(pl_Get(p_intf)) > 0)
+        [self osdDisplayIcon:OSD_MUTE_ICON];
+    else
+        [self osdDisplayVolume];
 }
 
 - (BOOL)muted

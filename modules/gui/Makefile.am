@@ -34,6 +34,7 @@ liblegacy_macosx_plugin_la_SOURCES = \
 	gui/legacy_macosx/intf.h gui/legacy_macosx/intf.m \
 	gui/legacy_macosx/misc.h gui/legacy_macosx/misc.m \
 	gui/legacy_macosx/VLCLegacyVoutWindow.h gui/legacy_macosx/VLCLegacyVoutWindow.m \
+	gui/legacy_macosx/VLCLegacyCustomCropAr.h gui/legacy_macosx/VLCLegacyCustomCropAr.m \
 	gui/legacy_macosx/VLCLegacyMenu.h gui/legacy_macosx/VLCLegacyMenu.m \
 	gui/legacy_macosx/VLCLegacyCoreInteraction.h gui/legacy_macosx/VLCLegacyCoreInteraction.m \
 	gui/legacy_macosx/VLCLegacyMainWindow.h gui/legacy_macosx/VLCLegacyMainWindow.m \
@@ -54,6 +55,8 @@ liblegacy_macosx_plugin_la_SOURCES = \
 	gui/legacy_macosx/VLCLegacyBookmarks.h gui/legacy_macosx/VLCLegacyBookmarks.m \
 	gui/legacy_macosx/VLCLegacyFSPanel.h gui/legacy_macosx/VLCLegacyFSPanel.m \
 	gui/legacy_macosx/VLCLegacyControls.h gui/legacy_macosx/VLCLegacyControls.m \
+	gui/legacy_macosx/VLCLegacySeekThumbnailer.h \
+	gui/legacy_macosx/VLCLegacySeekThumbnailer.m \
 	gui/legacy_macosx/VLCLegacyAbout.h gui/legacy_macosx/VLCLegacyAbout.m \
 	gui/legacy_macosx/VLCLegacyAppleRemote.h gui/legacy_macosx/VLCLegacyAppleRemote.m \
 	gui/legacy_macosx/VLCLegacyMediaKeys.h gui/legacy_macosx/VLCLegacyMediaKeys.m \

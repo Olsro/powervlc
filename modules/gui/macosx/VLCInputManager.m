@@ -90,6 +90,11 @@ static int InputEvent(vlc_object_t *p_this, const char *psz_var,
             case INPUT_EVENT_TITLE:
             case INPUT_EVENT_CHAPTER:
                 [inputManager performSelectorOnMainThread:@selector(updateMainMenu) withObject: nil waitUntilDone:NO];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [[NSNotificationCenter defaultCenter]
+                        postNotificationName:VLCInputTitleChangedNotification
+                                      object:nil];
+                });
                 break;
             case INPUT_EVENT_CACHE:
                 [inputManager performSelectorOnMainThread:@selector(updateMainWindow) withObject:nil waitUntilDone:NO];
@@ -117,7 +122,9 @@ static int InputEvent(vlc_object_t *p_this, const char *psz_var,
                 break;
             case INPUT_EVENT_RECORD:
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [[[VLCMain sharedInstance] mainMenu] updateRecordState: var_InheritBool(p_this, "record")];
+                    BOOL b_recording = var_InheritBool(p_this, "record");
+                    [[[VLCMain sharedInstance] mainMenu] updateRecordState: b_recording];
+                    [[VLCCoreInteraction sharedInstance] recordStateChanged: b_recording];
                 });
                 break;
             case INPUT_EVENT_PROGRAM:

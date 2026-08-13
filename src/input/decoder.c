@@ -186,6 +186,7 @@ static int LoadDecoder( decoder_t *p_dec, bool b_packetizer,
     p_dec->b_frame_drop_allowed = true;
     p_dec->i_extra_picture_buffers = 0;
     p_dec->i_dpb_size = 0;
+    p_dec->i_min_pts_delay = 0;
 
     p_dec->pf_decode = NULL;
     p_dec->pf_get_cc = NULL;
@@ -2348,6 +2349,18 @@ static decoder_t * CreateDecoder( vlc_object_t *p_parent,
     /* Find a suitable decoder/packetizer module */
     if( LoadDecoder( p_dec, p_sout != NULL, fmt ) )
         return p_dec;
+
+    /* The module may have claimed, in its Open(), that it needs more lead
+     * than the access-derived caching gives it. Applied by the core because
+     * only the core can reach the input -- and only when there is one: a
+     * packetizer, a preparser or a transcoding chain has no clock to widen.
+     * Deliberately here and not in LoadDecoder(), which ReloadDecoder() also
+     * calls from the decoder's OWN thread: the floor is owned by the input
+     * thread, and this is the only creation path that runs on it. A reload
+     * loses nothing, the floor having been claimed on the first load and
+     * never being lowered. */
+    if( p_dec->i_min_pts_delay > 0 && p_owner->p_input != NULL )
+        input_SetMinPtsDelay( p_owner->p_input, p_dec->i_min_pts_delay );
 
     switch( p_dec->fmt_out.i_cat )
     {

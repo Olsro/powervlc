@@ -93,9 +93,13 @@ static const struct
 static const struct
 {
     char psz_value[8];
-    char psz_label[8];
+    char psz_label[16];
 } p_crop_values[] = {
     { "", N_("Default") },
+    /* Detects the black bars in the picture itself and crops them away.
+     * Deliberately reuses the "Automatic" msgid, which every one of the
+     * 105 catalogs already translates. */
+    { "auto", N_("Automatic") },
     { "16:10", "16:10" },
     { "16:9", "16:9" },
     { "4:3", "4:3" },
@@ -314,6 +318,15 @@ void vout_IntfInit( vout_thread_t *p_vout )
 void vout_IntfReinit( vout_thread_t *p_vout )
 {
     var_TriggerCallback( p_vout, "zoom" );
+    /* Replaying "crop" here is what upstream relies on to put the crop back
+     * after an input format change tore the display down -- and it does
+     * cover the four "crop-<edge>" variables too, since CropBorderCallback
+     * mirrors them into this one. It is only ever replayed *after* the new
+     * display has been opened and has sized its window on the full frame,
+     * though, which is what the viewer sees as the picture (and the window)
+     * jumping at every turn of a looping stream. The vout now re-applies
+     * the crop it holds from ThreadStart, before the first picture; this
+     * then finds the same value in place and changes nothing. */
     var_TriggerCallback( p_vout, "crop" );
     var_TriggerCallback( p_vout, "aspect-ratio" );
 
@@ -439,17 +452,49 @@ exit:
 /*****************************************************************************
  * Object variables callbacks
  *****************************************************************************/
+/**
+ * Remembers a crop *mode* -- off, or automatic -- for the next playback and
+ * the next run. Only those two: a ratio (or a border, or a window) is a
+ * decision about the video in front of the viewer, and carrying it over to
+ * the next one would crop it wrong; "no black bars please" is a lasting
+ * preference, and the vout inherits it from the configuration on its own.
+ */
+static void SaveCropMode( vlc_object_t *object, const char *psz_value )
+{
+    char *psz_config = config_GetPsz( object, "crop" );
+    const bool b_same = psz_config != NULL ? !strcmp( psz_config, psz_value )
+                                           : *psz_value == '\0';
+    free( psz_config );
+    if( b_same )
+        return;
+
+    config_PutPsz( object, "crop", *psz_value != '\0' ? psz_value : NULL );
+    config_SaveConfigFile( object );
+}
+
 static int CropCallback( vlc_object_t *object, char const *cmd,
                          vlc_value_t oldval, vlc_value_t newval, void *data )
 {
     vout_thread_t *vout = (vout_thread_t *)object;
-    VLC_UNUSED(cmd); VLC_UNUSED(oldval); VLC_UNUSED(data);
+    VLC_UNUSED(cmd); VLC_UNUSED(data);
     unsigned num, den;
     unsigned y, x;
     unsigned width, height;
     unsigned left, top, right, bottom;
 
-    if (sscanf(newval.psz_string, "%u:%u", &num, &den) == 2) {
+    /* Only a real change, never the replay vout_IntfInit/Reinit does of the
+     * value already in force. ⚠ the variable holds a NULL string until
+     * something sets it (the configuration default is NULL), so this is
+     * exactly the transition that matters and it must not be skipped. */
+    const char *psz_old = oldval.psz_string != NULL ? oldval.psz_string : "";
+    const char *psz_new = newval.psz_string != NULL ? newval.psz_string : "";
+    if( strcmp( psz_old, psz_new ) != 0
+     && ( *psz_new == '\0' || !strcmp( psz_new, "auto" ) ) )
+        SaveCropMode( object, psz_new );
+
+    if (!strcmp(newval.psz_string, "auto")) {
+        vout_ControlChangeCropAuto(vout);
+    } else if (sscanf(newval.psz_string, "%u:%u", &num, &den) == 2) {
         vout_ControlChangeCropRatio(vout, num, den);
     } else if (sscanf(newval.psz_string, "%ux%u+%u+%u",
                       &width, &height, &x, &y) == 4) {

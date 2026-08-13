@@ -25,13 +25,28 @@
 #import "VLCLegacyMainWindow.h"
 #import "VLCLegacyCoreInteraction.h"
 #import "VLCLegacyControls.h"
+#import "VLCLegacySeekThumbnailer.h"
 #import "VLCLegacyMain.h"
 #import "VLCLegacyMenu.h"
 #import "VLCLegacyHUDWindow.h"
+#import "VLCLegacyVoutWindow.h"
 #import "misc.h"
 
 /* SetSystemUIMode(): menu bar/Dock hiding available since Mac OS X 10.2 */
 #import <Carbon/Carbon.h>
+
+/* typed objc_msgSend for -setStyleMask: (10.6+, absent from the old SDK
+ * headers). <objc/message.h> is a 10.5+ SDK split; the 10.4u SDK declares
+ * objc_msgSend in <objc/objc-runtime.h>. */
+#if defined(__has_include)
+# if __has_include(<objc/message.h>)
+#  import <objc/message.h>
+# else
+#  import <objc/objc-runtime.h>
+# endif
+#else
+# import <objc/objc-runtime.h>
+#endif
 
 #include <ctype.h>
 #include <fcntl.h>      /* open() — journal de bascule synchrone */
@@ -83,6 +98,52 @@ static NSString *timeToString(int64_t us)
  * VLCLegacyVideoView: VLC 3.0 in-window video behaviors
  *****************************************************************************/
 
+/* Corner grip of the bare window ("Hide controls during playback"): a
+ * drag started that close to a corner resizes, anywhere else moves. The
+ * video view paints the matching cursors over the same zones -- without
+ * them nothing tells the user the corners are grips, the window manager
+ * having no frame left to draw. */
+#define VLC_LEGACY_HIDDEN_CORNER_ZONE 24.0f
+
+/* Diagonal resize cursors have never been public API; they have however
+ * been there since 10.0 under these names. Guarded, with the horizontal
+ * one as a fallback -- the drag is driven by the width anyway. */
+static NSCursor *VLCLegacyCornerResizeCursor(BOOL northWestSouthEast)
+{
+    SEL sel = northWestSouthEast
+        ? @selector(_windowResizeNorthWestSouthEastCursor)
+        : @selector(_windowResizeNorthEastSouthWestCursor);
+    if ([NSCursor respondsToSelector:sel]) {
+        NSCursor *cursor = [NSCursor performSelector:sel];
+        if (cursor != nil)
+            return cursor;
+    }
+    return [NSCursor resizeLeftRightCursor];
+}
+
+/* A click on the video must leave the keyboard where the shortcuts are
+ * handled. Two window arrangements host the video and both need help:
+ * the embedded child window (see VLCLegacyVideoHostWindow) deliberately
+ * refuses key status while windowed, and AppKit then simply leaves the
+ * key status wherever it was -- click an extension dialog, click back on
+ * the video, and Space still goes to the dialog, with no controls bar
+ * left to click when they are auto-hidden. The plain arrangement (video
+ * as a subview of the main window) keys itself, but only if the click
+ * reaches the window, which the vout views do not guarantee. */
+static void VLCLegacyRestoreKeyWindowForVideoClick(NSWindow *window)
+{
+    if (window == nil)
+        return;
+    if ([window canBecomeKeyWindow]) {
+        if (![window isKeyWindow])
+            [window makeKeyWindow];
+        return;
+    }
+    NSWindow *parent = [window parentWindow];
+    if (parent != nil && ![parent isKeyWindow])
+        [parent makeKeyWindow];
+}
+
 @implementation VLCLegacyVideoView
 
 - (BOOL)isOpaque
@@ -102,14 +163,55 @@ static NSString *timeToString(int64_t us)
 }
 
 /* The vout OpenGL view forwards unhandled events up the responder chain;
- * double-click toggles fullscreen, exactly like VLCVideoWindowCommon. */
+ * double-click toggles fullscreen, exactly like VLCVideoWindowCommon --
+ * except while the controls are auto-hidden, where it brings them back
+ * (a plain click only focuses the window, dragging moves it). */
 - (void)mouseDown:(NSEvent *)event
 {
+    extern VLCLegacyMainWindow *VLCLegacyGetMainWindow(void);
+    VLCLegacyMainWindow *controller = VLCLegacyGetMainWindow();
+
+    VLCLegacyRestoreKeyWindowForVideoClick([self window]);
+
     if ([event clickCount] == 2) {
-        [core toggleFullscreen];
+        if ([controller controlsHiddenForPlayback])
+            [controller revealControlsForPlayback];
+        else
+            [core toggleFullscreen];
         return;
     }
+    /* dragging the picture always moves the window, controls hidden or
+     * not; only the auto-hidden state adds the corner resize zones (there
+     * is no window frame left to grab there) */
+    if (![controller videoIsFullscreen]) {
+        /* screen point, 10.2-safe */
+        NSPoint p = [[self window] convertBaseToScreen:
+                        [event locationInWindow]];
+        [controller beginVideoDragAtScreenPoint:p
+                                    allowResize:[controller controlsHiddenForPlayback]];
+    }
     [super mouseDown:event];
+}
+
+- (void)mouseDragged:(NSEvent *)event
+{
+    extern VLCLegacyMainWindow *VLCLegacyGetMainWindow(void);
+    VLCLegacyMainWindow *controller = VLCLegacyGetMainWindow();
+
+    if (![controller videoIsFullscreen]) {
+        NSPoint p = [[self window] convertBaseToScreen:
+                        [event locationInWindow]];
+        [controller dragHiddenControlsToScreenPoint:p];
+        return;
+    }
+    [super mouseDragged:event];
+}
+
+- (void)mouseUp:(NSEvent *)event
+{
+    extern VLCLegacyMainWindow *VLCLegacyGetMainWindow(void);
+    [VLCLegacyGetMainWindow() endVideoDrag];
+    [super mouseUp:event];
 }
 
 - (void)keyDown:(NSEvent *)event
@@ -118,6 +220,7 @@ static NSString *timeToString(int64_t us)
     if (!VLCLegacyHandleKeyEvent([core intf], event))
         [super keyDown:event];
 }
+
 
 - (void)scrollWheel:(NSEvent *)event
 {
@@ -485,6 +588,11 @@ extern VLCLegacyCoreInteraction *VLCLegacyGetCore(void);
 
 - (void)mouseDown:(NSEvent *)event
 {
+    /* see VLCLegacyRestoreKeyWindowForVideoClick: this window refuses to
+     * be key while windowed, so it has to hand the keyboard back to its
+     * parent itself */
+    VLCLegacyRestoreKeyWindowForVideoClick(self);
+
     if ([event clickCount] == 2) {
         [VLCLegacyGetCore() toggleFullscreen];
         return;
@@ -560,14 +668,33 @@ extern VLCLegacyCoreInteraction *VLCLegacyGetCore(void);
 
 @implementation VLCLegacyHostWindow
 
+/* while "Hide controls during playback" strips the title bar (the window
+ * turns borderless on 10.6+), the keyboard must keep working: a plain
+ * borderless NSWindow refuses key status */
+- (BOOL)canBecomeKeyWindow
+{
+    return YES;
+}
+
+- (BOOL)canBecomeMainWindow
+{
+    return YES;
+}
+
 /* when a list (playlist outline, sidebar) has keyboard focus, the plain
  * navigation keys belong to it — arrows move/fold, Return activates —
  * not to the core hotkeys (key-nav-*).  DVD menu navigation still gets
- * them whenever the video view has focus. */
+ * them whenever the video view has focus.
+ * ⚠ Clip creation trims the selected bound by one frame with the
+ * arrows, and on an AUDIO item the playlist is the only thing on screen,
+ * so the list always holds the focus: the mode wins there, otherwise the
+ * arrows would be dead exactly where trimming by hand matters most. */
 static BOOL VLCLegacyKeyBelongsToFocusedList(NSWindow *window, NSEvent *event)
 {
     if ([event modifierFlags] & (NSControlKeyMask | NSAlternateKeyMask
                                | NSShiftKeyMask | NSCommandKeyMask))
+        return NO;
+    if ([VLCLegacyGetCore() clipCreationMode])
         return NO;
     if (![[window firstResponder] isKindOfClass:[NSTableView class]])
         return NO;
@@ -589,14 +716,40 @@ static BOOL VLCLegacyKeyBelongsToFocusedList(NSWindow *window, NSEvent *event)
     if (VLCLegacyKeyBelongsToFocusedList(self, event))
         return [super performKeyEquivalent:event];
 
+    /* Command+<digit> on a keyboard whose digits need Shift: substitute the
+     * digit the key bears, or neither the menu nor the core would match
+     * (see VLCLegacyEventWithDigitRowFallback). Done before anything else
+     * so both paths below see the same event -- and AFTER the text editing
+     * guard above, which must keep the real characters. */
+    event = VLCLegacyEventWithDigitRowFallback(event);
+
     intf_thread_t *p_intf = [VLCLegacyGetCore() intf];
     int match = VLCLegacyEventHotkeyMatch(p_intf, event);
-    /* Cocoa menu equivalents keep priority, except for the transport keys
-     * the core must always see (same list as VLCMainWindow) */
-    if (match != 2 && [[NSApp mainMenu] performKeyEquivalent:event])
-        return YES;
-    if (match)
+    /* the transport keys the core must always see, even when a menu item
+     * carries the same equivalent (same list as VLCMainWindow) */
+    if (match == 2)
         return VLCLegacyHandleKeyEvent(p_intf, event);
+
+    /* ⚠ The menu has to be looked up TWICE, because no single way of doing it
+     * works on both ends of the supported range -- measured, not guessed:
+     *
+     *  - on 10.2 (iBook G3, Jaguar 10.2.8) asking [NSApp mainMenu] straight
+     *    out DOES fire the item: Command+0 halved the window;
+     *  - on macOS 15 that same call never matched anything (traced on all
+     *    four window size shortcuts). There, the menu is only reached by
+     *    REFUSING the key, so that AppKit carries on with its own dispatch.
+     *
+     * Refusing alone is not enough either: it left Command+0 dead on Jaguar.
+     * So: ask, and if that draws a blank, refuse -- never hand the key to the
+     * core in between, which is what used to happen and what broke Half Size
+     * on modern systems. The core binds Command+0 TWICE upstream (key-zoom-half
+     * AND key-subtitle-text-scale-normal, see libvlc-module.c) and resolves it
+     * to the subtitle scale, so the shortcut moved the subtitle size instead of
+     * the window.
+     * A key no menu item claims comes back as a plain key press, and -keyDown:
+     * below (or the video view's) hands it to the core exactly as before. */
+    if ([[NSApp mainMenu] performKeyEquivalent:event])
+        return YES;
     return [super performKeyEquivalent:event];
 }
 
@@ -1161,6 +1314,7 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
         initWithFrame:NSMakeRect(0, 0, W, BOTTOM_BAR_HEIGHT)] autorelease];
     [bar setAutoresizingMask:NSViewWidthSizable | NSViewMaxYMargin];
     [content addSubview:bar];
+    bottomBar = bar;    /* "Hide controls during playback" needs a handle */
 
     /* The 3.0 framed buttons at their natural sizes: the transport
      * cluster is flush like MainWindow.xib, stop and the playlist
@@ -1226,9 +1380,11 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
 
     /* like 3.0: no elapsed field on the left, the seek bar follows the
      * buttons directly */
-    seekSlider = [[[NSSlider alloc]
+    seekSlider = [[[VLCLegacySeekSlider alloc]
         initWithFrame:NSMakeRect(186, 8, W - 186 - 196, 21)] autorelease];
-    [seekSlider setToolTip:_NS("Position")];
+    /* no static tooltip: the slider shows a live time/chapter/preview
+     * tooltip on hover, a "Position" one would fight with it */
+    [(VLCLegacySeekSlider *)seekSlider setHoverDelegate:self];
     VLCLegacyProgressSliderCell *seekCell =
         [[[VLCLegacyProgressSliderCell alloc] init] autorelease];
     [seekSlider setCell:seekCell];
@@ -1959,6 +2115,16 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
     }
 }
 
+/* -[VLCMainWindow highlightSearchField:] simply selects the text; here the
+ * field lives in the playlist strip, which the video view covers while a
+ * movie plays, so bring that view back first -- a Find that leaves the
+ * caret in a hidden field would do nothing at all. */
+- (void)highlightSearchField
+{
+    [self showPlaylistView];
+    [searchField selectText:nil];
+}
+
 /*****************************************************************************
  * playlist table columns (View > Playlist Table Columns)
  *****************************************************************************/
@@ -2243,6 +2409,7 @@ static const struct {
     resumeTrackedURI = nil;
     [updateTimer invalidate];
     updateTimer = nil;
+    [self stopHiddenCornerCursorWatch];
     playlist_t *p_playlist = pl_Get(p_intf);
     unsigned i;
     for (i = 0; i < sizeof(changeVariables) / sizeof(changeVariables[0]);
@@ -2522,6 +2689,521 @@ static const struct {
     [window setHasShadow:YES];
 }
 
+/*****************************************************************************
+ * "Hide controls during playback" (Video menu, legacy-macosx-hide-controls)
+ *****************************************************************************/
+
+- (BOOL)controlsHiddenForPlayback
+{
+    return controlsHiddenForPlayback;
+}
+
+/* While hidden, the video zone is the whole content view; the splitView
+ * frame must follow because the child video window mirrors it. */
+- (void)layoutVideoZoneForHiddenControls
+{
+    NSRect bounds = [[window contentView] bounds];
+    [splitView setFrame:bounds];
+    if (!videoHostWindow)
+        [videoView setFrame:bounds];
+    [self syncVideoHostFrame];
+    [self syncVideoSubviews];
+}
+
+- (void)layoutVideoZoneForVisibleControls
+{
+    NSRect bounds = [[window contentView] bounds];
+    NSRect upper = NSMakeRect(0, BOTTOM_BAR_HEIGHT, bounds.size.width,
+                              bounds.size.height - BOTTOM_BAR_HEIGHT);
+    [splitView setFrame:upper];
+    if (!videoHostWindow)
+        [videoView setFrame:upper];
+    [self syncVideoHostFrame];
+    [self syncVideoSubviews];
+}
+
+/* Every picture transformation -- zoom, crop, aspect ratio, the rotation
+ * of the video effects, or simply another item -- reaches the interface
+ * as the vout asking for a window size, and that is also what a plain
+ * restart does. Three cases to tell apart:
+ *  - a restart asks for the size it asked for last time: ignored, so the
+ *    size the user settled on survives every loop;
+ *  - the request keeps the picture SHAPE and only changes its scale:
+ *    that is a zoom (Half/Normal/Double, or the matching hotkeys), an
+ *    explicit "make it this big", so the requested size is taken as is;
+ *  - the request changes the SHAPE (crop, aspect ratio, rotation,
+ *    another item): the new shape is fitted inside the box the user is
+ *    watching in, so it never grows. Cropping used to blow the window up
+ *    instead, bare window or not, because the core drops the zoom factor
+ *    on a crop change and then asks for the natural size of the media.
+ * The box only follows what the user asks for (a zoom, a hand resize),
+ * never a shape change, so going 16:9 -> 4:3 -> 16:9 lands back on the
+ * very same window instead of shrinking a little every time.
+ * Returns NSZeroSize when the request must be ignored. */
+/* The zoom factor the vout is currently applying, 0 when there is no
+ * video to ask. */
+- (float)currentVideoZoom
+{
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get([core intf]));
+    if (!p_input)
+        return 0.f;
+    vout_thread_t *p_vout = input_GetVout(p_input);
+    vlc_object_release(p_input);
+    if (!p_vout)
+        return 0.f;
+
+    float zoom = var_GetFloat(p_vout, "zoom");
+    vlc_object_release(p_vout);
+    return zoom;
+}
+
+- (NSSize)pictureSizeForRequest:(NSSize)requested currentArea:(NSSize)area
+{
+    if (requested.width <= 0.f || requested.height <= 0.f)
+        return NSZeroSize;
+
+    NSSize previous = lastRequestedVideoSize;
+    lastRequestedVideoSize = requested;
+    if (previous.width == requested.width
+        && previous.height == requested.height)
+        return NSZeroSize;
+
+    /* Half / Normal / Double, and the hotkeys that do the same, all go
+     * through the vout's "zoom": that is how a scale change the *user*
+     * asked for is told apart from one the stream decided on its own. */
+    float zoom = [self currentVideoZoom];
+    float previousZoom = lastVideoZoom;
+    lastVideoZoom = zoom;
+
+    float ratio = requested.width / requested.height;
+    BOOL sameShape = (previous.width > 0.f && previous.height > 0.f
+        && fabsf(ratio - previous.width / previous.height) <= ratio * 0.005f);
+
+    /* the very first request opens the window at the size of the media,
+     * as it always did */
+    if (previous.width <= 0.f || previous.height <= 0.f) {
+        pictureBox = requested;
+        return requested;
+    }
+
+    if (sameShape) {
+        /* ⚠ Same shape, another size, and nobody asked to zoom: an
+         * adaptive stream switching variant. Following it made the window
+         * take the pixel size of each variant and end up filling the
+         * screen on its own, one step at a time. */
+        if (zoom <= 0.f || zoom == previousZoom)
+            return NSZeroSize;
+
+        pictureBox = requested;
+        return requested;
+    }
+
+    NSSize box = pictureBox;
+    if (box.width <= 0.f || box.height <= 0.f)
+        box = area;
+    if (box.width <= 0.f || box.height <= 0.f)
+        return requested;
+    float fitW = box.width / requested.width;
+    float fitH = box.height / requested.height;
+    float fit = fitW < fitH ? fitW : fitH;
+    return NSMakeSize((float)floor(requested.width * fit + 0.5f),
+                      (float)floor(requested.height * fit + 0.5f));
+}
+
+- (void)hiddenWindowFollowVideoSize:(NSSize)requested
+{
+    NSRect frame = [window frame];
+    NSRect content = VLCLegacyContentRectForFrameRect(window, frame);
+    NSSize picture = [self pictureSizeForRequest:requested
+                                     currentArea:content.size];
+    if (picture.width <= 0.f || picture.height <= 0.f)
+        return;
+
+    /* keep it on the screen, at the ratio it just took */
+    NSScreen *screen = [window screen];
+    if (!screen)
+        screen = [NSScreen mainScreen];
+    NSRect visible = [screen visibleFrame];
+    float fitW = visible.size.width / picture.width;
+    float fitH = visible.size.height / picture.height;
+    float fit = fitW < fitH ? fitW : fitH;
+    if (fit < 1.f) {
+        picture.width = (float)floor(picture.width * fit + 0.5f);
+        picture.height = (float)floor(picture.height * fit + 0.5f);
+    }
+    if (picture.width < 160.f || picture.height < 90.f)
+        return;
+
+    /* grow or shrink from the top left corner, where the eye is */
+    content.origin.y += content.size.height - picture.height;
+    content.size = picture;
+    NSRect newFrame = VLCLegacyFrameRectForContentRect(window, content);
+    if (NSMaxY(newFrame) > NSMaxY(visible))
+        newFrame.origin.y = NSMaxY(visible) - newFrame.size.height;
+    [window setFrame:newFrame display:YES];
+    [self layoutVideoZoneForHiddenControls];
+}
+
+/* Show the resize cursor over the four corner grips of the bare window.
+ *
+ * ⚠ Cursor RECTS cannot do this job: the embedded video lives in a child
+ * window that deliberately refuses key status (see
+ * VLCLegacyVideoHostWindow), and AppKit only applies the cursor rects of
+ * the key window -- measured, the rects work when the video sits in the
+ * main window (legacy-macosx-childvideo off) and never otherwise. So the
+ * pointer is polled instead, the same trick the seek bar tooltip uses
+ * for the same reason (no tracking areas before 10.5). The arrow is put
+ * back only when WE changed it, so the cursor the core hides during
+ * playback is left alone. */
+- (void)startHiddenCornerCursorWatch
+{
+    [self stopHiddenCornerCursorWatch];
+    hiddenCursorTimer = [[NSTimer scheduledTimerWithTimeInterval:0.1
+                                                          target:self
+                                                        selector:@selector(hiddenCornerCursorTick:)
+                                                        userInfo:nil
+                                                         repeats:YES] retain];
+}
+
+- (void)stopHiddenCornerCursorWatch
+{
+    if (hiddenCursorTimer != nil) {
+        [hiddenCursorTimer invalidate];
+        [hiddenCursorTimer release];
+        hiddenCursorTimer = nil;
+    }
+    if (hiddenCursorZone != 0) {
+        [[NSCursor arrowCursor] set];
+        hiddenCursorZone = 0;
+    }
+}
+
+- (void)hiddenCornerCursorTick:(NSTimer *)timer
+{
+    if (!controlsHiddenForPlayback) {
+        [self stopHiddenCornerCursorWatch];
+        return;
+    }
+
+    NSRect frame = [window frame];
+    NSPoint p = [NSEvent mouseLocation];
+    float z = VLC_LEGACY_HIDDEN_CORNER_ZONE;
+    int zone = 0;                       /* 0 none, 1 NW/SE, 2 NE/SW */
+    if (NSMouseInRect(p, frame, NO)
+        && frame.size.width >= 2 * z && frame.size.height >= 2 * z) {
+        BOOL left = (p.x - NSMinX(frame) <= z);
+        BOOL right = (NSMaxX(frame) - p.x <= z);
+        BOOL bottom = (p.y - NSMinY(frame) <= z);
+        BOOL top = (NSMaxY(frame) - p.y <= z);
+        if ((left && top) || (right && bottom))
+            zone = 1;
+        else if ((right && top) || (left && bottom))
+            zone = 2;
+    }
+
+    if (zone == hiddenCursorZone)
+        return;
+    hiddenCursorZone = zone;
+    if (zone == 0)
+        [[NSCursor arrowCursor] set];
+    else
+        [VLCLegacyCornerResizeCursor(zone == 1) set];
+}
+
+- (void)hideControlsForPlayback
+{
+    if (controlsHiddenForPlayback || !videoActive
+        || [self videoIsFullscreen])
+        return;
+
+    /* where the picture sits on screen right now: the window then
+     * shrinks onto exactly that rectangle, so the picture neither moves
+     * nor changes size. Starting from the video view, the aspect-ratio
+     * correction the vout applies inside it is replayed so its thin
+     * black bands go away too. */
+    NSRect inWindow = [videoView convertRect:[videoView bounds] toView:nil];
+    NSRect screenRect;
+    screenRect.origin = [[videoView window] convertBaseToScreen:
+                            inWindow.origin];
+    screenRect.size = inWindow.size;
+    if (lastNativeVideoSize.width > 0. && lastNativeVideoSize.height > 0.
+        && screenRect.size.width > 0. && screenRect.size.height > 0.) {
+        float scale_w = screenRect.size.width / lastNativeVideoSize.width;
+        float scale_h = screenRect.size.height / lastNativeVideoSize.height;
+        float scale = scale_w < scale_h ? scale_w : scale_h;
+        NSSize picture = NSMakeSize(
+            (float)floor(lastNativeVideoSize.width * scale + 0.5),
+            (float)floor(lastNativeVideoSize.height * scale + 0.5));
+        screenRect.origin.x +=
+            (float)floor((screenRect.size.width - picture.width) / 2 + 0.5);
+        screenRect.origin.y +=
+            (float)floor((screenRect.size.height - picture.height) / 2 + 0.5);
+        screenRect.size = picture;
+    }
+
+    /* a video view caught mid-relayout or mid-teardown (playback ending,
+     * a DVD transition, the playlist view coming and going) measures
+     * next to nothing: shrinking the window onto that would leave a
+     * sliver behind and there would be no picture to watch anyway */
+    if (screenRect.size.width < 160.f || screenRect.size.height < 90.f)
+        return;
+
+    controlsHiddenForPlayback = YES;
+    frameBeforeHidingControls = [window frame];
+    lastRequestedVideoSize = lastNativeVideoSize;
+    pictureBox = screenRect.size;
+
+    VLCLegacySetViewHidden(bottomBar, YES);
+
+    /* the title bar can only go where -setStyleMask: exists (10.6+);
+     * the PowerPC systems this interface targets keep it, only the
+     * controls bar goes -- the picture geometry is preserved anyway */
+    styleMaskChangedForHiddenControls = NO;
+    if ([window respondsToSelector:@selector(setStyleMask:)]) {
+        /* ⚠ BORDERLESS SEUL, sans NSResizableWindowMask : sur 10.6 le bit
+         * « redimensionnable » sans le bit « titré » n'est pas une
+         * combinaison que l'AppKit d'alors accepte, et la barre de titre
+         * RESTE -- mesuré par sonde sur Snow Leopard 10.6.8 : masque 8, cadre
+         * inchangé à 382 px pour 360 px de contenu ; masque 0, cadre ramené à
+         * 360 px. Rien n'est perdu, le redimensionnement par les coins étant
+         * fait à la main (-dragHiddenControlsToScreenPoint:) et la fenêtre
+         * gardant le statut de fenêtre clé par -canBecomeKeyWindow. */
+        typedef NSUInteger (*GetMaskFn)(id, SEL);
+        typedef void (*SetMaskFn)(id, SEL, NSUInteger);
+        styleMaskBeforeHidingControls =
+            ((GetMaskFn)objc_msgSend)(window, @selector(styleMask));
+        /* ⚠ mémoriser le titre AVANT : changer le masque recrée le cadre de
+         * fenêtre, et le titre est perdu au passage. Le relire au retour
+         * ([window title]) ne rend qu'une chaîne VIDE -- constaté sur Snow
+         * Leopard : boutons de fenêtre présents, titre absent. */
+        [titleBeforeHidingControls release];
+        titleBeforeHidingControls = [[window title] copy];
+        ((SetMaskFn)objc_msgSend)(window, @selector(setStyleMask:),
+            (NSUInteger)NSBorderlessWindowMask);
+        styleMaskChangedForHiddenControls = YES;
+    }
+
+    NSRect frame = VLCLegacyFrameRectForContentRect(window, screenRect);
+    [window setFrame:frame display:YES];
+    hiddenControlsInitialFrame = frame;
+    [self layoutVideoZoneForHiddenControls];
+
+    [window makeKeyAndOrderFront:nil];
+    if (!videoHostWindow)
+        [window makeFirstResponder:videoView];
+
+    [core setControlsHiddenForPlayback:YES];
+    [self startHiddenCornerCursorWatch];
+}
+
+- (void)revealControlsForPlayback
+{
+    if (!controlsHiddenForPlayback)
+        return;
+    controlsHiddenForPlayback = NO;
+    mouseOutsideSince = 0;
+    autoHideRevealTicks = 0;
+
+    /* the frame before hiding, carried over by whatever the user moved
+     * or resized the naked window to meanwhile */
+    NSRect hiddenFrame = [window frame];
+    NSRect frame = frameBeforeHidingControls;
+    frame.origin.x += hiddenFrame.origin.x
+                    - hiddenControlsInitialFrame.origin.x;
+    frame.origin.y += hiddenFrame.origin.y
+                    - hiddenControlsInitialFrame.origin.y;
+    frame.size.width += hiddenFrame.size.width
+                      - hiddenControlsInitialFrame.size.width;
+    frame.size.height += hiddenFrame.size.height
+                       - hiddenControlsInitialFrame.size.height;
+
+    VLCLegacySetViewHidden(bottomBar, NO);
+    if (styleMaskChangedForHiddenControls) {
+        typedef void (*SetMaskFn)(id, SEL, NSUInteger);
+        ((SetMaskFn)objc_msgSend)(window, @selector(setStyleMask:),
+                                  styleMaskBeforeHidingControls);
+        styleMaskChangedForHiddenControls = NO;
+        /* a fresh titled frame comes up blank -- and asking the window for
+         * its own title gives "" by then, so restore the copy taken before */
+        [window setTitle:titleBeforeHidingControls ?
+                             titleBeforeHidingControls : @""];
+    }
+
+    /* keep the whole window on the screen (the title bar coming back on
+     * top could push it under the menu bar) */
+    NSScreen *screen = [window screen];
+    if (!screen)
+        screen = [NSScreen mainScreen];
+    NSRect visible = [screen visibleFrame];
+    if (NSMaxY(frame) > NSMaxY(visible))
+        frame.origin.y = NSMaxY(visible) - frame.size.height;
+
+    [window setFrame:frame display:YES];
+    [self layoutVideoZoneForVisibleControls];
+    [window makeKeyAndOrderFront:nil];
+
+    [core setControlsHiddenForPlayback:NO];
+    [self stopHiddenCornerCursorWatch];
+}
+
+/* Driven by the refresh tick: 10.2 has no tracking primitive worth the
+ * name for this, and a 3 s delay does not need one. */
+- (void)updateAutoHideControls
+{
+    BOOL enabled = [core autoHideControls];
+    BOOL fullscreen = [self videoIsFullscreen];
+    BOOL videoShown = videoActive && !playlistViewWanted
+                      && !VLCLegacyViewIsHidden(videoView);
+
+    if (controlsHiddenForPlayback) {
+        /* Fullscreen reveals them on the way in (see
+         * -setVideoFullscreenFromNumber:); doing it from here as well would
+         * re-lay the windowed frame out on top of the fullscreen one. */
+        if (fullscreen)
+            return;
+        if (!enabled) {
+            [self revealControlsForPlayback];
+            return;
+        }
+        /* the video being gone is often transient (loop restart, next
+         * playlist item, DVD menu transition): only give up once it has
+         * been gone for a few consecutive ticks (~3 s) */
+        if (!videoShown) {
+            autoHideRevealTicks++;
+            int threshold = VLCLegacyOSVersionAtLeast(10, 4, 0) ? 10 : 3;
+            if (autoHideRevealTicks >= threshold)
+                [self revealControlsForPlayback];
+        } else {
+            autoHideRevealTicks = 0;
+        }
+        return;
+    }
+
+    autoHideRevealTicks = 0;
+    /* the video being on show is the whole condition: a pause hides just
+     * as well (the OSD is the feedback then), the playlist view never
+     * does */
+    if (!enabled || fullscreen || !videoShown) {
+        mouseOutsideSince = 0;
+        return;
+    }
+    if (NSMouseInRect([NSEvent mouseLocation], [window frame], NO)) {
+        mouseOutsideSince = 0;
+        return;
+    }
+    double now = [NSDate timeIntervalSinceReferenceDate];
+    if (mouseOutsideSince == 0) {
+        mouseOutsideSince = now;
+        return;
+    }
+    if (now - mouseOutsideSince >= 3.0)
+        [self hideControlsForPlayback];
+}
+
+- (void)beginHiddenControlsDragAtScreenPoint:(NSPoint)point
+{
+    [self beginVideoDragAtScreenPoint:point allowResize:YES];
+}
+
+/* ⚠ A drag is only ever honoured between a mouse-down on the picture and
+ * the matching mouse-up. Without that, any stray -mouseDragged: reaching
+ * the video view -- the one that follows a click whose press was eaten by
+ * the menu tracking loop, for instance -- was taken as the continuation of
+ * whatever drag happened last, and moved the window by the difference
+ * between two unrelated pointer positions. */
+- (void)endVideoDrag
+{
+    videoDragActive = NO;
+}
+
+- (void)beginVideoDragAtScreenPoint:(NSPoint)point allowResize:(BOOL)allowResize
+{
+    videoDragActive = YES;
+    hiddenDragStartMouse = point;
+    hiddenDragStartFrame = [window frame];
+    hiddenDragStartOrigin = hiddenDragStartFrame.origin;
+
+    if (!allowResize) {
+        /* with the controls up the window still has its own frame and
+         * resize control: dragging the picture only MOVES it */
+        hiddenDragResizeH = 0;
+        hiddenDragResizeV = 0;
+        hiddenDragIsResize = NO;
+        return;
+    }
+
+    /* corner zones resize, everything else moves */
+    float zone = VLC_LEGACY_HIDDEN_CORNER_ZONE;
+    hiddenDragResizeH =
+        (point.x - NSMinX(hiddenDragStartFrame) <= zone) ? -1 :
+        ((NSMaxX(hiddenDragStartFrame) - point.x <= zone) ? 1 : 0);
+    hiddenDragResizeV =
+        (point.y - NSMinY(hiddenDragStartFrame) <= zone) ? -1 :
+        ((NSMaxY(hiddenDragStartFrame) - point.y <= zone) ? 1 : 0);
+    hiddenDragIsResize = (hiddenDragResizeH != 0 && hiddenDragResizeV != 0);
+}
+
+/* Keeps enough of the window on the screen to grab it again: the picture
+ * is the whole grab area here, so a window dragged fully past an edge
+ * could not be brought back at all. Dragging it PARTLY out stays allowed,
+ * as everywhere else on the system. */
+- (NSPoint)dragOriginKeptReachable:(NSPoint)origin
+{
+    NSRect visible = [[window screen] visibleFrame];
+    NSRect frame = [window frame];
+    float margin = (frame.size.width < 120.f) ? frame.size.width : 120.f;
+    float vmargin = (frame.size.height < 60.f) ? frame.size.height : 60.f;
+
+    if (origin.x + frame.size.width < NSMinX(visible) + margin)
+        origin.x = NSMinX(visible) + margin - frame.size.width;
+    if (origin.x > NSMaxX(visible) - margin)
+        origin.x = NSMaxX(visible) - margin;
+
+    if (origin.y + frame.size.height > NSMaxY(visible))
+        origin.y = NSMaxY(visible) - frame.size.height;
+    if (origin.y + frame.size.height < NSMinY(visible) + vmargin)
+        origin.y = NSMinY(visible) + vmargin - frame.size.height;
+
+    return origin;
+}
+
+- (void)dragHiddenControlsToScreenPoint:(NSPoint)point
+{
+    if (!videoDragActive)
+        return;
+
+    if (!hiddenDragIsResize) {
+        NSPoint origin = NSMakePoint(
+            hiddenDragStartOrigin.x + (point.x - hiddenDragStartMouse.x),
+            hiddenDragStartOrigin.y + (point.y - hiddenDragStartMouse.y));
+        [window setFrameOrigin:[self dragOriginKeptReachable:origin]];
+        return;
+    }
+
+    /* the window IS the picture: one dimension drives, the ratio gives
+     * the other, and the corner opposite the grabbed one stays put */
+    float width = hiddenDragStartFrame.size.width
+        + (point.x - hiddenDragStartMouse.x) * hiddenDragResizeH;
+    if (width < 160.f)
+        width = 160.f;
+    float ratio = (lastNativeVideoSize.width > 0.
+                   && lastNativeVideoSize.height > 0.)
+        ? lastNativeVideoSize.height / lastNativeVideoSize.width
+        : hiddenDragStartFrame.size.height / hiddenDragStartFrame.size.width;
+    NSRect frame = hiddenDragStartFrame;
+    frame.size.width = width;
+    frame.size.height = (float)floor(width * ratio + 0.5);
+    if (hiddenDragResizeH < 0)
+        frame.origin.x = NSMaxX(hiddenDragStartFrame) - frame.size.width;
+    if (hiddenDragResizeV < 0)
+        frame.origin.y = NSMaxY(hiddenDragStartFrame) - frame.size.height;
+
+    [window setFrame:frame display:YES];
+    /* resizing by hand redefines the box a later crop fits into */
+    pictureBox = frame.size;
+    [self layoutVideoZoneForHiddenControls];
+}
+
 /* Old-style NSOpenGLContext surfaces do not reliably track window resizes;
  * re-setting the vout subview frame forces a context update. */
 - (void)syncVideoSubviews
@@ -2537,6 +3219,24 @@ static const struct {
     if (!videoActive || [self videoIsFullscreen])
         return;
     NSSize size = [value sizeValue];
+    /* remembered for the picture-fit of the auto-hidden window */
+    lastNativeVideoSize = size;
+    /* While the controls are auto-hidden the frame is exactly the
+     * picture the user watches: a plain input restart (loop, next item)
+     * must not blow it back up to the decorated size, but a genuine
+     * ratio change -- a crop, an aspect ratio, an item of another shape
+     * -- has to be followed, otherwise cropping looks like it does
+     * nothing and puts bands back inside the bare window. */
+    if (controlsHiddenForPlayback) {
+        [self hiddenWindowFollowVideoSize:size];
+        return;
+    }
+    /* see -pictureSizeForRequest:currentArea: -- the bare window is the
+     * picture itself, the decorated one keeps its chrome around it, but
+     * both follow the same rule */
+    size = [self pictureSizeForRequest:size currentArea:[videoView frame].size];
+    if (size.width <= 0.f || size.height <= 0.f)
+        return;
     /* Resize the window so the video area gets the requested size, keeping
      * the top-left corner in place (VLC 3.0 behavior). -setFrame: bypasses
      * -minSize, so clamp explicitly like VLC 3.0 does. */
@@ -2663,6 +3363,20 @@ static const struct {
         host->keyable = YES;          /* Échap / Espace en plein écran */
         [host setFrame:[screen frame] display:YES animate:NO];
         videoHostFullscreen = YES;
+        /* ⚠ The view does not follow the window on its own here: growing
+         * the host window leaves the video view at the size it had, and
+         * since a Cocoa view keeps its origin at the BOTTOM the picture
+         * ends up sitting on the bottom edge with a black band above it --
+         * the screen visibly not covered. The heavy path (a dedicated
+         * fullscreen window) has always set the frame explicitly; this one
+         * relied on an autoresizing mask that the hidden-controls layout
+         * can have replaced with an explicit frame.
+         * ⚠ Not all the way up on a notched screen: the window does cover
+         * the whole display, but the picture stops below the camera strip,
+         * which the window's BLACK background then fills (see
+         * VLCLegacySafeContentRect). */
+        if ([videoView window] == host)
+            [videoView setFrame:VLCLegacySafeContentRect(host, screen)];
         [self syncVideoSubviews];
         [host makeKeyAndOrderFront:nil];
         [host makeFirstResponder:videoView];
@@ -2672,10 +3386,24 @@ static const struct {
         videoHostFullscreen = NO;
         host->keyable = NO;           /* fenêtré : la principale redevient clé */
         [host setFrame:videoHostWindowedFrame display:YES animate:NO];
+        if ([videoView window] == host)
+            [videoView setFrame:[[host contentView] bounds]];
         [self syncVideoSubviews];
         [self syncVideoHostFrame];    /* la fenêtre a pu bouger entre-temps */
         [window makeKeyAndOrderFront:nil];
     }
+}
+
+/* VOUT_WINDOW_SET_STATE for the embedded picture (Video > Float on Top).
+ * The video is hosted by the main window and, in windowed playback, by a
+ * borderless CHILD of it: AppKit keeps a child ordered above its parent but
+ * does not carry a level change over to it, so raise both. */
+- (void)setVideoAboveOthersFromNumber:(NSNumber *)above
+{
+    int level = [above boolValue] ? NSFloatingWindowLevel : NSNormalWindowLevel;
+    [window setLevel:level];
+    if (videoHostWindow)
+        [videoHostWindow setLevel:level];
 }
 
 - (void)setVideoFullscreenFromNumber:(NSNumber *)fullscreen
@@ -2684,6 +3412,17 @@ static const struct {
     if (!videoActive) {
         return;
     }
+
+    /* ⚠ Fullscreen must start from the normal window state. With the
+     * controls auto-hidden the window IS the picture, and the frames the
+     * transition saves and restores are that bare frame; worse, the
+     * auto-hide tick reveals the controls as soon as it notices fullscreen
+     * -- which lays the *windowed* frame back over the fullscreen one, and
+     * leaves the picture the size it had in a window, with black around.
+     * Revealing here, before anything is resized, is what the modern
+     * interface does in -windowWillEnterFullScreen:. */
+    if (enter && controlsHiddenForPlayback)
+        [self revealControlsForPlayback];
 
     if (videoHostWindow) {
         [self setVideoHostFullscreen:enter];
@@ -2718,7 +3457,9 @@ static const struct {
         [videoView retain];
         preFullscreenVideoFrame = [videoView frame];   /* pour la restitution */
         [videoView removeFromSuperview];
-        [videoView setFrame:[[fsVideoWindow contentView] bounds]];
+        /* écran à encoche : l'image s'arrête sous la bande de la caméra, que
+         * le fond noir de la fenêtre remplit (VLCLegacySafeContentRect) */
+        [videoView setFrame:VLCLegacySafeContentRect(fsVideoWindow, screen)];
         [[fsVideoWindow contentView] addSubview:videoView];
         [videoView release];
         if ([screen hasMenuBar] || [screen hasDock])
@@ -2849,7 +3590,157 @@ static const struct {
 
 - (void)seeked:(id)sender
 {
+    if ([core clipCreationMode]) {
+        /* both knobs define the clip bounds; moving either one seeks
+         * there so the user previews what the clip will contain */
+        VLCLegacyProgressSliderCell *seekCell =
+            (VLCLegacyProgressSliderCell *)[seekSlider cell];
+        float fraction;
+        int knob = [seekCell activeClipKnob];
+        if (knob == 2) {
+            fraction = (float)[seekCell clipEndValue];
+            [core setClipEndPosition:fraction];
+            [core setClipSelectedKnob:2];
+        } else if (knob == 3) {
+            /* scrub between the bounds: seek only, bounds untouched */
+            fraction = (float)[seekCell playbackMarkerValue];
+        } else {
+            fraction = [sender floatValue];
+            [core setClipStartPosition:fraction];
+            [core setClipSelectedKnob:1];
+        }
+        [core setPositionFraction:fraction];
+        return;
+    }
     [core setPositionFraction:[sender floatValue]];
+}
+
+/* hover delegate of the seek slider: fired once the mouse has settled
+ * for a second (the slider debounces so a frantic hover cannot spam a
+ * secondary decode, which matters a lot on a G3) */
+- (void)seekSlider:(VLCLegacySeekSlider *)slider
+        hoverThumbnailWantedAtFraction:(double)fraction
+{
+    [[VLCLegacySeekThumbnailer sharedInstance]
+        requestThumbnailWithIntf:p_intf fraction:fraction forSlider:slider];
+}
+
+/* bare arrow keys pressed while the slider is the first responder
+ * (clip mode): one-frame nudge of the selected bound */
+- (void)seekSlider:(VLCLegacySeekSlider *)slider
+        clipStepFrames:(int)direction
+{
+    [core clipStepFrames:direction];
+}
+
+/* chapter separators on the seek bar and names for its hover tooltip,
+ * same INPUT_GET_TITLE_INFO rules as the Qt and modern seek sliders:
+ * only usable when the seekpoints carry time offsets */
+- (void)updateChaptersForInput:(input_thread_t *)p_input
+                      duration:(int64_t)i_length
+{
+
+    VLCLegacyProgressSliderCell *cell =
+        (VLCLegacyProgressSliderCell *)[seekSlider cell];
+
+    int title = p_input ? (int)var_GetInteger(p_input, "title") : -1;
+
+    /* ⚠⚠⚠ IDENTIFIER LE MÉDIA PAR SON URI, pas par le pointeur d'entrée.
+     * Un `input_thread_t` fraîchement alloué retombe très souvent à la MÊME
+     * adresse que celui qu'on vient de fermer : avec (pointeur, titre) pour
+     * seule identité, deux fichiers successifs passaient pour le même média,
+     * et la garde « un sondage vide n'efface pas » conservait alors les
+     * marqueurs du PRÉCÉDENT sur un fichier qui n'a aucun chapitre.
+     * Constaté en enchaînant deux vidéos. L'URI, elle, ne ment pas. */
+    char *psz_uri = NULL;
+    if (p_input != NULL) {
+        input_item_t *p_item = input_GetItem(p_input);
+        if (p_item != NULL)
+            psz_uri = input_item_GetURI(p_item);
+    }
+    BOOL sameMedia = ((psz_uri == NULL && chaptersUri == NULL)
+                      || (psz_uri != NULL && chaptersUri != NULL
+                          && strcmp(psz_uri, chaptersUri) == 0))
+                     && title == chaptersTitle;
+    BOOL sameSource = sameMedia && i_length == chaptersDuration;
+
+    if (!sameMedia) {
+        free(chaptersUri);
+        chaptersUri = psz_uri;      /* on en prend la propriété */
+        psz_uri = NULL;
+    }
+    free(psz_uri);
+    /* ⚠⚠ NE JAMAIS mémoriser un ÉCHEC de façon définitive. Sur un DVD, la
+     * durée et le numéro de titre sont publiés AVANT que les points de
+     * chapitre ne portent leurs décalages temporels : la première passe ne
+     * trouvait rien, le triplet (entrée, titre, durée) ne bougeait plus
+     * ensuite, et les marqueurs n'apparaissaient alors JAMAIS de toute la
+     * lecture. D'où un symptôme qui dépend de l'ordre d'arrivée — le même
+     * disque montrait ses chapitres une fois sur deux, et seul le
+     * redémarrage de l'application semblait « corriger » quoi que ce soit.
+     * On ne court-circuite donc que sur un résultat POSITIF ; sinon on
+     * retente, mais pas à chaque sondage (INPUT_GET_TITLE_INFO recopie tout
+     * l'arbre des titres, trois fois par seconde ce serait cher sur un G3). */
+    if (sameSource && [cell chapterFractions] != nil)
+        return;
+    if (sameSource && ++chaptersRetryTicks < 8)   /* ~2,5 s */
+        return;
+    chaptersRetryTicks = 0;
+    chaptersTitle = title;
+    chaptersDuration = i_length;
+
+    NSArray *fractions = nil;
+    NSArray *names = nil;
+    if (p_input && i_length > 0) {
+        input_title_t *p_title = NULL;
+        int i_title_id = -1;
+        if (input_Control(p_input, INPUT_GET_TITLE_INFO, &p_title,
+                          &i_title_id) == VLC_SUCCESS && p_title) {
+            if (p_title->i_seekpoint > 1
+                && p_title->seekpoint[p_title->i_seekpoint - 1]->i_time_offset
+                   > 0) {
+                NSMutableArray *mutableFractions = [NSMutableArray
+                    arrayWithCapacity:p_title->i_seekpoint];
+                NSMutableArray *mutableNames = [NSMutableArray
+                    arrayWithCapacity:p_title->i_seekpoint];
+                int i;
+                for (i = 0; i < p_title->i_seekpoint; i++) {
+                    seekpoint_t *point = p_title->seekpoint[i];
+                    /* beaucoup de disques numérotent leurs chapitres sans
+                     * les nommer : sans repli, le survol n'affichait que
+                     * l'heure. « Chapter %i » existe déjà au catalogue. */
+                    NSString *name =
+                        (point->psz_name != NULL && *point->psz_name != '\0')
+                        ? [NSString stringWithUTF8String:point->psz_name]
+                        : [NSString stringWithFormat:_NS("Chapter %i"), i + 1];
+                    [mutableFractions addObject:
+                        [NSNumber numberWithDouble:
+                            (double)point->i_time_offset / (double)i_length]];
+                    [mutableNames addObject:name ? name : @""];
+                }
+                fractions = mutableFractions;
+                names = mutableNames;
+            }
+            vlc_input_title_Delete(p_title);
+        }
+    }
+
+    /* the common case is "no chapters, again": do not trigger a repaint
+     * of the whole track every poll for it */
+    if (!fractions && ![cell chapterFractions])
+        return;
+    /* ⚠⚠ Ne pas EFFACER des marqueurs déjà trouvés sur un simple échec de
+     * sondage. Sur un DVD la durée retombe transitoirement à zéro (frontière
+     * de cellule, bascule de domaine) : le triplet changeait, on recalculait,
+     * on ne trouvait rien, et la barre perdait ses chapitres EN PLEINE
+     * LECTURE. Tant que le média est le même (même entrée, même titre), un
+     * résultat vide veut dire « pas maintenant », pas « il n'y en a plus » ;
+     * un vrai changement de titre ou la fin de lecture, eux, font tomber
+     * `sameMedia` et nettoient bien la barre. */
+    if (!fractions && sameMedia)
+        return;
+    [cell setChapterFractions:fractions names:names];
+    [seekSlider setNeedsDisplay:YES];
 }
 
 - (void)searchChanged:(id)sender
@@ -3776,9 +4667,26 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
             pp_items[j++] = p_item;
     }
 
-    int target = (int)index;
-    if (index == NSOutlineViewDropOnItemIndex)
-        target = p_parent->i_children;   /* dropping on a node → append */
+    int target = p_parent->i_children;   /* dropping on a node → append */
+    if (index != NSOutlineViewDropOnItemIndex) {
+        /* the outline shows a snapshot, and a live search hides rows from
+         * it: the displayed child index is not the core one.  Translate it
+         * through the id of the row the insertion point aims at (without a
+         * search the two coincide, so this is a no-op then). */
+        NSArray *siblings = targetItem ? [targetItem objectForKey:@"children"]
+                                       : items;
+        if (index >= 0 && (unsigned)index < [siblings count]) {
+            int i_id = [[[siblings objectAtIndex:index]
+                            objectForKey:@"id"] intValue];
+            int k;
+            for (k = 0; k < p_parent->i_children; k++) {
+                if (p_parent->pp_children[k]->i_id == i_id) {
+                    target = k;
+                    break;
+                }
+            }
+        }
+    }
 
     BOOL ok = j > 0
         && playlist_TreeMoveMany(p_playlist, (int)j, pp_items,
@@ -3818,6 +4726,35 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     return readOnly;
 }
 
+/* where a snapshot row sits in the tree: its parent row (nil at the top
+ * level) and its rank among that parent's children.  -parentForItem: would
+ * answer the first half, but it is 10.4 and this interface still runs on
+ * 10.2. */
+- (BOOL)locateItem:(id)needle
+           inArray:(NSArray *)array
+            parent:(id)parentItem
+         outParent:(id *)outParent
+          outIndex:(NSInteger *)outIndex
+{
+    unsigned i;
+    for (i = 0; i < [array count]; i++) {
+        id entry = [array objectAtIndex:i];
+        if (entry == needle) {
+            *outParent = parentItem;
+            *outIndex = (NSInteger)i;
+            return YES;
+        }
+        NSArray *children = [entry objectForKey:@"children"];
+        if (children && [self locateItem:needle
+                                 inArray:children
+                                  parent:entry
+                               outParent:outParent
+                                outIndex:outIndex])
+            return YES;
+    }
+    return NO;
+}
+
 /* dropping files, or our own rows, on the playlist outline */
 - (NSDragOperation)outlineView:(NSOutlineView *)outlineView
                   validateDrop:(id <NSDraggingInfo>)info
@@ -3831,6 +4768,36 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
 
     /* internal move: reorder / re-parent inside the playlist tree */
     if ([[pboard types] containsObject:VLCLegacyPlaylistItemPboardType]) {
+        /* ⚠ AppKit falls back on "drop ON" (childIndex ==
+         * NSOutlineViewDropOnItemIndex) as soon as it refuses to aim at a
+         * row -- over the row being dragged, or over a leaf.  On the root
+         * (item nil) that reached -moveDraggedItemsInto:atIndex: as "append
+         * at the end": the row flew to the BOTTOM of the playlist instead
+         * of landing where the pointer was, which read as "dropped above,
+         * inserted below".  Retarget the proposal at the real insertion
+         * point, the way every other outline behaves.  A genuine node keeps
+         * its own "drop inside me" meaning, and so does the empty area
+         * below the last row (no row under the pointer). */
+        if (index == NSOutlineViewDropOnItemIndex
+         && !(item && [item objectForKey:@"children"])) {
+            NSPoint loc = [outlineView convertPoint:[info draggingLocation]
+                                           fromView:nil];
+            NSInteger row = [outlineView rowAtPoint:loc];
+            id parentItem = nil;
+            NSInteger childIndex = -1;
+            if (row >= 0
+             && [self locateItem:[outlineView itemAtRow:row]
+                         inArray:items
+                          parent:nil
+                       outParent:&parentItem
+                        outIndex:&childIndex]) {
+                /* the outline is flipped: past the middle means below */
+                NSRect rowRect = [outlineView rectOfRow:row];
+                item = parentItem;
+                index = childIndex + (loc.y > NSMidY(rowRect) ? 1 : 0);
+                [outlineView setDropItem:item dropChildIndex:index];
+            }
+        }
         /* dropping ON a leaf is meaningless: only nodes hold children */
         if (item && index == NSOutlineViewDropOnItemIndex
          && ![item objectForKey:@"children"])
@@ -4253,6 +5220,43 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     }
 }
 
+/* header title of the item list: selected view name, with the total
+ * duration of the node appended for the playlist and the media library,
+ * exactly like the modern interface (" — H:MM:SS", days first if any) */
+- (void)updateViewTitleWithDuration:(int64_t)duration
+{
+    NSString *title = nil;
+    if (sidebarSelection >= 0
+        && (unsigned)sidebarSelection < [sidebarItems count])
+        title = [[sidebarItems objectAtIndex:sidebarSelection]
+                    objectForKey:@"title"];
+    if (!title)
+        title = _NS("Playlist");
+
+    if (duration >= CLOCK_FREQ) {
+        int64_t total = duration / CLOCK_FREQ;
+        int sec = (int)(total % 60);
+        int min = (int)((total % 3600) / 60);
+        int hours = (int)((total % 86400) / 3600);
+        int days = (int)(total / 86400);
+        NSString *timeString;
+        if (days > 0)
+            timeString = [NSString stringWithFormat:@"%i:%i:%02i:%02i",
+                          days, hours, min, sec];
+        else
+            timeString = [NSString stringWithFormat:@"%i:%02i:%02i",
+                          hours, min, sec];
+        /* em dash through UTF-8 explicitly: 10.2's Foundation reads
+         * high-bit bytes of CONSTANT strings as MacRoman (",Äî") */
+        title = [NSString stringWithFormat:@"%@%@%@", title,
+                 [NSString stringWithUTF8String:" \xE2\x80\x94 "],
+                 timeString];
+    }
+
+    if (![[viewTitleLabel stringValue] isEqualToString:title])
+        [viewTitleLabel setStringValue:title];
+}
+
 - (void)rebuildItemsSnapshot
 {
     NSMutableArray *fresh = [NSMutableArray array];
@@ -4294,8 +5298,15 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         }
     }
     [self updateSidebarBadgesLocked:p_playlist];
+    /* total duration for the header, playlist and media library only
+     * (parity with the modern interface) */
+    int64_t headerDuration = 0;
+    if (p_root && (p_root == p_playlist->p_playing
+                   || p_root == p_playlist->p_media_library))
+        headerDuration = playlist_GetNodeDuration(p_root);
     playlist_Unlock(p_playlist);
 
+    [self updateViewTitleWithDuration:headerDuration];
     [self markBrowsableDirsInArray:fresh];
 
     /* the playing item is shown bold, so its change needs a redraw too */
@@ -4405,6 +5416,8 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     int status = playlist_Status(p_playlist);
     playlist_Unlock(p_playlist);
     BOOL nowPlaying = (status == PLAYLIST_RUNNING);
+
+    [self updateAutoHideControls];
     if (nowPlaying != playing) {
         playing = nowPlaying;
         NSString *base = playing
@@ -4482,6 +5495,15 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
             free(psz_title);
             if ([title length] && ![[window title] isEqualToString:title])
                 [window setTitle:title];
+            /* « Afficher la vidéo dans la fenêtre principale » décochée : la
+             * fenêtre vidéo autonome porte le même titre (c'est ici, et non à
+             * sa création, que le format input-title-format est composé). */
+            {
+                NSWindow *voutWindow = VLCLegacyCurrentVoutWindow();
+                if (voutWindow != nil && [title length]
+                 && ![[voutWindow title] isEqualToString:title])
+                    [voutWindow setTitle:title];
+            }
         }
         int64_t i_time = var_GetInteger(p_input, "time");
         int64_t i_length = var_GetInteger(p_input, "length");
@@ -4496,6 +5518,25 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
             timeString = timeToString(i_time);
         [self setField:durationField toString:timeString];
         float position = var_GetFloat(p_input, "position");
+        [(VLCLegacySeekSlider *)seekSlider
+            setMediaDuration:(double)i_length / CLOCK_FREQ];
+        [self updateChaptersForInput:p_input duration:i_length];
+        VLCLegacyProgressSliderCell *clipCell =
+            (VLCLegacyProgressSliderCell *)[seekSlider cell];
+        if ([core clipCreationMode]) {
+            /* the knobs hold the clip bounds; only the thin marker
+             * follows the playback position */
+            if (![clipCell clipKnobsActive])
+                [clipCell setClipKnobsActive:YES];
+            [seekSlider setDoubleValue:[core clipStartPosition]];
+            [clipCell setClipEndValue:[core clipEndPosition]];
+            [clipCell setPlaybackMarkerValue:position];
+            [seekSlider setNeedsDisplay:YES];
+        } else {
+        if ([clipCell clipKnobsActive]) {
+            [clipCell setClipKnobsActive:NO];
+            [seekSlider setNeedsDisplay:YES];
+        }
         /* setFloatValue: repaints the whole slider (gradient track,
          * bezier knob) plus the bar strip behind it, but on long media
          * the 0.3 s poll advances the position by far less than a pixel
@@ -4512,6 +5553,7 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
             delta = -delta;
         if (delta >= 1.0f / sliderWidth)
             [seekSlider setFloatValue:position];
+        }
         BOOL canSeek = var_GetBool(p_input, "can-seek") ? YES : NO;
         if ([seekSlider isEnabled] != canSeek)
             [seekSlider setEnabled:canSeek];
@@ -4532,8 +5574,14 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         }
         [self trackResumeForInput:p_input];
         [self updateSidebarArtForInput:p_input];
+        /* clip creation mode: leave it on item change/end, pause at the
+         * end bound, follow a core-side end of the recording */
+        [core updateClipModeForInput:p_input];
         vlc_object_release(p_input);
     } else {
+        [core updateClipModeForInput:NULL];
+        [(VLCLegacySeekSlider *)seekSlider setMediaDuration:0.0];
+        [self updateChaptersForInput:NULL duration:0];
         [self trackResumeForInput:NULL];
         [self updateSidebarArtForInput:NULL];
         if (![[window title] isEqualToString:VLCLegacyDefaultWindowTitle()])
@@ -4547,6 +5595,14 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
             (VLCLegacyProgressSliderCell *)[seekSlider cell];
         if ([seekCell indefinite]) {
             [seekCell setIndefinite:NO];
+            [seekSlider setNeedsDisplay:YES];
+        }
+        /* Stop leaves NO input, so the branch above -- the only place that
+         * puts the clip knobs away -- never runs: the seek bar kept its two
+         * knobs while -updateClipModeForInput: had already left the mode and
+         * the menu had gone back to "Enter Clip Creation Mode". */
+        if ([seekCell clipKnobsActive]) {
+            [seekCell setClipKnobsActive:NO];
             [seekSlider setNeedsDisplay:YES];
         }
     }
@@ -4704,10 +5760,47 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
  * resterait affichée seule à l'écran). D'où ces quatre notifications.
  *****************************************************************************/
 
+/* While the controls are auto-hidden the window IS the picture: keep it
+ * exactly that when the user resizes it, otherwise black bands come back
+ * inside the bare window the feature exists to get rid of. Outside that
+ * state the window resizes freely and the vout letterboxes, as always. */
+/* ⚠ Only the USER reaches this: -setFrame: does not consult the delegate.
+ * That is what makes it the right place to record the box a later crop
+ * fits into -- windowDidResize: fires on our own resizes too, and the
+ * box would follow every crop instead of only the user. */
+- (NSSize)windowWillResize:(NSWindow *)sender toSize:(NSSize)proposedSize
+{
+    if (sender != window)
+        return proposedSize;
+
+    if (!controlsHiddenForPlayback) {
+        if (videoActive && !VLCLegacyViewIsHidden(videoView)) {
+            /* the proposed size is a FRAME: the title bar comes off with
+             * the content rect, the controls bar by hand */
+            NSRect content = VLCLegacyContentRectForFrameRect(window,
+                NSMakeRect(0, 0, proposedSize.width, proposedSize.height));
+            pictureBox = NSMakeSize(content.size.width,
+                                    content.size.height - BOTTOM_BAR_HEIGHT);
+        }
+        return proposedSize;
+    }
+
+    if (lastNativeVideoSize.width <= 0. || lastNativeVideoSize.height <= 0.)
+        return proposedSize;
+
+    proposedSize.height = (float)floor(proposedSize.width
+        * lastNativeVideoSize.height / lastNativeVideoSize.width + 0.5);
+    return proposedSize;
+}
+
 - (void)windowDidResize:(NSNotification *)notification
 {
-    if ([notification object] == window)
-        [self syncVideoHostFrame];
+    if ([notification object] != window)
+        return;
+    [self syncVideoHostFrame];
+    /* the hidden window has no controls bar to leave room for */
+    if (controlsHiddenForPlayback)
+        [self layoutVideoZoneForHiddenControls];
 }
 
 - (void)windowDidMove:(NSNotification *)notification

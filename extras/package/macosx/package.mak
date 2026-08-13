@@ -72,7 +72,45 @@ if HAVE_BREAKPAD
 endif
 	mkdir -p $@/Contents/MacOS/share/
 if BUILD_LUA
-	## Copy lua scripts
+	## Copy lua scripts. The scripts are split across two install
+	## directories -- the interpreted ones under vlclibdir, the data the
+	## extensions read (the translation catalogues) under vlcdatadir --
+	## and the bundle puts both back into ONE directory, which is what
+	## the running player expects. So the same relative path arriving
+	## from both sides is not a merge, it is one file quietly winning
+	## over the other, decided by nothing but the order of these two
+	## lines.
+	##
+	## It happened: the catalogues moved from vlclibdir to vlcdatadir,
+	## "make install" left the old copies behind in the prefix (it only
+	## ever adds), and being copied second they overwrote the current
+	## ones. 72 files -- 18 languages x 4 extensions -- shipped frozen at
+	## the day of the move, beside extension code that was up to date.
+	## build.sh now empties both trees before "install" repopulates them,
+	## which is what makes the prefix trustworthy; this refuses to build
+	## at all if they ever overlap again, so the next such move is a
+	## build failure naming the files rather than a silent wrong bundle.
+	@_data="$(prefix)/share/vlc/lua"; _lib="$(prefix)/lib/vlc/lua"; \
+	_tmp="$(abs_top_builddir)/.lua-overlap-check"; \
+	rm -rf "$$_tmp" && mkdir -p "$$_tmp" && : > "$$_tmp/data" && : > "$$_tmp/lib"; \
+	if test -d "$$_data"; then \
+		( cd "$$_data" && find . -type f ) | LC_ALL=C sort > "$$_tmp/data"; \
+	fi; \
+	if test -d "$$_lib"; then \
+		( cd "$$_lib" && find . -type f ) | LC_ALL=C sort > "$$_tmp/lib"; \
+	fi; \
+	_overlap=`LC_ALL=C comm -12 "$$_tmp/data" "$$_tmp/lib"`; \
+	rm -rf "$$_tmp"; \
+	if test -n "$$_overlap"; then \
+		echo "ERROR: these Lua files are installed BOTH under $$_lib" >&2; \
+		echo "       and under $$_data. The bundle merges the two trees into one" >&2; \
+		echo "       directory, so one copy would silently overwrite the other:" >&2; \
+		echo "$$_overlap" | sed 's|^\./|         |' >&2; \
+		echo "       Install each file to one place only -- or, if this is a leftover" >&2; \
+		echo "       of a file that MOVED between the two, delete both lua trees out" >&2; \
+		echo "       of $(prefix) and build again." >&2; \
+		exit 1; \
+	fi
 	cp -r "$(prefix)/share/vlc/lua" $@/Contents/MacOS/share/
 	cp -r "$(prefix)/lib/vlc/lua" $@/Contents/MacOS/share/
 endif

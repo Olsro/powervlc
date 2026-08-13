@@ -183,7 +183,18 @@ nobase_vlclib_DATA += \
 # share/lua/i18n/<extension>/<code>.lua. Installed as source on purpose --
 # the loader looks for a .lua path, and only the language in use is ever
 # read into memory.
-nobase_dist_vlclib_DATA = \
+#
+# These MUST go to vlcdatadir, not vlclibdir: pvlc_i18n.load() builds the path
+# from vlc.config.datadir(), the only root Lua is given. On macOS the mistake
+# is invisible, because package.mak copies BOTH $(prefix)/share/vlc/lua and
+# $(prefix)/lib/vlc/lua into Contents/MacOS/share/lua -- the two trees merge
+# and datadir() finds everything. On Linux they stay apart
+# (/usr/share/vlc vs /usr/lib/vlc), so catalogues installed to vlclibdir were
+# invisible: load() then returned an empty table, every label came out nil and
+# the extension died on activation with "Could not activate extension!".
+# Only VLSub, which ships no catalogue, still worked. (Found 2026-08-10 on the
+# i386 AppImage.)
+nobase_dist_vlcdata_DATA += \
 	lua/i18n/invidious/cs.lua \
 	lua/i18n/invidious/de.lua \
 	lua/i18n/invidious/en.lua \

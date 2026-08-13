@@ -37,6 +37,8 @@
 #import <vlc_playlist.h>
 #import <vlc_interface.h>
 #import <vlc_vout_window.h>
+/* VOUT_WINDOW_STATE_ABOVE lives here, not in vlc_vout_window.h */
+#import <vlc_vout_display.h>
 
 #import "VLCLegacyVoutWindow.h"
 #import "VLCLegacyMain.h"
@@ -54,6 +56,13 @@ static VLCLegacyMain *g_legacyMain = nil;
 VLCLegacyCoreInteraction *VLCLegacyGetCore(void)
 {
     return [g_legacyMain coreInteraction];
+}
+
+/* Used by the core interaction when the core asks for the auto-hidden
+ * controls to come back (double click on the video). */
+VLCLegacyMainWindow *VLCLegacyGetMainWindow(void)
+{
+    return [g_legacyMain mainWindowController];
 }
 
 /*****************************************************************************
@@ -181,6 +190,7 @@ static int WindowControl(vout_window_t *, int i_query, va_list);
 {
 @public
     NSRect rect;
+    BOOL decorated;
     VLCLegacyVoutWindow *window;
 }
 - (void)createWindow;
@@ -189,7 +199,8 @@ static int WindowControl(vout_window_t *, int i_query, va_list);
 @implementation VLCLegacyWindowFactory
 - (void)createWindow
 {
-    window = [[VLCLegacyVoutWindow alloc] initWithContentRect:rect];
+    window = [[VLCLegacyVoutWindow alloc] initWithContentRect:rect
+                                                    decorated:decorated];
     [window makeKeyAndOrderFront:nil];
 }
 @end
@@ -221,8 +232,21 @@ int WindowOpen(vout_window_t *p_wnd, const vout_window_cfg_t *cfg)
 
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
-    /* Preferred path: embed the video inside the main window (3.0 behavior) */
-    VLCLegacyMainWindow *controller = [g_legacyMain mainWindowController];
+    /* ⚠ « Afficher la vidéo dans la fenêtre principale » (embedded-video) ET
+     * « Décorations de la fenêtre » (video-deco) n'étaient lues QUE par
+     * l'interface moderne : côté legacy, les deux cases se décochaient sans
+     * rien changer, la vidéo étant toujours embarquée.
+     * ⚠ C'est « embedded-video » qui DÉCIDE, et elle seule :
+     *   - cochée (défaut) ⇒ vidéo dans la fenêtre principale, et « video-deco »
+     *     n'a alors rien à décorer (pas de fenêtre vidéo à elle) ;
+     *   - décochée ⇒ fenêtre séparée, décorée ou non selon « video-deco ».
+     * L'interface moderne, elle, laisse « video-deco » décochée l'emporter et
+     * détacher la vidéo quoi qu'il arrive : recocher « afficher dans la fenêtre
+     * principale » ne produisait alors RIEN, ce qui se lit comme une panne. */
+    bool b_deco = var_InheritBool(p_wnd, "video-deco");
+    VLCLegacyMainWindow *controller =
+        var_InheritBool(p_wnd, "embedded-video")
+            ? [g_legacyMain mainWindowController] : nil;
     if (controller) {
         VLCLegacyEmbedRequest *request =
             [[VLCLegacyEmbedRequest alloc] init];
@@ -247,11 +271,12 @@ int WindowOpen(vout_window_t *p_wnd, const vout_window_cfg_t *cfg)
         }
     }
 
-    /* Fallback: standalone video window (second concurrent vout, or the
-     * interface is shutting down) */
+    /* Fenêtre vidéo autonome : une des deux cases ci-dessus décochée, deuxième
+     * vout simultané, ou interface en cours d'extinction. */
 
     VLCLegacyWindowFactory *factory = [[VLCLegacyWindowFactory alloc] init];
     factory->rect = NSMakeRect(cfg->x, cfg->y, cfg->width, cfg->height);
+    factory->decorated = b_deco;
     [factory performSelectorOnMainThread:@selector(createWindow)
                               withObject:nil
                            waitUntilDone:YES];
@@ -265,9 +290,12 @@ int WindowOpen(vout_window_t *p_wnd, const vout_window_cfg_t *cfg)
     }
 
     msg_Dbg(p_wnd, "returning video window with proposed position x=%i, y=%i, width=%i, height=%i", cfg->x, cfg->y, cfg->width, cfg->height);
-    /* The window (created with a +1 retain above, released when closed) is
-     * recovered from this view in WindowControl()/WindowClose(). */
-    p_wnd->handle.nsobject = (void *)[[o_window contentView] retain];
+    /* ⚠ PAS le contentView : la fenêtre décorée lui réserve la bande du bas
+     * pour sa barre de contrôles allégée, et la surface accélérée du vout,
+     * qui remplit son parent, la recouvrirait. La fenêtre (créée avec un +1
+     * ci-dessus, relâchée à sa fermeture) reste retrouvable depuis cette vue
+     * dans WindowControl()/WindowClose(). */
+    p_wnd->handle.nsobject = (void *)[[o_window videoView] retain];
 
     p_wnd->type = VOUT_WINDOW_TYPE_NSOBJECT;
     p_wnd->control = WindowControl;
@@ -399,8 +427,19 @@ static int WindowControlEmbedded(vout_window_t *p_wnd, int i_query,
 
     switch (i_query) {
         case VOUT_WINDOW_SET_STATE:
-            /* the main window does not float above others */
+        {
+            /* Video > Float on Top. Dropping this query is what made that
+             * entry do nothing: the embedded picture lives in the main
+             * window, so floating above the other applications is that
+             * window's LEVEL, not a property of a vout of its own. */
+            unsigned i_state = va_arg(args, unsigned);
+            [controller
+                performSelectorOnMainThread:@selector(setVideoAboveOthersFromNumber:)
+                                 withObject:[NSNumber numberWithBool:
+                                     i_state == VOUT_WINDOW_STATE_ABOVE]
+                              waitUntilDone:NO];
             break;
+        }
         case VOUT_WINDOW_SET_SIZE:
         {
             unsigned int i_width  = va_arg(args, unsigned int);

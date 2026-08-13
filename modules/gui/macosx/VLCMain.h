@@ -51,8 +51,12 @@
 intf_thread_t *getIntf();
 
 static NSString * VLCInputChangedNotification = @"VLCInputChangedNotification";
+static NSString * VLCInputTitleChangedNotification = @"VLCInputTitleChangedNotification";
 static NSString * VLCConfigurationChangedNotification = @"VLCConfigurationChangedNotification";
 static NSString * VLCMediaKeySupportSettingChangedNotification = @"VLCMediaKeySupportSettingChangedNotification";
+/* the core asked (double click on the video) for the auto-hidden
+ * controls to come back */
+static NSString * VLCRevealControlsNotification = @"VLCRevealControlsNotification";
 
 /*****************************************************************************
  * VLCMain interface

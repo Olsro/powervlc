@@ -75,6 +75,23 @@ libcxx-legacy: llvm-$(LIBCXX_LEGACY_VERSION).src.tar.xz \
 	mv $@.tmp/llvm-$(LIBCXX_LEGACY_VERSION).src $@.tmp/llvm
 	mv $@.tmp/libcxx-$(LIBCXX_LEGACY_VERSION).src $@.tmp/libcxx
 	mv $@.tmp/libcxxabi-$(LIBCXX_LEGACY_VERSION).src $@.tmp/libcxxabi
+	# ⚠ libc++abi links against a HARDCODED /usr/lib/libSystem.B.dylib
+	# (src/CMakeLists.txt), a path that no longer exists on disk since the
+	# system dylibs moved into the dyld shared cache: the link dies with
+	# "no such file or directory". The SDK ships the stub the linker really
+	# wants, usr/lib/libSystem.B.tbd, so point at that one -- through
+	# CMAKE_OSX_SYSROOT, which the shared toolchain.cmake does set, so this
+	# keeps working whatever SDK is in use.
+	sed -i.orig 's|"/usr/lib/libSystem.B.dylib"|"$${CMAKE_OSX_SYSROOT}/usr/lib/libSystem.B.tbd"|' \
+		$@.tmp/libcxxabi/src/CMakeLists.txt
+	# ⚠ libc++ refuse la cible 10.6 par un FATAL_ERROR, sur une comparaison
+	# LITTÉRALE à la chaîne « 10.6 » -- d'où le fait que 10.5 passait très
+	# bien. Le refus vise le libc++ DU SYSTÈME (la liste de ré-export de
+	# l'époque) ; nous embarquons le nôtre, et la branche else prend la même
+	# liste que pour 10.5 comme pour 10.7. On neutralise donc la condition
+	# plutôt que la cible, qui doit rester celle de la tranche.
+	sed -i.orig 's|if ( CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "10.6" )|if ( FALSE )|' \
+		$@.tmp/libcxx/lib/CMakeLists.txt
 	# Tarball mtimes are ancient (2018-vintage LLVM release) and clustered
 	# to the second; normalize to now so nothing downstream (CMake's own
 	# try_compile machinery included) makes a wrong same-second/stale-file

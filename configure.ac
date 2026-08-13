@@ -32,8 +32,18 @@ AC_SUBST(PKGDIR)
 CONFIGURE_LINE="`echo "$0 $ac_configure_args" | sed -e 's/\\\/\\\\\\\/g'`"
 CODENAME="Vetinari"
 dnl PowerVLC product version, distinct from the VLC core version above
-POWERVLC_VERSION="1.2.0"
+POWERVLC_VERSION="1.3.0"
 AC_SUBST(POWERVLC_VERSION)
+dnl Split for the Win32 VERSIONINFO resources, which want a numeric 4-tuple.
+dnl Without these the file properties, the Add/Remove Programs entry and the
+dnl Windows crash dialogs all report the upstream VLC version instead.
+POWERVLC_VERSION_MAJOR=`echo "$POWERVLC_VERSION" | cut -d. -f1`
+POWERVLC_VERSION_MINOR=`echo "$POWERVLC_VERSION" | cut -d. -f2`
+POWERVLC_VERSION_REVISION=`echo "$POWERVLC_VERSION" | cut -d. -f3`
+test -n "$POWERVLC_VERSION_REVISION" || POWERVLC_VERSION_REVISION=0
+AC_SUBST(POWERVLC_VERSION_MAJOR)
+AC_SUBST(POWERVLC_VERSION_MINOR)
+AC_SUBST(POWERVLC_VERSION_REVISION)
 COPYRIGHT_YEARS="1996-2026"
 
 AC_CONFIG_SRCDIR(src/libvlc.c)
@@ -521,6 +531,17 @@ AS_IF([test "${HAVE_OSX}" = "1"], [
 AM_CONDITIONAL(HAVE_SECURETRANSPORT, [test "${have_securetransport}" = "yes"])
 dnl Objective-C ARC is clang-only; the legacy FSF GCC cross builds
 dnl (ppc/i386) must skip the few plugins written with ARC.
+dnl ARC needs BOTH a clang that emits it and a runtime that provides it.
+dnl ⚠⚠⚠ Testing only the compiler was a trap: clang happily compiles ARC with
+dnl -mmacosx-version-min=10.6, but objc_retainAutoreleasedReturnValue and its
+dnl siblings only landed in /usr/lib/libobjc.A.dylib with Mac OS X 10.7. The
+dnl plugin then builds, ships, and DYLD KILLS THE PROCESS the moment it is
+dnl dlopen()ed -- diagnosed on 10.6.8, where merely reaching the keystore
+dnl ("using keystore module keychain") took the player down:
+dnl   Symbol not found: _objc_retainAutoreleasedReturnValue
+dnl   Referenced from: .../plugins/libkeychain_plugin.dylib
+dnl Below 10.7 the ARC-based plugins are simply not built; the keystore falls
+dnl back to the portable "file" one, which is what those systems want anyway.
 have_objc_arc="no"
 AS_IF([test "${SYS}" = "darwin"], [
     AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
@@ -528,7 +549,13 @@ AS_IF([test "${SYS}" = "darwin"], [
 # error ARC requires clang
 #endif
 ]])], [have_objc_arc="yes"])
+    AS_IF([test -n "${with_macosx_version_min}"], [
+        AS_VERSION_COMPARE([${with_macosx_version_min}], [10.7],
+            [have_objc_arc="no"], [], [])
+    ])
 ])
+AS_IF([test "${have_objc_arc}" = "no" -a "${SYS}" = "darwin"],
+      [AC_MSG_NOTICE([ARC unavailable at the chosen deployment target: the ARC-based plugins are skipped])])
 AM_CONDITIONAL(HAVE_OBJC_ARC, [test "${have_objc_arc}" = "yes"])
 dnl VideoToolbox.framework does not exist in SDKs before 10.8 (and neither
 dnl do the CVPixelBuffer helpers vt_utils.c relies on); skip the plugins

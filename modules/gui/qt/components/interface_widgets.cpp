@@ -30,6 +30,7 @@
 
 #include "qt.hpp"
 #include "components/interface_widgets.hpp"
+#include "main_interface.hpp"    /* the bare window borrows this mouse */
 #include "dialogs_provider.hpp"
 #include "util/customwidgets.hpp"               // qtEventToVLCKey, QVLCStackedWidget
 
@@ -301,8 +302,28 @@ int VideoWidget::qtMouseButton2VLC( Qt::MouseButton qtButton )
     }
 }
 
+/* While "Hide controls during playback" has stripped the window frame,
+ * the window manager has nothing left to grab: a left drag on the video
+ * moves the window, or resizes it from a corner. The events keep being
+ * reported to the vout as well (a disc menu still answers the pointer,
+ * like on the mac interfaces), and the double click is not intercepted
+ * at all: it travels to the core, which turns it into the request to
+ * bring the controls back. */
+/* The interface a picture drag moves: any windowed one. It used to be
+ * restricted to the bare (auto-hidden) window; dragging the video now
+ * always moves the window, which is the same gesture the two macOS
+ * interfaces offer. */
+MainInterface *VideoWidget::bareWindowInterface()
+{
+    return p_intf->p_sys->p_mi;
+}
+
 void VideoWidget::mouseReleaseEvent( QMouseEvent *event )
 {
+    MainInterface *bare = bareWindowInterface();
+    if ( bare && event->button() == Qt::LeftButton )
+        bare->endHiddenControlsDrag();
+
     if ( !p_window || !enable_mouse_events )
     {
         event->ignore();
@@ -322,6 +343,10 @@ void VideoWidget::mouseReleaseEvent( QMouseEvent *event )
 
 void VideoWidget::mousePressEvent( QMouseEvent* event )
 {
+    MainInterface *bare = bareWindowInterface();
+    if ( bare && event->button() == Qt::LeftButton )
+        bare->beginHiddenControlsDrag( event->globalPos() );
+
     if ( !p_window || !enable_mouse_events )
     {
         event->ignore();
@@ -341,6 +366,10 @@ void VideoWidget::mousePressEvent( QMouseEvent* event )
 
 void VideoWidget::mouseMoveEvent( QMouseEvent *event )
 {
+    MainInterface *bare = bareWindowInterface();
+    if ( bare && ( event->buttons() & Qt::LeftButton ) )
+        bare->dragHiddenControlsTo( event->globalPos() );
+
     if ( !p_window || !enable_mouse_events )
     {
         event->ignore();

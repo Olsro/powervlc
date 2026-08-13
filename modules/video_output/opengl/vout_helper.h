@@ -248,6 +248,12 @@ static const vlc_fourcc_t gl_subpicture_chromas[] = {
 
 typedef struct vout_display_opengl_t vout_display_opengl_t;
 
+/* True when the current context is served by a software rasteriser (llvmpipe,
+ * softpipe, swrast...). The context must be current. Callers that have a
+ * cheaper non-GL output to fall back on can use this to decline the job; see
+ * modules/video_output/opengl/display.c. */
+bool vout_display_opengl_IsSoftware(vlc_gl_t *gl);
+
 vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
                                                const vlc_fourcc_t **subpicture_chromas,
                                                vlc_gl_t *gl,

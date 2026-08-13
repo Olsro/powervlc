@@ -27,6 +27,7 @@
 #import "VLCCoreInteraction.h"
 #import "VLCMainMenu.h"
 #import "VLCPlaylist.h"
+#import "VLCSeekThumbnailer.h"
 #import "CompatibilityFixes.h"
 
 /*****************************************************************************
@@ -36,7 +37,7 @@
  *  and in main window.
  *****************************************************************************/
 
-@interface VLCControlsBarCommon ()
+@interface VLCControlsBarCommon () <VLCSliderHoverDelegate>
 {
     NSImage * _pauseImage;
     NSImage * _pressedPauseImage;
@@ -48,6 +49,10 @@
     NSTimeInterval last_bwd_event;
     BOOL just_triggered_next;
     BOOL just_triggered_previous;
+
+    int _chaptersRetryTicks;
+    /* identité seule, jamais déréférencée (cf. -updateChapters) */
+    char *_chaptersUri;     /* identité du média, cf. -updateChapters */
 }
 @end
 
@@ -55,6 +60,7 @@
 
 - (void)dealloc
 {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     if (@available(macOS 10_14, *)) {
         [[NSApplication sharedApplication] removeObserver:self forKeyPath:@"effectiveAppearance"];
     }
@@ -89,9 +95,10 @@
     [[self.forwardButton cell] accessibilitySetOverrideValue:_NS("Seek forward") forAttribute:NSAccessibilityDescriptionAttribute];
     [[self.forwardButton cell] accessibilitySetOverrideValue:[self.forwardButton toolTip] forAttribute:NSAccessibilityTitleAttribute];
 
-    [self.timeSlider setToolTip: _NS("Position")];
+    /* no setToolTip: here — the slider shows its own live time/chapter
+     * tooltip on hover, the static one would fight with it */
     [[self.timeSlider cell] accessibilitySetOverrideValue:_NS("Playback position") forAttribute:NSAccessibilityDescriptionAttribute];
-    [[self.timeSlider cell] accessibilitySetOverrideValue:[self.timeSlider toolTip] forAttribute:NSAccessibilityTitleAttribute];
+    [[self.timeSlider cell] accessibilitySetOverrideValue:_NS("Position") forAttribute:NSAccessibilityTitleAttribute];
     if (_darkInterface)
         [self.timeSlider setSliderStyleDark];
 
@@ -120,6 +127,145 @@
 
     if (config_GetInt(getIntf(), "macosx-show-playback-buttons"))
         [self toggleForwardBackwardMode: YES];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(clipCreationModeChanged:)
+                                                 name:VLCClipCreationModeChangedNotification
+                                               object:nil];
+    [self syncClipCreationMode];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(chaptersPossiblyChanged:)
+                                                 name:VLCInputChangedNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(chaptersPossiblyChanged:)
+                                                 name:VLCInputTitleChangedNotification
+                                               object:nil];
+    [self updateChapters];
+
+    [self.timeSlider setHoverDelegate:self];
+}
+
+#pragma mark -
+#pragma mark Seek bar hover thumbnails
+
+- (void)slider:(VLCSlider *)slider hoverThumbnailWantedAtFraction:(double)fraction
+{
+    [[VLCSeekThumbnailer sharedInstance] thumbnailAtFraction:fraction
+                                                  completion:^(NSImage *image, double f) {
+        if (image)
+            [slider setHoverThumbnail:image forFraction:f];
+    }];
+}
+
+- (void)sliderHoverEnded:(VLCSlider *)slider
+{
+    /* pending requests die of old age (generation counter) */
+}
+
+- (void)chaptersPossiblyChanged:(NSNotification *)aNotification
+{
+    [self updateChapters];
+}
+
+/* chapter separators on the seek bar and names for its hover tooltip,
+ * like the Qt seek slider (INPUT_GET_TITLE_INFO seekpoints) */
+- (void)updateChapters
+{
+    NSArray *fractions = nil;
+    NSArray *names = nil;
+
+    input_thread_t *p_input = pl_CurrentInput(getIntf());
+    if (p_input) {
+        vlc_tick_t duration = input_item_GetDuration(input_GetItem(p_input));
+        input_title_t *p_title = NULL;
+        int i_title_id = -1;
+        if (duration > 0
+            && input_Control(p_input, INPUT_GET_TITLE_INFO, &p_title, &i_title_id)
+               == VLC_SUCCESS && p_title) {
+            /* only usable when the seekpoints carry time offsets */
+            if (p_title->i_seekpoint > 1
+                && p_title->seekpoint[p_title->i_seekpoint - 1]->i_time_offset > 0) {
+                NSMutableArray *mutableFractions =
+                    [NSMutableArray arrayWithCapacity:p_title->i_seekpoint];
+                NSMutableArray *mutableNames =
+                    [NSMutableArray arrayWithCapacity:p_title->i_seekpoint];
+                for (int i = 0; i < p_title->i_seekpoint; i++) {
+                    seekpoint_t *point = p_title->seekpoint[i];
+                    [mutableFractions addObject:
+                        [NSNumber numberWithDouble:
+                            (double)point->i_time_offset / (double)duration]];
+                    /* beaucoup de disques et de conteneurs numérotent leurs
+                     * chapitres sans les nommer : sans repli, le survol
+                     * n'affichait que l'heure */
+                    [mutableNames addObject:
+                        (point->psz_name != NULL && *point->psz_name != '\0')
+                        ? toNSStr(point->psz_name)
+                        : [NSString stringWithFormat:_NS("Chapter %i"), i + 1]];
+                }
+                fractions = mutableFractions;
+                names = mutableNames;
+            }
+            vlc_input_title_Delete(p_title);
+        } else if (p_title) {
+            vlc_input_title_Delete(p_title);
+        }
+        vlc_object_release(p_input);
+    }
+
+    /* ⚠⚠ Ne pas EFFACER des marqueurs déjà trouvés sur un échec de sondage :
+     * sur un DVD la durée retombe transitoirement à zéro (frontière de
+     * cellule, bascule de domaine) et un évènement « titre changé » tombe
+     * pile à ce moment-là, si bien que la barre perdait ses chapitres en
+     * pleine lecture. Tant qu'on interroge la MÊME entrée, un résultat vide
+     * veut dire « pas maintenant » ; un changement d'entrée, lui, doit bien
+     * nettoyer la barre. */
+    /* ⚠⚠⚠ Identifier le média par son URI et non par le pointeur d'entrée :
+     * un `input_thread_t` neuf retombe souvent à l'adresse de celui qu'on
+     * vient de fermer, si bien que deux fichiers successifs passaient pour le
+     * même — et la garde ci-dessous laissait alors les marqueurs du PRÉCÉDENT
+     * sur un fichier sans chapitres. */
+    char *psz_uri = NULL;
+    if (p_input != NULL) {
+        input_item_t *p_item = input_GetItem(p_input);
+        if (p_item != NULL)
+            psz_uri = input_item_GetURI(p_item);
+    }
+    BOOL sameMedia = (psz_uri != NULL && _chaptersUri != NULL
+                      && strcmp(psz_uri, _chaptersUri) == 0);
+    if (!sameMedia) {
+        free(_chaptersUri);
+        _chaptersUri = psz_uri;
+        psz_uri = NULL;
+    }
+    free(psz_uri);
+
+    if (fractions == nil && sameMedia
+        && [self.timeSlider chapterFractions] != nil)
+        return;
+
+    [self.timeSlider setChapterFractions:fractions];
+    [self.timeSlider setChapterNames:names];
+}
+
+- (void)clipCreationModeChanged:(NSNotification *)aNotification
+{
+    [self syncClipCreationMode];
+}
+
+- (void)syncClipCreationMode
+{
+    VLCCoreInteraction *coreInteraction = [VLCCoreInteraction sharedInstance];
+    if ([coreInteraction clipCreationMode]) {
+        [self.timeSlider setClipEndValue:[coreInteraction clipEndPosition] * 10000.];
+        [self.timeSlider setFloatValue:(float)([coreInteraction clipStartPosition] * 10000.)];
+        [self.timeSlider setPlaybackMarkerValue:[coreInteraction clipStartPosition] * 10000.];
+        [self.timeSlider setClipKnobsActive:YES];
+    } else {
+        [self.timeSlider setClipKnobsActive:NO];
+        [self updateTimeSlider];
+    }
 }
 
 - (void)setBrightButtonImageSet
@@ -320,9 +466,31 @@
     if (p_input != NULL) {
         vlc_value_t pos;
 
-        pos.f_float = f_updated / 10000.;
-        var_Set(p_input, "position", pos);
-        [self.timeSlider setFloatValue: f_updated];
+        VLCCoreInteraction *coreInteraction = [VLCCoreInteraction sharedInstance];
+        if ([coreInteraction clipCreationMode]) {
+            /* both knobs define the clip bounds; moving either one seeks
+             * there so the user previews what the clip will contain */
+            [coreInteraction noteClipInteraction];
+            NSInteger activeKnob = [self.timeSlider activeClipKnob];
+            if (activeKnob == 2) {
+                f_updated = (float)[self.timeSlider clipEndValue];
+                [coreInteraction setClipEndPosition:f_updated / 10000.];
+                [coreInteraction setClipSelectedKnob:2];
+            } else if (activeKnob == 3) {
+                /* scrub between the bounds: seek only, bounds untouched */
+                f_updated = (float)[self.timeSlider playbackMarkerValue];
+            } else {
+                f_updated = [self.timeSlider floatValue];
+                [coreInteraction setClipStartPosition:f_updated / 10000.];
+                [coreInteraction setClipSelectedKnob:1];
+            }
+            pos.f_float = f_updated / 10000.;
+            var_Set(p_input, "position", pos);
+        } else {
+            pos.f_float = f_updated / 10000.;
+            var_Set(p_input, "position", pos);
+            [self.timeSlider setFloatValue: f_updated];
+        }
 
         NSString *time = [[VLCStringUtility sharedInstance] getCurrentTimeAsString:p_input negative:NO];
         NSString *remainingTime = [[VLCStringUtility sharedInstance] getCurrentTimeAsString:p_input negative:YES];
@@ -358,11 +526,34 @@
 
     [self.timeSlider setKnobHidden:NO];
 
+    /* ⚠ Les chapitres ne sont relus que sur notification (entrée ou titre
+     * changé) et sont écartés tant que la durée vaut 0. Sur un DVD, les
+     * décalages temporels des points de chapitre sont publiés APRÈS ces
+     * deux évènements : la barre restait alors sans le moindre marqueur
+     * pour toute la lecture, au hasard de l'ordre d'arrivée. Tant qu'aucun
+     * chapitre n'a été trouvé, on retente — pas à chaque sondage, car
+     * INPUT_GET_TITLE_INFO recopie tout l'arbre des titres. */
+    if ([self.timeSlider chapterFractions] == nil
+        && ++_chaptersRetryTicks >= 8) {
+        _chaptersRetryTicks = 0;
+        [self updateChapters];
+    }
+
     vlc_value_t pos;
     var_Get(p_input, "position", &pos);
-    [self.timeSlider setFloatValue:(10000. * pos.f_float)];
+    VLCCoreInteraction *coreInteraction = [VLCCoreInteraction sharedInstance];
+    if ([coreInteraction clipCreationMode]) {
+        /* the knobs hold the clip bounds; only the thin marker follows
+         * the playback position */
+        [self.timeSlider setPlaybackMarkerValue:10000. * pos.f_float];
+        [self.timeSlider setFloatValue:(float)([coreInteraction clipStartPosition] * 10000.)];
+        [self.timeSlider setClipEndValue:[coreInteraction clipEndPosition] * 10000.];
+    } else {
+        [self.timeSlider setFloatValue:(10000. * pos.f_float)];
+    }
 
     vlc_tick_t dur = input_item_GetDuration(input_GetItem(p_input));
+    [self.timeSlider setMediaDuration:(dur > 0 ? (double)dur / CLOCK_FREQ : 0.)];
     if (dur == -1) {
         // No duration, disable slider
         [self.timeSlider setEnabled:NO];

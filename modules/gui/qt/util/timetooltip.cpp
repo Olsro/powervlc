@@ -32,6 +32,8 @@
 #endif
 
 #define TIP_HEIGHT 5
+/* PowerVLC: padding around the hover preview, inside the tooltip box */
+#define PREVIEW_MARGIN 3
 
 TimeTooltip::TimeTooltip( QWidget *parent ) :
     QWidget( parent )
@@ -68,16 +70,34 @@ void TimeTooltip::adjustPosition()
     textbox.adjust( -2, -2, 2, 2 );
     textbox.moveTo( 0, 0 );
 
-    // Resize the widget to fit our needs
-    QSize size( textbox.width() + 1, textbox.height() + TIP_HEIGHT + 1 );
+    /* PowerVLC: the preview of the hovered position sits above the text,
+     * the two centred in a box as wide as the wider of them. */
+    const int previewHeight = mPreview.isNull() ? 0
+                            : mPreview.height() + 2 * PREVIEW_MARGIN;
+    const int previewWidth  = mPreview.isNull() ? 0
+                            : mPreview.width() + 2 * PREVIEW_MARGIN;
+    QRect box( 0, 0, qMax( textbox.width(), previewWidth ),
+               previewHeight + textbox.height() );
+    QRect textArea( 0, previewHeight, box.width(), textbox.height() );
 
-    // The desired label position is just above the target
-    QPoint position( mTarget.x() - size.width() / 2,
+    // Resize the widget to fit our needs
+    QSize size( box.width() + 1, box.height() + TIP_HEIGHT + 1 );
+
+    /* The desired label position is just above the target.
+     * ⚠ PowerVLC: upstream asked for TWICE the height on Windows, to clear
+     * the mouse cursor there. That is a FIXED clearance dressed up as a
+     * proportional one -- harmless while the tooltip was one line of text
+     * (about 25 px), but the hover preview makes the box ten times taller,
+     * and the whole tooltip then jumped a preview's height further up the
+     * moment the image arrived. The clearance is now what it always meant
+     * to be: a constant. */
 #if defined( Q_OS_WIN )
-        mTarget.y() - 2 * size.height() - TIP_HEIGHT / 2 );
+    const int cursorClearance = 25;
 #else
-        mTarget.y() - size.height() - TIP_HEIGHT / 2 );
+    const int cursorClearance = 0;
 #endif
+    QPoint position( mTarget.x() - size.width() / 2,
+        mTarget.y() - size.height() - TIP_HEIGHT / 2 - cursorClearance );
 
     // Keep the tooltip on the same screen if possible
 #if QT_VERSION >= QT_VERSION_CHECK(5, 10, 0)
@@ -96,9 +116,10 @@ void TimeTooltip::adjustPosition()
     move( position );
 
     int tipX = mTarget.x() - position.x();
-    if( mBox != textbox || mTipX != tipX )
+    mTextBox = textArea;
+    if( mBox != box || mTipX != tipX )
     {
-        mBox = textbox;
+        mBox = box;
         mTipX = tipX;
 
         resize( size );
@@ -144,6 +165,19 @@ void TimeTooltip::setTip( const QPoint& target, const QString& time, const QStri
     raise();
 }
 
+/* PowerVLC. Unlike setTip(), this has to lay the tooltip out itself: the
+ * preview usually arrives while the mouse sits still, i.e. with the time and
+ * the position unchanged, so nothing else would notice the box has grown. */
+void TimeTooltip::setPreview( const QPixmap& preview )
+{
+    if( preview.cacheKey() == mPreview.cacheKey() )
+        return;
+
+    mPreview = preview;
+    adjustPosition();
+    update();
+}
+
 void TimeTooltip::show()
 {
     setVisible( true );
@@ -159,7 +193,11 @@ void TimeTooltip::paintEvent( QPaintEvent * )
     p.setBrush( qApp->palette().base() );
     p.drawPath( mPainterPath );
 
+    if( !mPreview.isNull() )
+        p.drawPixmap( ( mBox.width() - mPreview.width() ) / 2, PREVIEW_MARGIN,
+                      mPreview );
+
     p.setFont( mFont );
     p.setPen( QPen( qApp->palette().text(), 1 ) );
-    p.drawText( mBox, Qt::AlignCenter, mDisplayedText );
+    p.drawText( mTextBox, Qt::AlignCenter, mDisplayedText );
 }

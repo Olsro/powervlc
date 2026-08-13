@@ -27,6 +27,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG LLVM_MINGW_VER=20260616
 ARG LLVM_MINGW_DIR=llvm-mingw-${LLVM_MINGW_VER}-ucrt-ubuntu-22.04-aarch64
 
+# ⚠ openjdk-8 on top of the default JDK, and not instead of it: contrib's
+# libbluray recipe only turns the BD-J jar on when it finds a javac 1.8.x
+# (javac 9 dropped -source/-target 1.5, and the jar has to stay loadable by
+# the Java 5 JRE of Mac OS X 10.4/10.5 PPC — same jar everywhere). With only
+# the jammy default JDK 11 here, BLURAY_JDK_HOME stayed empty, the recipe
+# quietly built with -Dbdj_jar=disabled, and the Windows packages shipped
+# without BD-J: the copy of share/java/*.jar failed as an ignored error and
+# discs with Java menus played their main title only.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential git ca-certificates curl xz-utils file rsync \
       autoconf automake libtool libtool-bin libltdl-dev pkg-config \
@@ -34,6 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       cmake meson ninja-build nasm yasm \
       python3 python3-setuptools \
       protobuf-compiler help2man ant default-jdk-headless \
+      openjdk-8-jdk-headless \
       zip unzip p7zip-full dos2unix \
       gcc-mingw-w64-i686 g++-mingw-w64-i686 \
       gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \

@@ -55,6 +55,7 @@
 #import "VLCTimeSelectionPanelController.h"
 #import "NSScreen+VLCAdditions.h"
 #import "VLCRendererMenuController.h"
+#import "VLCCustomCropArWindowController.h"
 
 #ifdef HAVE_SPARKLE
 #import <Sparkle/Sparkle.h>
@@ -80,6 +81,13 @@
      * it only ever appears for HLS/DASH. */
     NSMenuItem *_adaptiveQualityMenuItem;
     NSMenuItem *_adaptiveMaxHeightMenuItem;
+
+    /* Clip creation mode, right below Record. Also built here. */
+    NSMenuItem *_clipModeMenuItem;
+
+    /* Hide controls during playback, right below Float on Top. Also
+     * built here. */
+    NSMenuItem *_hideControlsMenuItem;
 
     __strong VLCTimeSelectionPanelController *_timeSelectionPanel;
 }
@@ -162,6 +170,47 @@
                           atIndex:snapshotIndex + 2];
         }
     }
+
+    /* Clip creation mode, right below Record: a second knob appears on the
+     * seek bar so both clip bounds can be set with instant preview, and
+     * Record then saves exactly that range. Built here instead of in
+     * MainMenu.xib, like the Blu-ray pop-up entry above. */
+    NSMenu *recordMenu = [_record menu];
+    if (recordMenu) {
+        _clipModeMenuItem = [[NSMenuItem alloc]
+            initWithTitle:_NS("Enter Clip Creation Mode")
+                   action:@selector(toggleClipCreationMode:)
+            keyEquivalent:@"c"];
+        /* Command+Shift+C ("Clip"): Command+C is Copy and Command+Alt+C the
+         * playback window. Same equivalent in the legacy interface. */
+        [_clipModeMenuItem setKeyEquivalentModifierMask:
+            NSCommandKeyMask | NSShiftKeyMask];
+        [_clipModeMenuItem setTarget:self];
+        [recordMenu insertItem:_clipModeMenuItem
+                       atIndex:[recordMenu indexOfItem:_record] + 1];
+    }
+    /* Hide controls during playback, right below Float on Top: windowed
+     * playback drops the controls bar and the title bar a few seconds
+     * after the mouse leaves the window; a double click on the video
+     * brings them back. Built here like the entries above. */
+    if (_videoMenu && _floatontop) {
+        _hideControlsMenuItem = [[NSMenuItem alloc]
+            initWithTitle:_NS("Hide Controls During Playback")
+                   action:@selector(toggleHideControlsPlayback:)
+            keyEquivalent:@"h"];
+        /* Command+Shift+H: Command+H hides the app, Command+Alt+H the
+         * other apps. Same equivalent in the legacy interface. */
+        [_hideControlsMenuItem setKeyEquivalentModifierMask:
+            NSCommandKeyMask | NSShiftKeyMask];
+        [_hideControlsMenuItem setTarget:self];
+        [_videoMenu insertItem:_hideControlsMenuItem
+                       atIndex:[_videoMenu indexOfItem:_floatontop] + 1];
+    }
+
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(clipCreationModeChanged:)
+                                                 name:VLCClipCreationModeChangedNotification
+                                               object:nil];
 
     /* An adaptive stream (HLS/DASH) offers the same programme at several
      * qualities and picks one on its own, from a bandwidth estimate. When
@@ -768,9 +817,13 @@
         if (p_vout != NULL) {
             [self setupVarMenuItem:_aspect_ratio target: (vlc_object_t *)p_vout
                                      var:"aspect-ratio" selector: @selector(toggleVar:)];
+            [self appendCustomizationItemTo:_aspect_ratio
+                                     action:@selector(performCustomAspectRatio:)];
 
             [self setupVarMenuItem:_crop target: (vlc_object_t *) p_vout
                                      var:"crop" selector: @selector(toggleVar:)];
+            [self appendCustomizationItemTo:_crop
+                                     action:@selector(performCustomCrop:)];
 
             [self setupVarMenuItem:_deinterlace target: (vlc_object_t *)p_vout
                                      var:"deinterlace" selector: @selector(toggleVar:)];
@@ -1018,6 +1071,19 @@
     [_record setState:b_value];
 }
 
+- (IBAction)toggleClipCreationMode:(id)sender
+{
+    [[VLCCoreInteraction sharedInstance] toggleClipCreationMode];
+}
+
+- (void)clipCreationModeChanged:(NSNotification *)aNotification
+{
+    if ([[VLCCoreInteraction sharedInstance] clipCreationMode])
+        [_clipModeMenuItem setTitle:_NS("Exit Clip Creation Mode")];
+    else
+        [_clipModeMenuItem setTitle:_NS("Enter Clip Creation Mode")];
+}
+
 - (IBAction)setPlaybackRate:(id)sender
 {
     [[VLCCoreInteraction sharedInstance] setPlaybackRate: [_rate_sld intValue]];
@@ -1176,6 +1242,12 @@
         }
         vlc_object_release(p_input);
     }
+}
+
+- (IBAction)toggleHideControlsPlayback:(id)sender
+{
+    VLCCoreInteraction *coreInteraction = [VLCCoreInteraction sharedInstance];
+    [coreInteraction setAutoHideControls:![coreInteraction autoHideControls]];
 }
 
 - (IBAction)createVideoSnapshot:(id)sender
@@ -1717,6 +1789,115 @@
 
 #pragma mark - Dynamic menu creation and validation
 
+#pragma mark - custom crop and aspect ratio
+
+/* setupVarMenu rebuilds the submenu from the variable's choices every time
+ * the menu opens, so the entry has to be put back after it. Same shape as
+ * VLC 4.0's -appendCustomizationItem:. */
+- (void)appendCustomizationItemTo:(NSMenuItem *)menuItem action:(SEL)action
+{
+    NSMenu *submenu = [menuItem submenu];
+    if (submenu == nil)
+        return;
+
+    if ([submenu numberOfItems] > 0)
+        [submenu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *customItem = [submenu addItemWithTitle:_NS("Custom")
+                                                action:action
+                                         keyEquivalent:@""];
+    [customItem setTarget:self];
+    [customItem setEnabled:YES];
+    /* setupVarMenu greys the parent out when the variable offers one choice
+     * or none; this entry always works, so it must not stay unreachable. */
+    [menuItem setEnabled:YES];
+}
+
+/* Offers the ratio in the menu from now on, and keeps it for the next vout
+ * and the next run -- "custom-crop-ratios" / "custom-aspect-ratios" is
+ * exactly what vout_IntfInit reads back to fill the menu. */
+- (void)rememberCustomRatio:(NSString *)ratio
+                   variable:(const char *)psz_var
+                     config:(const char *)psz_config
+                     onVout:(vout_thread_t *)p_vout
+{
+    const char *psz_value = [ratio UTF8String];
+
+    vlc_value_t val_list, text_list;
+    if (var_Change(VLC_OBJECT(p_vout), psz_var, VLC_VAR_GETCHOICES,
+                   &val_list, &text_list) == VLC_SUCCESS) {
+        bool known = false;
+        for (int i = 0; i < val_list.p_list->i_count; i++) {
+            const char *psz_choice = val_list.p_list->p_values[i].psz_string;
+            if (psz_choice != NULL && !strcmp(psz_choice, psz_value)) {
+                known = true;
+                break;
+            }
+        }
+        var_FreeList(&val_list, &text_list);
+        if (known)
+            return;
+    }
+
+    vlc_value_t val, text;
+    val.psz_string = (char *)psz_value;
+    text.psz_string = (char *)psz_value;
+    var_Change(VLC_OBJECT(p_vout), psz_var, VLC_VAR_ADDCHOICE, &val, &text);
+
+    intf_thread_t *p_intf = getIntf();
+    char *psz_list = config_GetPsz(p_intf, psz_config);
+    NSMutableArray *ratios = [NSMutableArray array];
+    if (psz_list != NULL) {
+        for (NSString *entry in [toNSStr(psz_list) componentsSeparatedByString:@","]) {
+            if ([entry length] > 0)
+                [ratios addObject:entry];
+        }
+        free(psz_list);
+    }
+    if (![ratios containsObject:ratio])
+        [ratios addObject:ratio];
+
+    config_PutPsz(p_intf, psz_config,
+                  [[ratios componentsJoinedByString:@","] UTF8String]);
+    config_SaveConfigFile(p_intf);
+}
+
+- (void)performCustomRatioForVariable:(const char *)psz_var
+                               config:(const char *)psz_config
+                                title:(NSString *)title
+{
+    vout_thread_t *p_vout = getVoutForActiveWindow();
+    if (p_vout == NULL)
+        return;
+
+    char *psz_current = var_GetString(p_vout, psz_var);
+    NSString *ratio =
+        [VLCCustomCropArWindowController runModalWithTitle:title
+                                              currentRatio:toNSStr(psz_current)];
+    free(psz_current);
+
+    if (ratio != nil) {
+        [self rememberCustomRatio:ratio variable:psz_var config:psz_config
+                           onVout:p_vout];
+        var_SetString(p_vout, psz_var, [ratio UTF8String]);
+    }
+    vlc_object_release(p_vout);
+}
+
+- (void)performCustomAspectRatio:(id)sender
+{
+    [self performCustomRatioForVariable:"aspect-ratio"
+                                 config:"custom-aspect-ratios"
+                                  title:_NS("Aspect ratio")];
+}
+
+- (void)performCustomCrop:(id)sender
+{
+    [self performCustomRatioForVariable:"crop"
+                                 config:"custom-crop-ratios"
+                                  title:_NS("Crop")];
+}
+
 - (void)setupVarMenuItem:(NSMenuItem *)mi
                   target:(vlc_object_t *)p_object
                      var:(const char *)psz_variable
@@ -1968,6 +2149,12 @@
         enabled = NO;
         if (p_input)
             enabled = var_GetBool(p_input, "can-record");
+    } else if (mi == _clipModeMenuItem) {
+        /* defining bounds needs seeking, saving the clip needs recording */
+        enabled = NO;
+        if (p_input)
+            enabled = var_GetBool(p_input, "can-seek")
+                   && var_GetBool(p_input, "can-record");
     } else if (mi == _random) {
         int i_state;
         var_Get(p_playlist, "random", &val);
@@ -1999,6 +2186,9 @@
         [mi setState: [[VLCCoreInteraction sharedInstance] mute] ? NSOnState : NSOffState];
         [self setupMenus]; /* Make sure audio menu is up to date */
         [self refreshAudioDeviceList];
+    } else if (mi == _hideControlsMenuItem) {
+        [mi setState: [[VLCCoreInteraction sharedInstance] autoHideControls]
+                          ? NSOnState : NSOffState];
     } else if (mi == _half_window           ||
                mi == _normal_window         ||
                mi == _double_window         ||

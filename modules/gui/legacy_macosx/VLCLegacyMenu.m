@@ -36,6 +36,7 @@
 #import "VLCLegacyBookmarks.h"
 #import "VLCLegacyAbout.h"
 #import "VLCLegacyAddons.h"
+#import "VLCLegacyCustomCropAr.h"
 #import "../macosx_crystalhd.h"
 #import "../macosx_browser_addon.h"
 #import "misc.h"
@@ -405,8 +406,12 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
                        action:@selector(unhideAllApplications:)
                 keyEquivalent:@""];
     [appMenu addItem:[NSMenuItem separatorItem]];
-    [self addItemTo:appMenu title:_NS("Quit PowerVLC")
-             action:@selector(quit:) key:@"q"];
+    /* the items whose action has a core hotkey show the CONFIGURED key, as
+     * -[VLCMainMenu setupMenus] does: the literal below is only the fallback
+     * should the option be missing */
+    item = [self addItemTo:appMenu title:_NS("Quit PowerVLC")
+                    action:@selector(quit:) key:@"q"];
+    VLCLegacyApplyHotkeyToMenuItem(p_intf, item, "key-quit");
 
     /* --- File --- */
     NSMenu *fileMenu = [self addMenuTo:menubar title:_NS("File")];
@@ -414,7 +419,7 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
              action:@selector(openFile:) key:@"o"];
     item = [self addItemTo:fileMenu title:_NS("Advanced Open File...")
                     action:@selector(openAdvanced:) key:@"o"];
-    [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSAlternateKeyMask];
+    [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSShiftKeyMask];
     [self addItemTo:fileMenu title:_NS("Open Disc...")
              action:@selector(openDisc:) key:@"d"];
     [self addItemTo:fileMenu title:_NS("Open Network...")
@@ -433,15 +438,16 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     [fileMenu addItem:[NSMenuItem separatorItem]];
     [fileMenu addItemWithTitle:_NS("Close Window")
                         action:@selector(performClose:) keyEquivalent:@"w"];
-    [self addItemTo:fileMenu title:_NS("Reveal in Finder")
-             action:@selector(revealInFinder:) key:@""];
+    item = [self addItemTo:fileMenu title:_NS("Reveal in Finder")
+                    action:@selector(revealInFinder:) key:@"r"];
+    [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSShiftKeyMask];
     [fileMenu addItem:[NSMenuItem separatorItem]];
     item = [self addItemTo:fileMenu title:_NS("Convert / Stream...")
                     action:@selector(showConvertAndSave:) key:@"s"];
     [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSShiftKeyMask];
     [fileMenu addItem:[NSMenuItem separatorItem]];
     [self addItemTo:fileMenu title:_NS("Save Playlist...")
-             action:@selector(savePlaylist:) key:@""];
+             action:@selector(savePlaylist:) key:@"s"];
 
     /* --- Edit --- */
     NSMenu *editMenu = [self addMenuTo:menubar title:_NS("Edit")];
@@ -458,6 +464,10 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     [item setTarget:mainWindow];
     [editMenu addItemWithTitle:_NS("Select All")
                         action:@selector(selectAll:) keyEquivalent:@"a"];
+    [editMenu addItem:[NSMenuItem separatorItem]];
+    item = [self addItemTo:editMenu title:_NS("Find")
+                    action:@selector(highlightSearchField:) key:@"f"];
+    [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSShiftKeyMask];
 
     /* --- View (order and behaviors of the 3.0.23 View menu) --- */
     NSMenu *viewMenu = [self addMenuTo:menubar title:_NS("View")];
@@ -503,14 +513,27 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
 
     /* --- Playback (items and order of the 3.0.23 menu) --- */
     NSMenu *playMenu = [self addMenuTo:menubar title:_NS("Playback")];
+    /* Command+P like VLCMainMenu, NOT Space: a menu key equivalent is
+     * consumed app-wide before the key window sees it, which would keep the
+     * core from ever handling key-play-pause. Space still pauses everywhere
+     * -- the vout windows send every key to the hotkey engine, and
+     * -[VLCLegacyHostWindow performKeyEquivalent:] hands it the keys that
+     * match a configured hotkey. */
     playItem = [self addItemTo:playMenu title:_NS("Play")
-                        action:@selector(togglePlayPause:) key:@" "];
-    [playItem setKeyEquivalentModifierMask:0];
-    [self addItemTo:playMenu title:_NS("Stop")
-             action:@selector(stop:) key:@"."];
+                        action:@selector(togglePlayPause:) key:@"p"];
+    item = [self addItemTo:playMenu title:_NS("Stop")
+                    action:@selector(stop:) key:@"."];
+    VLCLegacyApplyHotkeyToMenuItem(p_intf, item, "key-stop");
     item = [self addItemTo:playMenu title:_NS("Record")
                     action:@selector(toggleRecord:) key:@"r"];
     [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSAlternateKeyMask];
+    /* clip creation mode, right below Record like the modern interface;
+     * the title is refreshed by the validation. Command+Shift+C ("Clip"):
+     * Command+C is Copy and Command+Alt+C the playback window, and it sits
+     * next to Record's Command+Alt+R. */
+    item = [self addItemTo:playMenu title:_NS("Enter Clip Creation Mode")
+                    action:@selector(toggleClipCreationMode:) key:@"c"];
+    [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSShiftKeyMask];
     /* 3.0 embeds a rate slider in the menu; menu item views only exist
      * from Mac OS X 10.5 on, so the same control becomes a submenu of
      * fixed rates (the slider maps 2^(-2..2) anyway) */
@@ -545,11 +568,13 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
                        key:keyString(NSRightArrowFunctionKey)];
     [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSAlternateKeyMask];
     [item setTag:10];
+    VLCLegacyApplyHotkeyToMenuItem(p_intf, item, "key-jump+short");
     item = [self addItemTo:playMenu title:_NS("Step Backward")
                     action:@selector(jump:)
                        key:keyString(NSLeftArrowFunctionKey)];
     [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSAlternateKeyMask];
     [item setTag:-10];
+    VLCLegacyApplyHotkeyToMenuItem(p_intf, item, "key-jump-short");
     [self addItemTo:playMenu title:_NS("Jump to Time")
              action:@selector(jumpToTime:) key:@"j"];
     [playMenu addItem:[NSMenuItem separatorItem]];
@@ -557,16 +582,23 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
                     action:@selector(previous:)
                        key:keyString(NSLeftArrowFunctionKey)];
     [item setKeyEquivalentModifierMask:NSCommandKeyMask];
+    VLCLegacyApplyHotkeyToMenuItem(p_intf, item, "key-prev");
     item = [self addItemTo:playMenu title:_NS("Next")
                     action:@selector(next:)
                        key:keyString(NSRightArrowFunctionKey)];
     [item setKeyEquivalentModifierMask:NSCommandKeyMask];
-    [self addItemTo:playMenu title:_NS("Random")
-             action:@selector(toggleRandom:) key:@""];
+    VLCLegacyApplyHotkeyToMenuItem(p_intf, item, "key-next");
+    item = [self addItemTo:playMenu title:_NS("Random")
+                    action:@selector(toggleRandom:) key:@"z"];
+    VLCLegacyApplyHotkeyToMenuItem(p_intf, item, "key-random");
+    /* No Command+R on Repeat One although VLCMainMenu carries one: File >
+     * Open Capture Device... owns that equivalent in both interfaces, and
+     * being earlier in the menu bar it always wins -- the modern entry is
+     * decorative. */
     [self addItemTo:playMenu title:_NS("Repeat One")
              action:@selector(toggleRepeat:) key:@""];
     [self addItemTo:playMenu title:_NS("Repeat All")
-             action:@selector(toggleLoop:) key:@""];
+             action:@selector(toggleLoop:) key:@"l"];
     item = [self addItemTo:playMenu title:_NS("A→B Loop")
                     action:@selector(toggleAtoBLoop:) key:@"l"];
     [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSShiftKeyMask];
@@ -597,14 +629,17 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
                     action:@selector(volumeUp:)
                        key:keyString(NSUpArrowFunctionKey)];
     [item setKeyEquivalentModifierMask:NSCommandKeyMask];
+    VLCLegacyApplyHotkeyToMenuItem(p_intf, item, "key-vol-up");
     item = [self addItemTo:audioMenu title:_NS("Decrease Volume")
                     action:@selector(volumeDown:)
                        key:keyString(NSDownArrowFunctionKey)];
     [item setKeyEquivalentModifierMask:NSCommandKeyMask];
+    VLCLegacyApplyHotkeyToMenuItem(p_intf, item, "key-vol-down");
     item = [self addItemTo:audioMenu title:_NS("Mute")
                     action:@selector(mute:)
                        key:keyString(NSDownArrowFunctionKey)];
     [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSAlternateKeyMask];
+    VLCLegacyApplyHotkeyToMenuItem(p_intf, item, "key-vol-mute");
     [audioMenu addItem:[NSMenuItem separatorItem]];
     audioTrackMenu = [self addDynamicMenuTo:audioMenu
                                       title:_NS("Audio Track")];
@@ -630,21 +665,42 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     item = [self addItemTo:videoMenu title:_NS("Half Size")
                     action:@selector(setZoom:) key:@"0"];
     [item setTag:50];
+    VLCLegacyApplyHotkeyToMenuItem(p_intf, item, "key-zoom-half");
     item = [self addItemTo:videoMenu title:_NS("Normal Size")
                     action:@selector(setZoom:) key:@"1"];
     [item setTag:100];
+    VLCLegacyApplyHotkeyToMenuItem(p_intf, item, "key-zoom-original");
     item = [self addItemTo:videoMenu title:_NS("Double Size")
                     action:@selector(setZoom:) key:@"2"];
     [item setTag:200];
+    VLCLegacyApplyHotkeyToMenuItem(p_intf, item, "key-zoom-double");
+    /* Not a "zoom" factor: like VLCMainMenu this is the AppKit zoom of the
+     * window hosting the video, i.e. what the green button does. No core
+     * hotkey backs it, so Command+3 is fixed in both interfaces. */
+    [self addItemTo:videoMenu title:_NS("Fit to Screen")
+             action:@selector(fitToScreen:) key:@"3"];
     [videoMenu addItem:[NSMenuItem separatorItem]];
-    [self addItemTo:videoMenu title:_NS("Fullscreen")
-             action:@selector(toggleFullscreen:) key:@"f"];
+    item = [self addItemTo:videoMenu title:_NS("Fullscreen")
+                    action:@selector(toggleFullscreen:) key:@"f"];
+    VLCLegacyApplyHotkeyToMenuItem(p_intf, item, "key-toggle-fullscreen");
+    /* Command+T ("on Top"): free in both interfaces and not a core hotkey
+     * (key-position is a bare "t") */
     [self addItemTo:videoMenu title:_NS("Float on Top")
-             action:@selector(toggleFloatOnTop:) key:@""];
+             action:@selector(toggleFloatOnTop:) key:@"t"];
+    /* windowed playback drops the controls bar and the title bar a few
+     * seconds after the mouse leaves the window; double-click the video
+     * to bring them back. Command+Shift+H, like the modern interface
+     * (Command+H hides the app, Command+Alt+H the other apps). */
+    item = [self addItemTo:videoMenu
+                     title:_NS("Hide Controls During Playback")
+                    action:@selector(toggleHideControlsPlayback:)
+                       key:@"h"];
+    [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSShiftKeyMask];
     [videoMenu addItem:[NSMenuItem separatorItem]];
     item = [self addItemTo:videoMenu title:_NS("Snapshot")
                     action:@selector(snapshot:) key:@"s"];
     [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSAlternateKeyMask];
+    VLCLegacyApplyHotkeyToMenuItem(p_intf, item, "key-snapshot");
     [videoMenu addItem:[NSMenuItem separatorItem]];
     videoTrackMenu = [self addDynamicMenuTo:videoMenu
                                       title:_NS("Video Track")];
@@ -1132,6 +1188,120 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     if (isString)
         free(current.psz_string);
     vlc_object_release(p_object);
+
+    /* The two ratio menus get a "Custom..." entry of their own, appended
+     * after the choices the variable offers (VLC 4.0 backport). It has to
+     * be put back here: this method empties the menu each time it opens. */
+    if (menu == aspectMenu || menu == voutAspectMenu)
+        [self appendCustomItemTo:menu action:@selector(customAspectRatio:)];
+    else if (menu == cropMenu || menu == voutCropMenu)
+        [self appendCustomItemTo:menu action:@selector(customCrop:)];
+}
+
+/*****************************************************************************
+ * Custom crop / aspect ratio (VLC 4.0 backport)
+ *****************************************************************************/
+
+- (void)appendCustomItemTo:(NSMenu *)menu action:(SEL)action
+{
+    if ([menu numberOfItems] > 0)
+        [menu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *item = [[[NSMenuItem alloc] initWithTitle:_NS("Custom")
+                                                  action:action
+                                           keyEquivalent:@""] autorelease];
+    [item setTarget:self];
+    [menu addItem:item];
+}
+
+/* Offers the ratio in the menu from now on, and keeps it for the next vout
+ * and the next run -- "custom-crop-ratios" / "custom-aspect-ratios" is
+ * exactly what vout_IntfInit reads back to fill the menu. */
+- (void)rememberCustomRatio:(NSString *)ratio
+                   variable:(const char *)name
+                     config:(const char *)configName
+                     onVout:(vlc_object_t *)p_vout
+{
+    const char *value = [ratio UTF8String];
+
+    vlc_value_t val_list, text_list;
+    if (var_Change(p_vout, name, VLC_VAR_GETCHOICES, &val_list, &text_list)
+            == VLC_SUCCESS) {
+        BOOL known = NO;
+        int i;
+        for (i = 0; i < val_list.p_list->i_count; i++) {
+            const char *choice = val_list.p_list->p_values[i].psz_string;
+            if (choice && !strcmp(choice, value)) {
+                known = YES;
+                break;
+            }
+        }
+        var_FreeList(&val_list, &text_list);
+        if (known)
+            return;
+    }
+
+    vlc_value_t val, text;
+    val.psz_string = (char *)value;
+    text.psz_string = (char *)value;
+    var_Change(p_vout, name, VLC_VAR_ADDCHOICE, &val, &text);
+
+    char *psz_list = config_GetPsz(p_intf, configName);
+    NSMutableArray *ratios = [NSMutableArray array];
+    if (psz_list) {
+        NSArray *known = [[NSString stringWithUTF8String:psz_list]
+            componentsSeparatedByString:@","];
+        NSEnumerator *e = [known objectEnumerator];
+        NSString *entry;
+        while ((entry = [e nextObject]) != nil) {
+            if ([entry length] > 0)
+                [ratios addObject:entry];
+        }
+        free(psz_list);
+    }
+    if (![ratios containsObject:ratio])
+        [ratios addObject:ratio];
+
+    config_PutPsz(p_intf, configName,
+                  [[ratios componentsJoinedByString:@","] UTF8String]);
+    config_SaveConfigFile(p_intf);
+}
+
+- (void)customRatioForVariable:(const char *)name
+                        config:(const char *)configName
+                         title:(NSString *)title
+{
+    vlc_object_t *p_vout = [self objectOfType:OBJ_VOUT];
+    if (!p_vout)
+        return;
+
+    char *psz_current = var_GetString(p_vout, name);
+    NSString *current = psz_current
+        ? [NSString stringWithUTF8String:psz_current] : nil;
+    NSString *ratio = [VLCLegacyCustomCropAr runModalWithTitle:title
+                                                  currentRatio:current];
+    free(psz_current);
+
+    if (ratio) {
+        [self rememberCustomRatio:ratio variable:name config:configName
+                           onVout:p_vout];
+        var_SetString(p_vout, name, [ratio UTF8String]);
+    }
+    vlc_object_release(p_vout);
+}
+
+- (void)customAspectRatio:(id)sender
+{
+    [self customRatioForVariable:"aspect-ratio"
+                          config:"custom-aspect-ratios"
+                           title:_NS("Aspect ratio")];
+}
+
+- (void)customCrop:(id)sender
+{
+    [self customRatioForVariable:"crop"
+                          config:"custom-crop-ratios"
+                           title:_NS("Crop")];
 }
 
 /*****************************************************************************
@@ -1423,7 +1593,15 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
 - (void)previous:(id)sender           { [core previous]; }
 - (void)jump:(id)sender               { [core jumpWithSeconds:(int)[sender tag]]; }
 - (void)jumpToTime:(id)sender         { [mainWindow showJumpToTimePanel]; }
-- (void)toggleRecord:(id)sender       { [core toggleRecord]; }
+- (void)toggleRecord:(id)sender
+{
+    /* while creating a clip, Record saves exactly the [start..end] range */
+    if ([core clipCreationMode])
+        [core recordClipToggle];
+    else
+        [core toggleRecord];
+}
+- (void)toggleClipCreationMode:(id)sender { [core toggleClipCreationMode]; }
 
 /* Blu-ray pop-up menu (INPUT_NAV_POPUP), not the disc root menu */
 - (void)showDiscPopupMenu:(id)sender
@@ -1496,7 +1674,32 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
 - (void)toggleRandom:(id)sender       { [core togglePlaylistBool:"random"]; }
 - (void)toggleLoop:(id)sender         { [core togglePlaylistBool:"loop"]; }
 - (void)toggleRepeat:(id)sender       { [core togglePlaylistBool:"repeat"]; }
-- (void)toggleFloatOnTop:(id)sender   { [core togglePlaylistBool:"video-on-top"]; }
+/* Port of -[VLCMainMenu floatOnTop:]. Toggling only the PLAYLIST variable
+ * (what this did) seeds the next vout and never reaches the window that is
+ * on screen: the state has to be set on the running vout, which is what the
+ * core turns into VOUT_WINDOW_SET_STATE. The playlist copy is kept in sync
+ * because the check mark reads it. */
+- (void)toggleFloatOnTop:(id)sender
+{
+    playlist_t *p_playlist = pl_Get(p_intf);
+    input_thread_t *p_input = playlist_CurrentInput(p_playlist);
+    if (!p_input) {
+        var_ToggleBool(p_playlist, "video-on-top");
+        return;
+    }
+    vout_thread_t *p_vout = input_GetVout(p_input);
+    if (p_vout) {
+        bool b_on = var_ToggleBool(p_vout, "video-on-top");
+        var_SetBool(p_playlist, "video-on-top", b_on);
+        vlc_object_release(p_vout);
+    }
+    vlc_object_release(p_input);
+}
+
+- (void)toggleHideControlsPlayback:(id)sender
+{
+    [core setAutoHideControls:![core autoHideControls]];
+}
 
 - (void)volumeUp:(id)sender           { [core volumeUp]; }
 - (void)volumeDown:(id)sender         { [core volumeDown]; }
@@ -1505,6 +1708,15 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
 - (void)toggleFullscreen:(id)sender   { [core toggleFullscreen]; }
 - (void)snapshot:(id)sender           { [core snapshot]; }
 - (void)setZoom:(id)sender            { [core setZoom:(float)[sender tag] / 100.f]; }
+
+/* Video > Fit to Screen, ported from -[VLCMainMenu resizeVideoWindow:]:
+ * zoom the window the video lives in. Windowed playback embeds the video in
+ * the main window, which is zoomable; the standalone vout window (second
+ * vout, or shutdown) is borderless and AppKit ignores -performZoom: there,
+ * exactly as in the modern interface. */
+- (void)fitToScreen:(id)sender        { [[NSApp keyWindow] performZoom:sender]; }
+
+- (void)highlightSearchField:(id)sender { [mainWindow highlightSearchField]; }
 
 - (void)setTextSize:(id)sender
 {
@@ -1811,6 +2023,9 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
         [item setState:[core playlistBool:"video-on-top"]
             ? NSOnState : NSOffState];
         return [self hasVout];
+    } else if (action == @selector(toggleHideControlsPlayback:)) {
+        [item setState:[core autoHideControls] ? NSOnState : NSOffState];
+        return YES;
     } else if (action == @selector(mute:)) {
         [item setState:[core muted] ? NSOnState : NSOffState];
         return YES;
@@ -1841,6 +2056,18 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     } else if (action == @selector(toggleRecord:)) {
         [item setState:[core recording] ? NSOnState : NSOffState];
         return [core canRecord];
+    } else if (action == @selector(toggleClipCreationMode:)) {
+        [item setTitle:[core clipCreationMode]
+            ? _NS("Exit Clip Creation Mode")
+            : _NS("Enter Clip Creation Mode")];
+        /* defining bounds needs seeking, saving the clip needs recording */
+        BOOL canSeek = NO;
+        input_thread_t *p_input = playlist_CurrentInput(p_playlist);
+        if (p_input) {
+            canSeek = var_GetBool(p_input, "can-seek") ? YES : NO;
+            vlc_object_release(p_input);
+        }
+        return canSeek && [core canRecord];
     } else if (action == @selector(setPlaybackSpeed:)) {
         int current = (int)lroundf([core playbackRate] * 100.f);
         [item setState:current == [item tag] ? NSOnState : NSOffState];
@@ -1869,6 +2096,7 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     } else if (action == @selector(extensionsParent:)) {
         return [self extensionsCount] > 0;
     } else if (action == @selector(setZoom:)
+            || action == @selector(fitToScreen:)
             || action == @selector(snapshot:)
             || action == @selector(toggleFullscreen:)) {
         return [self hasVout];

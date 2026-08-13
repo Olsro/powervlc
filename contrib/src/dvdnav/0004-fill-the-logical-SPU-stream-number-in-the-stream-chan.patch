@@ -1,0 +1,34 @@
+From: PowerVLC <powervlc@localhost>
+Date: Thu, 13 Aug 2026 12:00:00 +0200
+Subject: [PATCH] fill the logical SPU stream number in the stream change event
+
+dvdnav_spu_stream_change_event_t documents a "logical" member as "The
+logical (DVD) stream number", and the audio counterpart fills its own,
+but the subpicture event leaves it uninitialised: callers read whatever
+was in the buffer.
+
+That member is the only way for a caller to tell "the disc selected
+subpicture stream N" apart from "the disc selected no subpicture at
+all".  vm_get_subp_active_stream() cannot express the difference: when
+SPST_REG holds no valid selection -- which is the case right after
+vm_reset(), where it is set to 62 -- the lookup fails and the function
+silently falls back to the first available stream, then flags it hidden
+because the register carries no display bit.  A player then believes the
+disc asked for "stream 0, forced subtitles only" and selects that track.
+
+position_next.spu_channel already carries SPST_REG verbatim (see
+vm_get_position() in vm/vm.c), so publishing it costs one assignment:
+values 0-31 are a real selection, bit 0x40 is the display flag, and
+anything above is "no subpicture selected".
+
+--- a/src/dvdnav.c
++++ b/src/dvdnav.c
+@@ -797,6 +797,7 @@
+     (*len) = sizeof(dvdnav_spu_stream_change_event_t);
+     stream_change->physical_wide      = vm_get_subp_active_stream(this->vm, 0);
+     stream_change->physical_letterbox = vm_get_subp_active_stream(this->vm, 1);
+     stream_change->physical_pan_scan  = vm_get_subp_active_stream(this->vm, 2);
++    stream_change->logical            = this->position_next.spu_channel;
+     this->position_current.spu_channel = this->position_next.spu_channel;
+ #ifdef LOG_DEBUG
+     Log3(this, "SPU_STREAM_CHANGE stream_id_wide=%d",stream_change->physical_wide);

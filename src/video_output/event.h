@@ -48,6 +48,30 @@ static inline void vout_SendEventKey(vout_thread_t *vout, int key)
 {
     var_SetInteger(vout->obj.libvlc, "key-pressed", key);
 }
+/* PowerVLC. Dragging the picture moves the window -- the gesture the two
+ * macOS interfaces offer, and the only way to move the window at all once
+ * "Hide controls during playback" has stripped its frame. An interface whose
+ * own widget sees the mouse does it by itself; the Win32 vout creates a
+ * child window of its own INSIDE the one the interface hands it and answers
+ * every mouse message in its own thread, so no toolkit event is ever born
+ * there and the core has to relay the gesture.
+ *
+ * The relay only exists for interfaces that ask for it, by creating the
+ * libvlc "intf-video-drag" integer: 1 = pressed, 2 = moved, 3 = released.
+ * No coordinates travel with it -- what moving a window needs is the
+ * pointer in SCREEN space, which the interface reads for itself, while the
+ * vout only ever knows picture coordinates. */
+enum {
+    VOUT_VIDEO_DRAG_PRESSED  = 1,
+    VOUT_VIDEO_DRAG_MOVED    = 2,
+    VOUT_VIDEO_DRAG_RELEASED = 3,
+};
+static inline void vout_RelayVideoDrag(vout_thread_t *vout, int phase)
+{
+    vlc_object_t *libvlc = VLC_OBJECT(vout->obj.libvlc);
+    if (var_Type(libvlc, "intf-video-drag") != 0)
+        var_SetInteger(libvlc, "intf-video-drag", phase);
+}
 static inline void vout_SendEventMouseMoved(vout_thread_t *vout, int x, int y)
 {
     var_SetCoords(vout, "mouse-moved", x, y);
@@ -74,6 +98,7 @@ static inline void vout_SendEventMousePressed(vout_thread_t *vout, int button)
         var_GetCoords(vout, "mouse-moved", &x, &y);
         var_SetCoords(vout, "mouse-clicked", x, y);
         var_SetBool(vout->obj.libvlc, "intf-popupmenu", false);
+        vout_RelayVideoDrag(vout, VOUT_VIDEO_DRAG_PRESSED);
         return;
     }
     case MOUSE_BUTTON_CENTER:
@@ -94,6 +119,8 @@ static inline void vout_SendEventMousePressed(vout_thread_t *vout, int button)
 static inline void vout_SendEventMouseReleased(vout_thread_t *vout, int button)
 {
     var_NAndInteger(vout, "mouse-button-down", 1 << button);
+    if (button == MOUSE_BUTTON_LEFT)
+        vout_RelayVideoDrag(vout, VOUT_VIDEO_DRAG_RELEASED);
 #if defined(_WIN32)
     switch (button)
     {
@@ -105,6 +132,17 @@ static inline void vout_SendEventMouseReleased(vout_thread_t *vout, int button)
 }
 static inline void vout_SendEventMouseDoubleClick(vout_thread_t *vout)
 {
+    /* While an interface auto-hides its windowed controls (it then holds
+     * the libvlc "intf-controls-hidden" bool up), a double click means
+     * "bring the controls back", not "toggle fullscreen". */
+    vlc_object_t *libvlc = VLC_OBJECT(vout->obj.libvlc);
+    if (var_Type(libvlc, "intf-controls-hidden") != 0
+     && var_GetBool(libvlc, "intf-controls-hidden"))
+    {
+        if (var_Type(libvlc, "intf-reveal-controls") != 0)
+            var_TriggerCallback(libvlc, "intf-reveal-controls");
+        return;
+    }
     //vout_ControlSetFullscreen(vout, !var_GetBool(vout, "fullscreen"));
     var_ToggleBool(vout, "fullscreen");
 }

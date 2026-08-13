@@ -160,6 +160,10 @@ image_HandlerDelete
 image_Mime2Fourcc
 image_Type2Fourcc
 InitMD5
+input_ClipExportFinish
+input_ClipExportIsRunning
+input_ClipExportNew
+input_ClipExportProgress
 input_Control
 input_Create
 input_CreateFilename

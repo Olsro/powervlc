@@ -200,6 +200,16 @@ void SeekStyle::drawComplexControl( ComplexControl cc, const QStyleOptionComplex
 
                 if ( option->state & QStyle::State_MouseOver || slideroptions->animate )
                 {
+                    /* ⚠ PowerVLC: everything below leaves the painter with a
+                     * different opacity, pen and brush, and the caller draws
+                     * on with it (SeekSlider::paintEvent paints the clip
+                     * creation extras after us). It used to leak
+                     * animationopacity in particular, which the clip mode
+                     * sets to 0 to keep the style's own handle out of the
+                     * way -- so the whole clip overlay was painted
+                     * INVISIBLE, every time the pointer was over the bar or
+                     * the handle was fading. */
+                    painter->save();
                     QPalette p = slideroptions->palette;
 
                     /* draw chapters tickpoints */
@@ -293,6 +303,7 @@ void SeekStyle::drawComplexControl( ComplexControl cc, const QStyleOptionComplex
                         painter->setBrush( handleGradient );
                         painter->drawEllipse( pos.x(), pos.y(), hSize.width(), hSize.height() );
                     }
+                    painter->restore();
                 }
             }
         }

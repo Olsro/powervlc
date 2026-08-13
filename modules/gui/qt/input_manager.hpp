@@ -38,6 +38,7 @@
 #include <QObject>
 #include <QEvent>
 class QSignalMapper;
+class QTimer;
 
 enum { NORMAL,    /* loop: 0, repeat: 0 */
        REPEAT_ONE,/* loop: 0, repeat: 1 */
@@ -158,6 +159,29 @@ private:
     bool            b_video;
     vlc_tick_t      timeA, timeB;
 
+    /* clip creation mode */
+    bool            b_clipMode;
+    double          f_clipStart, f_clipEnd; /* position fractions, 0..1 */
+    bool            b_clipRecording;
+    double          f_clipLastPos;          /* last polled pos, -1 = none */
+    qint64          clipLastInteractionMs;  /* last knob drag/click */
+    /* end-bound pause: 0 = none, 1 = pause requested, 2 = confirmed.
+     * playlist_Pause() is asynchronous, so without the intermediate state
+     * the resume could not be told apart from the pause just asked for. */
+    int             i_clipPausedAtEnd;
+    /* fast extraction: a second headless input writes the clip at disk
+     * speed, leaving the playback alone. NULL when the core refused it
+     * (unseekable stream, unknown length): the realtime recording above
+     * is then used instead. Polled by clipExportTimer, because the
+     * position events that drive clipModeLoop stop when paused. */
+    input_clip_export_t *p_clipExport;
+    QTimer         *clipExportTimer;
+    int             i_clipSelectedKnob;  /* frame-step target: 1 start, 2 end */
+
+    bool startClipExport();
+    void finishClipExport( bool b_cancelled );
+    void clipExportNotify( const QString &message );
+
     void customEvent( QEvent * ) override;
 
     void addCallbacks();
@@ -210,9 +234,34 @@ public slots:
     void activateTeletext( bool );     ///< Toggle buttons after click
     /* A to B Loop */
     void setAtoB();
+    /* Clip creation mode (PowerVLC): both seek bar knobs define the clip
+     * bounds; Record then saves exactly that range */
+    void toggleClipCreationMode();
+    void exitClipCreationMode();
+    void recordClipToggle();
+
+public:
+    bool clipCreationMode() const { return b_clipMode; }
+    double clipStartPosition() const { return f_clipStart; }
+    double clipEndPosition() const { return f_clipEnd; }
+    void setClipStartPosition( double pos );
+    void setClipEndPosition( double pos );
+    bool clipRecordingActive() const { return b_clipRecording; }
+    /* suppresses the end-bound auto-pause right after a knob interaction */
+    void noteClipInteraction();
+    /* which bound the frame-step shortcuts move (1 = start, 2 = end) */
+    void setClipSelectedKnob( int knob ) { i_clipSelectedKnob = knob; }
+    /* nudge that bound and preview it: one frame, or a signed amount of
+     * seconds for the longer jumps */
+    void clipStepFrames( int direction );
+    void clipNudgeSelectedBoundBySeconds( double seconds );
 
 private slots:
     void AtoBLoop( float, int64_t, int );
+    void clipModeLoop( float, int64_t, int );
+    void clipExportPoll();
+    /* a jump shortcut redirected here by the core hotkeys module */
+    void clipStepFromCore( qint64 value );
 
 signals:
     /// Send new position, new time and new length
@@ -237,6 +286,8 @@ signals:
     /// Play/pause status
     void playingStatusChanged( int );
     void recordingStateChanged( bool );
+    /// Clip creation mode entered/left
+    void clipCreationModeChanged( bool );
     /// Teletext
     void teletextPossible( bool );
     void teletextActivated( bool );

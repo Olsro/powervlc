@@ -507,6 +507,106 @@ static int DecodeBlock(decoder_t *p_dec, block_t *p_block)
  * Open / Close
  *****************************************************************************/
 
+
+/* rappel muet : VDADecoderCreate exige un pointeur non nul (cf. sonde) */
+static void ProbeCallback(void *drop1, CFDictionaryRef drop2, OSStatus drop3,
+                          uint32_t drop4, CVImageBufferRef drop5)
+{
+    VLC_UNUSED(drop1); VLC_UNUSED(drop2); VLC_UNUSED(drop3);
+    VLC_UNUSED(drop4); VLC_UNUSED(drop5);
+}
+
+/* Cette MACHINE a-t-elle VDA, tout court ?
+ *
+ * ⚠⚠⚠ Sans cette question, le module était ACCEPTÉ à l'ouverture puis
+ * échouait plus tard, à la création de la session : le cœur devait alors
+ * recharger le décodeur (« Reloading the decoder module ») en plein début de
+ * lecture, et le décodage logiciel reprenait en cours de GOP — l'utilisateur
+ * voyait des macro-blocs pendant les premières secondes, À CHAQUE FICHIER.
+ * Mesuré sur un Mac mini Core 2 Duo sous 10.6.8.
+ *
+ * VDA n'expose aucune API de capacité : le seul test fiable est de lui
+ * demander une session avec la même API que plus tard. On le fait UNE fois
+ * par session, avec une configuration minimale.
+ *
+ * ⚠⚠ Un seul verdict est retenu : kVDADecoderHardwareNotSupportedErr, le seul
+ * qui parle de la MACHINE. Tout autre refus (configuration jugée invalide,
+ * profil, mémoire…) peut venir de notre jeu de paramètres de test lui-même —
+ * en tirer une conclusion désactiverait l'accélération sur du matériel qui la
+ * gère, ce qui serait bien pire que le défaut corrigé ici. Dans ce cas on ne
+ * conclut rien et le comportement d'origine reprend la main. */
+static bool VDAHardwareMissing(vlc_object_t *p_this)
+{
+    libvlc_int_t *p_libvlc = p_this->obj.libvlc;
+
+    if (var_Type(p_libvlc, "vda-unsupported") != 0)
+        return var_GetBool(p_libvlc, "vda-unsupported");
+
+    /* Jeu de paramètres H.264 Baseline minimal (avcC : version, profil,
+     * compat, niveau, longueurs, puis un SPS et un PPS de 64x64). */
+    static const uint8_t p_avcc_probe[] = {
+        0x01, 0x42, 0xc0, 0x1e, 0xff, 0xe1, 0x00, 0x0b,
+        0x67, 0x42, 0xc0, 0x1e, 0xd9, 0x00, 0xf0, 0x11,
+        0x7e, 0xf0, 0x11, 0x01, 0x00, 0x04, 0x68, 0xce,
+        0x3c, 0x80,
+    };
+
+    CFMutableDictionaryRef config = CFDictionaryCreateMutable(
+        kCFAllocatorDefault, 4,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (config == NULL)
+        return false;
+
+    int i_number = 64;
+    CFNumberRef ref = CFNumberCreate(NULL, kCFNumberSInt32Type, &i_number);
+    CFDictionarySetValue(config, kVDADecoderConfiguration_Width, ref);
+    CFDictionarySetValue(config, kVDADecoderConfiguration_Height, ref);
+    CFRelease(ref);
+    i_number = 'avc1';
+    ref = CFNumberCreate(NULL, kCFNumberSInt32Type, &i_number);
+    CFDictionarySetValue(config, kVDADecoderConfiguration_SourceFormat, ref);
+    CFRelease(ref);
+    CFDataRef avcc = CFDataCreate(kCFAllocatorDefault, p_avcc_probe,
+                                  sizeof (p_avcc_probe));
+    CFDictionarySetValue(config, kVDADecoderConfiguration_avcCData, avcc);
+    CFRelease(avcc);
+
+    /* ⚠ imageAttributes ET rappel sont OBLIGATOIRES : sans eux VDA répond -50
+     * (paramErr) et la sonde ne conclut rien — mesuré au premier essai. */
+    CFMutableDictionaryRef attrs = CFDictionaryCreateMutable(
+        kCFAllocatorDefault, 2,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionaryRef surface = CFDictionaryCreateMutable(
+        kCFAllocatorDefault, 0,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    i_number = kCVPixelFormatType_422YpCbCr8;
+    ref = CFNumberCreate(NULL, kCFNumberSInt32Type, &i_number);
+    CFDictionarySetValue(attrs, kCVPixelBufferPixelFormatTypeKey, ref);
+    CFRelease(ref);
+    if (surface != NULL)
+        CFDictionarySetValue(attrs, kCVPixelBufferIOSurfacePropertiesKey,
+                             surface);
+
+    VDADecoder session = NULL;
+    OSStatus status = VDADecoderCreate(config, attrs,
+                                       (VDADecoderOutputCallback *)ProbeCallback,
+                                       NULL, &session);
+    CFRelease(attrs);
+    if (surface != NULL)
+        CFRelease(surface);
+    CFRelease(config);
+    if (session != NULL)
+        VDADecoderDestroy(session);
+
+    bool b_missing = (status == kVDADecoderHardwareNotSupportedErr);
+    var_Create(p_libvlc, "vda-unsupported", VLC_VAR_BOOL);
+    var_SetBool(p_libvlc, "vda-unsupported", b_missing);
+    msg_Dbg(p_this, "VDA probe: %s (status %d)",
+            b_missing ? "no hardware on this machine, not offering VDA again"
+                      : "hardware usable", (int)status);
+    return b_missing;
+}
+
 static int OpenDecoder(vlc_object_t *p_this)
 {
     decoder_t *p_dec = (decoder_t *)p_this;
@@ -520,6 +620,10 @@ static int OpenDecoder(vlc_object_t *p_this)
 
     /* hardware already proved unusable for this ES (see DecodeBlock) */
     if (var_Type(p_dec, "vda-failed") != 0)
+        return VLC_EGENERIC;
+
+    /* ... or on this machine at all, asked once per session */
+    if (VDAHardwareMissing(p_this))
         return VLC_EGENERIC;
 
     /* No runtime symbol check needed: the framework is linked directly,

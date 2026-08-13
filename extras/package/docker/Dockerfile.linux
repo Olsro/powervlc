@@ -30,9 +30,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential git ca-certificates curl wget file rsync xz-utils \
       autoconf automake libtool libtool-bin pkg-config gettext autopoint \
       flex bison \
+      patchelf \
     && ( apt-get build-dep -y vlc || echo "WARN: build-dep vlc failed; some modules may be disabled" ) \
     && apt-get install -y --no-install-recommends \
       qtbase5-dev qtbase5-private-dev libqt5svg5-dev libqt5x11extras5-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# AACS and BD+ descrambling for retail Blu-ray. libbluray does not link against
+# these, it dlopen()s them by SONAME, so build-dep vlc never pulls them in and
+# build-appimage.sh has nothing to copy: the AppImage then plays homemade discs
+# only. Tolerated if a base image lacks them -- the packaging script warns.
+RUN apt-get update \
+    && ( apt-get install -y --no-install-recommends libaacs0 libbdplus0 \
+         || echo "WARN: libaacs0/libbdplus0 unavailable; retail Blu-ray will not play" ) \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /work

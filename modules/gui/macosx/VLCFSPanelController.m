@@ -28,6 +28,7 @@
 #import "VLCCoreInteraction.h"
 #import "CompatibilityFixes.h"
 #import "VLCMain.h"
+#import "VLCSeekThumbnailer.h"
 
 @interface VLCFSPanelController () {
     BOOL _isCounting;
@@ -37,6 +38,10 @@
     NSRect _associatedVoutFrame;
     // Used to ask for current constraining rect on movement
     NSWindow *_associatedVoutWindow;
+
+    int _chaptersRetryTicks;
+    /* identité seule, jamais déréférencée (cf. -updateChapters) */
+    char *_chaptersUri;     /* identité du média, cf. -updateChapters */
 }
 
 @end
@@ -139,9 +144,15 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
     setupButton(_volumeSlider,
                 _NS("Volume"),
                 _NS("Adjust the volume"));
-    setupButton(_timeSlider,
-                _NS("Position"),
-                _NS("Adjust the current playback position"));
+    /* no static tooltip on the time slider: it shows the live
+     * time/chapter/preview tooltip on hover, like the main window bar */
+    [_timeSlider accessibilitySetOverrideValue:_NS("Position")
+                                  forAttribute:NSAccessibilityTitleAttribute];
+    [_timeSlider accessibilitySetOverrideValue:
+        _NS("Adjust the current playback position")
+                                  forAttribute:NSAccessibilityDescriptionAttribute];
+    [_timeSlider setSliderStyleDark];
+    [_timeSlider setHoverDelegate:self];
 
     /* Setup other controls */
     [_volumeSlider setMaxValue:[[VLCCoreInteraction sharedInstance] maxVolume]];
@@ -153,6 +164,146 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
      * so the state is shared between those.
      */
     [_remainingOrTotalTime setRemainingIdentifier:@"DisplayTimeAsTimeRemaining"];
+
+    /* chapter separators on the seek bar, refetched with the input and on
+     * title/chapter changes (parity with the main window bar and the Qt
+     * fullscreen controller) */
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    [center addObserver:self
+               selector:@selector(fsChaptersPossiblyChanged:)
+                   name:VLCInputChangedNotification
+                 object:nil];
+    [center addObserver:self
+               selector:@selector(fsChaptersPossiblyChanged:)
+                   name:VLCInputTitleChangedNotification
+                 object:nil];
+    /* the clip creation mode drives this seek bar exactly like the one of
+     * the windowed controls: two knobs for the bounds, a marker for the
+     * playback position */
+    [center addObserver:self
+               selector:@selector(clipCreationModeChanged:)
+                   name:VLCClipCreationModeChangedNotification
+                 object:nil];
+    [self updateChapters];
+    [self syncClipCreationMode];
+}
+
+#pragma mark -
+#pragma mark Clip creation mode (same behaviour as the windowed controls)
+
+- (void)clipCreationModeChanged:(NSNotification *)aNotification
+{
+    [self syncClipCreationMode];
+}
+
+- (void)syncClipCreationMode
+{
+    VLCCoreInteraction *coreInteraction = [VLCCoreInteraction sharedInstance];
+    if ([coreInteraction clipCreationMode]) {
+        [_timeSlider setClipEndValue:[coreInteraction clipEndPosition] * 10000.];
+        [_timeSlider setFloatValue:(float)([coreInteraction clipStartPosition] * 10000.)];
+        [_timeSlider setPlaybackMarkerValue:[coreInteraction clipStartPosition] * 10000.];
+        [_timeSlider setClipKnobsActive:YES];
+    } else {
+        [_timeSlider setClipKnobsActive:NO];
+        [self updatePositionAndTime];
+    }
+}
+
+- (void)fsChaptersPossiblyChanged:(NSNotification *)aNotification
+{
+    [self updateChapters];
+}
+
+/* same INPUT_GET_TITLE_INFO rules as VLCControlsBarCommon: only usable
+ * when the seekpoints carry time offsets */
+- (void)updateChapters
+{
+    NSArray *fractions = nil;
+    NSArray *names = nil;
+
+    input_thread_t *p_input = pl_CurrentInput(getIntf());
+    if (p_input) {
+        vlc_tick_t duration = input_item_GetDuration(input_GetItem(p_input));
+        input_title_t *p_title = NULL;
+        int i_title_id = -1;
+        if (duration > 0
+            && input_Control(p_input, INPUT_GET_TITLE_INFO, &p_title, &i_title_id)
+               == VLC_SUCCESS && p_title) {
+            if (p_title->i_seekpoint > 1
+                && p_title->seekpoint[p_title->i_seekpoint - 1]->i_time_offset > 0) {
+                NSMutableArray *mutableFractions =
+                    [NSMutableArray arrayWithCapacity:p_title->i_seekpoint];
+                NSMutableArray *mutableNames =
+                    [NSMutableArray arrayWithCapacity:p_title->i_seekpoint];
+                for (int i = 0; i < p_title->i_seekpoint; i++) {
+                    seekpoint_t *point = p_title->seekpoint[i];
+                    [mutableFractions addObject:
+                        [NSNumber numberWithDouble:
+                            (double)point->i_time_offset / (double)duration]];
+                    /* cf. VLCControlsBarCommon : nommer les chapitres
+                     * anonymes plutôt que de laisser le survol vide */
+                    [mutableNames addObject:
+                        (point->psz_name != NULL && *point->psz_name != '\0')
+                        ? toNSStr(point->psz_name)
+                        : [NSString stringWithFormat:_NS("Chapter %i"), i + 1]];
+                }
+                fractions = mutableFractions;
+                names = mutableNames;
+            }
+            vlc_input_title_Delete(p_title);
+        } else if (p_title) {
+            vlc_input_title_Delete(p_title);
+        }
+        vlc_object_release(p_input);
+    }
+
+    /* même garde que VLCControlsBarCommon : un résultat vide sur la MÊME
+     * entrée veut dire « pas maintenant » (la durée d'un DVD retombe
+     * transitoirement à zéro), surtout pas « il n'y a plus de chapitres » */
+    /* ⚠⚠⚠ Identifier le média par son URI et non par le pointeur d'entrée :
+     * un `input_thread_t` neuf retombe souvent à l'adresse de celui qu'on
+     * vient de fermer, si bien que deux fichiers successifs passaient pour le
+     * même — et la garde ci-dessous laissait alors les marqueurs du PRÉCÉDENT
+     * sur un fichier sans chapitres. */
+    char *psz_uri = NULL;
+    if (p_input != NULL) {
+        input_item_t *p_item = input_GetItem(p_input);
+        if (p_item != NULL)
+            psz_uri = input_item_GetURI(p_item);
+    }
+    BOOL sameMedia = (psz_uri != NULL && _chaptersUri != NULL
+                      && strcmp(psz_uri, _chaptersUri) == 0);
+    if (!sameMedia) {
+        free(_chaptersUri);
+        _chaptersUri = psz_uri;
+        psz_uri = NULL;
+    }
+    free(psz_uri);
+
+    if (fractions == nil && sameMedia
+        && [_timeSlider chapterFractions] != nil)
+        return;
+
+    [_timeSlider setChapterFractions:fractions];
+    [_timeSlider setChapterNames:names];
+}
+
+#pragma mark -
+#pragma mark Hover thumbnails (delegate of the time slider)
+
+- (void)slider:(VLCSlider *)slider hoverThumbnailWantedAtFraction:(double)fraction
+{
+    [[VLCSeekThumbnailer sharedInstance] thumbnailAtFraction:fraction
+                                                  completion:^(NSImage *image, double f) {
+        if (image)
+            [slider setHoverThumbnail:image forFraction:f];
+    }];
+}
+
+- (void)sliderHoverEnded:(VLCSlider *)slider
+{
+    /* pending requests die of old age (generation counter) */
 }
 
 #undef setupButton
@@ -224,7 +375,30 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
 
     if (p_input) {
         vlc_value_t pos;
-        pos.f_float = [_timeSlider floatValue] / 10000.;
+        VLCCoreInteraction *coreInteraction = [VLCCoreInteraction sharedInstance];
+        if ([coreInteraction clipCreationMode]) {
+            /* both knobs define the clip bounds; moving either one seeks
+             * there so the user previews what the clip will contain
+             * (routing identical to VLCControlsBarCommon) */
+            [coreInteraction noteClipInteraction];
+            float f_updated;
+            NSInteger activeKnob = [_timeSlider activeClipKnob];
+            if (activeKnob == 2) {
+                f_updated = (float)[_timeSlider clipEndValue];
+                [coreInteraction setClipEndPosition:f_updated / 10000.];
+                [coreInteraction setClipSelectedKnob:2];
+            } else if (activeKnob == 3) {
+                /* scrub between the bounds: seek only, bounds untouched */
+                f_updated = (float)[_timeSlider playbackMarkerValue];
+            } else {
+                f_updated = [_timeSlider floatValue];
+                [coreInteraction setClipStartPosition:f_updated / 10000.];
+                [coreInteraction setClipSelectedKnob:1];
+            }
+            pos.f_float = f_updated / 10000.;
+        } else {
+            pos.f_float = [_timeSlider floatValue] / 10000.;
+        }
         var_Set(p_input, "position", pos);
         vlc_object_release(p_input);
     }
@@ -263,9 +437,18 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
     /* If nothing is playing, reset times and slider */
     if (!p_input) {
         [_timeSlider setFloatValue:0.0];
+        [_timeSlider setMediaDuration:0.];
         [_elapsedTime setStringValue:@""];
         [_remainingOrTotalTime setHidden:YES];
         return;
+    }
+
+    /* même rattrapage que VLCControlsBarCommon : les décalages temporels des
+     * points de chapitre d'un DVD arrivent APRÈS les deux notifications qui
+     * déclenchent -updateChapters, et la barre restait sans marqueur */
+    if ([_timeSlider chapterFractions] == nil && ++_chaptersRetryTicks >= 8) {
+        _chaptersRetryTicks = 0;
+        [self updateChapters];
     }
 
     vlc_value_t pos;
@@ -273,11 +456,25 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
 
     var_Get(p_input, "position", &pos);
     float f_updated = 10000. * pos.f_float;
-    [_timeSlider setFloatValue:f_updated];
+    VLCCoreInteraction *coreInteraction = [VLCCoreInteraction sharedInstance];
+    if ([coreInteraction clipCreationMode]) {
+        /* the knobs hold the clip bounds; only the thin marker follows
+         * the playback position */
+        [_timeSlider setPlaybackMarkerValue:f_updated];
+        [_timeSlider setFloatValue:(float)([coreInteraction clipStartPosition] * 10000.)];
+        [_timeSlider setClipEndValue:[coreInteraction clipEndPosition] * 10000.];
+    } else {
+        [_timeSlider setFloatValue:f_updated];
+    }
 
 
     int64_t t = var_GetInteger(p_input, "time");
     vlc_tick_t dur = input_item_GetDuration(input_GetItem(p_input));
+
+    /* the hover tooltip needs the duration to turn a position into a time:
+     * without it the slider shows nothing at all (parity with the main
+     * window controls bar) */
+    [_timeSlider setMediaDuration:(dur > 0 ? (double)dur / CLOCK_FREQ : 0.)];
 
     /* Update total duration (right field) */
     if (dur <= 0) {
@@ -349,6 +546,9 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
 
 - (void)fadeOut
 {
+    /* the seek tooltip is a window of its own: it would survive the panel
+     * fading away under the mouse */
+    [_timeSlider hideHoverTooltip];
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext * _Nonnull context) {
         [context setDuration:0.4f];
         [[self.window animator] setAlphaValue:0.0f];
@@ -394,6 +594,7 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
 
 - (void)setNonActive
 {
+    [_timeSlider hideHoverTooltip];
     [self.window orderOut:self];
 }
 

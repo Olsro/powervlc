@@ -444,6 +444,15 @@ static const luaL_Reg vlclua_misc_info_reg[] = {
      * a sane size before handing it to a dialog. */
     { "image_scale", vlclua_image_scale },
 
+    /* Reading the clock acts on nothing. An extension that moves bytes --
+     * a download -- has otherwise no way to tell the user how fast it is
+     * going, nor to say where its own time went: os.time() answers in
+     * whole seconds and os.clock() counts CPU, which is precisely the
+     * part that is NOT spent when the wait is a socket or the interface
+     * thread. mwait() stays out: sleeping the thread that drives the
+     * dialog is not a script's business. */
+    { "mdate", vlclua_mdate },
+
     { NULL, NULL }
 };
 

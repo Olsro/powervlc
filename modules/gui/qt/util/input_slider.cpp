@@ -31,6 +31,7 @@
 
 #include "util/input_slider.hpp"
 #include "util/timetooltip.hpp"
+#include "util/seek_thumbnailer.hpp"
 #include "adapters/seekpoints.hpp"
 #include "input_manager.hpp"
 #include "imagehelper.hpp"
@@ -39,6 +40,9 @@
 
 #include <QPaintEvent>
 #include <QPainter>
+#include <QPainterPath>
+#include <QPixmap>
+#include <QImage>
 #include <QBitmap>
 #include <QStyleOptionSlider>
 #include <QLinearGradient>
@@ -77,6 +81,14 @@ SeekSlider::SeekSlider( intf_thread_t *p_intf, Qt::Orientation q, QWidget *_pare
     mHandleLength = -1;
     b_seekable = true;
     alternativeStyle = NULL;
+    b_clipMode = false;
+    activeClipKnob = 0;
+    f_clipMarker = 0.f;
+    b_clipPreviewPending = false;
+    f_clipPreviewFraction = 0.f;
+    clipPreviewTimer = new QTimer( this );
+    clipPreviewTimer->setSingleShot( true );
+    hoverFraction = -1.;
 
     // prepare some static colors
     QPalette p = palette();
@@ -115,6 +127,16 @@ SeekSlider::SeekSlider( intf_thread_t *p_intf, Qt::Orientation q, QWidget *_pare
     /* Tooltip bubble */
     mTimeTooltip = new TimeTooltip( NULL );
     mTimeTooltip->setMouseTracking( true );
+
+    /* Preview of the hovered position, decoded by a second input. Asked for
+     * only once the mouse has settled: sweeping the bar would otherwise
+     * queue a decode per pixel, and on the machines this fork exists for
+     * that decode is taken out of the playback. Shared with the other seek
+     * bar of the interface -- one worker, one cache. */
+    thumbnailer = SeekThumbnailer::acquire( p_intf );
+    thumbnailTimer = new QTimer( this );
+    thumbnailTimer->setSingleShot( true );
+    thumbnailTimer->setInterval( 500 );
 
     /* Properties */
     setRange( MIN_SLIDER_VALUE, MAX_SLIDER_VALUE );
@@ -170,6 +192,10 @@ SeekSlider::SeekSlider( intf_thread_t *p_intf, Qt::Orientation q, QWidget *_pare
     connect( seekLimitTimer, &QTimer::timeout, this, &SeekSlider::updatePos );
     connect( hideHandleTimer, &QTimer::timeout, this, &SeekSlider::hideHandle );
     connect( startAnimLoadingTimer, &QTimer::timeout, this, &SeekSlider::startAnimLoading );
+    connect( thumbnailTimer, &QTimer::timeout, this, &SeekSlider::requestHoverThumbnail );
+    connect( clipPreviewTimer, &QTimer::timeout, this, &SeekSlider::clipPreviewTimeout );
+    connect( thumbnailer, &SeekThumbnailer::thumbnailReady,
+             this, &SeekSlider::hoverThumbnailReady );
     mTimeTooltip->installEventFilter( this );
 
     connect(&wheelEventConverter, &WheelToVLCConverter::vlcWheelKey, this, [this](int vlcButton){
@@ -200,6 +226,13 @@ SeekSlider::SeekSlider( intf_thread_t *p_intf, Qt::Orientation q, QWidget *_pare
 
 SeekSlider::~SeekSlider()
 {
+    /* Explicitly, and first. The thumbnailer is shared, so this only ends
+     * the worker thread when the other seek bar has gone too -- and then it
+     * joins it, which has to happen while the interface it decodes with is
+     * still whole. Disconnect first: nothing should be delivered to a slider
+     * that is being destroyed. */
+    disconnect( thumbnailer, 0, this, 0 );
+    SeekThumbnailer::release( thumbnailer );
     delete chapters;
     if ( alternativeStyle )
         delete alternativeStyle;
@@ -239,7 +272,16 @@ void SeekSlider::setPosition( float pos, int64_t time, int length )
     else
         setEnabled( true );
 
-    if( !isSliding )
+    if( b_clipMode )
+    {
+        /* the handles hold the clip bounds; only the thin marker follows
+         * the playback position */
+        f_clipMarker = pos;
+        if( !isSliding )
+            setValue( THEMIM->getIM()->clipStartPosition() * maximum() );
+        update();
+    }
+    else if( !isSliding )
     {
         setValue( pos * static_cast<float>( maximum() ) );
         if ( animLoading != NULL && pos >= 0.0f && animLoading->state() != QAbstractAnimation::Stopped )
@@ -295,6 +337,20 @@ void SeekSlider::processReleasedButton()
 {
     if ( !isSliding && !isJumping ) return;
     isSliding = false;
+    if ( b_clipMode )
+    {
+        /* every knob step already seeked; make sure the last one, which
+         * the pacing may still be holding, lands on screen */
+        activeClipKnob = 0;
+        seekLimitTimer->stop();
+        clipPreviewTimer->stop();
+        if( b_clipPreviewPending )
+        {
+            b_clipPreviewPending = false;
+            emit sliderDragged( f_clipPreviewFraction );
+        }
+        return;
+    }
     bool b_seekPending = seekLimitTimer->isActive();
     seekLimitTimer->stop(); /* We're not sliding anymore: only last seek on release */
     if ( isJumping )
@@ -317,6 +373,110 @@ void SeekSlider::mouseReleaseEvent( QMouseEvent *event )
     processReleasedButton();
 }
 
+/* PowerVLC clip creation mode */
+
+void SeekSlider::updateClipCreationMode()
+{
+    InputManager *im = THEMIM->getIM();
+    b_clipMode = im->clipCreationMode();
+    activeClipKnob = 0;
+    if( b_clipMode )
+    {
+        setValue( im->clipStartPosition() * maximum() );
+        f_clipMarker = (float)im->clipStartPosition();
+    }
+    update();
+}
+
+/* One knob interaction step (press or drag). On the knobs: drag that
+ * bound. Strictly between them: plain seek (scrub), bounds untouched.
+ * Outside the range: pull the nearest bound. Every step seeks so the
+ * user previews what the clip will contain. */
+void SeekSlider::clipKnobInteract( int xPos )
+{
+    InputManager *im = THEMIM->getIM();
+    float fraction = getValuePercentageFromXPos( xPos );
+
+    if( activeClipKnob == 0 )
+    {
+        int margin = handleLength() / 2;
+        int width = size().width() - 2 * margin;
+        int xStart = margin + im->clipStartPosition() * width;
+        int xEnd = margin + im->clipEndPosition() * width;
+        /* each bound is grabbed by its OUTER side (plus a couple of pixels
+         * of slop inwards), and the midpoint between the two bounds always
+         * splits them: a handle sitting next to the other one can still be
+         * picked on its own side, however close they are */
+        int grab = qMax( handleLength() / 2, 4 );
+        const int slop = 2;
+        int middle = ( xStart + xEnd ) / 2;
+        int startInner = qMin( xStart + slop, middle );
+        int endInner = qMax( xEnd - slop, middle );
+        if( xPos >= xStart - grab && xPos <= startInner )
+            activeClipKnob = 1;
+        else if( xPos >= endInner && xPos <= xEnd + grab )
+            activeClipKnob = 2;
+        else if( xPos > xStart && xPos < xEnd )
+            activeClipKnob = 3;
+        else
+            activeClipKnob = ( xPos <= xStart ) ? 1 : 2;
+    }
+
+    im->noteClipInteraction();
+    switch( activeClipKnob )
+    {
+    case 1:
+        if( fraction > im->clipEndPosition() )
+            fraction = im->clipEndPosition();
+        im->setClipStartPosition( fraction );
+        im->setClipSelectedKnob( 1 ); /* the frame-step shortcuts follow */
+        setValue( fraction * maximum() );
+        break;
+    case 2:
+        if( fraction < im->clipStartPosition() )
+            fraction = im->clipStartPosition();
+        im->setClipEndPosition( fraction );
+        im->setClipSelectedKnob( 2 );
+        break;
+    default: /* scrub, clamped to the clip */
+        fraction = qBound( (float)im->clipStartPosition(), fraction,
+                           (float)im->clipEndPosition() );
+        break;
+    }
+    f_clipMarker = fraction;
+    clipSeekPreview( fraction ); /* seek, for an instant preview */
+    update();
+}
+
+/* The knob follows the mouse at full rate, the preview seek behind it is
+ * PACED -- but never dropped. A seek is not free (an accurate one decodes
+ * from the preceding key frame), so firing one per mouse event just queues
+ * positions that are already stale when they are served, and the picture
+ * trails the handle. One every 100 ms then, with a TRAILING one: a single
+ * pixel nudge, which frame-accurate trimming is made of, still gets
+ * previewed even though no further event follows it. */
+void SeekSlider::clipSeekPreview( float fraction )
+{
+    f_clipPreviewFraction = fraction;
+    if( clipPreviewTimer->isActive() )
+    {
+        b_clipPreviewPending = true;
+        return;
+    }
+    b_clipPreviewPending = false;
+    emit sliderDragged( fraction );
+    clipPreviewTimer->start( 100 );
+}
+
+void SeekSlider::clipPreviewTimeout()
+{
+    if( !b_clipPreviewPending )
+        return;
+    b_clipPreviewPending = false;
+    emit sliderDragged( f_clipPreviewFraction );
+    clipPreviewTimer->start( 100 );
+}
+
 void SeekSlider::mousePressEvent( QMouseEvent* event )
 {
     /* Right-click */
@@ -325,6 +485,15 @@ void SeekSlider::mousePressEvent( QMouseEvent* event )
        )
     {
         QSlider::mousePressEvent( event );
+        return;
+    }
+
+    if( b_clipMode )
+    {
+        isSliding = true;
+        activeClipKnob = 0;
+        clipKnobInteract( event->x() );
+        event->accept();
         return;
     }
 
@@ -385,8 +554,13 @@ void SeekSlider::mouseMoveEvent( QMouseEvent *event )
 
     if( isSliding )
     {
-        setValue( getValueFromXPos( event->x() ) );
-        emit sliderMoved( value() );
+        if( b_clipMode )
+            clipKnobInteract( event->x() );
+        else
+        {
+            setValue( getValueFromXPos( event->x() ) );
+            emit sliderMoved( value() );
+        }
     }
 
     /* Tooltip */
@@ -413,6 +587,27 @@ void SeekSlider::mouseMoveEvent( QMouseEvent *event )
             }
         }
 
+        /* PowerVLC: hovering anywhere between the two bounds also tells how
+         * long the clip currently is -- what the trimming is actually for,
+         * and what the mac interfaces show (VLCSlider, _NS("Clip:")). */
+        if ( b_clipMode )
+        {
+            InputManager *im = THEMIM->getIM();
+            float f_hovered = getValuePercentageFromXPos( event->x() );
+            if ( f_hovered >= im->clipStartPosition()
+              && f_hovered <= im->clipEndPosition() )
+            {
+                char psz_clip[MSTRTIME_MAX_SIZE];
+                secstotimestr( psz_clip,
+                    ( im->clipEndPosition() - im->clipStartPosition() )
+                    * inputLength );
+                if ( !chapterLabel.isEmpty() )
+                    chapterLabel += " — ";
+                chapterLabel += qtr( "Clip:" ) + QString( " " )
+                              + qfu( psz_clip );
+            }
+        }
+
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
         const auto pos = event->globalPosition();
 #else
@@ -422,14 +617,75 @@ void SeekSlider::mouseMoveEvent( QMouseEvent *event )
                 QWidget::mapToGlobal( QPoint( 0, 0 ) ).y() );
         if( likely( size().width() > handleLength() ) ) {
             secstotimestr( psz_length, getValuePercentageFromXPos( event->x() ) * inputLength );
+            hoverFraction = getValuePercentageFromXPos( event->x() );
+            updateHoverPreview();
             mTimeTooltip->setTip( target, psz_length, chapterLabel );
         }
     }
     event->accept();
 }
 
+/* PowerVLC. Show the preview of the position now under the mouse: from the
+ * cache when it is there, otherwise nothing (rather than the previous
+ * position's image, which would be a lie) and a request once the mouse has
+ * stopped moving for a moment. */
+void SeekSlider::updateHoverPreview()
+{
+    QPixmap preview;
+
+    /* Read every time: turning the preference off mid-film has to take the
+     * images away at once, cached ones included -- someone turning it off
+     * is someone whose machine is struggling with it. */
+    if( !var_InheritBool( p_intf, "qt-hover-thumbnails" ) )
+    {
+        thumbnailTimer->stop();
+        mTimeTooltip->setPreview( QPixmap() );
+        return;
+    }
+
+    if( thumbnailer->cachedThumbnail( hoverFraction, preview ) )
+    {
+        thumbnailTimer->stop();
+        mTimeTooltip->setPreview( preview );
+        return;
+    }
+
+    mTimeTooltip->setPreview( QPixmap() );
+    thumbnailTimer->start();
+}
+
+void SeekSlider::requestHoverThumbnail()
+{
+    /* the mouse left, or the tooltip went away, while we were waiting */
+    if( hoverFraction < 0. || !mTimeTooltip->isVisible() )
+        return;
+
+    thumbnailer->requestThumbnail( hoverFraction );
+}
+
+void SeekSlider::hoverThumbnailReady( const QImage &image, double fraction )
+{
+    /* A decode takes as long as it takes: by now the mouse may be somewhere
+     * else entirely, and the image belongs to the position it was asked
+     * for. The cache keeps it for when that position is hovered again. */
+    if( hoverFraction < 0. || !mTimeTooltip->isVisible() || image.isNull() )
+        return;
+
+    QPixmap current;
+    if( thumbnailer->cachedThumbnail( hoverFraction, current ) )
+        mTimeTooltip->setPreview( current );
+    else if( qAbs( fraction - hoverFraction ) < 0.0005 )
+        mTimeTooltip->setPreview( QPixmap::fromImage( image ) );
+}
+
 void SeekSlider::wheelEvent( QWheelEvent *event )
 {
+    /* scrolling would silently move the clip start bound */
+    if( b_clipMode )
+    {
+        event->accept();
+        return;
+    }
     /* Don't do anything if we are for somehow reason sliding */
     if( !isSliding && isEnabled() )
         wheelEventConverter.wheelEvent(event);
@@ -469,6 +725,11 @@ void SeekSlider::leaveEvent( QEvent * )
       ( !isActiveWindow() && !mTimeTooltip->isActiveWindow() ) )
     {
         mTimeTooltip->hide();
+        /* nothing is hovered any more: drop the pending preview request
+         * and the image, so the next hover starts from its own position */
+        hoverFraction = -1.;
+        thumbnailTimer->stop();
+        mTimeTooltip->setPreview( QPixmap() );
     }
 }
 
@@ -485,9 +746,18 @@ void SeekSlider::paintEvent( QPaintEvent *ev )
         option.length = inputLength;
         option.animate = ( animHandle->state() == QAbstractAnimation::Running
                            || hideHandleTimer->isActive() );
-        option.animationopacity = mHandleOpacity;
+        /* in clip creation mode the two bounds ARE the handles: hide the
+         * style's own one instead of stacking a third circle on the start
+         * bound (SeekStyle applies this opacity to the handle+shadow) */
+        option.animationopacity = b_clipMode ? 0.0 : mHandleOpacity;
         option.animationloading = mLoading;
-        option.sliderPosition = sliderPosition();
+        /* The filled part of the bar means "the clip", not "played": in
+         * clip mode the slider value holds the START bound, so letting the
+         * style fill [0..start] painted everything BEFORE the clip solid
+         * blue -- the exact opposite of what it says. The range itself is
+         * filled by paintClipExtras() below, as the two macOS interfaces
+         * do (VLCSliderCell fills [start..end] there). */
+        option.sliderPosition = b_clipMode ? minimum() : sliderPosition();
         option.sliderValue = value();
         option.maximum = maximum();
         option.minimum = minimum();
@@ -495,14 +765,79 @@ void SeekSlider::paintEvent( QPaintEvent *ev )
             option.points << point.time;
         QPainter painter( this );
         style()->drawComplexControl( QStyle::CC_Slider, &option, &painter, this );
+        if( b_clipMode )
+            paintClipExtras( painter );
     }
     else
+    {
         QSlider::paintEvent( ev );
+        if( b_clipMode )
+        {
+            QPainter painter( this );
+            paintClipExtras( painter );
+        }
+    }
+}
+
+/* Clip creation mode: highlight the [start..end] range, draw the second
+ * (end bound) handle and a thin marker on the playback position. */
+void SeekSlider::paintClipExtras( QPainter &painter )
+{
+    InputManager *im = THEMIM->getIM();
+    int margin = handleLength() / 2;
+    int width = size().width() - 2 * margin;
+    if( width <= 0 )
+        return;
+
+    int xStart = margin + im->clipStartPosition() * width;
+    int xEnd = margin + im->clipEndPosition() * width;
+    int xMarker = margin + f_clipMarker * width;
+    int h = height();
+
+    painter.setRenderHint( QPainter::Antialiasing, true );
+
+    /* range highlight */
+    QColor rangeColor( 50, 156, 255, 70 );
+    painter.fillRect( QRect( xStart, h / 2 - 3, qMax( xEnd - xStart, 1 ), 6 ),
+                      rangeColor );
+
+    /* playback marker */
+    painter.fillRect( QRect( xMarker - 1, 2, 2, h - 4 ),
+                      QColor( 50, 156, 255 ) );
+
+    /* Both bounds are drawn as HALF discs pointing away from the clip: the
+     * flat edge sits exactly on the bound, and two bounds sitting next to
+     * each other never cover one another (which is also what the grab
+     * areas in clipKnobInteract() assume). Same shape as the two macOS
+     * interfaces. */
+    int diameter = qBound( 8, h - 6, 14 );
+    qreal radius = diameter / 2.0;
+    qreal cy = h / 2.0;
+    painter.setPen( QPen( palette().shadow().color(), 0.5 ) );
+    painter.setBrush( palette().base() );
+
+    QPainterPath startKnob;
+    startKnob.moveTo( xStart, cy - radius );
+    /* left half: 90 deg -> 270 deg counterclockwise, then the flat edge */
+    startKnob.arcTo( QRectF( xStart - radius, cy - radius,
+                             diameter, diameter ), 90, 180 );
+    startKnob.closeSubpath();
+    painter.drawPath( startKnob );
+
+    QPainterPath endKnob;
+    endKnob.moveTo( xEnd, cy + radius );
+    endKnob.arcTo( QRectF( xEnd - radius, cy - radius,
+                           diameter, diameter ), 270, 180 );
+    endKnob.closeSubpath();
+    painter.drawPath( endKnob );
 }
 
 void SeekSlider::hideEvent( QHideEvent * )
 {
     mTimeTooltip->hide();
+    hoverFraction = -1.;
+    thumbnailTimer->stop();
+    mTimeTooltip->setPreview( QPixmap() );
 }
 
 bool SeekSlider::eventFilter( QObject *obj, QEvent *event )
@@ -517,10 +852,25 @@ bool SeekSlider::eventFilter( QObject *obj, QEvent *event )
                 return false;
         }
 
+        /* PowerVLC: same escape for a Leave. The tooltip is laid out around
+         * the pointer, tip included, so growing it to hold a preview puts
+         * the pointer inside it and the next move takes the pointer back
+         * out -- a Leave Qt works out from the geometry, whatever the
+         * window's empty input shape says. Before the preview the tooltip
+         * was a small box well above the seek bar and this never happened;
+         * with it, every hover that followed a displayed preview was
+         * cancelled here, one preview in two. */
+        if( event->type() == QEvent::Leave &&
+            rect().contains( mapFromGlobal( QCursor::pos() ) ) )
+            return false;
+
         if( event->type() == QEvent::Leave ||
             event->type() == QEvent::MouseMove )
         {
             mTimeTooltip->hide();
+            hoverFraction = -1.;
+            thumbnailTimer->stop();
+            mTimeTooltip->setPreview( QPixmap() );
         }
 
         return false;

@@ -1539,6 +1539,15 @@ void vout_SendDisplayEventMouse(vout_thread_t *vout, const vlc_mouse_t *m)
                 vout_SendEventMouseReleased(vout, button);
         }
     }
+    /* PowerVLC: a left drag on the picture moves the window, see
+     * vout_RelayVideoDrag(). ⚠ Deliberately NOT under vlc_mouse_HasMoved()
+     * above: the window follows the pointer, so the pointer hardly moves
+     * RELATIVE TO THE PICTURE -- which is the only thing that filter can
+     * see -- and most steps of a drag would be dropped as "did not move".
+     * Coordinates in picture pixels would be just as useless to the
+     * interface: only the phase travels. */
+    if (m->i_pressed & (1 << MOUSE_BUTTON_LEFT))
+        vout_RelayVideoDrag(vout, VOUT_VIDEO_DRAG_MOVED);
     if (m->b_double_click)
         vout_SendEventMouseDoubleClick(vout);
     vout->p->mouse = *m;

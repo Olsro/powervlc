@@ -759,6 +759,28 @@ ResizeFormatToGLMaxTexSize(video_format_t *fmt, unsigned int max_tex_size)
     }
 }
 
+bool vout_display_opengl_IsSoftware(vlc_gl_t *gl)
+{
+    PFNGLGETSTRINGPROC GetStringFn = vlc_gl_GetProcAddress(gl, "glGetString");
+    if (GetStringFn == NULL)
+        return false; /* cannot tell: assume hardware, i.e. do not interfere */
+
+    const char *renderer = (const char *)GetStringFn(GL_RENDERER);
+    if (renderer == NULL)
+        return false;
+
+    /* Mesa's software rasterisers. llvmpipe reports e.g.
+     * "llvmpipe (LLVM 19.1.7, 128 bits)"; softpipe and swrast name themselves
+     * likewise. No hardware driver advertises these names, so a substring
+     * match is safe and survives version churn. */
+    static const char *const soft[] = { "llvmpipe", "softpipe", "swrast" };
+    for (size_t i = 0; i < sizeof (soft) / sizeof (soft[0]); i++)
+        if (strstr(renderer, soft[i]) != NULL)
+            return true;
+
+    return false;
+}
+
 vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
                                                const vlc_fourcc_t **subpicture_chromas,
                                                vlc_gl_t *gl,

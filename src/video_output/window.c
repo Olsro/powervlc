@@ -76,10 +76,16 @@ vout_window_t *vout_window_New(vlc_object_t *obj, const char *module,
         return NULL;
     }
 
-    /* Hook for screensaver inhibition */
+    /* Hook for screensaver inhibition.
+     * NSOBJECT is included for the legacy Mac OS X interface (10.2-10.5),
+     * which has no IOPMAssertion to hold: there the "inhibit" module
+     * darwin_legacy pokes UpdateSystemActivity() instead. On 10.6+ that
+     * module is not built and the modern interface does the job itself, so
+     * vlc_inhibit_Create() simply finds nothing there. */
     if (var_InheritBool(obj, "disable-screensaver") &&
         (window->type == VOUT_WINDOW_TYPE_XID || window->type == VOUT_WINDOW_TYPE_HWND
-      || window->type == VOUT_WINDOW_TYPE_WAYLAND))
+      || window->type == VOUT_WINDOW_TYPE_WAYLAND
+      || window->type == VOUT_WINDOW_TYPE_NSOBJECT))
     {
         w->inhibit = vlc_inhibit_Create(VLC_OBJECT (window));
         if (w->inhibit != NULL)

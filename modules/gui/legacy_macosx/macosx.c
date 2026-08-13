@@ -115,6 +115,32 @@ vlc_module_begin ()
               N_("With this option enabled, the playback will be "
                  "automatically paused when minimizing the window."),
               false )
+    add_bool( "legacy-macosx-hide-controls", false,
+              N_("Hide controls during playback"),
+              N_("In windowed playback, hide the controls bar and the "
+                 "window title bar after a few seconds once the mouse has "
+                 "left the window, leaving only the video. Double-click "
+                 "the video to bring them back; keyboard shortcuts keep "
+                 "working and show the fullscreen-style OSD meanwhile."),
+              false )
+    /* The preview costs a full secondary decode. Measured on the iBook
+     * G3 600 MHz: ~3-4 s alone and ~10 s during playback, with the
+     * playback visibly stuttering meanwhile — every PowerPC build
+     * therefore ships with it off; the checkbox in the interface
+     * preferences turns it back on. */
+#if defined(__ppc__) || defined(__ppc64__) || defined(__POWERPC__)
+# define HOVER_THUMBNAILS_DEFAULT false
+#else
+# define HOVER_THUMBNAILS_DEFAULT true
+#endif
+    add_bool( "legacy-macosx-hover-thumbnails", HOVER_THUMBNAILS_DEFAULT,
+              N_("Show a preview image when hovering the seek bar"),
+              N_("Render a small preview of the hovered position in the "
+                 "seek bar tooltip. The preview is decoded by a second, "
+                 "silent input: on slow machines it can take several "
+                 "seconds to appear and steal cycles from the playback; "
+                 "disable it there."),
+              false )
     add_integer( "legacy-macosx-vdev", 0,
               N_("Video device"),
               N_("Number of the screen to use by default to display videos "

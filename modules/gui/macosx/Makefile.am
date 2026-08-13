@@ -54,6 +54,7 @@ libmacosx_plugin_la_SOURCES = \
 	gui/macosx/iTunes.h \
 	gui/macosx/VLCKeyboardBacklightControl.h gui/macosx/VLCKeyboardBacklightControl.m \
 	gui/macosx/macosx.m \
+	gui/macosx/VLCCustomCropArWindowController.h gui/macosx/VLCCustomCropArWindowController.m \
 	gui/macosx/VLCMainMenu.h gui/macosx/VLCMainMenu.m \
 	gui/macosx/VLCMainWindowTitleView.h gui/macosx/VLCMainWindowTitleView.m \
 	gui/macosx/misc.h gui/macosx/misc.m \
@@ -121,6 +122,7 @@ libmacosx_plugin_la_SOURCES = \
 	gui/macosx/VLCTintedImageButtonCell.h gui/macosx/VLCTintedImageButtonCell.m \
 	gui/macosx/VLCTimeField.h gui/macosx/VLCTimeField.m \
 	gui/macosx/VLCHexNumberFormatter.h gui/macosx/VLCHexNumberFormatter.m \
+	gui/macosx/VLCSeekThumbnailer.h gui/macosx/VLCSeekThumbnailer.m \
 	gui/macosx/VLCSlider.h gui/macosx/VLCSlider.m \
 	gui/macosx/VLCSliderCell.h gui/macosx/VLCSliderCell.m \
 	gui/macosx/VLCVolumeSlider.h gui/macosx/VLCVolumeSlider.m \

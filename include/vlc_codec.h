@@ -198,6 +198,29 @@ struct decoder_t
 
     /* Private structure for the owner of the decoder */
     decoder_owner_sys_t *p_owner;
+
+    /**
+     * Minimum lead this decoder needs between being handed a block and the
+     * moment the picture it produces has to be on screen, or 0 for none.
+     *
+     * The core normally sizes that lead from the access alone (--file-caching
+     * and friends), which assumes decoding is near-instant. A hardware
+     * decoder can break that assumption badly: the Crystal HD returns its
+     * pictures in batches of about 32 frames, so a picture can surface more
+     * than a second after its block went in, and every frame at the head of a
+     * batch then misses its display date. Set this from the module's Open()
+     * to the decoder's own worst-case latency, plus what the video output
+     * needs to smooth it; the core takes it as a floor on the input's
+     * pts_delay and never lowers a larger one the access already asked for.
+     *
+     * ⚠ Deliberately LAST in the structure. Every codec and packetizer
+     * compiles against this layout, so a field inserted higher up silently
+     * shifts everything below it for any plugin not rebuilt in the same
+     * pass -- which is exactly what a partial rebuild produces. Adding at
+     * the end keeps such a mix merely incomplete instead of corrupt. New
+     * fields belong here too.
+     */
+    vlc_tick_t      i_min_pts_delay;
 };
 
 /* struct for packetizer get_cc polling/decoder queue_cc

@@ -481,6 +481,13 @@
         </property>
        </widget>
       </item>
+      <item row="5" column="0" colspan="2">
+       <widget class="QCheckBox" name="hoverThumbnailsBox">
+        <property name="text">
+         <string>Show a preview image when hovering the seek bar</string>
+        </property>
+       </widget>
+      </item>
       <item row="0" column="0">
        <widget class="QCheckBox" name="OneInterfaceMode">
         <property name="text">

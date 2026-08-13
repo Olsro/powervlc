@@ -194,6 +194,11 @@ struct es_out_sys_t
 
     /* Record */
     sout_instance_t *p_sout_record;
+    /* Bounded recording (clip creation): the stop bound only starts
+     * counting once the demuxer has actually reached the clip, see
+     * ES_OUT_SET_TIMES */
+    vlc_tick_t  i_record_stop_armed_for;
+    bool        b_record_stop_armed;
 
     /* Used only to limit debugging output */
     int         i_prev_stream_level;
@@ -721,16 +726,7 @@ static int EsOutSetRecord(  es_out_t *out, bool b_record )
 
     if( b_record )
     {
-        char *psz_path = var_CreateGetNonEmptyString( p_input, "input-record-path" );
-        if( !psz_path )
-        {
-            if( var_CountChoices( p_input, "video-es" ) )
-                psz_path = config_GetUserDir( VLC_VIDEOS_DIR );
-            else if( var_CountChoices( p_input, "audio-es" ) )
-                psz_path = config_GetUserDir( VLC_MUSIC_DIR );
-            else
-                psz_path = config_GetUserDir( VLC_DOWNLOAD_DIR );
-        }
+        char *psz_path = input_RecordDirectory( p_input );
 
         char *psz_sout = NULL;  // TODO conf
 
@@ -742,7 +738,14 @@ static int EsOutSetRecord(  es_out_t *out, bool b_record )
                 char* psz_file_esc = config_StringEscape( psz_file );
                 if ( psz_file_esc )
                 {
-                    if( asprintf( &psz_sout, "#record{dst-prefix='%s'}", psz_file_esc ) < 0 )
+                    /* PowerVLC clip creation: pass the preferred start
+                     * bound so the capture starts at the last key frame
+                     * at or before it (see modules/stream_out/record.c) */
+                    vlc_tick_t i_record_start =
+                        var_GetInteger( p_input, "record-start-time" );
+                    if( asprintf( &psz_sout, "#record{dst-prefix='%s',"
+                                  "start-time=%"PRId64"}", psz_file_esc,
+                                  i_record_start > 0 ? i_record_start : 0 ) < 0 )
                         psz_sout = NULL;
                     free( psz_file_esc );
                 }
@@ -3949,6 +3952,51 @@ static int EsOutControlLocked( es_out_t *out, int i_query, va_list args )
         vlc_tick_t i_length = va_arg( args, vlc_tick_t );
 
         input_SendEventLength( p_sys->p_input, i_length );
+
+        /* Bounded recording (clip creation): the UI arms an absolute stop
+         * time (µs, same base as the "time" variable) in the
+         * "record-stop-time" input variable. The raw i_time received here
+         * is demux-paced, so recording ends when the DEMUXER crosses the
+         * bound -- stopping from the interface on the playback time would
+         * overshoot by the whole buffering lead. The var write goes through
+         * the regular "record" callback and control queue, which both
+         * updates the recording state and notifies the interfaces. */
+        if( input_priv(p_sys->p_input)->b_recording )
+        {
+            vlc_tick_t i_record_stop = var_GetInteger( p_sys->p_input,
+                                                       "record-stop-time" );
+            if( i_record_stop != p_sys->i_record_stop_armed_for )
+            {
+                p_sys->i_record_stop_armed_for = i_record_stop;
+                p_sys->b_record_stop_armed = false;
+            }
+            if( i_record_stop > 0 )
+            {
+                /* ⚠ The bound is meaningless until the demuxer has
+                 * reached the clip: arming a clip whose start lies
+                 * BEHIND the current position (the end knob was just
+                 * previewed, or the end-bound pause is holding there)
+                 * seeks backwards, and the first times reported after
+                 * that still carry the position the demuxer was at --
+                 * already past the bound, so the recording used to stop
+                 * on the spot, leaving a header-only file or none at
+                 * all. Wait for a time below the bound before letting it
+                 * fire. */
+                if( !p_sys->b_record_stop_armed )
+                {
+                    if( i_time < i_record_stop )
+                        p_sys->b_record_stop_armed = true;
+                }
+                else if( i_time >= i_record_stop )
+                    var_SetBool( p_sys->p_input, "record", false );
+            }
+        }
+        else if( p_sys->b_record_stop_armed
+              || p_sys->i_record_stop_armed_for != 0 )
+        {
+            p_sys->b_record_stop_armed = false;
+            p_sys->i_record_stop_armed_for = 0;
+        }
 
         if( !p_sys->b_buffering || p_sys->p_next_frame_es != NULL )
         {

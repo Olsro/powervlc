@@ -50,6 +50,22 @@
 @property (nonatomic, setter=setIndefinite:) BOOL indefinite;
 @property (nonatomic, setter=setKnobHidden:) BOOL isKnobHidden;
 
+/* Clip creation mode: a second knob marks the clip end position, the
+ * regular knob marks the clip start, and a thin vertical marker keeps
+ * showing the actual playback position on the track. Values use the
+ * same unit as the cell value (0..10000 for the time slider). */
+@property (nonatomic) BOOL clipKnobsActive;
+@property (nonatomic) double clipEndValue;
+@property (nonatomic) double playbackMarkerValue;
+/* 0 = none, 1 = start knob, 2 = end knob */
+@property (nonatomic) NSInteger activeClipKnob;
+
+/* chapter start positions (NSNumber, normalized 0..1), drawn as thin
+ * separators on the track like the Qt seek slider */
+@property (nonatomic, copy) NSArray *chapterFractions;
+
+- (NSRect)clipEndKnobRect;
+
 - (void)setSliderStyleLight;
 - (void)setSliderStyleDark;
 

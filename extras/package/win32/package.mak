@@ -80,6 +80,13 @@ package-win-common: package-win-install package-win-sdk
 # so there was no way to install the add-on on Basilisk and the other retro
 # browsers -- the very ones it exists for.
 	cp $(srcdir)/share/powervlc.xpi $(win32_destdir)
+
+# Root CA bundle, next to the executable for the same reason as the add-on
+# above: that is what config_GetDataDir() returns on Windows. gnutls loads it
+# IN ADDITION to the CryptoAPI store (see modules/misc/gnutls.c) -- Windows XP
+# has a perfectly readable trust store that simply stopped being updated, so
+# it knows nothing of ISRG Root X1 and much of today's HTTPS fails on it.
+	cp $(srcdir)/share/certs/ca-certificates.crt $(win32_destdir)
 	for plugindir in $(prefix)/lib/vlc/plugins/*/; do \
 		plugin_destdir="$(win32_destdir)/plugins/`basename $$plugindir`"; \
 		mkdir -p "$$plugin_destdir"; \

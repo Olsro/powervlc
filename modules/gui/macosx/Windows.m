@@ -30,6 +30,9 @@
 #import "CompatibilityFixes.h"
 #import "NSScreen+VLCAdditions.h"
 
+#import <vlc_playlist.h>
+#import <vlc_input.h>
+
 /*****************************************************************************
  * VLCWindow
  *
@@ -216,6 +219,18 @@
     BOOL b_video_view_was_hidden;
 
     NSRect frameBeforeLionFullscreen;
+
+    // "Hide controls during playback" state
+    NSTimer *o_autohide_controls_timer;     // 0.5 s poll, always on
+    int i_autohide_outside_ticks;           // mouse outside the window
+    int i_autohide_reveal_ticks;            // video gone
+    NSWindowStyleMask i_stylemask_before_hiding_controls;
+    BOOL _videoDragActive;                  // picture drag moves the window
+    NSRect o_frame_before_hiding_controls;  // full frame to restore
+    NSRect o_hidden_controls_initial_frame; // to keep drags across reveal
+    NSSize o_last_requested_video_size;     // to spot a plain restart
+    CGFloat f_last_video_zoom;              // to spot a zoom the user asked for
+    NSSize o_picture_box;                   // box a shape change fits in
 }
 
 - (void)customZoom:(id)sender;
@@ -255,6 +270,31 @@
     return self;
 }
 
+/* in clip creation mode the bare arrow keys nudge the selected clip
+ * bound by one frame, wherever the focus sits inside the window: the
+ * event otherwise dies on whatever first responder holds it (the video
+ * lives in a borderless child window that never becomes key, so the
+ * VLCVoutView keyDown path is unreachable in embedded playback) */
+- (void)keyDown:(NSEvent *)event
+{
+    if ([[VLCCoreInteraction sharedInstance] clipCreationMode]) {
+        NSString *characters = [event charactersIgnoringModifiers];
+        if ([characters length] == 1
+            && !([event modifierFlags]
+                 & (NSShiftKeyMask | NSControlKeyMask | NSAlternateKeyMask
+                    | NSCommandKeyMask))) {
+            unichar key = [characters characterAtIndex:0];
+            if (key == NSLeftArrowFunctionKey
+                || key == NSRightArrowFunctionKey) {
+                [[VLCCoreInteraction sharedInstance]
+                    clipStepFrames:(key == NSRightArrowFunctionKey ? 1 : -1)];
+                return;
+            }
+        }
+    }
+    [super keyDown:event];
+}
+
 - (void)awakeFromNib
 {
     BOOL b_nativeFullscreenMode = var_InheritBool(getIntf(), "macosx-nativefullscreenmode");
@@ -271,7 +311,37 @@
         self.titlebarView = nil;
     }
 
+    /* "Hide controls during playback": polled, exactly like the other
+     * two interfaces. A tracking area was tried first and lost hide
+     * cycles -- a mouse-exited event that never comes (a warped pointer,
+     * a window that changed under the cursor) leaves the machine with
+     * nothing to re-arm it, and the feature silently stops working until
+     * the mouse enters and leaves again. A half-second poll cannot miss
+     * a state, whatever order the video, the playlist view and the
+     * playback state settle in. */
+    o_autohide_controls_timer = [NSTimer
+        scheduledTimerWithTimeInterval:0.5
+                                target:self
+                              selector:@selector(autoHideControlsTick:)
+                              userInfo:nil
+                               repeats:YES];
+
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(revealControlsNotification:)
+               name:VLCRevealControlsNotification
+             object:nil];
+
     [super awakeFromNib];
+}
+
+- (void)dealloc
+{
+    if (o_autohide_controls_timer) {
+        [o_autohide_controls_timer invalidate];
+        o_autohide_controls_timer = nil;
+    }
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)setTitle:(NSString *)title
@@ -448,6 +518,16 @@
     NSSize windowMinSize = [self minSize];
     NSRect screenFrame = [[self screen] visibleFrame];
 
+    /* ⚠ Le chrome (barre de titre + barre de contrôles) est mesuré plus bas
+     * comme la DIFFÉRENCE entre la fenêtre et la vue vidéo : cela suppose que
+     * la vue vidéo a déjà la taille que ses contraintes lui donnent. Au tout
+     * premier vout d'une fenêtre détachée, Auto Layout n'a pas encore tourné
+     * sur le nib et la mesure sortait 22 pt trop grande : la fenêtre s'ouvrait
+     * d'autant trop haute et l'image, pourtant à l'échelle 1:1, se retrouvait
+     * avec deux bandes noires (11 pt en haut, 11 en bas) que ni l'amont ni
+     * l'interface legacy n'affichent. */
+    [[self contentView] layoutSubtreeIfNeeded];
+
     NSRect topleftbase = NSMakeRect(0, [self frame].size.height, 0, 0);
     NSPoint topleftscreen = [self convertRectToScreen: topleftbase].origin;
 
@@ -492,7 +572,20 @@
     if ([self fullscreen] || _inFullscreenTransition)
         return;
 
-    NSRect window_rect = [self getWindowRectForProposedVideoViewSize:self.nativeVideoSize];
+    /* see -pictureSizeForRequest:currentArea: -- the bare window is the
+     * picture itself, the decorated one keeps its chrome around it, but
+     * both follow the same rule */
+    if (_controlsHiddenForPlayback) {
+        [self hiddenWindowFollowVideoSize:self.nativeVideoSize];
+        return;
+    }
+
+    NSSize picture = [self pictureSizeForRequest:self.nativeVideoSize
+                                     currentArea:[self.videoView frame].size];
+    if (picture.width <= 0. || picture.height <= 0.)
+        return;
+
+    NSRect window_rect = [self getWindowRectForProposedVideoViewSize:picture];
     [[self animator] setFrame:window_rect display:YES];
 }
 
@@ -516,6 +609,18 @@
     if ([_videoView isHidden])
         return proposedFrameSize;
 
+    /* while the controls are auto-hidden the window IS the picture: keep
+     * it exactly that, whatever the aspect-ratio lock says -- letting it
+     * go free here would just put black bands back inside the bare
+     * window the feature exists to get rid of */
+    if (_controlsHiddenForPlayback) {
+        proposedFrameSize.height = round(proposedFrameSize.width
+            * self.nativeVideoSize.height / self.nativeVideoSize.width);
+        /* resizing by hand redefines the box a later crop fits into */
+        o_picture_box = proposedFrameSize;
+        return proposedFrameSize;
+    }
+
     if ([[VLCCoreInteraction sharedInstance] aspectRatioIsLocked]) {
         NSRect videoWindowFrame = [self frame];
         NSRect viewRect = [_videoView convertRect:[_videoView bounds] toView: nil];
@@ -527,6 +632,14 @@
 
         proposedFrameSize.height = (proposedFrameSize.width - marginx) * self.nativeVideoSize.height / self.nativeVideoSize.width + marginy;
     }
+
+    /* resizing by hand redefines the box a later crop fits into: the
+     * video area is the window minus whatever chrome it carries */
+    NSSize chrome = NSMakeSize(
+        [self frame].size.width - [_videoView frame].size.width,
+        [self frame].size.height - [_videoView frame].size.height);
+    o_picture_box = NSMakeSize(proposedFrameSize.width - chrome.width,
+                               proposedFrameSize.height - chrome.height);
 
     return proposedFrameSize;
 }
@@ -569,6 +682,342 @@
     [[self.controlsBar bottomBarView] setHidden: NO];
     self.videoViewBottomConstraint.priority = 999;
 }
+
+#pragma mark -
+#pragma mark Hide controls during playback
+
+- (BOOL)mouseIsInsideWindow
+{
+    return NSMouseInRect([NSEvent mouseLocation], [self frame], NO);
+}
+
+- (BOOL)shouldAutoHideControls
+{
+    if (![[VLCCoreInteraction sharedInstance] autoHideControls])
+        return NO;
+    if ([self fullscreen] || _inFullscreenTransition)
+        return NO;
+    /* the video being on show is the whole condition: a pause hides just
+     * as well (the OSD is the feedback then), the playlist view never
+     * does */
+    return [self hasActiveVideo] && ![self.videoView isHidden];
+}
+
+/* The zoom factor the vout is currently applying, 0 when there is no
+ * video to ask. */
+- (CGFloat)currentVideoZoom
+{
+    VLCVoutView *videoView = [self videoView];
+    vout_thread_t *p_vout = videoView != nil ? [videoView voutThread] : NULL;
+    if (p_vout == NULL)
+        return 0.;
+
+    const CGFloat zoom = var_GetFloat(p_vout, "zoom");
+    vlc_object_release(p_vout);
+    return zoom;
+}
+
+/* Every picture transformation -- zoom, crop, aspect ratio, the rotation
+ * of the video effects, or simply another item -- reaches the interface
+ * as the vout asking for a window size, and that is also what a plain
+ * restart does. Three cases to tell apart:
+ *  - a restart asks for the size it asked for last time: ignored, so the
+ *    size the user settled on survives every loop;
+ *  - the request keeps the picture SHAPE and only changes its scale:
+ *    that is a zoom (Half/Normal/Double, or the matching hotkeys), an
+ *    explicit "make it this big", so the requested size is taken as is;
+ *  - the request changes the SHAPE (crop, aspect ratio, rotation,
+ *    another item): the new shape is fitted inside the box the user is
+ *    watching in, so it never grows. Cropping used to blow the window up
+ *    instead, bare window or not, because the core drops the zoom factor
+ *    on a crop change and then asks for the natural size of the media.
+ * The box only follows what the user asks for (a zoom, a hand resize),
+ * never a shape change, so going 16:9 -> 4:3 -> 16:9 lands back on the
+ * very same window instead of shrinking a little every time.
+ * Returns NSZeroSize when the request must be ignored. */
+- (NSSize)pictureSizeForRequest:(NSSize)requested currentArea:(NSSize)area
+{
+    if (requested.width <= 0. || requested.height <= 0.)
+        return NSZeroSize;
+
+    NSSize previous = o_last_requested_video_size;
+    o_last_requested_video_size = requested;
+    if (NSEqualSizes(previous, requested))
+        return NSZeroSize;
+
+    /* Half / Normal / Double, and the hotkeys that do the same, all go
+     * through the vout's "zoom": that is how a scale change the *user*
+     * asked for is told apart from one the stream decided on its own. */
+    const CGFloat zoom = [self currentVideoZoom];
+    const CGFloat previous_zoom = f_last_video_zoom;
+    f_last_video_zoom = zoom;
+
+    CGFloat ratio = requested.width / requested.height;
+    BOOL sameShape = (previous.width > 0. && previous.height > 0.
+        && fabs(ratio - previous.width / previous.height) <= ratio * 0.005);
+
+    /* the very first request opens the window at the size of the media,
+     * as it always did */
+    if (previous.width <= 0. || previous.height <= 0.) {
+        o_picture_box = requested;
+        return requested;
+    }
+
+    if (sameShape) {
+        /* ⚠ Same shape, another size, and nobody asked to zoom: this is
+         * an adaptive stream switching variant, which it does several
+         * times a programme. Following it made the window take the pixel
+         * size of each variant and, one step up after another, end up
+         * filling the screen on its own. The window belongs to the
+         * viewer; only a shape change re-fits it (below). */
+        if (zoom <= 0. || zoom == previous_zoom)
+            return NSZeroSize;
+
+        o_picture_box = requested;
+        return requested;
+    }
+
+    NSSize box = o_picture_box;
+    if (box.width <= 0. || box.height <= 0.)
+        box = area;
+    if (box.width <= 0. || box.height <= 0.)
+        return requested;
+    CGFloat fit = MIN(box.width / requested.width,
+                      box.height / requested.height);
+    return NSMakeSize(round(requested.width * fit),
+                      round(requested.height * fit));
+}
+
+- (void)hiddenWindowFollowVideoSize:(NSSize)requested
+{
+    NSRect frame = [self frame];
+    NSSize picture = [self pictureSizeForRequest:requested
+                                     currentArea:frame.size];
+    if (picture.width <= 0. || picture.height <= 0.)
+        return;
+
+    /* keep it on the screen, at the ratio it just took */
+    NSRect visible = [[self screen] visibleFrame];
+    CGFloat fit = MIN(1., MIN(visible.size.width / picture.width,
+                              visible.size.height / picture.height));
+    if (fit < 1.) {
+        picture.width = round(picture.width * fit);
+        picture.height = round(picture.height * fit);
+    }
+    if (picture.width < 160. || picture.height < 90.)
+        return;
+
+    /* grow or shrink from the top left corner, where the eye is */
+    frame.origin.y += frame.size.height - picture.height;
+    frame.size = picture;
+    [self setFrame:[self customConstrainFrameRect:frame toScreen:[self screen]]
+           display:YES];
+}
+
+/* Hiding waits for the mouse to have been outside the window for 3 s;
+ * revealing waits for the video to have been gone for 2.5 s, since the
+ * gaps of a loop restart or of an item transition are shorter than that
+ * and must not count. Coming back over the window never reveals by
+ * itself: that takes a double click on the video. */
+- (void)autoHideControlsTick:(NSTimer *)timer
+{
+    if (_controlsHiddenForPlayback) {
+        if (![[VLCCoreInteraction sharedInstance] autoHideControls]
+            || [self fullscreen] || _inFullscreenTransition) {
+            [self revealControlsForPlayback];
+            return;
+        }
+        if ([self hasActiveVideo] && ![self.videoView isHidden])
+            i_autohide_reveal_ticks = 0;
+        else if (++i_autohide_reveal_ticks >= 5)
+            [self revealControlsForPlayback];
+        return;
+    }
+
+    i_autohide_reveal_ticks = 0;
+    if (![self shouldAutoHideControls] || [self mouseIsInsideWindow]) {
+        i_autohide_outside_ticks = 0;
+        return;
+    }
+    if (++i_autohide_outside_ticks >= 6)
+        [self hideControlsForPlayback];
+}
+
+- (void)hideControlsForPlayback
+{
+    if (_controlsHiddenForPlayback)
+        return;
+
+    /* where the picture sits on screen right now: the window then
+     * shrinks onto exactly that rectangle, so the picture neither moves
+     * nor changes size when the decorations go away. Starting from the
+     * video view, the aspect-ratio correction the vout applies inside it
+     * is replayed so its thin black bands go away too. */
+    NSRect videoScreenRect = [self convertRectToScreen:
+        [self.videoView convertRect:[self.videoView bounds] toView:nil]];
+    NSSize nativeSize = [self nativeVideoSize];
+    if (nativeSize.width > 0. && nativeSize.height > 0.
+        && videoScreenRect.size.width > 0. && videoScreenRect.size.height > 0.) {
+        CGFloat scale = MIN(videoScreenRect.size.width / nativeSize.width,
+                            videoScreenRect.size.height / nativeSize.height);
+        NSSize pictureSize = NSMakeSize(round(nativeSize.width * scale),
+                                        round(nativeSize.height * scale));
+        videoScreenRect.origin.x +=
+            round((videoScreenRect.size.width - pictureSize.width) / 2.);
+        videoScreenRect.origin.y +=
+            round((videoScreenRect.size.height - pictureSize.height) / 2.);
+        videoScreenRect.size = pictureSize;
+    }
+
+    /* a video view caught mid-relayout or mid-teardown (playback ending,
+     * the playlist view coming and going) measures next to nothing:
+     * shrinking the window onto that would leave a sliver behind and
+     * there would be no picture to watch anyway */
+    if (videoScreenRect.size.width < 160. || videoScreenRect.size.height < 90.)
+        return;
+
+    _controlsHiddenForPlayback = YES;
+    o_frame_before_hiding_controls = [self frame];
+    o_last_requested_video_size = nativeSize;
+    o_picture_box = videoScreenRect.size;
+
+    [self hideControlsBar];
+    if (self.darkInterface && self.titlebarView) {
+        /* same recipe as the fullscreen transition below */
+        [self.titlebarView setHidden:YES];
+        self.videoViewTopConstraint.priority = 1;
+    } else {
+        BOOL b_was_key = [self isKeyWindow];
+        i_stylemask_before_hiding_controls = [self styleMask];
+        [self setStyleMask:(NSBorderlessWindowMask | NSResizableWindowMask)];
+        if (b_was_key)
+            [self makeKeyAndOrderFront:nil];
+    }
+
+    /* borderless frame == content == picture */
+    [self setFrame:videoScreenRect display:YES];
+    o_hidden_controls_initial_frame = videoScreenRect;
+
+    if ([[self.videoView subviews] count] > 0)
+        [self makeFirstResponder:[[self.videoView subviews] firstObject]];
+
+    [[VLCCoreInteraction sharedInstance] setControlsHiddenForPlayback:YES];
+}
+
+- (void)revealControlsForPlayback
+{
+    if (!_controlsHiddenForPlayback)
+        return;
+    _controlsHiddenForPlayback = NO;
+
+    /* the window before hiding, carried over by whatever the user moved
+     * or resized the naked window meanwhile: the picture lands back on
+     * the very same pixels it occupies right now */
+    NSRect hiddenFrame = [self frame];
+
+    [self showControlsBar];
+    if (self.darkInterface && self.titlebarView) {
+        [self.titlebarView setHidden:NO];
+        self.videoViewTopConstraint.priority = 999;
+    } else {
+        BOOL b_was_key = [self isKeyWindow];
+        [self setStyleMask:i_stylemask_before_hiding_controls];
+        if (b_was_key)
+            [self makeKeyAndOrderFront:nil];
+        /* setStyleMask: wipes the title of a fresh titled frame */
+        [super setTitle:[self title]];
+    }
+
+    NSRect frame = o_frame_before_hiding_controls;
+    frame.origin.x +=
+        hiddenFrame.origin.x - o_hidden_controls_initial_frame.origin.x;
+    frame.origin.y +=
+        hiddenFrame.origin.y - o_hidden_controls_initial_frame.origin.y;
+    frame.size.width +=
+        hiddenFrame.size.width - o_hidden_controls_initial_frame.size.width;
+    frame.size.height +=
+        hiddenFrame.size.height - o_hidden_controls_initial_frame.size.height;
+    [self setFrame:[self customConstrainFrameRect:frame toScreen:[self screen]]
+           display:YES];
+
+    [[VLCCoreInteraction sharedInstance] setControlsHiddenForPlayback:NO];
+    /* the delay restarts from zero: the mouse being outside already is
+     * not enough to hide again right away */
+    i_autohide_outside_ticks = 0;
+}
+
+- (void)revealControlsNotification:(NSNotification *)notification
+{
+    [self revealControlsForPlayback];
+}
+
+/* Dragging the picture always moves the window, controls hidden or not
+ * (it is the natural grab area, and while the controls are hidden there
+ * is no title bar left at all). The events bubble up here from the vout
+ * view, which never consumes them; a drag is not a plain click, so
+ * nothing is revealed or toggled. */
+- (void)mouseDown:(NSEvent *)o_event
+{
+    _videoDragActive = ![self fullscreen] && !_inFullscreenTransition;
+    [super mouseDown:o_event];
+}
+
+/* ⚠ Without this the flag stayed on for the rest of the session, and any
+ * later drag whose press had been taken by something else moved the
+ * window instead of doing its own job. */
+- (void)mouseUp:(NSEvent *)o_event
+{
+    _videoDragActive = NO;
+    [super mouseUp:o_event];
+}
+
+/* Keeps enough of the window on the screen to grab it again. Dragging a
+ * window partly past an edge is normal on macOS; losing it entirely is
+ * not, and the picture is the whole grab area here. */
+- (NSPoint)dragOriginKeptReachable:(NSPoint)origin
+{
+    NSRect visible = [[self screen] visibleFrame];
+    NSRect frame = [self frame];
+    const CGFloat margin = MIN(120., frame.size.width);
+
+    if (origin.x + frame.size.width < NSMinX(visible) + margin)
+        origin.x = NSMinX(visible) + margin - frame.size.width;
+    if (origin.x > NSMaxX(visible) - margin)
+        origin.x = NSMaxX(visible) - margin;
+
+    /* The top edge may never go under the menu bar: from there the window
+     * cannot be dragged back by its title bar. */
+    if (origin.y + frame.size.height > NSMaxY(visible))
+        origin.y = NSMaxY(visible) - frame.size.height;
+    if (origin.y + frame.size.height < NSMinY(visible) + MIN(60., frame.size.height))
+        origin.y = NSMinY(visible) + MIN(60., frame.size.height) - frame.size.height;
+
+    return origin;
+}
+
+- (void)mouseDragged:(NSEvent *)o_event
+{
+    if (_videoDragActive) {
+        /* ⚠ Move by the pointer's own delta, never from an anchor taken
+         * at mouse-down: the anchor was read with +[NSEvent mouseLocation],
+         * i.e. where the pointer is *when the event is handled*, and this
+         * main thread does stall (an adaptive stream fetching its playlist
+         * is enough). The pointer has moved by then, and the window jumped
+         * by that error on the very first drag -- straight off the screen
+         * on a wide monitor. The window can also be resized under the
+         * pointer by the stream itself, which an anchor does not survive
+         * either. */
+        NSPoint origin = [self frame].origin;
+        origin.x += [o_event deltaX];
+        origin.y -= [o_event deltaY];
+        [self setFrameOrigin:[self dragOriginKeptReachable:origin]];
+        return;
+    }
+    [super mouseDragged:o_event];
+}
+
+#pragma mark -
+#pragma mark Lion native fullscreen handling (continued)
 
 - (void)becomeKeyWindow
 {
@@ -632,6 +1081,11 @@
 
 - (void)windowWillEnterFullScreen:(NSNotification *)notification
 {
+    /* fullscreen must start from the normal window state: with the
+     * controls auto-hidden the style mask / titlebar are not what the
+     * transition code expects to save and restore */
+    [self revealControlsForPlayback];
+
     _windowShouldExitFullscreenWhenFinished = [[VLCMain sharedInstance] activeVideoPlayback];
 
     NSInteger i_currLevel = [self level];
@@ -755,6 +1209,9 @@
 
 - (void)enterFullscreenWithAnimation:(BOOL)b_animation
 {
+    /* see -windowWillEnterFullScreen: */
+    [self revealControlsForPlayback];
+
     NSMutableDictionary *dict1, *dict2;
     NSScreen *screen;
     NSRect screen_rect;
