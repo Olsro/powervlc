@@ -1,0 +1,54 @@
+# PowerVLC — Qt interface test bench (Linux, headless X).
+#
+# The Windows and Linux builds share the same Qt interface, but neither
+# target can be driven from this Mac: the Windows XP bench answers over SSH
+# on a window station that is never rendered (screenshots come back black),
+# and there is no Qt build for macOS at all. This image gives the Qt UI a
+# real X server it can be clicked on and photographed: Xvfb + xdotool +
+# ImageMagick, on top of the same build dependencies the AppImage target
+# uses.
+#
+# Not a packaging target: a bench. The base is deliberately a CURRENT Ubuntu
+# (the AppImage image uses an old glibc for portability, and its
+# end-of-life repositories cannot install anything new), and the build links
+# against the distribution's FFmpeg rather than the contrib one, so a full
+# build takes minutes instead of an hour.
+#
+# PowerVLC is an unofficial fork of VLC, not affiliated with VideoLAN.
+
+ARG BASE=ubuntu:22.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DISPLAY=:99
+
+RUN if [ -f /etc/apt/sources.list ]; then \
+      grep '^deb ' /etc/apt/sources.list | sed 's/^deb /deb-src /' >> /etc/apt/sources.list ; \
+    fi
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential git ca-certificates curl wget file rsync xz-utils \
+      autoconf automake libtool libtool-bin pkg-config gettext autopoint \
+      flex bison zip unzip \
+    && ( apt-get build-dep -y vlc || echo "WARN: build-dep vlc failed; some modules may be disabled" ) \
+    && apt-get install -y --no-install-recommends \
+      qtbase5-dev qtbase5-private-dev libqt5svg5-dev libqt5x11extras5-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# The bench proper: a headless X server, a window manager (without one
+# xdotool cannot activate a window and neither fullscreen nor moving a
+# window means anything), a way to send clicks and keys, and a way to
+# photograph the result. xdotool drives by window name, so the tests never
+# depend on where a window happens to land.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      xvfb x11-utils x11-xserver-utils xdotool imagemagick \
+      fonts-dejavu-core libgl1-mesa-dri mesa-utils \
+      openbox \
+    && rm -rf /var/lib/apt/lists/*
+
+# VLC refuses to run as root, and the bench has to run the real binary:
+# give it an ordinary user. The build itself still runs as root (the work
+# volume belongs to root), only the interface runs as `bench`.
+RUN useradd -m -u 1000 bench
+
+WORKDIR /work

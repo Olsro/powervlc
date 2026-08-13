@@ -243,6 +243,64 @@ static unsigned int CocoaKeyToVLC(unichar i_key)
     return (unsigned int)i_key;
 }
 
+/* ★ Command + a digit is unusable on a keyboard whose digit row needs Shift
+ * -- AZERTY, QWERTZ, and every other non-US layout. The event then carries
+ * the UNSHIFTED character of the key ('"' for the "3" of a French keyboard),
+ * which matches neither a menu equivalent nor the "Command+3" of a core
+ * hotkey. Modern AppKit works around it by falling back to an ASCII-capable
+ * layout when matching command equivalents; the AppKit of 10.2-10.4 does
+ * not, so Command+0/1/2 (the window sizes) and Command+3 (fit to screen)
+ * were simply dead there -- measured on a French iBook under 10.2.8.
+ *
+ * VIRTUAL key codes are positional and layout independent: those below are
+ * the digit row of every Mac keyboard (the order is the historical one, 5
+ * and 6 are swapped and 7 to 0 are not consecutive). */
+static unichar DigitForKeyCode(unsigned short i_keycode)
+{
+    switch (i_keycode) {
+        case 18: return '1';
+        case 19: return '2';
+        case 20: return '3';
+        case 21: return '4';
+        case 23: return '5';
+        case 22: return '6';
+        case 26: return '7';
+        case 28: return '8';
+        case 25: return '9';
+        case 29: return '0';
+    }
+    return 0;
+}
+
+NSEvent *VLCLegacyEventWithDigitRowFallback(NSEvent *event)
+{
+    if (!([event modifierFlags] & NSCommandKeyMask))
+        return event;               /* only command equivalents suffer this */
+    unichar digit = DigitForKeyCode([event keyCode]);
+    if (!digit)
+        return event;
+
+    NSString *chars = [event charactersIgnoringModifiers];
+    if (!([event modifierFlags] & NSShiftKeyMask)
+        && [chars length] == 1 && [chars characterAtIndex:0] == digit)
+        return event;               /* the layout already gives the digit */
+
+    /* Shift is dropped: on such a keyboard it is how the digit is typed in
+     * the first place, and no entry of either interface is bound to
+     * Command+Shift+<digit>. */
+    NSString *replacement = [NSString stringWithCharacters:&digit length:1];
+    return [NSEvent keyEventWithType:[event type]
+                            location:[event locationInWindow]
+                       modifierFlags:[event modifierFlags] & ~NSShiftKeyMask
+                           timestamp:[event timestamp]
+                        windowNumber:[event windowNumber]
+                             context:[event context]
+                          characters:replacement
+         charactersIgnoringModifiers:replacement
+                           isARepeat:[event isARepeat]
+                             keyCode:[event keyCode]];
+}
+
 BOOL VLCLegacyHandleKeyEvent(intf_thread_t *p_intf, NSEvent *event)
 {
     if (!p_intf)
@@ -254,6 +312,10 @@ BOOL VLCLegacyHandleKeyEvent(intf_thread_t *p_intf, NSEvent *event)
      * and once on release. */
     if ([event type] != NSKeyDown)
         return NO;
+
+    /* the vout windows come here directly, without passing through
+     * -[VLCLegacyHostWindow performKeyEquivalent:] */
+    event = VLCLegacyEventWithDigitRowFallback(event);
 
     unsigned int modifiers = (unsigned int)[event modifierFlags];
     vlc_value_t val;
@@ -340,6 +402,7 @@ void VLCLegacyHandleScrollWheel(intf_thread_t *p_intf, NSEvent *event)
 
 static uint_fast32_t EventToVLCKey(NSEvent *event)
 {
+    event = VLCLegacyEventWithDigitRowFallback(event);
     unsigned int modifiers = (unsigned int)[event modifierFlags];
     uint_fast32_t code = 0;
     if (modifiers & NSShiftKeyMask)
@@ -414,6 +477,142 @@ int VLCLegacyEventHotkeyMatch(intf_thread_t *p_intf, NSEvent *event)
     return match;
 }
 
+/*****************************************************************************
+ * Menu key equivalents taken from the configured hotkeys
+ *****************************************************************************/
+
+/* Key names VLC spells out, in the order -[VLCStringUtility VLCKeyToString:]
+ * tests them: the longer names must come first, "Page Up" before "Up" and
+ * "F12" before "F1", since the test is a substring search. */
+static const struct { const char *psz_name; unichar key; } s_named_keys[] = {
+    { "Page Up",   NSPageUpFunctionKey },
+    { "Page Down", NSPageDownFunctionKey },
+    { "Up",        NSUpArrowFunctionKey },
+    { "Down",      NSDownArrowFunctionKey },
+    { "Right",     NSRightArrowFunctionKey },
+    { "Left",      NSLeftArrowFunctionKey },
+    /* NSCarriageReturnCharacter is treated as equivalent, like the modern
+     * interface does */
+    { "Enter",     NSEnterCharacter },
+    { "Insert",    NSInsertFunctionKey },
+    { "Home",      NSHomeFunctionKey },
+    { "End",       NSEndFunctionKey },
+    { "Menu",      NSMenuFunctionKey },
+    { "Tab",       NSTabCharacter },
+    { "Backspace", NSBackspaceCharacter },
+    { "Delete",    NSDeleteCharacter },
+    { "F12", NSF12FunctionKey }, { "F11", NSF11FunctionKey },
+    { "F10", NSF10FunctionKey }, { "F9",  NSF9FunctionKey },
+    { "F8",  NSF8FunctionKey },  { "F7",  NSF7FunctionKey },
+    { "F6",  NSF6FunctionKey },  { "F5",  NSF5FunctionKey },
+    { "F4",  NSF4FunctionKey },  { "F3",  NSF3FunctionKey },
+    { "F2",  NSF2FunctionKey },  { "F1",  NSF1FunctionKey },
+    { "Space", ' ' },
+    /* Esc is deliberately absent: it is reserved for leaving fullscreen */
+};
+
+static unsigned int HotkeyModifiersToCocoa(const char *psz_binding)
+{
+    unsigned int mask = 0;
+    if (strstr(psz_binding, "Command"))
+        mask |= NSCommandKeyMask;
+    if (strstr(psz_binding, "Alt"))
+        mask |= NSAlternateKeyMask;
+    if (strstr(psz_binding, "Shift"))
+        mask |= NSShiftKeyMask;
+    if (strstr(psz_binding, "Ctrl"))
+        mask |= NSControlKeyMask;
+    return mask;
+}
+
+/* Removes every occurrence of psz_needle from psz_haystack, in place. */
+static void StripSubstring(char *psz_haystack, const char *psz_needle)
+{
+    size_t i_len = strlen(psz_needle);
+    char *psz_hit;
+    while ((psz_hit = strstr(psz_haystack, psz_needle)) != NULL)
+        memmove(psz_hit, psz_hit + i_len, strlen(psz_hit + i_len) + 1);
+}
+
+/* Everything the modifiers left of a binding, as the single character
+ * AppKit wants. All done on the C string: -[NSString
+ * stringByReplacingOccurrencesOfString:withString:] is 10.5 and this
+ * interface runs from 10.2. */
+static NSString *HotkeyToCocoaKeyEquivalent(const char *psz_binding)
+{
+    size_t i_len = strlen(psz_binding);
+    if (!i_len)
+        return @"";
+
+    char *psz_rest = strdup(psz_binding);
+    if (!psz_rest)
+        return @"";
+
+    /* Drop the separators, but keep a trailing one: "Command++" is the
+     * Command key with the "+" key, not a stray separator (same dance as
+     * VLCKeyToString:, and the reason it cannot simply split on "+"). */
+    char c_last = psz_binding[i_len - 1];
+    StripSubstring(psz_rest, "+");
+    StripSubstring(psz_rest, "-");
+    StripSubstring(psz_rest, "Command");
+    StripSubstring(psz_rest, "Alt");
+    StripSubstring(psz_rest, "Shift");
+    StripSubstring(psz_rest, "Ctrl");
+
+    NSString *key = nil;
+    if (c_last == '+' || c_last == '-') {
+        char sz_key[2] = { c_last, '\0' };
+        key = [NSString stringWithUTF8String:sz_key];
+    } else if (strlen(psz_rest) <= 1) {
+        key = [NSString stringWithUTF8String:psz_rest];
+    } else {
+        unsigned i;
+        for (i = 0; i < sizeof(s_named_keys) / sizeof(s_named_keys[0]); i++) {
+            if (!strstr(psz_rest, s_named_keys[i].psz_name))
+                continue;
+            unichar uc = s_named_keys[i].key;
+            key = [NSString stringWithCharacters:&uc length:1];
+            break;
+        }
+        /* A name AppKit has no character for (Esc, mouse buttons, media
+         * keys). The modern interface hands the leftover text to
+         * setKeyEquivalent:, which draws it as-is next to the item although
+         * it can never fire; show nothing instead. */
+        if (!key)
+            key = @"";
+    }
+
+    free(psz_rest);
+    return key ? key : @"";
+}
+
+void VLCLegacyApplyHotkeyToMenuItem(intf_thread_t *p_intf, NSMenuItem *item,
+                                    const char *psz_option)
+{
+    if (!p_intf || !item)
+        return;
+
+    char *psz_key = config_GetPsz(p_intf, psz_option);
+    if (!psz_key)
+        return;     /* no such option: keep whatever the menu was built with */
+
+    /* one option can carry several bindings, tab-separated (the media keys
+     * on other platforms); only the first can be a menu equivalent */
+    char *psz_tab = strchr(psz_key, '\t');
+    if (psz_tab)
+        *psz_tab = '\0';
+
+    if (!*psz_key) {
+        /* hotkey cleared in the Preferences: no equivalent at all */
+        [item setKeyEquivalent:@""];
+        [item setKeyEquivalentModifierMask:0];
+    } else {
+        [item setKeyEquivalent:HotkeyToCocoaKeyEquivalent(psz_key)];
+        [item setKeyEquivalentModifierMask:HotkeyModifiersToCocoa(psz_key)];
+    }
+    free(psz_key);
+}
+
 @implementation NSScreen (VLCAdditions)
 
 - (BOOL)hasMenuBar
@@ -441,7 +640,53 @@ int VLCLegacyEventHotkeyMatch(intf_thread_t *p_intf, NSEvent *event)
     return (CGDirectDisplayID)[[[self deviceDescription] objectForKey: @"NSScreenNumber"] intValue];
 }
 
+/* ⚠ Sur un écran à encoche (MacBook Pro 14/16 pouces), -frame INCLUT la bande
+ * de la barre de menus où loge la caméra : une fenêtre de plein écran étendue
+ * à -frame met la vidéo de part et d'autre de l'encoche. AppKit n'écarte cette
+ * bande que pour les fenêtres qui respectent la zone sûre ; cette interface
+ * dimensionne elle-même ses fenêtres de plein écran, elle doit donc le faire à
+ * la main. L'interface moderne retranche déjà la même valeur
+ * (-[VLCWindow transformRect:withSafeAreaFromScreen:multiplier:]).
+ *
+ * -safeAreaInsets est du 12.0 et RENVOIE UNE STRUCTURE : impossible de l'appeler
+ * directement dans un module qui se compile aussi contre le SDK de Tiger. D'où
+ * NSInvocation, et NSEdgeInsets (10.7) réécrit à la main. Vérifié identique à
+ * l'appel direct : 32,0 sur un MacBook Pro 14 pouces. */
+- (CGFloat)vlcTopSafeAreaInset
+{
+    if (![self respondsToSelector:@selector(safeAreaInsets)])
+        return 0.0;
+    NSMethodSignature *signature =
+        [self methodSignatureForSelector:@selector(safeAreaInsets)];
+    if (!signature)
+        return 0.0;
+
+    NSInvocation *call =
+        [NSInvocation invocationWithMethodSignature:signature];
+    [call setSelector:@selector(safeAreaInsets)];
+    [call setTarget:self];
+    [call invoke];
+
+    struct { CGFloat top, left, bottom, right; } insets;
+    memset(&insets, 0, sizeof(insets));
+    [call getReturnValue:&insets];
+
+    return insets.top > 0.0 ? insets.top : 0.0;
+}
+
 @end
+
+NSRect VLCLegacySafeContentRect(NSWindow *window, NSScreen *screen)
+{
+    NSRect bounds = [[window contentView] bounds];
+    CGFloat inset = [screen vlcTopSafeAreaInset];
+
+    /* l'origine d'une vue Cocoa est EN BAS : réduire la hauteur rogne le haut,
+     * là où loge l'encoche */
+    if (inset > 0.0 && NSHeight(bounds) > inset)
+        bounds.size.height -= inset;
+    return bounds;
+}
 
 void VLCLegacyConfirmAndOpenVideoLANURL(NSURL *url)
 {

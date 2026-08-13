@@ -365,8 +365,16 @@ int ScanLuaCallback( vlc_object_t *p_this, const char *psz_filename,
      * library, which computes and nothing else, and vlc.config.language(),
      * which reads and nothing else. Neither can touch the outside world. */
     vlclua_set_this( L, p_mgr );
+    /* Since Lua 5.2 luaopen_string() only RETURNS the library table; setting
+     * the global is the caller's job (5.1 did it for you). Popping it left
+     * `string` nil, so the promise made just above was never kept: a script
+     * touching string.* at load time -- outside any function, where descriptor()
+     * data is usually built -- died with "attempt to index global 'string' (a
+     * nil value)". The extension then never appeared in the menu, with a single
+     * warning in the log to say why. That is exactly how the iTunes podcast
+     * extension went missing (found 2026-08-10, Linux i386). */
     luaopen_string( L );
-    lua_pop( L, 1 );
+    lua_setglobal( L, "string" );
     lua_newtable( L );
     luaopen_config_language( L );
     lua_setglobal( L, "vlc" );

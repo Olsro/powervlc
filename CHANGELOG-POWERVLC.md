@@ -2,6 +2,646 @@
 
 PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more legacy systems, not affiliated with VideoLAN.
 
+## 1.3.0 (2026-08-13)
+
+### New features — all platforms (modern machines included)
+
+- **Clip creation mode**: cut a piece out of what is playing, without
+  re-encoding it and without leaving the player. It is entered from the
+  playback menu right below Record (⌘⇧C on the Macs) and turns the seek
+  bar into a pair of knobs — one holds the start of the clip, the other
+  its end — while a thin marker keeps following the playback position.
+  Moving either knob seeks there, so what you set a bound on is what you
+  see; dragging between them scrubs without touching the bounds. The
+  jump shortcuts and the bare arrow keys resize the selected bound
+  instead of seeking, one frame at a time for the short steps and by
+  their configured size for the long ones, so a clip can be framed
+  exactly. Playback pauses when it reaches the end bound and replays the
+  clip from its start when you press play again. Record then writes
+  exactly that range — and writes it as fast as the disk allows, through
+  a second headless input instead of playing the clip through at normal
+  speed: a minute of video lands in a fraction of a second, and the
+  playback you are watching is not disturbed at all. Discs (which are
+  driven by titles and menus, so a second reader would restart in the
+  menu) and media that cannot be seeked or whose length is unknown (live
+  streams) are still recorded as they play, at normal speed.
+  The fullscreen controls carry the same seek bar, so a clip can be
+  framed, previewed and recorded in fullscreen exactly as in a window.
+  Dragging a bound previews it as you go: the picture follows the handle
+  at a steady ten frames a second, and a single pixel nudge — what
+  trimming to the frame is made of — is shown too, instead of being
+  swallowed until the button is released.
+  Getting the first and last frames right took work down in the core:
+  the seek and the start of the recording are now a single input control
+  (a seek is refused while recording, and in the other order the demuxer
+  runs between the two and the key frame the clip should open on is
+  already gone); that seek is deliberately imprecise, because a precise
+  one makes demuxers swallow everything between the preceding key frame
+  and the target, which is up to a whole GOP of what the user framed;
+  the recorder then starts at the last key frame at or before the bound
+  rather than the first one it happens to see; and the end bound is
+  crossed by the *demuxer*, not by the playback clock, which would
+  overshoot by the whole buffering lead.
+  Two recording fixes came out of it, and they apply to plain recordings
+  too: a clip that starts exactly on a key frame no longer opens on a
+  black second (the recorder aligned every stream on the *latest* first
+  block, which let an audio stream starting a few milliseconds later
+  push the start past that key frame — the whole leading GOP was then
+  dropped, and the picture only came back at the next key frame), and
+  recordings are now named `powervlc-record-…` instead of `vlc-record-…`.
+- **Dragging the picture moves the window**, in all three interfaces,
+  whether the controls are showing or not. A maximized or fullscreen
+  window stays where it was put.
+- **Clicking the seek bar lands on the time the tooltip announced.** Both
+  macOS interfaces drew their own knob but let AppKit turn a click into a
+  position, and AppKit measures that with a knob width of its own: the two
+  disagreed by a couple of pixels, which on a 1h30 media meant a seek
+  landing up to 17 seconds away from the hovered time (measured: tooltip
+  07:39, playback 07:48). The seek bars now convert the click themselves,
+  with the same formula that draws the knob and fills the tooltip.
+- **Hide controls during playback** (aka Picture-In-Picture), in all three interfaces (Video >
+  Hide Controls During Playback, ⌘⇧H or Ctrl+Shift+H, off by default).
+  A few seconds after the mouse has left the window during windowed
+  playback, the controls bar and the window title bar go away and the
+  window shrinks onto the picture itself, which keeps its exact size and
+  position on screen — a bare rectangle of video, with no black bands
+  and nothing else. A double click on the video brings everything back.
+  The window has no frame left for the window manager to grab, so a drag
+  started in a corner resizes it (the picture's ratio kept, the opposite
+  corner anchored) and a drag anywhere else moves it. Keyboard shortcuts
+  keep working meanwhile and now draw the fullscreen-style OSD sliders
+  for position and volume: the core shows them whenever the video is the
+  only thing on screen, which used to mean fullscreen only.
+- **Hovering the seek bar shows a preview of that moment**, in all three
+  interfaces, in the tooltip that already carries the hovered time and
+  the name of the chapter it falls in. VLC 3.0 has no thumbnailer of its
+  own, so the frame is decoded by a second, silent input on the same
+  file, whose stream output re-encodes it to a temporary image; requests
+  wait for the mouse to settle, only the latest one is served, results
+  are cached, and network streams are excluded (a preview would open a
+  second connection to the server). Discs are excluded too, and by more
+  than their scheme: a disc dropped from the file manager is the mounted
+  volume, so a preview would have set a second reader loose on the
+  drive — they are recognised by their tree (a folder holding VIDEO_TS
+  or BDMV, which covers a disc copied to a hard drive), by their disc
+  image extensions, and on the Macs by a UDF or ISO 9660 mount. It can
+  be turned off from the
+  interface preferences — and is off by default on the PowerPC builds,
+  where that extra decode is taken out of the playback. The legacy Mac
+  interface gets the same thing written to a Jaguar floor: no GCD, no
+  blocks, no NSCache and no tracking areas — one worker thread at a time
+  and a tracking rectangle with a 10 Hz follow timer.
+- **An up-to-date list of root certificates is shipped and trusted
+  alongside the operating system's own.** The systems this fork targets
+  do not fail HTTPS for lack of a trust store — Windows XP has one that
+  gnutls reads perfectly well — but because that store stopped being
+  updated years ago and knows nothing of the roots today's web signs
+  with, ISRG Root X1 (Let's Encrypt) first among them. The bundle is
+  therefore added to the system store rather than used as a fallback for
+  it, which is what the old code did and which never ran on XP.
+  `--no-gnutls-bundled-trust` restores the strict system-only behaviour,
+  since a root an administrator removed from the system store does come
+  back this way. The bundle is refreshed by a script that is run
+  deliberately and never from the build: a build that downloads its own
+  trust anchors is no longer reproducible.
+- **Automatic cropping of the black bars**, as a new *Automatic* entry at
+  the top of Video > Crop (`--crop=auto` on the command line). The bars
+  are measured on the picture itself, a few times a second, and cropped
+  away without touching a single pixel of the decoded frame: it is the
+  same zero-copy crop the ratio entries below it use, so it costs
+  nothing to display and works on every video output, down to QuickDraw
+  on Mac OS X 10.2. The measurement is HandBrake's — a row or a column
+  counts as a border only when its average luma is dark *and* every one
+  of its samples sits within sixteen of that average, which is what
+  separates a flat mat from a dark night scene — taken over a rolling
+  window of frames rather than a single one, so a fade through black, a
+  title card or the credits cannot drag the decision with them. The
+  first crop lands about eight tenths of a second after the picture
+  does, and is corrected once, to the pixel, when enough frames have
+  been seen. From then on the decision is taken over half a minute of
+  samples: a scene that happens to be dark right up to the mat measures
+  a wider mat, and over a short window that was enough to make the
+  picture resize in the middle of a scene. Cropping *more* than what is
+  already in force is refused outright unless every single sample of that
+  window agrees, since that direction is what a dark scene produces --
+  a night sky over a 4:3 programme reads as a wider mat and takes the
+  picture with it until the daylight comes back. Cropping less goes
+  through at once: that direction means picture is being cut. Content
+  whose aspect ratio genuinely changes mid-programme is still followed -- a television
+  channel going full frame for its advert break loses the crop within
+  seconds, and gets it back the moment the programme's own mat returns,
+  which is recognised as one this source has already worn rather than
+  having to win the half-minute vote again. A two-pixel disagreement is
+  never acted on, since every change moves the window. Hardware-decoded pictures (VideoToolbox, and any other
+  opaque surface) are measured too, through a conversion done only on
+  the frames that are actually sampled.
+- **A custom crop ratio and a custom aspect ratio can be typed in**, from
+  a *Custom* entry at the bottom of Video > Crop and Video > Aspect ratio
+  in all three interfaces — a backport of VLC 4.0's panel. What is
+  entered is applied at once, added to the menu so it can be picked again
+  without retyping, and kept for the next run in `custom-crop-ratios` /
+  `custom-aspect-ratios`. The whole thing is typed at the keyboard: Tab
+  walks from one side of the ratio to the other, and typing replaces what
+  the field holds instead of inserting into it. Switching Video > Crop between *Default*
+  and *Automatic* is remembered too, so the choice holds for the next
+  video and the next run; a ratio picked from the same menu is not, being
+  a decision about the video in front of the viewer rather than a lasting
+  preference.
+
+### Improvements — all platforms (modern machines included)
+
+- **The Invidious extension now offers both cadences of a 60 fps
+  upload** instead of one of them at random. YouTube publishes such a
+  video at 30 and at 60 fps, the manifest lists both, and the quality
+  menu kept whichever came first — which matters here, because 1080p60
+  is H.264 level 4.2, past the Crystal HD's 4.1 ceiling: the card takes
+  the stream, decodes under a second of it (56 pictures, measured) and
+  stops dead, while 1080p30 of the same video decodes in hardware. Both
+  are now listed, spelled out as "1080p — avc1 — 60 fps" rather than
+  folded into the resolution, tallest first and the plain cadence before
+  the high one — a choice for the viewer to make, on a machine that can
+  carry it.
+- **The Invidious extension downloads a video, and shows its
+  thumbnail.** The video view now carries the picture in a column of its
+  own, fetched from the connected instance and never from Google's own
+  thumbnail host: the streams may have been routed through the instance
+  on purpose, and a picture is not worth undoing that. Beside Play there
+  is a Download button, which writes the quality currently selected into
+  the Downloads folder under a name like "Title [1080p].mp4", so that the
+  same video fetched twice at two qualities is two files rather than one
+  overwritten. It moves on the extension's own timer in bounded slices —
+  the window stays alive, a progress bar follows it, and the same button
+  cancels it — and a transfer that stopped short of the length announced
+  is thrown away instead of being left looking like a playable file.
+  Above 720p, YouTube publishes picture and sound as separate streams and
+  nothing here can mux them, so those qualities come down as two files
+  and the closing message says which is which.
+  The download opens **four connections at once**, each asking for its own
+  quarter of the file and writing it straight into place. That is not a
+  refinement: measured against a public instance, a single connection was
+  served at a flat 211 KiB/s — 0.275 s for every 64 KiB read, with a
+  regularity that rules out congestion — which is this video's own
+  bitrate. The relay hands the file over at the speed it would be watched
+  at, so a ten-minute video took ten minutes. The ceiling is per
+  connection: the same download over four runs at 723 KiB/s and rising.
+  No thread was needed for this. Every stream VLC opens already carries
+  the `prefetch` filter, which reads up to 16 MiB ahead **on a thread of
+  its own**, so four streams fill their buffers concurrently while the
+  extension walks round them taking what has arrived. A server that
+  refuses ranges is detected on the spot (the seek fails) and the
+  download falls back to the single connection it always used — all or
+  nothing, because half a set of slices would be a corrupt file. The rate
+  is shown beside the progress bar.
+  The pacing is per stream, at each stream's own bitrate — measured a
+  second time on the audio track of that same video: 28 KiB/s a
+  connection, which is exactly what that track is encoded at. An audio
+  track therefore takes as long to fetch as the video it belongs to
+  unless there are enough connections, so eight are opened, and the file
+  is cut into twice as many pieces as there are connections: a small file
+  then uses them all, and **a connection that drops puts what is left of
+  its piece back in the queue** instead of leaving a hole. A tick is now
+  bounded by the clock (250 ms) rather than by a byte count — 4 MiB is
+  five seconds of a video stream and thirty-seven of an audio one, so the
+  progress bar used to sit still for half a minute at a time on the
+  second file, with Cancel stuck behind it.
+- **The sound of a video can be downloaded on its own**, from a button of
+  its own. The quality list already held "audio only" entries — but only
+  in API mode; on an instance whose JSON API is closed, the list is built
+  from the watch page and has none, even though every DASH quality in it
+  names the audio track it would play as a slave input. The button looks
+  in all three places, in the order that respects what was chosen: the
+  selected entry when it is already a sound-only one, the sound that goes
+  with the selected quality when that quality keeps picture and sound
+  apart, and failing both, whatever sound-only stream the list holds. A
+  video that only offers combined streams gets a message saying so rather
+  than a button that pretends: pulling the sound out of a combined stream
+  is a re-encode, which is the ffmpeg button's business.
+- **The two halves of a high-resolution download can be put back together
+  in one click.** Above 720p YouTube publishes picture and sound
+  separately, and this player cannot mux them: its mp4 muxer takes H.264
+  and AAC, and there is no matroska muxer in the bundle at all, so a
+  VP9+Opus pair would have nowhere to go. Rather than half a feature, a
+  button hands the job to **ffmpeg** — which the user installs, or does
+  not. Nothing runs behind anyone's back: a script is written next to the
+  files and a terminal window is opened on it, so the command, ffmpeg's
+  own output and the "ffmpeg is not installed" case are all in plain
+  sight. The output is Matroska, which takes every pair YouTube serves
+  and cannot collide with either source file, and the streams are copied,
+  never re-encoded. If no terminal can be opened the command goes to the
+  clipboard instead.
+- **Extension dialogs stop flickering.** In the Qt interface the window
+  was resized once per widget added, updated or removed, and to a layout
+  wish that collapses while a rebuilt widget is momentarily empty: the
+  Invidious list of public instances snapped small and back a dozen
+  times as it filled. The dialog is now resized once, at the end, and
+  once on screen it only ever grows.
+- **MPEG-2 video inside a `.mov` container plays.** The `m2v1` fourcc —
+  what ffmpeg's own mov muxer writes — was in no table, so the file was
+  opened and then played nothing at all. `m1v1`, its MPEG-1 counterpart,
+  is recognised as well.
+- **Hundreds of translated strings came back to life in every
+  language.** A template regenerated through `make` on 2026-07-25 had
+  dropped the Qt interface strings it could not extract, `msgmerge` had
+  marked them obsolete across every catalogue, and `msgfmt` had stopped
+  compiling them: those parts of the interface silently reverted to
+  English in all of them. The French catalogue went from 735 obsolete
+  entries to 260, and the other 104 followed. The remaining ones are
+  genuine removals, listed and verified one by one. Sardinian, whose
+  catalogue was in the tree but missing from `LINGUAS`, is built and
+  shipped for the first time — 106 languages.
+
+### Fixes — all platforms (modern machines included)
+
+- **A DVD could start the film with a subtitle track nobody asked
+  for** — on a region 2 disc carrying Arabic, English and three French
+  tracks, playback began with the Arabic one, treated as forced-only.
+  The disc had in fact selected no subtitle at all: libdvdnav answers
+  "stream 0, hidden" both when a disc really asks for forced subtitles
+  on its first track and when its subpicture register holds no
+  selection, because the lookup then falls back to the first available
+  stream. The register itself is now read — libdvdnav documents the
+  field that carries it but only ever filled it for audio, so a patch
+  fills it — and a track is auto-selected only when the disc really
+  picked one, still forced-only when the disc says so.
+- **HTTPS was impossible on Mac OS X 10.6 and 10.7, and the player
+  blamed the server.** Those systems' own TLS stack stops at TLS 1.0,
+  which every current server refuses — the handshake came back
+  `errSSLPeerProtocolVersion` and the interface reported the site as
+  unreachable while it was answering perfectly. That stack also had the
+  highest priority, so it won the choice and took HTTPS down with it.
+  Only the 64-bit Intel build was affected, and only when run below
+  10.8: the PowerPC and 32-bit Intel builds never carried that stack in
+  the first place, so they were already using the bundled one.
+  PowerVLC now always speaks TLS through the copy of GnuTLS it ships:
+  one negotiation everywhere regardless of the host system's age, and
+  the up-to-date list of certificate authorities that travels with the
+  player — plus the ones from the system keychain wherever it exposes
+  them, so a privately added authority still works.
+- **The player was killed outright the first time anything needed a
+  stored password** on Mac OS X 10.6 — browsing a media server, for
+  instance. The keychain plug-in is written against a runtime that only
+  exists from 10.7, but it was built whenever the compiler understood
+  the dialect rather than when the system could run it: loading it made
+  the dynamic linker terminate the process. It is no longer built for
+  those systems, which fall back to the portable password store.
+- **A DVD's seek bar could stop telling the truth mid-film** — the
+  remaining time jumping by minutes, the position knob freezing at the
+  start or sliding back, the hover preview refusing to open, and clicks
+  landing a minute away from what the tooltip promised. Underneath, the
+  seek bar was reading two different rulers. Chapter markers and the
+  hover tooltip are laid out in *time*, while the knob and seeking used
+  libdvdnav's *sector* position — two measures that only agree on a
+  constant bitrate. Worse, both of the library's answers are unusable on
+  a disc with multiple camera angles: the sector position gives up
+  entirely inside an angle block, and the running time counts such
+  blocks twice (measured on one disc: 4:16 announced for a picture
+  actually at 2:09). Everything now runs off a single ruler — the
+  chapter table the markers themselves come from, re-anchored at every
+  chapter boundary and every seek, with the clock filling in between —
+  so the knob, the tooltip, the markers and where a click lands finally
+  agree. Seeking to the very end also keeps a second in hand, so the
+  disc still reaches the commands that roll the credits.
+- **Discs were always told the viewer was an English speaker.** The
+  language registers a DVD reads to choose its audio track, its
+  subtitles and its menus fell back to English whenever the preferred
+  language settings were left empty, which they are by default. They now
+  fall back to the language the interface is running in, so a disc that
+  branches on the viewer's language takes the right branch out of the
+  box. An explicit preference still wins, and English remains the last
+  resort.
+- **An extension could vanish from the menu with a single line in the
+  log.** Since Lua 5.2 `luaopen_string()` only returns the string
+  library instead of also setting the global, so the scan pass that
+  reads an extension's descriptor had `string` set to nil: any script
+  touching `string.*` outside a function died on the spot and was never
+  listed. That is what took the iTunes podcast extension away.
+- **`--start-time` was ignored when recording or converting.** The seek
+  was queued as a control, so the main loop had already demuxed the
+  first blocks from position zero and the stream output — which nothing
+  paces — had written them to the destination by the time it was
+  applied. It is now performed synchronously, before any of that.
+- **An imprecise seek in a fragmented MP4 lands on the fragment's key
+  frame**, like the non-fragmented path already did, instead of
+  swallowing every sample up to the target — the samples a bounded
+  recording needs.
+- **A crop no longer comes back late, or wrong, when a stream loops.**
+  Every input format change tears the video output's display down and
+  builds a new one, which crops nothing; the crop was only put back
+  afterwards, from the interface variable, so each turn of a looping
+  stream — an Invidious video on repeat, an adaptive stream that comes
+  back at another quality — showed the uncropped frame for a moment and
+  moved the window twice. The crop in force is now held by the video
+  output itself and re-applied to the new display before it shows its
+  first picture. A crop counted in pixels is dropped when the source
+  comes back at a different resolution, where it would have cut the
+  wrong place; the automatic detection remembers what it measured for
+  each of the last four resolutions instead, and puts it straight back.
+- **The video window grew until it filled the screen on an adaptive
+  stream.** Every variant change reaches the interface as a request for a
+  window the size of the new variant's pixels, which is indistinguishable
+  from the request Video > Half/Normal/Double Size makes -- so the window
+  followed it, one step up after another, until the screen stopped it.
+  A scale change is now only followed when the vout's zoom factor
+  actually changed, i.e. when the viewer asked for it; a stream changing
+  resolution behind their back leaves the window alone. Both macOS
+  interfaces.
+- **The next item in the playlist inherited the crop of the previous
+  one.** The automatic detection remembers the mat it measured so an
+  adaptive stream that changes variant is cropped again straight away,
+  and it scales that mat to a resolution it has not seen yet as long as
+  the frame has the same shape -- which is exactly what put a film's
+  2.39 letterbox on the 4:3 programme that followed it, black pillars
+  and all. What was learnt is now dropped as soon as the video output is
+  handed a different item; a crop set by hand still carries over, as it
+  always did.
+- **Fullscreen could leave part of the screen uncovered** in the legacy
+  interface, with the controls auto-hidden: the auto-hide tick revealed
+  them as soon as it noticed fullscreen, which laid the windowed frame
+  back over the fullscreen one, and the video view was never resized to
+  the enlarged window -- a Cocoa view keeps its origin at the bottom, so
+  the picture sat on the bottom edge with a black band above it. The
+  controls are now revealed *before* the transition, as the modern
+  interface already did, and the view is given the window's bounds
+  explicitly on the way in and out.
+- **A click on the picture just after a click in the menu bar teleported
+  the video window** (legacy interface, controls hidden). Dragging the
+  picture moves the window, and the legacy path honoured *any* drag
+  reaching the video view -- including the one that follows a click whose
+  press had been swallowed by the menu tracking loop, which was then read
+  as the continuation of whatever drag happened last and moved the window
+  by the distance between two unrelated pointer positions. A drag is now
+  only honoured between a press on the picture and its own release.
+- **The video window could walk off the left of the screen on its own.**
+  Dragging the picture moves the window, and the drag was measured from
+  an anchor read with `+[NSEvent mouseLocation]` — where the pointer is
+  when the event is *handled*, not where it was clicked. The interface
+  thread does stall (an adaptive stream fetching its playlist is enough),
+  and the window then jumped by however far the pointer had travelled
+  meanwhile; the flag that says a drag is in progress was never cleared
+  on mouse up either. The drag now follows the pointer's own deltas, and
+  neither interface will let the window be dragged so far out that there
+  is nothing left to grab it by.
+
+### New features — macOS (both interfaces)
+
+- **Chapters are marked on the seek bar** — main window, fullscreen
+  panel and legacy interface alike, where the Qt interface already had
+  them — whenever the media carries seekpoints with time offsets, with
+  the chapter name in the hover tooltip. Media that numbers its chapters
+  without naming them — most discs, and plenty of containers — gets
+  "Chapter 1", "Chapter 2"… rather than a blank, in all four seek bars
+  and in the same wording the Chapter menu has always used.
+
+### Improvements — macOS
+
+- **The window is no longer locked to the video's aspect ratio by
+  default** in the modern interface: it resizes freely and the picture
+  is letterboxed inside it, like the legacy interface and like every
+  other player. Video > Aspect ratio > Lock Aspect Ratio puts the old
+  behaviour back.
+
+### Fixes — legacy Macs
+
+- **Every film started with a few seconds of blocky rubbish** on the
+  Intel Macs whose graphics chip has no video decode engine — a GMA950
+  or GMA X3100 running 10.6.3 or later, where the decode framework
+  exists but the chip behind it does not. Hardware decoding was
+  offered, accepted, and only found to be unavailable once the decoder
+  actually tried to start — at which point the whole decoder had to be
+  swapped for the software one, which then picked the stream up in the
+  middle of a group of pictures and drew broken frames until the next
+  key frame. That happened at the start of every single file. The
+  hardware is now asked once per session, before anything is committed
+  to, so those machines go straight to software decoding and start
+  clean. Machines that do have the engine are unaffected: only a plain
+  "this hardware cannot do it" answer is taken as final, any other
+  refusal leaves the previous behaviour alone. Verified on both — a
+  GMA950 Mac mini and a GeForce 320M MacBook Pro, both on 10.6.8.
+- **The screen could go to sleep in the middle of a film.** The core
+  only hooked its screensaver inhibitor onto X11, HWND and Wayland
+  windows, so on the legacy interface — whose window is an `NSObject`
+  one — the inhibitor was never even loaded, and the module that pokes
+  `UpdateSystemActivity()` for these systems never ran.
+- **⌘ + a digit was dead on every non-US keyboard under 10.2 to 10.4.**
+  When the digit row needs Shift (AZERTY, QWERTZ…), the event carries
+  the unshifted character of the key, which matches neither a menu
+  equivalent nor a core hotkey; modern AppKit falls back to an
+  ASCII-capable layout for this, the AppKit of those releases does not.
+  The window sizes (⌘0/1/2) and Fit to Screen (⌘3) are now matched on
+  the layout-independent virtual key codes — verified on a French iBook
+  under 10.2.8.
+- **The legacy menu bar carries the same shortcuts as the modern
+  interface**: Quit, Reveal in Finder, Find, Stop, Random, Fit to
+  Screen, Fullscreen and Float on Top, with the items backed by a core
+  hotkey showing the key that is actually configured.
+- **Video > Float on Top did nothing.** The interface dropped the
+  window-state query the core sends: the embedded picture lives in the
+  main window, so floating above other applications is that window's
+  level, not a property of a vout of its own.
+- **An item dropped above another in the playlist was inserted at the
+  bottom of the list.** AppKit falls back on a "drop ON" proposal
+  (`NSOutlineViewDropOnItemIndex`) as soon as it declines to aim at a
+  row — over the row being dragged, and over a leaf — and on the root
+  that reached the move as "append at the end": the row flew to the
+  bottom of the playlist instead of landing where the pointer was, which
+  read as "dropped above, inserted below". The proposal is now
+  retargeted at the insertion point actually under the pointer. Dropping
+  onto a node still puts the rows inside it, and dropping on the empty
+  area below the last row still appends. The displayed position is also
+  translated into the core's own child index, which the two stop sharing
+  as soon as a live search hides rows from the list.
+- **Fullscreen video wrapped around the notch** of a 14 or 16 inch
+  MacBook Pro. `-[NSScreen frame]` includes the menu bar strip the
+  camera housing sits in, and this interface sizes its fullscreen
+  windows itself, so nothing kept the picture out of it — the modern
+  interface already subtracts the same safe area. The window still
+  covers the whole display, since one shrunk to avoid the notch shows
+  the *desktop* in the strip instead; the picture now stops below the
+  camera, and the window's black background fills what is left, which is
+  what native fullscreen does. All three fullscreen paths are covered
+  (host window, dedicated window and the vout's own window), and screens
+  without a notch are left exactly as they were.
+- **"Show video within the main window" and "Window decorations" did
+  nothing.** Both checkboxes were displayed by the legacy preferences
+  but read by the modern interface only, so the legacy one always
+  embedded the picture, whatever they were set to. Unchecking the first
+  now opens the video in a window of its own, decorated or bare
+  according to the second. Priority is the reverse of the modern
+  interface's, on purpose: there, an unchecked "Window decorations"
+  detaches the video whatever else is set, so re-checking "Show video
+  within the main window" appeared to do nothing at all. Here the first
+  checkbox decides alone, and the second only says whether that separate
+  window has a title bar. An audit of every option the legacy
+  preferences expose found no other one left unread.
+  A decorated separate window carries its own controls — backward,
+  play/pause, forward, seek bar, duration and fullscreen, no Stop and no
+  Playlist button, exactly what the modern interface puts in its
+  detached window; a window asked to have no decorations gets none, as
+  in the modern interface. Hiding the controls during playback and
+  pausing on minimisation both reach it, and a size the video asks for
+  is scaled down to fit the screen with the aspect ratio kept — "Double
+  size" on a 1080p film asks for 3840×2160, which no screen here can
+  hold.
+
+### Fixes — macOS (modern interface)
+
+- **The detached video window opened with black bands above and below a
+  1:1 picture.** The window chrome is measured as the difference between
+  the window and the video view, which assumes the video view already
+  has the size its constraints give it; on the very first vout of a
+  detached window Auto Layout has not run on the nib yet, so the
+  measurement was 22 pt too generous — 1024×854 instead of 1024×832 for
+  a 1024×768 picture. Layout is now forced before measuring.
+
+### Crystal HD — Macs and Windows
+
+- **The Crystal HD card is now driven on Windows too**, Windows XP SP3
+  included, where it is the difference between 1080p and a slideshow.
+  Bringing the macOS work over meant more than a rebuild: the DIL
+  exports its entry points as `__cdecl` and not `__stdcall` (declaring
+  them the usual way builds, links, survives one call, and then jumps
+  into whatever the drifting stack pointer holds), the colour space has
+  to be configured *after* the decoder is opened or the card writes a
+  quarter picture into the corner of the buffer and leaves the rest
+  green, and the card lays its lines out on a quantised stride — so the
+  buffer is advertised at that width while the visible width stays
+  truthful. The restart path, which lived in local variables of the
+  open routine, was lifted out so Windows has one at all.
+- **The video no longer freezes with the sound playing on.** This
+  decoder runs on two threads, and only one of them was throttled: the
+  picture pool bounds what is *pulled* from the card, nothing bounded
+  what was *fed* to it. Measured on a 720p30 Invidious stream, the
+  decoder had pushed 49.3 s of content into the card while its output
+  was still at 6.57 s — a 42.8 s gap, with the old throttle reporting a
+  perfectly healthy lead because it was watching the wrong end. Any
+  reset then resumed the film where the *input* had got to, so pictures
+  came out dated tens of seconds in the future, the video output could
+  never display one, never returned it to the pool, and the decoder
+  parked for good. The amount of stream the card may sit on is now
+  bounded in frames — generously, since it releases pictures in batches
+  of 32 and starving it makes it run stop-and-go — and widened, never
+  removed, while the output is silent.
+- **A decoder can now tell the core how much lead it needs.** Caching
+  options are sized on the assumption that decoding is near-instant,
+  which a card that returns its pictures in batches makes false: every
+  frame at the head of a batch missed its display date. The Crystal HD
+  claims 3 s on Windows, whose DIL batches hardest, and the core takes
+  it as a floor that a larger caching setting still wins over.
+- **A card that has truly stopped hands the stream back to the
+  processor** instead of leaving a still image for the rest of the film,
+  which is what used to happen on Windows when it died 36 s into a 50 s
+  clip.
+
+### New features — Windows and Linux
+
+- **Always on top is now in the Video menu**, right above Hide Controls
+  During Playback, where the two macOS interfaces have always had it. The
+  View menu keeps its own entry, and the two follow each other.
+
+### Fixes — Windows and Linux
+
+- **Recording produced nothing at all on Windows when the "My Videos"
+  folder did not exist** — no file, no message, not a line in the log at
+  the highest verbosity. That folder is not a given: a fresh Windows XP
+  profile carries My Music and My Pictures and leaves the video one
+  unset until something creates it. The player asked the system for it,
+  got nothing back, and abandoned the recording there. It now falls
+  through to the music folder and then to the documents folder, and says
+  so in the log if even that fails. The clip creation mode showed the
+  same defect from the other end: unable to name a file, its fast export
+  declined and the clip was recorded by playing it through at normal
+  speed instead.
+- **A recording announced itself under a mangled path on Windows.** The
+  variable that tells the rest of the player which file a recording has
+  just produced carried the copy escaped for the streaming chain instead
+  of the path itself, so every backslash came back doubled: the My Videos
+  list gained an entry pointing nowhere, and the clip export — which
+  checks that the file it is told about is the one it asked for —
+  reported a failure over a clip it had just written correctly. The two
+  strings are identical on systems whose paths need no escaping, which is
+  why this had never shown.
+- **A video larger than the screen opened a window larger than the
+  screen**, its lower edge under the task bar. Only the height was ever
+  compared, so a picture too wide for a screen tall enough went through
+  untouched; and when the height did not fit, the window was given the
+  full width of the screen — which its frame borders then exceeded — with
+  the picture letterboxed inside the result. Nothing moved the window
+  afterwards either, so one that already sat low on the screen simply
+  grew downwards off it. The picture is now scaled, aspect ratio kept, to
+  what the work area leaves once the window's own furniture is measured
+  rather than estimated, and a window that ends up sticking out is
+  brought back inside the work area.
+- **The Blu-ray pop-up menu entry in the Qt interface was dead.** It was
+  wired to a slot of the wrong object, so Qt refused the connection at
+  run time and the entry did nothing on every disc that offers one.
+- **A window whose title bar had been left off the top of the screen
+  came back there for ever**, and a title bar that cannot be reached
+  cannot be dragged back. Restored geometry is now pushed down into the
+  work area.
+- **Every extension carrying a translation catalogue failed to activate
+  on Linux** ("Could not activate extension!"): the catalogues were
+  installed into the library tree while Lua looks for them under the
+  data tree. On macOS the packaging merges both, which is why it went
+  unnoticed; on Linux they are `/usr/lib/vlc` and `/usr/share/vlc`, and
+  only VLSub — which ships no catalogue — still worked.
+- **Video is no longer decoded, converted and scaled by the processor
+  when the display hardware could do it.** The OpenGL output outranks
+  every other X11 output, so it won even where Mesa has fallen back to
+  llvmpipe — an ordinary Debian 13 on a 945GME, since Mesa 25 dropped
+  the DRI2 path that generation needs. Measured there on 52 s of 854×480
+  H.264 (Atom N270): 91.3 s of CPU through OpenGL against 39.9 s through
+  XVideo. The module now declines a software-rasterised context unless
+  it is holding a hardware surface no other output could take, or unless
+  `--gl-software` says otherwise.
+- **The Windows file properties, the Add/Remove Programs entry and the
+  crash dialogs reported VideoLAN and the upstream VLC version.** The
+  version resources of the executable, the core library and every plugin
+  now carry PowerVLC's own name and version.
+
+### Build & packaging
+
+- **The i386 AppImage segfaulted at startup and quietly lost a third of
+  its plugins.** linuxdeploy gives every file it merely scans a
+  `RUNPATH` of plain `$ORIGIN`, which for a VLC plugin points at its own
+  category folder and never at the bundled libraries: plugins whose
+  dependencies were not already loaded dropped out — including VLC's
+  private helpers, which takes out *every* X11 video output — and the Qt
+  interface plugin fell back to the host's Qt through `ld.so.cache`
+  while the platform plugin still came from the bundle, mixing two Qt
+  builds into an instant crash. The build now repairs those paths with
+  `patchelf` between deploying and packaging, and hard-fails if the
+  repair did not take. Exporting `LD_LIBRARY_PATH` from the launcher was
+  tried first and rejected: it is inherited by child processes, and
+  `dbus-launch` dies on our older libraries, taking the D-Bus and MPRIS
+  interface with it. Measured: 472 → 511 modules loaded, no load
+  failures.
+- Two more AppImage traps closed: the MIME helper desktop files that
+  `make install` lays down are dropped, since linuxdeploy hands
+  appimagetool the alphabetically first one and `vlc-opendvd.desktop`
+  would have given the bundle its name and icon; and libaacs/libbdplus
+  are bundled again after the core library rename left the lookup
+  resolving to `.` and silently copying them into the working
+  directory — retail Blu-ray had gone with it. The build image now
+  installs both, which `build-dep vlc` never pulls in because libbluray
+  `dlopen()`s them.
+- **`make` can no longer destroy the translations.** Regenerating the
+  template through the gettext rule cannot work in this tree — the Qt
+  interface headers exist only in the build tree, so `POTFILES.in` has
+  to keep them commented out and the extraction loses ~360 strings,
+  which `msgmerge` then marks obsolete everywhere. The rule now refuses
+  and points at a new `po/update-pot.sh`, which builds those headers
+  with `uic`, checks that every listed file actually resolves, compares
+  the msgid sets before and after and aborts on any unjustified loss —
+  the justified ones living in `po/POT-REMOVED.txt`, 123 removals each
+  verified against the source tree. Documented in BUILD-POWERVLC.md.
+- The root certificate bundle is installed next to the executable on
+  Windows, and refreshed by `share/certs/update-ca-bundle.sh`, which
+  validates what it downloaded before overwriting anything.
+- **LINUX_REAL_HARDWARE_TESTS.md**, notes from running the AppImage on
+  an Atom N270 netbook — including the one setup step that class of
+  machine needs, since the DPMS request any player makes segfaults the X
+  server on that Intel generation with the legacy driver.
+
 ## 1.2.0 (2026-08-09)
 
 ### New features — all platforms (modern machines included)

@@ -176,6 +176,19 @@ class QVLCTools
                widget->setGeometry(QStyle::alignedRect(Qt::LeftToRight, Qt::AlignCenter, widget->size(), QGuiApplication::primaryScreen()->availableGeometry()));
             return true;
           }
+
+          /* A geometry saved while the title bar was off the top of the screen
+           * would be restored there for ever, and a window whose title bar
+           * cannot be reached cannot be moved back with the mouse. Qt's own
+           * clamping in restoreGeometry() does not cover this case. Push it
+           * down just far enough that the frame starts inside the work area. */
+          if( const QScreen *scr = QGuiApplication::primaryScreen() )
+          {
+            const QRect avail = scr->availableGeometry();
+            const QRect frame = widget->frameGeometry();
+            if( frame.top() < avail.top() )
+               widget->move( frame.left(), avail.top() );
+          }
           return false;
        }
 

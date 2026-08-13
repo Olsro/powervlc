@@ -23,6 +23,16 @@
 
 #import <Cocoa/Cocoa.h>
 
+@class VLCSlider;
+
+/* Optional provider of hover thumbnails: asked (debounced) for a preview
+ * image of the hovered position; answers back through
+ * -setHoverThumbnail:forFraction: whenever the image is ready. */
+@protocol VLCSliderHoverDelegate <NSObject>
+- (void)slider:(VLCSlider *)slider hoverThumbnailWantedAtFraction:(double)fraction;
+- (void)sliderHoverEnded:(VLCSlider *)slider;
+@end
+
 @interface VLCSlider : NSSlider
 
 @property (nonatomic, getter=getIndefinite,setter=setIndefinite:) BOOL indefinite;
@@ -30,6 +40,31 @@
 
 /* Indicates if the slider is scrollable with the mouse or trackpad scrollwheel. */
 @property (readwrite) BOOL isScrollable;
+
+/* Clip creation mode: the regular knob holds the clip start, a second
+ * knob holds the clip end. Dragging or clicking either knob moves it and
+ * is reported through the regular action; activeClipKnob tells which
+ * knob (1 = start, 2 = end) is being manipulated. */
+@property (nonatomic) BOOL clipKnobsActive;
+@property (nonatomic) double clipEndValue;
+@property (nonatomic) double playbackMarkerValue;
+@property (nonatomic, readonly) NSInteger activeClipKnob;
+
+/* Chapters (normalized fractions + names) and media duration in seconds,
+ * used for the on-track separators and the hover tooltip. */
+@property (nonatomic, copy) NSArray *chapterFractions;
+@property (nonatomic, copy) NSArray *chapterNames;
+@property (nonatomic) double mediaDuration;
+
+@property (nonatomic, weak) id<VLCSliderHoverDelegate> hoverDelegate;
+
+/* Hand a ready thumbnail back to the tooltip (ignored if the mouse has
+ * moved away from that position in the meantime). */
+- (void)setHoverThumbnail:(NSImage *)image forFraction:(double)fraction;
+
+/* Drop the tooltip right away (the host is going away: autohidden
+ * fullscreen panel, closed window, …). */
+- (void)hideHoverTooltip;
 
 - (void)setSliderStyleLight;
 - (void)setSliderStyleDark;

@@ -156,23 +156,39 @@ static CVReturn DisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTimeSt
     CVDisplayLinkSetOutputCallback(_displayLink, DisplayLinkCallback, (__bridge void*) self);
 }
 
-- (double)myNormalizedDouble
+- (double)normalizedValue:(double)value
 {
-    double min;
-    double max;
-    double current;
-
-    min = [self minValue];
-    max = [self maxValue];
-    current = [self doubleValue];
+    double min = [self minValue];
+    double max = [self maxValue];
 
     max -= min;
-    current -= min;
+    value -= min;
 
-    return current / max;
+    double normalized = value / max;
+    if (normalized < 0.0)
+        normalized = 0.0;
+    else if (normalized > 1.0)
+        normalized = 1.0;
+    return normalized;
 }
 
-- (NSRect)knobRectFlipped:(BOOL)flipped
+- (double)myNormalizedDouble
+{
+    return [self normalizedValue:[self doubleValue]];
+}
+
+/* The knob we draw is as wide as the bar is tall. AppKit's own idea of the
+ * knob width (~11 pt) is NOT this one and cannot be overridden through
+ * -knobThickness (tried: it changes nothing on the tracking), which is why
+ * the seek sliders convert clicks themselves -- see -[VLCSlider mouseDown:].
+ * Reported here as well so the filled track and the chapter marks are
+ * drawn against the knob that actually exists. */
+- (CGFloat)knobThickness
+{
+    return [[self controlView] bounds].size.height;
+}
+
+- (NSRect)knobRectForNormalizedValue:(double)val
 {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wpartial-availability"
@@ -180,23 +196,55 @@ static CVReturn DisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTimeSt
     NSRect barRect = [self barRectFlipped:NO];
 #pragma clang diagnostic pop
     CGFloat knobThickness = barRect.size.height;
-    double val = [self myNormalizedDouble];
 
     NSRect rect = NSMakeRect((NSWidth(barRect) - knobThickness) * val, 0, knobThickness, knobThickness);
     return [[self controlView] backingAlignedRect:rect options:NSAlignAllEdgesNearest];
 }
 
+- (NSRect)knobRectFlipped:(BOOL)flipped
+{
+    return [self knobRectForNormalizedValue:[self myNormalizedDouble]];
+}
+
+- (NSRect)clipEndKnobRect
+{
+    return [self knobRectForNormalizedValue:[self normalizedValue:_clipEndValue]];
+}
+
 #pragma mark -
 #pragma mark Normal slider drawing
 
-- (void)drawKnob:(NSRect)knobRect
+/* half < 0: only the left half of the disc, half > 0: only the right one.
+ * The clip bounds use those so the flat edge sits exactly on the bound and
+ * the two handles never cover each other, however close they get. */
++ (NSBezierPath *)knobPathInRect:(NSRect)rect half:(NSInteger)half
 {
-    if (_isKnobHidden)
-        return;
+    if (half == 0)
+        return [NSBezierPath bezierPathWithOvalInRect:rect];
 
+    NSPoint center = NSMakePoint(NSMidX(rect), NSMidY(rect));
+    CGFloat radius = NSWidth(rect) / 2.0;
+    NSBezierPath *path = [NSBezierPath bezierPath];
+    /* non-flipped coordinates: 90 = top, 270 = bottom, counterclockwise */
+    [path appendBezierPathWithArcWithCenter:center
+                                     radius:radius
+                                 startAngle:(half < 0 ? 90.0 : 270.0)
+                                   endAngle:(half < 0 ? 270.0 : 90.0)];
+    [path closePath];
+    return path;
+}
+
+- (void)drawKnobInRect:(NSRect)knobRect active:(BOOL)active
+{
+    [self drawKnobInRect:knobRect active:active half:0];
+}
+
+- (void)drawKnobInRect:(NSRect)knobRect active:(BOOL)active half:(NSInteger)half
+{
     // Draw knob
-    NSBezierPath* knobPath = [NSBezierPath bezierPathWithOvalInRect:NSInsetRect(knobRect, 2.0, 2.0)];
-    if (self.isHighlighted) {
+    NSBezierPath* knobPath = [VLCSliderCell knobPathInRect:NSInsetRect(knobRect, 2.0, 2.0)
+                                                      half:half];
+    if (active) {
         [_activeKnobFillColor setFill];
     } else {
         [_knobFillColor setFill];
@@ -208,10 +256,21 @@ static CVReturn DisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTimeSt
     knobPath.lineWidth = 0.5;
 
     [NSGraphicsContext saveGraphicsState];
-    if (self.isHighlighted)
+    if (active)
         [_knobShadow set];
     [knobPath stroke];
     [NSGraphicsContext restoreGraphicsState];
+}
+
+- (void)drawKnob:(NSRect)knobRect
+{
+    if (_isKnobHidden)
+        return;
+
+    BOOL active = self.isHighlighted
+        && (!_clipKnobsActive || _activeClipKnob != 2);
+    /* clip start: left half only, so the flat edge marks the bound */
+    [self drawKnobInRect:knobRect active:active half:(_clipKnobsActive ? -1 : 0)];
 }
 
 - (NSRect)barRectFlipped:(BOOL)flipped
@@ -243,6 +302,17 @@ static CVReturn DisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTimeSt
     NSRect knobRect = [self knobRectFlipped:NO];
     filledTrackRect.size.width = knobRect.origin.x + (self.knobThickness / 2);
 
+    if (_clipKnobsActive) {
+        // Fill the clip range [start knob .. end knob] instead of [0 .. knob]
+        NSRect endKnobRect = [self clipEndKnobRect];
+        CGFloat startX = knobRect.origin.x + (self.knobThickness / 2);
+        CGFloat endX = endKnobRect.origin.x + (self.knobThickness / 2);
+        if (endX < startX)
+            endX = startX;
+        filledTrackRect.origin.x = startX;
+        filledTrackRect.size.width = endX - startX;
+    }
+
     // Filled Track Drawing
     CGFloat filledTrackCornerRadius = 2;
     NSBezierPath* filledTrackPath = [NSBezierPath bezierPathWithRoundedRect:filledTrackRect
@@ -252,9 +322,69 @@ static CVReturn DisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTimeSt
     [_filledTrackColor setFill];
     [filledTrackPath fill];
 
+    /* chapter separators, like the Qt seek slider */
+    NSUInteger chapterCount = [_chapterFractions count];
+    if (chapterCount > 1) {
+        CGFloat knobThickness = self.knobThickness;
+        [_trackStrokeColor setFill];
+        for (NSUInteger i = 1; i < chapterCount; i++) {
+            double fraction = [[_chapterFractions objectAtIndex:i] doubleValue];
+            if (fraction <= 0. || fraction > 1.)
+                continue;
+            CGFloat x = NSMinX(rect) + (NSWidth(rect) - knobThickness) * fraction
+                + (knobThickness / 2);
+            NSRectFill(NSMakeRect(x, NSMinY(rect) + 1.0, 1.0, NSHeight(rect) - 2.0));
+        }
+    }
+
     [_trackStrokeColor setStroke];
     emptyTrackPath.lineWidth = 1;
     [emptyTrackPath stroke];
+}
+
+#pragma mark -
+#pragma mark Clip creation mode drawing
+
+- (void)drawClipExtrasInFrame:(NSRect)cellFrame
+{
+    if (_isKnobHidden)
+        return;
+
+    // Thin marker for the actual playback position, so the user does not
+    // lose track of it while both knobs hold the clip bounds.
+    NSRect barRect = [[self controlView] bounds];
+    CGFloat knobThickness = barRect.size.height;
+    double markerVal = [self normalizedValue:_playbackMarkerValue];
+    /* the playback can sit slightly outside the bounds (the end-of-clip
+     * pause lands a few frames past the end knob): keep the marker cut
+     * by the knob centers, where the clip logically starts and ends */
+    double startVal = [self normalizedValue:[self doubleValue]];
+    double endVal = [self normalizedValue:_clipEndValue];
+    if (markerVal < startVal)
+        markerVal = startVal;
+    else if (markerVal > endVal)
+        markerVal = endVal;
+    CGFloat markerX = (NSWidth(barRect) - knobThickness) * markerVal
+        + (knobThickness / 2);
+    NSRect markerRect = NSMakeRect(markerX - 1.0, NSMinY(barRect) + 2.0,
+                                   2.0, NSHeight(barRect) - 4.0);
+    [_highlightBackground setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:markerRect xRadius:1.0 yRadius:1.0] fill];
+
+    BOOL endActive = self.isHighlighted && _activeClipKnob == 2;
+    /* clip end: right half only (see -drawKnob:) */
+    [self drawKnobInRect:[self clipEndKnobRect] active:endActive half:1];
+}
+
+- (void)drawWithFrame:(NSRect)cellFrame inView:(NSView *)controlView
+{
+    if (_indefinite)
+        return [self drawAnimationInRect:cellFrame];
+
+    [super drawWithFrame:cellFrame inView:controlView];
+
+    if (_clipKnobsActive)
+        [self drawClipExtrasInFrame:cellFrame];
 }
 
 #pragma mark -
@@ -302,15 +432,6 @@ static CVReturn DisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTimeSt
     _deltaToLastFrame = 0;
 }
 
-
-- (void)drawWithFrame:(NSRect)cellFrame inView:(NSView *)controlView
-{
-    if (_indefinite)
-        return [self drawAnimationInRect:cellFrame];
-
-    [super drawWithFrame:cellFrame inView:controlView];
-
-}
 
 #pragma mark -
 #pragma mark Animation handling

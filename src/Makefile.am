@@ -228,6 +228,7 @@ libpowervlccore_la_SOURCES = \
 	playlist/renderer.c \
 	input/item.c \
 	input/access.c \
+	input/clip_export.c \
 	input/clock.c \
 	input/control.c \
 	input/decoder.c \
@@ -286,6 +287,8 @@ libpowervlccore_la_SOURCES = \
 	video_output/video_text.c \
 	video_output/video_epg.c \
 	video_output/video_widgets.c \
+	video_output/vout_autocrop.c \
+	video_output/vout_autocrop.h \
 	video_output/vout_subpictures.c \
 	video_output/vout_spuregion_helper.h \
 	video_output/window.c \

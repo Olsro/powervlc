@@ -110,6 +110,11 @@ typedef struct input_thread_private_t
     int64_t     i_time;     /* Current time */
     bool        b_fast_seek;/* :input-fast-seek */
 
+    /* Floor on the pipeline lead, claimed by a decoder that needs more than
+     * the access asks for (see decoder_t::i_min_pts_delay). Owned by the
+     * input thread, which is also the only thread that creates decoders. */
+    vlc_tick_t  i_min_pts_delay;
+
     /* Output */
     bool            b_out_pace_control; /* XXX Move it ot es_sout ? */
     sout_instance_t *p_sout;            /* Idem ? */
@@ -238,6 +243,13 @@ enum input_control_e
     INPUT_CONTROL_SET_FRAME_NEXT,
 
     INPUT_CONTROL_SET_RENDERER,
+
+    /* PowerVLC clip creation: atomic "seek to position, then start
+     * recording" (val.f_float = position fraction). Neither half may be
+     * separated from the other: SET_POSITION is refused while recording,
+     * and in the reverse order the demuxer runs between the two controls,
+     * so the recording misses the key frame the seek resumed from. */
+    INPUT_CONTROL_RECORD_CLIP,
 };
 
 /* Internal helpers */
@@ -246,6 +258,13 @@ enum input_control_e
  * input_ControlPush
  */
 void input_ControlPush( input_thread_t *, int i_type, vlc_value_t * );
+
+/**
+ * Raise the floor on the input's pts_delay, for a decoder whose own latency
+ * the access-derived caching cannot cover. Never lowers it. Must be called
+ * from the input thread (decoder creation runs there).
+ */
+void input_SetMinPtsDelay( input_thread_t *, vlc_tick_t );
 
 bool input_Stopped( input_thread_t * );
 
@@ -262,6 +281,10 @@ void input_ExtractAttachmentAndCacheArt( input_thread_t *, const char *name );
 /***************************************************************************
  * Internal prototypes
  ***************************************************************************/
+
+/* input.c: the directory a recording (live, or a clip export) goes to.
+ * Never returns an unusable one while any user directory exists. */
+char *input_RecordDirectory( input_thread_t * ) VLC_USED;
 
 /* var.c */
 void input_ControlVarInit ( input_thread_t * );

@@ -327,6 +327,7 @@ static input_thread_t *Create( vlc_object_t *p_parent, input_item_t *p_item,
     TAB_INIT( priv->i_attachment, priv->attachment );
     priv->attachment_demux = NULL;
     priv->p_sout   = NULL;
+    priv->i_min_pts_delay = 0;
     priv->b_out_pace_control = false;
     priv->p_renderer = p_renderer && b_preparsing == false ?
                 vlc_renderer_item_hold( p_renderer ) : NULL;
@@ -976,6 +977,8 @@ static void StartTitle( input_thread_t * p_input )
             priv->i_stop += priv->i_start;
     }
 
+    priv->b_fast_seek = var_GetBool( p_input, "input-fast-seek" );
+
     if( priv->i_start > 0 )
     {
         vlc_value_t s;
@@ -983,15 +986,18 @@ static void StartTitle( input_thread_t * p_input )
         msg_Dbg( p_input, "starting at time: %"PRId64"s",
                  priv->i_start / CLOCK_FREQ );
 
+        /* Seek synchronously: a queued control is only handled once the
+         * main loop already demuxed the first blocks from position 0, and
+         * a stream output (not being paced) has encoded/written them into
+         * the destination by the time the seek is finally applied */
         s.i_int = priv->i_start;
-        input_ControlPush( p_input, INPUT_CONTROL_SET_TIME, &s );
+        Control( p_input, INPUT_CONTROL_SET_TIME, s );
     }
     if( priv->i_stop > 0 && priv->i_stop <= priv->i_start )
     {
         msg_Warn( p_input, "invalid stop-time ignored" );
         priv->i_stop = 0;
     }
-    priv->b_fast_seek = var_GetBool( p_input, "input-fast-seek" );
 }
 
 static int SlaveCompare(const void *a, const void *b)
@@ -1287,6 +1293,13 @@ static void UpdatePtsDelay( input_thread_t *p_input )
     if( i_pts_delay < 0 )
         i_pts_delay = 0;
 
+    /* A decoder may need more lead than the access asked for: the caching
+     * options are sized for near-instant decoding, which a hardware decoder
+     * that returns its pictures in batches does not provide. Purely a floor,
+     * so a larger caching setting always wins. */
+    if( i_pts_delay < p_sys->i_min_pts_delay )
+        i_pts_delay = p_sys->i_min_pts_delay;
+
     /* Take care of audio/spu delay */
     const vlc_tick_t i_audio_delay = var_GetInteger( p_input, "audio-delay" );
     const vlc_tick_t i_spu_delay   = var_GetInteger( p_input, "spu-delay" );
@@ -1301,6 +1314,18 @@ static void UpdatePtsDelay( input_thread_t *p_input )
     es_out_SetDelay( input_priv(p_input)->p_es_out_display, AUDIO_ES, i_audio_delay );
     es_out_SetDelay( input_priv(p_input)->p_es_out_display, SPU_ES, i_spu_delay );
     es_out_SetJitter( input_priv(p_input)->p_es_out, i_pts_delay, 0, i_cr_average );
+}
+
+void input_SetMinPtsDelay( input_thread_t *p_input, vlc_tick_t i_delay )
+{
+    input_thread_private_t *p_sys = input_priv(p_input);
+
+    if( i_delay <= p_sys->i_min_pts_delay )
+        return;
+
+    msg_Dbg( p_input, "a decoder asks for %"PRId64" ms of lead", i_delay / 1000 );
+    p_sys->i_min_pts_delay = i_delay;
+    UpdatePtsDelay( p_input );
 }
 
 static void InitPrograms( input_thread_t * p_input )
@@ -2369,6 +2394,46 @@ static bool Control( input_thread_t *p_input,
                     /* The slave is now owned by the item */
                     val.p_address = NULL;
                 }
+            }
+            break;
+
+        case INPUT_CONTROL_RECORD_CLIP:
+            /* PowerVLC clip creation: seek + record start in one control,
+             * so no demuxing happens in between and the recording begins
+             * at the key frame the seek resumed from. The seek is done in
+             * IMPRECISE mode on purpose: a precise seek makes demuxers
+             * (fragmented mp4 among others) swallow every sample between
+             * the preceding key frame and the target, so the recording
+             * could only start at the NEXT key frame -- losing up to a
+             * whole GOP of what the user framed. Resuming at the key
+             * frame keeps that content; record trims towards the bound
+             * (sout-record-start-time) as far as decodability allows. */
+            if( !input_priv(p_input)->b_recording )
+            {
+                float f_pos = val.f_float;
+                if( f_pos < 0.f )
+                    f_pos = 0.f;
+                else if( f_pos > 1.f )
+                    f_pos = 1.f;
+                /* Reset the decoders states and clock sync (before calling the demuxer) */
+                es_out_SetTime( input_priv(p_input)->p_es_out, -1 );
+                if( demux_Control( input_priv(p_input)->master->p_demux,
+                                   DEMUX_SET_POSITION, (double) f_pos, false ) )
+                {
+                    msg_Err( p_input, "INPUT_CONTROL_RECORD_CLIP "
+                             "seek to %2.1f%% failed", (double)(f_pos * 100.f) );
+                }
+                else
+                {
+                    if( input_priv(p_input)->i_slave > 0 )
+                        SlaveSeek( p_input );
+                    input_priv(p_input)->master->b_eof = false;
+                    b_force_update = true;
+                }
+
+                vlc_value_t rec = { .b_bool = true };
+                if( Control( p_input, INPUT_CONTROL_SET_RECORD_STATE, rec ) )
+                    b_force_update = true;
             }
             break;
 
@@ -3680,6 +3745,54 @@ void input_UpdateStatistic( input_thread_t *p_input,
         break;
     }
     vlc_mutex_unlock( &input_priv(p_input)->counters.counters_lock);
+}
+
+/* An empty shell folder is no folder at all: the path would be built
+ * relative to whatever the working directory happens to be. */
+static char *InputUserDir(vlc_userdir_t type)
+{
+    char *dir = config_GetUserDir(type);
+
+    if (dir != NULL && *dir == '\0') {
+        free(dir);
+        dir = NULL;
+    }
+    return dir;
+}
+
+/**
+ * Where a recording goes: the configured directory, else the user's video
+ * or music directory depending on what is playing.
+ *
+ * ⚠ Any of those can come back empty, and the caller must not be left
+ * without one. On Windows XP the "My Videos" shell folder does not exist
+ * until something creates it -- a fresh profile carries "My Music" and "My
+ * Pictures" and an EMPTY registry value for the video one -- so
+ * SHGetFolderPath fails, and the recording used to be abandoned right
+ * there: no file, no message, nothing in the log. The clip creation mode
+ * showed it as "the fast export never runs", since it could not name a
+ * file either and fell back to recording in real time (reported on the XP
+ * bench, 13/08/2026). Hence the fall-through, down to the home directory,
+ * which every platform has.
+ */
+char *input_RecordDirectory(input_thread_t *input)
+{
+    char *dir = var_CreateGetNonEmptyString(input, "input-record-path");
+    if (dir != NULL)
+        return dir;
+
+    if (var_CountChoices(input, "video-es"))
+        dir = InputUserDir(VLC_VIDEOS_DIR);
+    else if (var_CountChoices(input, "audio-es"))
+        dir = InputUserDir(VLC_MUSIC_DIR);
+
+    if (dir == NULL)
+        dir = InputUserDir(VLC_DOWNLOAD_DIR);
+    if (dir == NULL)
+        dir = InputUserDir(VLC_HOME_DIR);
+    if (dir == NULL)
+        msg_Err(input, "no directory to record into");
+    return dir;
 }
 
 /**/

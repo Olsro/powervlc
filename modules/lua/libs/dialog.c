@@ -238,6 +238,31 @@ static int vlclua_dialog_create( lua_State *L )
     return 1;
 }
 
+
+/* ⚠⚠⚠ Retirer du registre Lua la table de rappels d'un widget qu'on détruit.
+ *
+ * Les rappels y sont rangés sous une clé « lightuserdata » qui EST l'adresse
+ * du widget (cf. vlclua_dialog_add_widget_inner et WidgetCallback dans
+ * extension.c). Rien ne les en retirait à la destruction : l'entrée survivait
+ * au `free()`, indexée par une adresse morte. Or un listage reconstruit ses
+ * widgets en masse, et l'allocateur rend très vite la même adresse — le widget
+ * NEUF héritait alors silencieusement des rappels de l'ANCIEN, dont les
+ * variables capturées désignent un dialogue déjà démonté.
+ *
+ * Diagnostiqué sur 10.6.8 pendant le chargement d'une bibliothèque Jellyfin :
+ * `Run` → `WidgetCallback` → `lua_pcall` → `luaV_execute` → saut vers
+ * l'ADRESSE NULLE. La purge de la file (KillWidgetCommands) ne couvre que les
+ * évènements EN ATTENTE ; celle-ci couvre l'état laissé derrière.
+ */
+static void ForgetWidgetCallbacks( lua_State *L, extension_widget_t *p_widget )
+{
+    if( L == NULL || p_widget == NULL )
+        return;
+    lua_pushlightuserdata( L, p_widget );
+    lua_pushnil( L );
+    lua_settable( L, LUA_REGISTRYINDEX );
+}
+
 static int vlclua_dialog_delete( lua_State *L )
 {
     vlc_object_t *p_mgr = vlclua_get_this( L );
@@ -338,6 +363,7 @@ static int vlclua_dialog_delete( lua_State *L )
          * outright, without going through it, so the queue has to be cleared
          * of the events naming them here too. */
         KillWidgetCommands( p_ext, p_widget );
+        ForgetWidgetCallbacks( L, p_widget );
 
         free( p_widget->psz_text );
 
@@ -1404,6 +1430,9 @@ static int vlclua_dialog_delete_widget( lua_State *L )
         vlc_cond_wait( &p_dlg->cond, &p_dlg->lock );
     }
 
+    /* AVANT la destruction : DeleteWidget() libère le widget, et son adresse
+     * ne doit plus servir de clé une fois le bloc rendu. */
+    ForgetWidgetCallbacks( L, p_widget );
     i_ret = DeleteWidget( p_dlg, p_widget );
 
     vlc_mutex_unlock( &p_dlg->lock );

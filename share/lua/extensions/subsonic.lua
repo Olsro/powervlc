@@ -314,12 +314,22 @@ local function sanitize_filename(s)
     s = "_"
   end
   if #s > 120 then
-    local cut = string.sub(s, 1, 120)
-    while #cut > 0 and string.byte(cut, #cut) >= 128
-                   and string.byte(cut, #cut) < 192 do
-      cut = string.sub(cut, 1, #cut - 1)
+    -- Judged on the first byte DROPPED, not on the last one kept: a
+    -- continuation byte there is what says the cut falls inside a
+    -- character. Walking back from the last byte kept instead throws away
+    -- a whole character when the cut happened to land cleanly -- and, on
+    -- a lead byte, leaves it dangling with its continuation gone, which
+    -- is not text any more.
+    local cut = 120
+    while cut > 0 do
+      local b = string.byte(s, cut + 1)
+      if not b or b < 128 or b >= 192 then
+        break
+      end
+      cut = cut - 1
     end
-    s = cut
+    -- the cut may have exposed a space, and a name may not end on one
+    s = trim(string.sub(s, 1, cut))
   end
   return s
 end
@@ -2394,12 +2404,19 @@ local function ellipsize(s, max)
   if #s <= max then
     return s
   end
-  local cut = string.sub(s, 1, max)
-  while #cut > 0 and string.byte(cut, #cut) >= 128
-                 and string.byte(cut, #cut) < 192 do
-    cut = string.sub(cut, 1, #cut - 1)
+  -- Judged on the first byte DROPPED, exactly as in sanitize_filename
+  -- above and for the same two reasons: a clean cut must not cost a whole
+  -- character, and a cut landing on a lead byte must take that byte with
+  -- it rather than leave it standing without its continuation.
+  local cut = max
+  while cut > 0 do
+    local b = string.byte(s, cut + 1)
+    if not b or b < 128 or b >= 192 then
+      break
+    end
+    cut = cut - 1
   end
-  return cut .. "…"
+  return string.sub(s, 1, cut) .. "…"
 end
 
 local function dl_update_label()

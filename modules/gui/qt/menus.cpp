@@ -56,6 +56,12 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QSignalMapper>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QLabel>
+#include <QSpinBox>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
 
 #ifndef QT_NO_STATUSBAR
 # include <QStatusBar>
@@ -340,7 +346,7 @@ void VLCMenuBar::createMenuBar( MainInterface *mi,
     /* Dynamic menus, rebuilt before being showed */
     BAR_DADD( NavigMenu( p_intf, bar ), qtr( "P&layback" ), 3 );
     BAR_DADD( AudioMenu( p_intf, bar ), qtr( "&Audio" ), 1 );
-    BAR_DADD( VideoMenu( p_intf, bar ), qtr( "&Video" ), 2 );
+    BAR_DADD( VideoMenu( p_intf, bar, mi ), qtr( "&Video" ), 2 );
     BAR_DADD( SubtitleMenu( p_intf, bar ), qtr( "Subti&tle" ), 5 );
 
     addMenuToMainbar( ToolsMenu( p_intf, bar ), qtr( "Tool&s" ), bar );
@@ -509,6 +515,8 @@ QMenu *VLCMenuBar::ViewMenu( intf_thread_t *p_intf, QMenu *current, MainInterfac
     action->setCheckable( true );
     action->setChecked( mi->isInterfaceAlwaysOnTop() );
     connect( action, &QAction::triggered, mi, &MainInterface::setInterfaceAlwaysOnTop );
+    /* the Video menu carries the same switch: keep the two ticks together */
+    connect( mi, &MainInterface::alwaysOnTopToggled, action, &QAction::setChecked );
 
     menu->addSeparator();
 
@@ -676,7 +684,8 @@ QMenu *VLCMenuBar::SubtitleMenu( intf_thread_t *p_intf, QMenu *current, bool b_p
  * Main Video Menu
  * Subtitles are part of Video.
  **/
-QMenu *VLCMenuBar::VideoMenu( intf_thread_t *p_intf, QMenu *current )
+QMenu *VLCMenuBar::VideoMenu( intf_thread_t *p_intf, QMenu *current,
+                              MainInterface *_mi )
 {
     input_thread_t *p_input;
     QVector<vlc_object_t *> objects;
@@ -696,6 +705,45 @@ QMenu *VLCMenuBar::VideoMenu( intf_thread_t *p_intf, QMenu *current )
         addActionWithCheckbox( current, "fullscreen", qtr( "&Fullscreen" ) );
         addActionWithCheckbox( current, "autoscale", qtr( "Always Fit &Window" ) );
         addActionWithCheckbox( current, "video-wallpaper", qtr( "Set as Wall&paper" ) );
+
+        /* Hide controls during playback: the mac interfaces put it right
+         * below Float on Top; the Qt Video menu has no such entry, so it
+         * joins the other surface modifiers. Interface-bound (not a vout
+         * variable), hence the static entry wired to MainInterface. */
+        /* ⚠ p_intf->p_sys->p_mi is still NULL here when the menu bar is
+         * built: createMenuBar() runs from the MainInterface constructor
+         * and qt.cpp only publishes the pointer once that returns. Taking
+         * it from p_sys therefore skipped this entry entirely (measured on
+         * the Qt bench: no "Hide Controls During Playback" in the Video
+         * menu, the feature unreachable). ViewMenu already had the answer:
+         * the caller passes the interface down. */
+        MainInterface *mi = _mi ? _mi : p_intf->p_sys->p_mi;
+        if( mi )
+        {
+            /* Float on Top, right above it, exactly as the mac Video menu
+             * has them. The View menu keeps its own copy (upstream); both
+             * are checkable and follow each other through
+             * alwaysOnTopToggled(). */
+            QAction *topAction = current->addAction( qtr( "Always on &top" ) );
+            topAction->setCheckable( true );
+            topAction->setChecked( mi->isInterfaceAlwaysOnTop() );
+            topAction->setData( QVariant( VLCMenuBar::ACTION_STATIC ) );
+            connect( topAction, &QAction::triggered,
+                     mi, &MainInterface::setInterfaceAlwaysOnTop );
+            connect( mi, &MainInterface::alwaysOnTopToggled,
+                     topAction, &QAction::setChecked );
+
+            QAction *hideAction =
+                current->addAction( qtr( "Hide Controls During Playback" ) );
+            hideAction->setShortcut( qtr( "Ctrl+Shift+H" ) );
+            hideAction->setCheckable( true );
+            hideAction->setChecked( mi->autoHideControlsEnabled() );
+            hideAction->setData( QVariant( VLCMenuBar::ACTION_STATIC ) );
+            connect( hideAction, &QAction::triggered,
+                     mi, &MainInterface::setAutoHideControls );
+            connect( mi, &MainInterface::autoHideControlsToggled,
+                     hideAction, &QAction::setChecked );
+        }
 
         current->addSeparator();
         /* Size modifiers */
@@ -735,9 +783,17 @@ QMenu *VLCMenuBar::NavigMenu( intf_thread_t *p_intf, QMenu *menu )
     addActionWithSubmenu( menu, "program", qtr( "&Program" ) );
 
     /* Blu-ray pop-up menu: enabled by RebuildNavigMenu() only while the disc
-     * actually offers one */
-    action = addMIMStaticEntry( p_intf, menu, qtr( I_MENU_DISC_POPUP ), "",
-                                SLOT( discPopupMenu() ) );
+     * actually offers one. discPopupMenu() is a slot of InputManager, not of
+     * MainInputManager, so it cannot go through addMIMStaticEntry(): that
+     * connects to THEMIM and Qt rejects the connection at run time ("No such
+     * slot MainInputManager::discPopupMenu()"), leaving the entry dead. */
+    action = menu->addAction( qtr( I_MENU_DISC_POPUP ), THEMIM->getIM(),
+                              SLOT( discPopupMenu() ) );
+    /* Same flags addMIMStaticEntry() would have set: ACTION_NO_CLEANUP keeps
+     * DeleteNonStaticEntries() from deleting the entry on every rebuild, and
+     * ACTION_MANAGED lets EnableStaticEntries() grey it out with no input
+     * (RebuildNavigMenu() then refines it with input_HasPopupMenu()). */
+    action->setData( static_cast<int>( ACTION_STATIC ) );
     action->setObjectName( "disc-popup-menu" );
 
     submenu = new QMenu( qtr( I_MENU_BOOKMARK ), menu );
@@ -758,6 +814,28 @@ QMenu *VLCMenuBar::NavigMenu( intf_thread_t *p_intf, QMenu *menu )
 
 
     PopupMenuControlEntries( menu, p_intf );
+
+    /* PowerVLC clip creation mode: the entry also exists in the right-click
+     * menu (PopupMenuPlaylistEntries), but the two macOS interfaces carry it
+     * in the Playback menu with a shortcut, and a mode you can only reach by
+     * right-clicking is a mode nobody finds. Ctrl+Shift+C = the ⌘⇧C of the
+     * Mac builds ("C" for clip; Ctrl+C is a copy everywhere). */
+    {
+        InputManager *im = THEMIM->getIM();
+        QAction *clipAction = menu->addAction(
+            im->clipCreationMode() ? qtr( "Exit Clip Creation Mode" )
+                                   : qtr( "Enter Clip Creation Mode" ),
+            im, SLOT( toggleClipCreationMode() ) );
+        clipAction->setShortcut( QKeySequence( "Ctrl+Shift+C" ) );
+        clipAction->setShortcutContext( Qt::ApplicationShortcut );
+        clipAction->setData( static_cast<int>( ACTION_STATIC | ACTION_MANAGED ) );
+        clipAction->setObjectName( "clip-creation-mode" );
+        QObject::connect( im, &InputManager::clipCreationModeChanged, clipAction,
+                          [clipAction]( bool b_on ) {
+            clipAction->setText( b_on ? qtr( "Exit Clip Creation Mode" )
+                                      : qtr( "Enter Clip Creation Mode" ) );
+        } );
+    }
 
     EnableStaticEntries( menu, ( THEMIM->getInput() != NULL ) );
     return RebuildNavigMenu( p_intf, menu, true );
@@ -926,6 +1004,24 @@ void VLCMenuBar::PopupMenuPlaylistEntries( QMenu *menu,
     if( !p_input )
         action->setEnabled( false );
     action->setData( static_cast<int>(ACTION_NO_CLEANUP | ACTION_DELETE_ON_REBUILD) );
+
+    /* PowerVLC clip creation mode, right below Record: a second knob
+     * appears on the seek bar so both clip bounds can be set with
+     * instant preview, and Record then saves exactly that range. */
+    InputManager *im = THEMIM->getIM();
+    action = menu->addAction(
+        im->clipCreationMode() ? qtr( "Exit Clip Creation Mode" )
+                               : qtr( "Enter Clip Creation Mode" ),
+        im, SLOT( toggleClipCreationMode() ) );
+    if( !p_input )
+        action->setEnabled( false );
+    action->setData( static_cast<int>(ACTION_NO_CLEANUP | ACTION_DELETE_ON_REBUILD) );
+    connect( im, &InputManager::clipCreationModeChanged, action,
+             [action]( bool b_on ) {
+        action->setText( b_on ? qtr( "Exit Clip Creation Mode" )
+                              : qtr( "Enter Clip Creation Mode" ) );
+    } );
+
     menu->addSeparator();
 }
 
@@ -1310,7 +1406,168 @@ static bool IsMenuEmpty( const char *psz_var, vlc_object_t *p_object )
 
 #define TEXT_OR_VAR qfue ( text.psz_string ? text.psz_string : psz_var )
 
-void VLCMenuBar::UpdateItem( intf_thread_t *, QMenu *menu,
+/*****************************************************************************
+ * Custom crop / aspect ratio (VLC 4.0 backport)
+ *****************************************************************************/
+
+/* A small window to type the wanted ratio in, the way VLC 4.0's macOS
+ * panel does it: one field per side of the ratio. Returns an empty string
+ * when cancelled. */
+static QString AskCustomRatio( const QString &title, const QString &current )
+{
+    QDialog dialog( NULL );
+    dialog.setWindowTitle( title );
+
+    QSpinBox *numerator = new QSpinBox( &dialog );
+    QSpinBox *denominator = new QSpinBox( &dialog );
+    numerator->setRange( 1, 100000 );
+    denominator->setRange( 1, 100000 );
+
+    /* Start from what is in force, when it is a ratio -- the variable can
+     * also hold a crop window or a border, which this window cannot show. */
+    unsigned num = 0, den = 0;
+    if( sscanf( qtu( current ), "%u:%u", &num, &den ) == 2 && num > 0 && den > 0 )
+    {
+        numerator->setValue( num );
+        denominator->setValue( den );
+    }
+    else
+    {
+        numerator->setValue( 16 );
+        denominator->setValue( 9 );
+    }
+
+    QHBoxLayout *ratioLayout = new QHBoxLayout();
+    ratioLayout->addWidget( numerator );
+    ratioLayout->addWidget( new QLabel( ":", &dialog ) );
+    ratioLayout->addWidget( denominator );
+
+    QDialogButtonBox *buttons =
+        new QDialogButtonBox( QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+                              Qt::Horizontal, &dialog );
+    QObject::connect( buttons, SIGNAL( accepted() ), &dialog, SLOT( accept() ) );
+    QObject::connect( buttons, SIGNAL( rejected() ), &dialog, SLOT( reject() ) );
+
+    /* Typing must replace what is there, not insert into it: the window
+     * opens on a default ratio and the first thing anyone does is type
+     * their own. Qt selects a spin box's text when Tab moves into it, but
+     * not the one that holds the focus to begin with. */
+    numerator->setFocus();
+    numerator->selectAll();
+
+    QVBoxLayout *layout = new QVBoxLayout( &dialog );
+    layout->addWidget( new QLabel( title, &dialog ) );
+    layout->addLayout( ratioLayout );
+    layout->addWidget( buttons );
+
+    if( dialog.exec() != QDialog::Accepted )
+        return QString();
+
+    return QString( "%1:%2" ).arg( numerator->value() )
+                             .arg( denominator->value() );
+}
+
+/* Offers the ratio in the menu from now on, and keeps it for the next vout
+ * and the next run -- "custom-crop-ratios" / "custom-aspect-ratios" is
+ * exactly what vout_IntfInit reads back to fill the menu. */
+static void RememberCustomRatio( intf_thread_t *p_intf, vlc_object_t *p_object,
+                                 const char *psz_var, const char *psz_config,
+                                 const QString &ratio )
+{
+    const QByteArray value = ratio.toUtf8();
+
+    vlc_value_t val_list, text_list;
+    if( var_Change( p_object, psz_var, VLC_VAR_GETCHOICES,
+                    &val_list, &text_list ) == VLC_SUCCESS )
+    {
+        bool known = false;
+        for( int i = 0; i < val_list.p_list->i_count; i++ )
+        {
+            const char *psz_choice = val_list.p_list->p_values[i].psz_string;
+            if( psz_choice != NULL && !strcmp( psz_choice, value.constData() ) )
+            {
+                known = true;
+                break;
+            }
+        }
+        var_FreeList( &val_list, &text_list );
+        if( known )
+            return;
+    }
+
+    vlc_value_t val, text;
+    val.psz_string = const_cast<char *>( value.constData() );
+    text.psz_string = val.psz_string;
+    var_Change( p_object, psz_var, VLC_VAR_ADDCHOICE, &val, &text );
+
+    QStringList ratios;
+    char *psz_list = config_GetPsz( p_intf, psz_config );
+    if( psz_list != NULL )
+    {
+        ratios = QString( qfu( psz_list ) ).split( ',',
+                                      #if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+                                        Qt::SkipEmptyParts
+                                      #else
+                                        QString::SkipEmptyParts
+                                      #endif
+                                    );
+        free( psz_list );
+    }
+    if( !ratios.contains( ratio ) )
+        ratios.append( ratio );
+
+    config_PutPsz( p_intf, psz_config, qtu( ratios.join( "," ) ) );
+    config_SaveConfigFile( p_intf );
+}
+
+static void AskAndSetCustomRatio( intf_thread_t *p_intf, vlc_object_t *p_object,
+                                  const char *psz_var )
+{
+    const bool is_crop = !strcmp( psz_var, "crop" );
+
+    char *psz_current = var_GetString( p_object, psz_var );
+    const QString ratio = AskCustomRatio( is_crop ? qtr( "Crop" )
+                                                  : qtr( "Aspect Ratio" ),
+                                          qfu( psz_current ? psz_current : "" ) );
+    free( psz_current );
+    if( ratio.isEmpty() )
+        return;
+
+    RememberCustomRatio( p_intf, p_object, psz_var,
+                         is_crop ? "custom-crop-ratios"
+                                 : "custom-aspect-ratios", ratio );
+    var_SetString( p_object, psz_var, qtu( ratio ) );
+}
+
+/* Appended after the choices the variable offers, and deliberately NOT
+ * static in the DeleteNonStaticEntries() sense: letting it be deleted and
+ * put back on every rebuild is what keeps it at the bottom of the list. */
+static void AppendCustomRatioEntry( intf_thread_t *p_intf, QMenu *submenu,
+                                    const char *psz_var )
+{
+    if( strcmp( psz_var, "crop" ) && strcmp( psz_var, "aspect-ratio" ) )
+        return;
+
+    submenu->addSeparator();
+    QAction *action = submenu->addAction( qtr( "Custom" ) );
+    /* Resolve the vout when the entry is picked, not now: the pointer the
+     * menu was built with is not held (see VideoAutoMenuBuilder, which
+     * releases it before Populate even runs) and the panel is modal, so it
+     * can well outlive the vout it was opened from.
+     * psz_var is a literal from the varnames list, safe to capture. */
+    QObject::connect( action, &QAction::triggered, [p_intf, psz_var]() {
+                          input_thread_t *p_input = THEMIM->getInput();
+                          vout_thread_t *p_vout = p_input ? input_GetVout( p_input )
+                                                          : NULL;
+                          if( p_vout == NULL )
+                              return;
+                          AskAndSetCustomRatio( p_intf, VLC_OBJECT( p_vout ),
+                                                psz_var );
+                          vlc_object_release( p_vout );
+                      } );
+}
+
+void VLCMenuBar::UpdateItem( intf_thread_t *p_intf, QMenu *menu,
         const char *psz_var, vlc_object_t *p_object, bool b_submenu )
 {
     vlc_value_t val, text;
@@ -1391,11 +1648,13 @@ void VLCMenuBar::UpdateItem( intf_thread_t *, QMenu *menu,
 
             action->setEnabled(
                 CreateChoicesMenu( submenu, psz_var, p_object ) == 0 );
+            AppendCustomRatioEntry( p_intf, submenu, psz_var );
         }
         else
         {
             action->setEnabled(
                 CreateChoicesMenu( menu, psz_var, p_object ) == 0 );
+            AppendCustomRatioEntry( p_intf, menu, psz_var );
         }
         FREENULL( text.psz_string );
         return;

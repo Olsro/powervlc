@@ -36,6 +36,8 @@ if HAVE_DARWIN
 libgnutls_plugin_la_LDFLAGS += -Wl,-framework,Security,-framework,CoreFoundation
 # memmem() only exists since macOS 10.7 (see misc/darwin_memmem.c)
 libgnutls_plugin_la_SOURCES += misc/darwin_memmem.c
+# gnutls cannot read the Apple keychain (see misc/darwin_trust.c)
+libgnutls_plugin_la_SOURCES += misc/darwin_trust.c misc/darwin_trust.h
 endif
 EXTRA_LTLIBRARIES += libgnutls_plugin.la
 misc_LTLIBRARIES += $(LTLIBgnutls)

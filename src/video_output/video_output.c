@@ -60,6 +60,8 @@
  *****************************************************************************/
 static void *Thread(void *);
 static void VoutDestructor(vlc_object_t *);
+static void ThreadApplyCrop(vout_thread_t *);
+static void ThreadUpdateCropAuto(vout_thread_t *, picture_t *);
 
 /* Maximum delay between 2 displayed pictures.
  * XXX it is needed for now but should be removed in the long term.
@@ -236,6 +238,10 @@ vout_thread_t *vout_Request(vlc_object_t *object,
             vout->p->input = cfg->input;
             if (vout->p->input)
                 spu_Attach(vout->p->spu, vout->p->input, true);
+
+            /* Another item entirely: what the automatic detection measured
+             * on the previous one must not be applied to this one. */
+            vout_ControlForgetCrop(vout);
         }
 
         if (cfg->change_fmt) {
@@ -643,6 +649,14 @@ void vout_ControlChangeCropBorder(vout_thread_t *vout,
 
     vout_control_Push(&vout->p->control, &cmd);
 }
+void vout_ControlChangeCropAuto(vout_thread_t *vout)
+{
+    vout_control_PushVoid(&vout->p->control, VOUT_CONTROL_CROP_AUTO);
+}
+void vout_ControlForgetCrop(vout_thread_t *vout)
+{
+    vout_control_PushVoid(&vout->p->control, VOUT_CONTROL_CROP_FORGET);
+}
 void vout_ControlChangeFilters(vout_thread_t *vout, const char *filters)
 {
     vout_control_PushString(&vout->p->control, VOUT_CONTROL_CHANGE_FILTERS,
@@ -1036,6 +1050,8 @@ static int ThreadDisplayPreparePicture(vout_thread_t *vout, bool reuse, bool fra
 
     if (!picture)
         return VLC_EGENERIC;
+
+    ThreadUpdateCropAuto(vout, picture);
 
     assert(!vout->p->displayed.next);
     if (!vout->p->displayed.current)
@@ -1756,27 +1772,170 @@ static void ThreadChangeAspectRatio(vout_thread_t *vout,
 }
 
 
+/* Pushes vout->p->crop down to the display. Called both when the crop
+ * changes and when a display has just been (re)created, which is the only
+ * way a crop survives an input format change. */
+static void ThreadApplyCrop(vout_thread_t *vout)
+{
+    vout_display_t *vd = vout->p->display.vd;
+    if (vd == NULL)
+        return;
+
+    /* A crop counted in pixels is meaningless on a source of another size:
+     * an adaptive stream that comes back at another resolution would be
+     * cropped by a border measured on the previous one. Drop it -- when the
+     * detection is running it will have measured the new source within the
+     * second. */
+    if (vout->p->crop.mode != VOUT_CROP_RATIO &&
+        (vout->p->crop.src_width  != vout->p->original.i_visible_width ||
+         vout->p->crop.src_height != vout->p->original.i_visible_height)) {
+        vout->p->crop.mode = VOUT_CROP_RATIO;
+        vout->p->crop.num  = 0;
+        vout->p->crop.den  = 0;
+    }
+
+    switch (vout->p->crop.mode) {
+    case VOUT_CROP_WINDOW:
+        vout_SetDisplayCrop(vd, 0, 0,
+                            vout->p->crop.x, vout->p->crop.y,
+                            vout->p->crop.width, vout->p->crop.height);
+        break;
+    case VOUT_CROP_BORDER:
+        vout_SetDisplayCrop(vd, 0, 0,
+                            vout->p->crop.left, vout->p->crop.top,
+                            -(int)vout->p->crop.right,
+                            -(int)vout->p->crop.bottom);
+        break;
+    case VOUT_CROP_RATIO:
+    default:
+        vout_SetDisplayCrop(vd, vout->p->crop.num, vout->p->crop.den,
+                            0, 0, 0, 0);
+        break;
+    }
+}
+
+/* Both crops expressed in pixels only mean something for the source they
+ * were measured on. */
+static void ThreadRecordCropSource(vout_thread_t *vout)
+{
+    vout->p->crop.src_width  = vout->p->original.i_visible_width;
+    vout->p->crop.src_height = vout->p->original.i_visible_height;
+}
+
+static void ThreadSetCropBorder(vout_thread_t *vout,
+                                unsigned left, unsigned top,
+                                unsigned right, unsigned bottom)
+{
+    vout->p->crop.mode   = VOUT_CROP_BORDER;
+    vout->p->crop.left   = left;
+    vout->p->crop.top    = top;
+    vout->p->crop.right  = right;
+    vout->p->crop.bottom = bottom;
+    ThreadRecordCropSource(vout);
+    ThreadApplyCrop(vout);
+}
+
+/* Any explicit crop takes the automatic detection out of the picture: it is
+ * one more "crop" menu entry, and picking another one leaves it. */
+static void ThreadStopCropAuto(vout_thread_t *vout)
+{
+    vout->p->crop.automatic = false;
+}
+
 static void ThreadExecuteCropWindow(vout_thread_t *vout,
                                     unsigned x, unsigned y,
                                     unsigned width, unsigned height)
 {
-    vout_SetDisplayCrop(vout->p->display.vd, 0, 0,
-                        x, y, width, height);
+    ThreadStopCropAuto(vout);
+    vout->p->crop.mode   = VOUT_CROP_WINDOW;
+    vout->p->crop.x      = x;
+    vout->p->crop.y      = y;
+    vout->p->crop.width  = width;
+    vout->p->crop.height = height;
+    ThreadRecordCropSource(vout);
+    ThreadApplyCrop(vout);
 }
 static void ThreadExecuteCropBorder(vout_thread_t *vout,
                                     unsigned left, unsigned top,
                                     unsigned right, unsigned bottom)
 {
     msg_Dbg(vout, "ThreadExecuteCropBorder %d.%d %dx%d", left, top, right, bottom);
-    vout_SetDisplayCrop(vout->p->display.vd, 0, 0,
-                        left, top, -(int)right, -(int)bottom);
+    ThreadStopCropAuto(vout);
+    ThreadSetCropBorder(vout, left, top, right, bottom);
 }
 
 static void ThreadExecuteCropRatio(vout_thread_t *vout,
                                    unsigned num, unsigned den)
 {
-    vout_SetDisplayCrop(vout->p->display.vd, num, den,
-                        0, 0, 0, 0);
+    ThreadStopCropAuto(vout);
+    vout->p->crop.mode = VOUT_CROP_RATIO;
+    vout->p->crop.num  = num;
+    vout->p->crop.den  = den;
+    ThreadRecordCropSource(vout);
+    ThreadApplyCrop(vout);
+}
+
+static void ThreadExecuteCropAuto(vout_thread_t *vout)
+{
+    if (vout->p->crop.detector == NULL) {
+        vout->p->crop.detector = vout_autocrop_New(VLC_OBJECT(vout));
+        if (vout->p->crop.detector == NULL)
+            return;
+    }
+    /* Only a fresh switch to automatic starts the measurement over. This
+     * command is also replayed by vout_IntfReinit at every input format
+     * change, i.e. at every turn of a looping stream: throwing the samples
+     * away there would make the detector redo its refinement pass and move
+     * the window a second time, every time round. */
+    if (!vout->p->crop.automatic)
+        vout_autocrop_Reset(vout->p->crop.detector);
+    vout->p->crop.automatic = true;
+
+    /* Coming back to a source already measured (a looping stream, a title
+     * change) -- crop it straight away instead of showing the black bars
+     * again for the second it takes to measure them anew. */
+    vout_autocrop_border_t border;
+    if (vout_autocrop_Restore(vout->p->crop.detector,
+                              vout->p->original.i_visible_width,
+                              vout->p->original.i_visible_height, &border))
+        ThreadSetCropBorder(vout, border.left, border.top,
+                            border.right, border.bottom);
+    else
+        ThreadSetCropBorder(vout, 0, 0, 0, 0);
+}
+
+/* ⚠ Everything the detection learned belongs to the item that was
+ * playing. Carrying it into the next one applies its mat to an unrelated
+ * source -- and it does not even need the same resolution to do so, since
+ * a border measured on a frame of the same *shape* is scaled to fit (that
+ * is what puts a film's 2.39 letterbox on the 4:3 programme that follows
+ * it). The vout survives an item change; this memory must not. */
+static void ThreadForgetCrop(vout_thread_t *vout)
+{
+    /* A crop the viewer set by hand is theirs, and upstream carries it
+     * over as well: only what the detection decided is dropped. */
+    if (!vout->p->crop.automatic)
+        return;
+
+    if (vout->p->crop.detector != NULL)
+        vout_autocrop_Forget(vout->p->crop.detector);
+
+    vout->p->crop.mode = VOUT_CROP_RATIO;
+    vout->p->crop.num  = 0;
+    vout->p->crop.den  = 0;
+    ThreadApplyCrop(vout);
+}
+
+/* Sampled from the display loop, on the pictures on their way out. */
+static void ThreadUpdateCropAuto(vout_thread_t *vout, picture_t *picture)
+{
+    if (!vout->p->crop.automatic || vout->p->crop.detector == NULL)
+        return;
+
+    vout_autocrop_border_t border;
+    if (vout_autocrop_Feed(vout->p->crop.detector, picture, mdate(), &border))
+        ThreadSetCropBorder(vout, border.left, border.top,
+                            border.right, border.bottom);
 }
 
 static void ThreadExecuteViewpoint(vout_thread_t *vout,
@@ -1849,6 +2008,34 @@ static int ThreadStart(vout_thread_t *vout, vout_display_state_t *state)
     vout->p->spu_blend_chroma        = 0;
     vout->p->spu_blend               = NULL;
 
+    /* A brand new display crops nothing. Hand it back the crop that was in
+     * force, before it has shown (and sized its window on) a single
+     * picture -- otherwise every input format change, and therefore every
+     * turn of a looping stream, flashes the uncropped frame and moves the
+     * window twice. */
+    if (vout->p->crop.automatic && vout->p->crop.detector != NULL) {
+        vout_autocrop_border_t border;
+        if (vout_autocrop_Restore(vout->p->crop.detector,
+                                  vout->p->original.i_visible_width,
+                                  vout->p->original.i_visible_height,
+                                  &border)) {
+            vout->p->crop.mode   = VOUT_CROP_BORDER;
+            vout->p->crop.left   = border.left;
+            vout->p->crop.top    = border.top;
+            vout->p->crop.right  = border.right;
+            vout->p->crop.bottom = border.bottom;
+            vout->p->crop.src_width  = vout->p->original.i_visible_width;
+            vout->p->crop.src_height = vout->p->original.i_visible_height;
+        }
+    }
+    ThreadApplyCrop(vout);
+    /* ...and hand it to the display right away rather than at the first
+     * picture: on a stream that re-buffers after the format change (an
+     * adaptive one, every time it switches variant) that is a second or
+     * more during which the window has already taken the shape of the
+     * uncropped frame. */
+    vout_ManageWrapper(vout);
+
     video_format_Print(VLC_OBJECT(vout), "original format", &vout->p->original);
     return VLC_SUCCESS;
 error:
@@ -1910,6 +2097,10 @@ static void ThreadInit(vout_thread_t *vout)
 
 static void ThreadClean(vout_thread_t *vout)
 {
+    if (vout->p->crop.detector != NULL) {
+        vout_autocrop_Delete(vout->p->crop.detector);
+        vout->p->crop.detector = NULL;
+    }
     vout_chrono_Clean(&vout->p->render);
     vout->p->dead = true;
     vout_control_Dead(&vout->p->control);
@@ -2090,6 +2281,12 @@ static int ThreadControl(vout_thread_t *vout, vout_control_cmd_t cmd)
         ThreadExecuteCropBorder(vout,
                 cmd.u.border.left,  cmd.u.border.top,
                 cmd.u.border.right, cmd.u.border.bottom);
+        break;
+    case VOUT_CONTROL_CROP_AUTO:
+        ThreadExecuteCropAuto(vout);
+        break;
+    case VOUT_CONTROL_CROP_FORGET:
+        ThreadForgetCrop(vout);
         break;
     case VOUT_CONTROL_VIEWPOINT:
         ThreadExecuteViewpoint(vout, &cmd.u.viewpoint);

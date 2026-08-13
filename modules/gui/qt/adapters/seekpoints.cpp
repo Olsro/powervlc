@@ -62,7 +62,7 @@ void SeekPoints::update()
         if ( p_title->seekpoint[p_title->i_seekpoint - 1]->i_time_offset > 0 )
         {
             for ( int i=0; i<p_title->i_seekpoint ; i++ )
-                pointsList << SeekPoint( p_title->seekpoint[i] );
+                pointsList << SeekPoint( p_title->seekpoint[i], i + 1 );
         }
     }
     vlc_input_title_Delete( p_title );

@@ -34,12 +34,17 @@
 #include <vlc_url.h>            /* vlc_uri_decode */
 #include <vlc_strings.h>        /* vlc_strfinput */
 #include <vlc_aout.h>           /* audio_output_t */
+#include <vlc_vout_osd.h>       /* vout_OSDText */
+#include <vlc_subpicture.h>     /* SUBPICTURE_ALIGN_* */
 
 #include <QApplication>
+#include <QDateTime>
 #include <QFile>
+#include <QFileInfo>
 #include <QDir>
 #include <QSignalMapper>
 #include <QMessageBox>
+#include <QTimer>
 
 #include <assert.h>
 
@@ -76,6 +81,19 @@ InputManager::InputManager( MainInputManager *mim, intf_thread_t *_p_intf) :
     b_video      = false;
     timeA        = 0;
     timeB        = 0;
+    b_clipMode   = false;
+    f_clipStart  = 0.;
+    f_clipEnd    = 0.;
+    b_clipRecording = false;
+    f_clipLastPos = -1.;
+    clipLastInteractionMs = 0;
+    i_clipPausedAtEnd = 0;
+    i_clipSelectedKnob = 2;
+    p_clipExport = NULL;
+    clipExportTimer = new QTimer( this );
+    clipExportTimer->setInterval( 250 );
+    connect( clipExportTimer, &QTimer::timeout,
+             this, &InputManager::clipExportPoll );
     f_cache      = -1.; /* impossible initial value, different from all */
     registerAndCheckEventIds( IMEvent::PositionUpdate, IMEvent::FullscreenControlPlanHide );
     registerAndCheckEventIds( PLEvent::PLItemAppended, PLEvent::PLEmpty );
@@ -157,6 +175,9 @@ void InputManager::delInput()
 {
     if( !p_input ) return;
     msg_Dbg( p_intf, "IM: Deleting the input" );
+
+    /* the clip creation mode is bound to the item it was entered on */
+    exitClipCreationMode();
 
     /* Save time / position */
     char *uri = input_item_GetURI( p_item );
@@ -312,6 +333,21 @@ inline void InputManager::addCallbacks()
 inline void InputManager::delCallbacks()
 {
     var_DelCallback( p_input, "intf-event", InputEvent, this );
+}
+
+/* The core hotkeys module redirects the jump actions (and the bare arrow
+ * keys) to this input variable while it exists, so that a jump shortcut
+ * nudges the selected clip bound instead of seeking -- the only way to
+ * frame a clip to the frame. Value convention (see hotkeys.c): +-1 = one
+ * frame, anything else = a signed amount of microseconds. Runs on the
+ * hotkeys thread: hop to the Qt thread. */
+static int ClipStepCallback( vlc_object_t *, const char *,
+                             vlc_value_t, vlc_value_t newval, void *param )
+{
+    InputManager *im = (InputManager *)param;
+    QMetaObject::invokeMethod( im, "clipStepFromCore", Qt::QueuedConnection,
+                               Q_ARG( qint64, (qint64)newval.i_int ) );
+    return VLC_SUCCESS;
 }
 
 /* Static callbacks for IM */
@@ -776,7 +812,11 @@ inline void InputManager::UpdateInfo()
 
 void InputManager::UpdateRecord()
 {
-    emit recordingStateChanged( var_GetBool( p_input, "record" ) );
+    bool b_recording = var_GetBool( p_input, "record" );
+    /* the core may have ended a clip recording itself (record-stop-time) */
+    if( !b_recording )
+        b_clipRecording = false;
+    emit recordingStateChanged( b_recording );
 }
 
 void InputManager::UpdateProgramEvent()
@@ -981,6 +1021,363 @@ void InputManager::AtoBLoop( float, int64_t i_time, int )
 {
     if( timeB && i_time >= timeB )
         var_SetInteger( p_mim->getInput(), "time" , timeA );
+}
+
+/**********************************************************************
+ * Clip creation mode (PowerVLC): both seek bar knobs define the clip
+ * bounds with instant preview; Record then saves exactly that range,
+ * bounded core-side by "record-clip-position" / "record-stop-time".
+ **********************************************************************/
+
+void InputManager::toggleClipCreationMode()
+{
+    if( b_clipMode )
+    {
+        exitClipCreationMode();
+        return;
+    }
+
+    if( !p_input || !var_GetBool( p_input, "can-seek" ) )
+        return;
+
+    double pos = var_GetFloat( p_input, "position" );
+    int64_t duration = var_GetInteger( p_input, "length" );
+
+    /* place the end knob right next to the start knob: 10 seconds ahead,
+     * bounded to stay between 1% and 5% of the item */
+    double delta = 0.05;
+    if( duration > 0 )
+    {
+        delta = (double)(10 * CLOCK_FREQ) / (double)duration;
+        delta = qBound( 0.01, delta, 0.05 );
+    }
+
+    f_clipStart = qBound( 0., pos, 1. );
+    f_clipEnd = qMin( f_clipStart + delta, 1. );
+    f_clipLastPos = -1.;
+    i_clipPausedAtEnd = 0;
+    /* the frame-step shortcuts default to the end bound, like the two
+     * macOS interfaces */
+    i_clipSelectedKnob = 2;
+    b_clipMode = true;
+
+    /* hotkeys -> interface channel for the frame-step shortcuts */
+    var_Create( p_input, "clip-frame-step",
+                VLC_VAR_INTEGER | VLC_VAR_ISCOMMAND );
+    var_AddCallback( p_input, "clip-frame-step", ClipStepCallback, this );
+
+    connect( this, &InputManager::positionUpdated,
+             this, &InputManager::clipModeLoop );
+    emit clipCreationModeChanged( true );
+}
+
+void InputManager::exitClipCreationMode()
+{
+    if( !b_clipMode )
+        return;
+
+    /* a running extraction has no reason to survive the mode */
+    if( p_clipExport )
+        finishClipExport( true );
+
+    if( p_input )
+    {
+        var_SetInteger( p_input, "record-stop-time", 0 );
+        var_SetInteger( p_input, "record-start-time", 0 );
+        if( b_clipRecording )
+            var_SetBool( p_input, "record", false );
+    }
+    if( p_input && var_Type( p_input, "clip-frame-step" ) != 0 )
+    {
+        var_DelCallback( p_input, "clip-frame-step", ClipStepCallback, this );
+        var_Destroy( p_input, "clip-frame-step" );
+    }
+    b_clipRecording = false;
+    b_clipMode = false;
+    i_clipPausedAtEnd = 0;
+
+    disconnect( this, &InputManager::positionUpdated,
+                this, &InputManager::clipModeLoop );
+    emit clipCreationModeChanged( false );
+}
+
+void InputManager::setClipStartPosition( double pos )
+{
+    f_clipStart = qBound( 0., pos, 1. );
+}
+
+void InputManager::setClipEndPosition( double pos )
+{
+    f_clipEnd = qBound( 0., pos, 1. );
+
+    /* follow a live adjustment of the end bound during a clip recording */
+    if( b_clipRecording && p_input )
+    {
+        int64_t duration = var_GetInteger( p_input, "length" );
+        if( duration > 0 )
+            var_SetInteger( p_input, "record-stop-time",
+                            (int64_t)( f_clipEnd * (double)duration ) );
+    }
+}
+
+/* One-frame nudge of the last-selected bound, for surgical trimming.
+ * Falls back to 25 fps when the demux did not expose a frame rate. */
+void InputManager::clipStepFrames( int direction )
+{
+    if( !p_input )
+        return;
+
+    double frameSec = 1. / 25.;
+    input_item_t *p_item_ = input_GetItem( p_input );
+    if( p_item_ )
+    {
+        vlc_mutex_lock( &p_item_->lock );
+        for( int i = 0; i < p_item_->i_es; i++ )
+        {
+            const es_format_t *fmt = p_item_->es[i];
+            if( fmt->i_cat == VIDEO_ES && fmt->video.i_frame_rate > 0
+             && fmt->video.i_frame_rate_base > 0 )
+            {
+                frameSec = (double)fmt->video.i_frame_rate_base
+                         / (double)fmt->video.i_frame_rate;
+                break;
+            }
+        }
+        vlc_mutex_unlock( &p_item_->lock );
+    }
+    clipNudgeSelectedBoundBySeconds( direction * frameSec );
+}
+
+/* Move the selected bound by a signed amount of seconds and preview it. */
+void InputManager::clipNudgeSelectedBoundBySeconds( double seconds )
+{
+    if( !p_input )
+        return;
+    int64_t duration = var_GetInteger( p_input, "length" );
+    if( duration <= 0 )
+        return;
+
+    double step = seconds * (double)CLOCK_FREQ / (double)duration;
+    double target;
+    if( i_clipSelectedKnob == 1 )
+    {
+        target = qBound( 0., f_clipStart + step, f_clipEnd );
+        f_clipStart = target;
+    }
+    else
+    {
+        target = qBound( f_clipStart, f_clipEnd + step, 1. );
+        /* the setter follows a live recording's record-stop-time */
+        setClipEndPosition( target );
+    }
+    noteClipInteraction();
+
+    var_SetFloat( p_input, "position", (float)target );
+}
+
+/* A jump shortcut the core hotkeys module redirected to us (Qt thread). */
+void InputManager::clipStepFromCore( qint64 value )
+{
+    if( !b_clipMode )
+        return;
+    if( value == 1 || value == -1 )
+        clipStepFrames( (int)value );
+    else
+        clipNudgeSelectedBoundBySeconds( (double)value / CLOCK_FREQ );
+}
+
+void InputManager::noteClipInteraction()
+{
+    clipLastInteractionMs = QDateTime::currentMSecsSinceEpoch();
+    /* touching a bound invalidates a pending "parked at the end bound":
+     * the next play must resume normally, not jump back to the start */
+    i_clipPausedAtEnd = 0;
+}
+
+/* Message on the video and in the log: a fast extraction is over in a
+ * blink and the user needs to be told where it went. */
+void InputManager::clipExportNotify( const QString &message )
+{
+    if( p_input )
+    {
+        vout_thread_t *p_vout = input_GetVout( p_input );
+        if( p_vout )
+        {
+            /* ⚠ vout_OSDMessage() would show it for ONE second in the top
+             * right corner. A fast export is over in a blink and this
+             * message is the only sign it happened at all, while the user
+             * is looking at the bottom of the window, where the bounds and
+             * the record button are: one second there is one second not
+             * looked at (missed on the Windows bench). Three, then, same
+             * place as everything else the OSD says. */
+            vout_OSDText( p_vout, VOUT_SPU_CHANNEL_OSD,
+                          SUBPICTURE_ALIGN_TOP | SUBPICTURE_ALIGN_RIGHT,
+                          3 * CLOCK_FREQ, qtu( message ) );
+            vlc_object_release( p_vout );
+        }
+    }
+    msg_Info( p_intf, "%s", qtu( message ) );
+}
+
+/* Extracts [A..B] through a second headless input, at disk speed and
+ * without touching the playback. false when the core cannot extract from
+ * this input (live stream, unknown length): record it live instead. */
+bool InputManager::startClipExport()
+{
+    if( p_clipExport )
+        return true;
+
+    int64_t duration = var_GetInteger( p_input, "length" );
+    if( duration <= 0 )
+        return false;
+
+    p_clipExport = input_ClipExportNew( p_intf, p_input,
+                        (vlc_tick_t)( f_clipStart * (double)duration ),
+                        (vlc_tick_t)( f_clipEnd * (double)duration ) );
+    if( !p_clipExport )
+        return false;
+
+    clipExportTimer->start();
+    clipExportNotify( qtr( "Exporting clip…" ) );
+    return true;
+}
+
+void InputManager::finishClipExport( bool b_cancelled )
+{
+    if( !p_clipExport )
+        return;
+
+    clipExportTimer->stop();
+    char *psz_file = input_ClipExportFinish( p_clipExport );
+    p_clipExport = NULL;
+
+    if( b_cancelled )
+        clipExportNotify( qtr( "Clip export cancelled" ) );
+    else if( psz_file )
+        clipExportNotify( qtr( "Clip saved:" ) + " "
+                          + QFileInfo( qfu( psz_file ) ).fileName() );
+    else
+        clipExportNotify( qtr( "Clip export failed" ) );
+    free( psz_file );
+}
+
+void InputManager::clipExportPoll()
+{
+    if( p_clipExport && !input_ClipExportIsRunning( p_clipExport ) )
+        finishClipExport( false );
+}
+
+void InputManager::recordClipToggle()
+{
+    if( !p_input )
+        return;
+
+    if( p_clipExport )
+    {
+        /* a fast extraction is running: give it up */
+        finishClipExport( true );
+        return;
+    }
+
+    if( b_clipRecording )
+    {
+        /* cancel the running clip recording */
+        var_SetInteger( p_input, "record-stop-time", 0 );
+        var_SetInteger( p_input, "record-start-time", 0 );
+        var_SetBool( p_input, "record", false );
+        b_clipRecording = false;
+        return;
+    }
+
+    /* extracted at disk speed by a second input when the media allows it;
+     * the playback the user is watching is not disturbed at all */
+    if( startClipExport() )
+        return;
+
+    /* arm the demux-paced stop bound, then let the core seek to the clip
+     * start and start recording in ONE input control */
+    int64_t duration = var_GetInteger( p_input, "length" );
+    var_SetInteger( p_input, "record-stop-time",
+                    duration > 0
+                        ? (int64_t)( f_clipEnd * (double)duration ) : 0 );
+    var_SetInteger( p_input, "record-start-time",
+                    duration > 0
+                        ? (int64_t)( f_clipStart * (double)duration ) : 0 );
+    var_SetFloat( p_input, "record-clip-position", (float)f_clipStart );
+    b_clipRecording = true;
+
+    if( var_GetInteger( p_input, "state" ) == PAUSE_S )
+        playlist_TogglePause( THEPL );
+}
+
+/* Function called regularly while in clip creation mode. Keeps the preview
+ * inside [A..B] exactly like the two macOS interfaces: never before A,
+ * never past B, and playing again after the end-bound pause replays the
+ * clip from A. i_length is in SECONDS (see the positionUpdated emitter). */
+void InputManager::clipModeLoop( float pos, int64_t, int i_length )
+{
+    if( !p_input )
+        return;
+
+    int state = var_GetInteger( p_input, "state" );
+
+    /* end-bound pause state machine, see the i_clipPausedAtEnd comment */
+    if( i_clipPausedAtEnd == 1 && state == PAUSE_S )
+        i_clipPausedAtEnd = 2;
+    else if( i_clipPausedAtEnd == 2 && state == PLAYING_S )
+    {
+        /* resumed by any path (button, hotkey, another interface): the
+         * clip replays from its start bound */
+        i_clipPausedAtEnd = 0;
+        var_SetFloat( p_input, "position", (float)f_clipStart );
+        f_clipLastPos = f_clipStart;
+        return;
+    }
+
+    /* one second as a fraction of the media, 0 when the length is unknown */
+    double posPerSec = i_length > 0 ? 1. / (double)i_length : 0.;
+
+    /* A bound sitting at the very END of the media cannot be caught by the
+     * poll: nothing is ever sampled between it and EOF, so the input runs
+     * out, the item ends and the mode goes with it. Pause a hair earlier in
+     * that case -- but NEVER while recording, where the exact stop belongs
+     * to the core (record-stop-time, on the raw demux clock) and pulling the
+     * preview back would truncate the clip. */
+    double endBound = f_clipEnd;
+    if( !b_clipRecording && posPerSec > 0. )
+    {
+        double lastSafe = 1. - 0.5 * posPerSec;
+        if( endBound > lastSafe )
+            endBound = lastSafe;
+    }
+
+    /* The playback must never run OUTSIDE [A..B]: before A it is pulled
+     * back to A, at B it pauses. A LEVEL test, not the crossing it used to
+     * be. Suppressed right after a knob interaction: dragging a bound seeks
+     * repeatedly around it and must not leave the player paused. */
+    bool interacting = ( QDateTime::currentMSecsSinceEpoch()
+                         - clipLastInteractionMs ) < 500;
+    if( !interacting && state == PLAYING_S )
+    {
+        if( posPerSec > 0. && pos < f_clipStart - 0.25 * posPerSec )
+        {
+            var_SetFloat( p_input, "position", (float)f_clipStart );
+            f_clipLastPos = f_clipStart;
+            return;
+        }
+        if( pos >= endBound )
+        {
+            if( b_clipRecording )
+            {
+                /* backstop -- the core normally ended it at the bound */
+                var_SetBool( p_input, "record", false );
+                b_clipRecording = false;
+            }
+            playlist_Pause( THEPL );
+            i_clipPausedAtEnd = 1;
+        }
+    }
+    f_clipLastPos = pos;
 }
 
 /**********************************************************************

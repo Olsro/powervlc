@@ -31,12 +31,21 @@ void VLCLegacyCursorSetHidden(bool);     /* intf.m */
 #import "VLCLegacyMain.h"
 #import "VLCLegacyMainWindow.h"
 #import "VLCLegacyControls.h"
+#import "VLCLegacySeekThumbnailer.h"
+#import "VLCLegacyVoutWindow.h"
 
 #include <vlc_playlist.h>
 #include <vlc_input.h>
 #include <vlc_vout.h>
 
 #define FS_PANEL_HIDE_DELAY 4.0
+
+/* declared up front: GCC 4 warns about messages to methods defined
+ * further down the file */
+@interface VLCLegacyFSPanel (ChaptersPrivate)
+- (void)updateChaptersForInput:(input_thread_t *)p_input
+                      duration:(int64_t)i_length;
+@end
 
 #define _NS(s) ((NSString *)[NSString stringWithUTF8String:vlc_gettext(s)])
 
@@ -208,13 +217,16 @@ static NSString *fsTimeToString(int seconds)
     [content addSubview:durationField];
 
     /* --- seek bar across --- */
-    seekSlider = [[[NSSlider alloc]
+    /* VLCLegacySeekSlider: brings the live time/chapter/preview tooltip
+     * and the chapter separators, like the Qt fullscreen controller (no
+     * static "Position" tooltip: it would fight with the live one) */
+    seekSlider = [[[VLCLegacySeekSlider alloc]
         initWithFrame:NSMakeRect(12, 42, 526, 18)] autorelease];
     VLCLegacyProgressSliderCell *seekCell =
         [[[VLCLegacyProgressSliderCell alloc] init] autorelease];
     [seekCell setAlwaysDark:YES];
     [seekSlider setCell:seekCell];
-    [seekSlider setToolTip:_NS("Position")];
+    [(VLCLegacySeekSlider *)seekSlider setHoverDelegate:self];
     [seekSlider setMinValue:0.0];
     [seekSlider setMaxValue:1.0];
     [seekSlider setContinuous:NO];
@@ -323,6 +335,30 @@ static NSString *fsTimeToString(int seconds)
 
 - (void)seeked:(id)sender
 {
+    if ([core clipCreationMode]) {
+        /* same routing as the windowed seek bar: both knobs define the
+         * clip bounds and moving either one seeks there, so the user
+         * previews what the clip will contain */
+        VLCLegacyProgressSliderCell *seekCell =
+            (VLCLegacyProgressSliderCell *)[seekSlider cell];
+        float fraction;
+        int knob = [seekCell activeClipKnob];
+        if (knob == 2) {
+            fraction = (float)[seekCell clipEndValue];
+            [core setClipEndPosition:fraction];
+            [core setClipSelectedKnob:2];
+        } else if (knob == 3) {
+            /* scrub between the bounds: seek only, bounds untouched */
+            fraction = (float)[seekCell playbackMarkerValue];
+        } else {
+            fraction = [sender floatValue];
+            [core setClipStartPosition:fraction];
+            [core setClipSelectedKnob:1];
+        }
+        [core setPositionFraction:fraction];
+        lastActivity = [NSDate timeIntervalSinceReferenceDate];
+        return;
+    }
     [core setPositionFraction:[sender floatValue]];
     lastActivity = [NSDate timeIntervalSinceReferenceDate];
 }
@@ -374,6 +410,11 @@ static NSString *fsTimeToString(int seconds)
         if ([appDelegate respondsToSelector:@selector(mainWindowController)])
             vv = [[(VLCLegacyMain *)appDelegate mainWindowController]
                       videoViewIfVisible];
+        /* « Afficher la vidéo dans la fenêtre principale » décochée : l'image
+         * n'est plus dans la fenêtre principale, c'est le contenu de la
+         * fenêtre vidéo autonome qu'il faut survoler. */
+        if (vv == nil)
+            vv = [VLCLegacyCurrentVoutWindow() videoView];
         NSWindow *vw = (vv != nil) ? [vv window] : nil;
         if (vw != nil && [vw isVisible]) {
             NSRect r = [vv convertRect:[vv bounds] toView:nil];
@@ -465,11 +506,112 @@ static NSString *fsTimeToString(int seconds)
         if (![[durationField stringValue] isEqualToString:newTotal])
             [durationField setStringValue:newTotal];
         float pos = var_GetFloat(p_input, "position");
-        if ([seekSlider floatValue] != pos)
-            [seekSlider setFloatValue:pos];
+        VLCLegacyProgressSliderCell *clipCell =
+            (VLCLegacyProgressSliderCell *)[seekSlider cell];
+        if ([core clipCreationMode]) {
+            /* the knobs hold the clip bounds; only the thin marker
+             * follows the playback position (parity with the windowed
+             * seek bar) */
+            if (![clipCell clipKnobsActive])
+                [clipCell setClipKnobsActive:YES];
+            [seekSlider setDoubleValue:[core clipStartPosition]];
+            [clipCell setClipEndValue:[core clipEndPosition]];
+            [clipCell setPlaybackMarkerValue:pos];
+            [seekSlider setNeedsDisplay:YES];
+        } else {
+            if ([clipCell clipKnobsActive]) {
+                [clipCell setClipKnobsActive:NO];
+                [seekSlider setNeedsDisplay:YES];
+            }
+            if ([seekSlider floatValue] != pos)
+                [seekSlider setFloatValue:pos];
+        }
+        int64_t length = var_GetInteger(p_input, "length");
+        [(VLCLegacySeekSlider *)seekSlider
+            setMediaDuration:(double)length / CLOCK_FREQ];
+        [self updateChaptersForInput:p_input duration:length];
         vlc_object_release(p_input);
+    } else {
+        [(VLCLegacySeekSlider *)seekSlider setMediaDuration:0.0];
+        [self updateChaptersForInput:NULL duration:0];
+        /* Stop leaves no input at all, and that is the only branch that
+         * puts the clip knobs away (same fix as the windowed bar) */
+        VLCLegacyProgressSliderCell *clipCell =
+            (VLCLegacyProgressSliderCell *)[seekSlider cell];
+        if ([clipCell clipKnobsActive]) {
+            [clipCell setClipKnobsActive:NO];
+            [seekSlider setNeedsDisplay:YES];
+        }
     }
     [volumeSlider setFloatValue:[core volume]];
+}
+
+/* hover delegate of the seek slider (1 s debounce in the slider) */
+- (void)seekSlider:(VLCLegacySeekSlider *)slider
+        hoverThumbnailWantedAtFraction:(double)fraction
+{
+    [[VLCLegacySeekThumbnailer sharedInstance]
+        requestThumbnailWithIntf:p_intf fraction:fraction forSlider:slider];
+}
+
+/* bare arrow keys while the slider is the first responder (clip mode) */
+- (void)seekSlider:(VLCLegacySeekSlider *)slider
+        clipStepFrames:(int)direction
+{
+    [core clipStepFrames:direction];
+}
+
+/* chapter separators, same rules and caching as the main window */
+- (void)updateChaptersForInput:(input_thread_t *)p_input
+                      duration:(int64_t)i_length
+{
+    VLCLegacyProgressSliderCell *cell =
+        (VLCLegacyProgressSliderCell *)[seekSlider cell];
+
+    int title = p_input ? (int)var_GetInteger(p_input, "title") : -1;
+    if ((void *)p_input == chaptersInput && title == chaptersTitle
+        && i_length == chaptersDuration)
+        return;
+    chaptersInput = (void *)p_input;
+    chaptersTitle = title;
+    chaptersDuration = i_length;
+
+    NSArray *fractions = nil;
+    NSArray *names = nil;
+    if (p_input && i_length > 0) {
+        input_title_t *p_title = NULL;
+        int i_title_id = -1;
+        if (input_Control(p_input, INPUT_GET_TITLE_INFO, &p_title,
+                          &i_title_id) == VLC_SUCCESS && p_title) {
+            if (p_title->i_seekpoint > 1
+                && p_title->seekpoint[p_title->i_seekpoint - 1]->i_time_offset
+                   > 0) {
+                NSMutableArray *mutableFractions = [NSMutableArray
+                    arrayWithCapacity:p_title->i_seekpoint];
+                NSMutableArray *mutableNames = [NSMutableArray
+                    arrayWithCapacity:p_title->i_seekpoint];
+                int i;
+                for (i = 0; i < p_title->i_seekpoint; i++) {
+                    seekpoint_t *point = p_title->seekpoint[i];
+                    NSString *name = point->psz_name
+                        ? [NSString stringWithUTF8String:point->psz_name]
+                        : nil;
+                    [mutableFractions addObject:
+                        [NSNumber numberWithDouble:
+                            (double)point->i_time_offset / (double)i_length]];
+                    [mutableNames addObject:name ? name : @""];
+                }
+                fractions = mutableFractions;
+                names = mutableNames;
+            }
+            vlc_input_title_Delete(p_title);
+        }
+    }
+
+    if (!fractions && ![cell chapterFractions])
+        return;
+    [cell setChapterFractions:fractions names:names];
+    [seekSlider setNeedsDisplay:YES];
 }
 
 @end

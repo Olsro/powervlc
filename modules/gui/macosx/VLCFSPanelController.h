@@ -29,8 +29,9 @@
 #import "Windows.h"
 #import "VLCDefaultValueSlider.h"
 #import "VLCTimeField.h"
+#import "VLCSlider.h"
 
-@interface VLCFSPanelController : NSWindowController
+@interface VLCFSPanelController : NSWindowController <VLCSliderHoverDelegate>
 
 @property (readwrite, weak) NSTimer   *hideTimer;
 
@@ -44,7 +45,7 @@
 @property IBOutlet NSTextField  *mediaTitle;
 @property IBOutlet VLCTimeField *elapsedTime;
 @property IBOutlet VLCTimeField *remainingOrTotalTime;
-@property IBOutlet NSSlider     *timeSlider;
+@property IBOutlet VLCSlider    *timeSlider;
 @property IBOutlet VLCDefaultValueSlider *volumeSlider;
 
 @property (assign) IBOutlet NSLayoutConstraint *heightMaxConstraint;

@@ -67,12 +67,12 @@
                             <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
                         </textFieldCell>
                     </textField>
-                    <slider verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="f9T-Kg-gn6">
+                    <slider verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="f9T-Kg-gn6" customClass="VLCSlider">
                         <rect key="frame" x="20" y="43" width="443" height="17"/>
                         <constraints>
                             <constraint firstAttribute="height" constant="15" id="lag-bs-Ziy"/>
                         </constraints>
-                        <sliderCell key="cell" controlSize="small" continuous="YES" state="on" alignment="left" maxValue="10000" tickMarkPosition="above" sliderType="linear" id="OBM-DB-OBK"/>
+                        <sliderCell key="cell" controlSize="small" continuous="YES" state="on" alignment="left" maxValue="10000" tickMarkPosition="above" sliderType="linear" id="OBM-DB-OBK" customClass="VLCSliderCell"/>
                         <connections>
                             <action selector="timeSliderUpdate:" target="-2" id="6Na-ur-p5P"/>
                         </connections>

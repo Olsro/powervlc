@@ -1874,6 +1874,15 @@ static int FragSeekToTime( demux_t *p_demux, vlc_tick_t i_nztime, bool b_accurat
             }
             msg_Dbg( p_demux, "seeking to fragment index pos %" PRId64 " %" PRId64, i64,
                      MP4_rescale_mtime( i_basetime, p_sys->i_timescale ) );
+            /* An IMPRECISE seek must resume the tracks at the fragment
+             * start (the key frame), like the non-fragmented Seek() does
+             * at the previous sync sample -- not swallow every sample up
+             * to the target: the swallowed leading GOP is precisely what
+             * a bounded recording (clip creation) needs to capture. The
+             * sidx and tfra paths already return a sync time; only this
+             * index path used to keep the raw target. */
+            if( !b_accurate )
+                i_sync_time = MP4_rescale_mtime( i_basetime, p_sys->i_timescale );
         }
     }
 

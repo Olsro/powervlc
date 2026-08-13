@@ -198,8 +198,17 @@
 - (void)mouseDown:(NSEvent *)o_event
 {
     if (([o_event type] == NSLeftMouseDown) && (! ([o_event modifierFlags] &  NSControlKeyMask))) {
-        if ([o_event clickCount] == 2)
-            [[VLCCoreInteraction sharedInstance] toggleFullscreen];
+        if ([o_event clickCount] == 2) {
+            /* while the controls are auto-hidden, the double click brings
+             * them back instead of toggling fullscreen (a plain click only
+             * focuses the window; dragging moves it) */
+            NSWindow *window = [self window];
+            if ([window isKindOfClass:[VLCVideoWindowCommon class]]
+                && [(VLCVideoWindowCommon *)window controlsHiddenForPlayback])
+                [(VLCVideoWindowCommon *)window revealControlsForPlayback];
+            else
+                [[VLCCoreInteraction sharedInstance] toggleFullscreen];
+        }
 
     } else if (([o_event type] == NSRightMouseDown) ||
                (([o_event type] == NSLeftMouseDown) &&

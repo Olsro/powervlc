@@ -136,6 +136,12 @@ static const char *const itunes_list_text[] = {
 #define CONTINUE_PLAYBACK_TEXT N_("Continue playback where you left off")
 #define CONTINUE_PLAYBACK_LONGTEXT N_("VLC will store playback positions of the last 30 items you played. If you re-open one of those, playback will continue.")
 
+#define HIDE_CONTROLS_TEXT N_("Hide controls during playback")
+#define HIDE_CONTROLS_LONGTEXT N_("In windowed playback, hide the controls bar and the window title bar after a few seconds once the mouse has left the window, leaving only the video. Double-click the video to bring them back; keyboard shortcuts keep working and show the fullscreen-style OSD meanwhile.")
+
+#define HOVER_THUMBNAILS_TEXT N_("Show a preview image when hovering the seek bar")
+#define HOVER_THUMBNAILS_LONGTEXT N_("Render a small preview of the hovered position in the seek bar tooltip. The preview is decoded by a second, silent input: on slow machines it can take several seconds to appear and steal cycles from the playback; disable it there.")
+
 static const int continue_playback_list[] =
 { 0, 1, 2 };
 static const char *const continue_playback_list_text[] = {
@@ -170,12 +176,19 @@ vlc_module_begin()
         add_bool("macosx-fspanel", true, FSPANEL_TEXT, FSPANEL_LONGTEXT, false)
         add_bool("macosx-video-autoresize", true, KEEPSIZE_TEXT, KEEPSIZE_LONGTEXT, false)
         add_bool("macosx-pause-minimized", false, PAUSE_MINIMIZED_TEXT, PAUSE_MINIMIZED_LONGTEXT, false)
-        add_bool("macosx-lock-aspect-ratio", true, LOCK_ASPECT_RATIO_TEXT, LOCK_ASPECT_RATIO_TEXT, true)
+        /* off by default: the window then resizes freely and the video is
+         * letterboxed inside it, like the legacy interface and like the
+         * other players. Video > Aspect ratio > Lock Aspect Ratio puts the
+         * window back under the video's ratio. */
+        add_bool("macosx-lock-aspect-ratio", false, LOCK_ASPECT_RATIO_TEXT, LOCK_ASPECT_RATIO_TEXT, true)
         add_bool("macosx-dim-keyboard", false, DIM_KEYBOARD_PLAYBACK_TEXT, DIM_KEYBOARD_PLAYBACK_LONGTEXT, false)
         add_integer("macosx-control-itunes", 1, ITUNES_TEXT, ITUNES_LONGTEXT, false)
         change_integer_list(itunes_list, itunes_list_text)
         add_integer("macosx-continue-playback", 0, CONTINUE_PLAYBACK_TEXT, CONTINUE_PLAYBACK_LONGTEXT, false)
         change_integer_list(continue_playback_list, continue_playback_list_text)
+
+    add_bool("macosx-hide-controls", false, HIDE_CONTROLS_TEXT, HIDE_CONTROLS_LONGTEXT, false)
+    add_bool("macosx-hover-thumbnails", true, HOVER_THUMBNAILS_TEXT, HOVER_THUMBNAILS_LONGTEXT, false)
 
     set_section(N_("Apple Remote and media keys"), 0)
         add_bool("macosx-appleremote", true, USE_APPLE_REMOTE_TEXT, USE_APPLE_REMOTE_LONGTEXT, false)

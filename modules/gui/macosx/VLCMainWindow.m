@@ -167,15 +167,77 @@ static NSString *defaultWindowTitle(void)
     return NO;
 }
 
+/* ⚠ Command + a digit was dead on every keyboard whose digit row needs Shift
+ * -- AZERTY, QWERTZ and the rest. The event then carries the UNSHIFTED
+ * character of the key ('"' for the "3" of a French layout), which matches no
+ * menu equivalent. AppKit works around this by falling back on an
+ * ASCII-capable layout, but only inside ITS OWN dispatch: -performKeyEquivalent:
+ * below consults the main menu by hand, with the event exactly as it came, and
+ * never calls super, so that fallback never gets its turn. Measured on a French
+ * layout, Video > Half Size: Command + the "0" key did nothing at all, Command
+ * + Shift + "0" halved the window as it should.
+ *
+ * VIRTUAL key codes are positional and layout independent: those below are the
+ * digit row of every Mac keyboard (the order is the historical one, 5 and 6 are
+ * swapped and 7 to 0 are not consecutive). Same fix as the legacy interface's
+ * VLCLegacyEventWithDigitRowFallback, which is why the legacy menus already
+ * answer these shortcuts. */
+static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
+{
+    if (!([o_event modifierFlags] & NSCommandKeyMask))
+        return o_event;             /* only command equivalents suffer this */
+
+    unichar digit;
+    switch ([o_event keyCode]) {
+        case 18: digit = '1'; break;
+        case 19: digit = '2'; break;
+        case 20: digit = '3'; break;
+        case 21: digit = '4'; break;
+        case 23: digit = '5'; break;
+        case 22: digit = '6'; break;
+        case 26: digit = '7'; break;
+        case 28: digit = '8'; break;
+        case 25: digit = '9'; break;
+        case 29: digit = '0'; break;
+        default: return o_event;
+    }
+
+    NSString *characters = [o_event charactersIgnoringModifiers];
+    if (!([o_event modifierFlags] & NSShiftKeyMask)
+        && [characters length] == 1
+        && [characters characterAtIndex:0] == digit)
+        return o_event;             /* the layout already gives the digit */
+
+    /* Shift is dropped: on such a keyboard it is how the digit is typed in the
+     * first place, and no menu item here is bound to Command+Shift+<digit>. */
+    NSString *replacement = [NSString stringWithCharacters:&digit length:1];
+    return [NSEvent keyEventWithType:[o_event type]
+                            location:[o_event locationInWindow]
+                       modifierFlags:[o_event modifierFlags] & ~NSShiftKeyMask
+                           timestamp:[o_event timestamp]
+                        windowNumber:[o_event windowNumber]
+                             context:nil
+                          characters:replacement
+         charactersIgnoringModifiers:replacement
+                           isARepeat:[o_event isARepeat]
+                             keyCode:[o_event keyCode]];
+}
+
 - (BOOL)performKeyEquivalent:(NSEvent *)o_event
 {
     /* when a list (playlist outline, sidebar) has keyboard focus, the
      * plain Left/Right arrows belong to it (fold/unfold), not to the
      * core hotkeys (key-nav-*).  DVD menu navigation still gets them
      * whenever the video view has focus.  Up/Down, Delete and Return
-     * are already let through by hasDefinedShortcutKey:force:. */
+     * are already let through by hasDefinedShortcutKey:force:.
+     * ⚠ Clip creation trims the selected bound by one frame with those
+     * arrows, and on an AUDIO item the playlist is the only thing on
+     * screen, so the list always holds the focus: the mode wins there,
+     * otherwise the arrows would be dead exactly where trimming by hand
+     * matters most. */
     if (!([o_event modifierFlags] & (NSControlKeyMask | NSAlternateKeyMask
                                    | NSShiftKeyMask | NSCommandKeyMask))
+     && ![[VLCCoreInteraction sharedInstance] clipCreationMode]
      && [[self firstResponder] isKindOfClass:[NSTableView class]]) {
         NSString *characters = [o_event charactersIgnoringModifiers];
         if ([characters length] > 0) {
@@ -184,6 +246,10 @@ static NSString *defaultWindowTitle(void)
                 return NO; /* regular dispatch: the focused list handles it */
         }
     }
+
+    /* substitute the digit before either path below sees the event, so the
+     * menu and the core agree on what was pressed (see above) */
+    o_event = VLCEventWithDigitRowFallback(o_event);
 
     BOOL b_force = NO;
     // these are key events which should be handled by vlc core, but are attached to a main menu item
@@ -708,6 +774,7 @@ static NSString *defaultWindowTitle(void)
     }];
 
     [[VLCCoreInteraction sharedInstance] updateAtoB];
+    [[VLCCoreInteraction sharedInstance] updateClipRecording];
 }
 
 - (void)updateName
@@ -1306,6 +1373,21 @@ static NSString *defaultWindowTitle(void)
     // sets lion fullscreen behaviour
     [super awakeFromNib];
     [self setAcceptsMouseMovedEvents: YES];
+
+    /* ⚠ La barre de contrôles passe AU-DESSUS de la vue vidéo dans la pile.
+     * Mesuré : la barre est bien là, visible, posée à 0,0 1024x36 sous une
+     * vue vidéo qui commence à y=36 — et pourtant la bande sortait tout
+     * NOIRE. Une sonde (remplissage rouge du -drawRect: de VLCVoutView) l'a
+     * montrée peinte par la VUE VIDÉO, dont le rendu déborde sous son propre
+     * cadre. Remonter la barre en dernier la met hors d'atteinte, quel que
+     * soit ce débordement. Le nib la place en premier, donc dessous. */
+    {
+        NSView *bar = [[self controlsBar] bottomBarView];
+        if (bar != nil && [bar superview] == [self contentView])
+            [[self contentView] addSubview:bar
+                                positioned:NSWindowAbove
+                                relativeTo:nil];
+    }
 
     if (@available(macOS 10.14, *)) {
         [self setContentMinSize: NSMakeSize(363., f_min_video_height + [[self controlsBar] height])];

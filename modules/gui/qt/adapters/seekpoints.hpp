@@ -33,14 +33,26 @@
 #include <QObject>
 #include <QList>
 #include <QMutex>
+#include <QString>
 
 class SeekPoint
 {
 public:
-    SeekPoint( seekpoint_t *seekpoint )
+    /* i_index est le numéro affiché du chapitre (1 pour le premier) : beaucoup
+     * de disques et de conteneurs numérotent leurs chapitres sans les nommer,
+     * et le survol de la barre n'avait alors rien à montrer. Même repli que le
+     * menu Chapitre du cœur (src/input/var.c), y compris le test de la chaîne
+     * VIDE, et même chaîne de catalogue — donc déjà traduite partout. */
+    SeekPoint( seekpoint_t *seekpoint, int i_index = 0 )
     {
         time = seekpoint->i_time_offset;
-        name = QString::fromUtf8( seekpoint->psz_name );
+        if( seekpoint->psz_name != NULL && *seekpoint->psz_name != '\0' )
+            name = QString::fromUtf8( seekpoint->psz_name );
+        else if( i_index > 0 )
+            /* pas `qtr` ici : il vient de qt.hpp, que cet en-tête n'inclut
+             * pas (et n'a pas à inclure). N_() garde la chaîne extractible. */
+            name = QString::fromUtf8( vlc_gettext( N_("Chapter %i") ) )
+                       .replace( "%i", QString::number( i_index ) );
     };
     int64_t time;
     QString name;

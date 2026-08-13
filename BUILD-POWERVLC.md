@@ -288,6 +288,90 @@ so grepping for an accented word gives a false negative — use `msgunfmt` inste
 Do this **before** `make-universal.sh`, since the universal bundle takes
 non-Mach-O files from its first input.
 
+### 5.2b Regenerating `po/vlc.pot` — never with `make`
+
+After adding or changing a translatable string in the code, the template has to
+be regenerated and the 105 catalogs merged against it. Use **only**:
+
+```bash
+./po/update-pot.sh --check
+```
+
+Read the report, then apply it:
+
+```bash
+./po/update-pot.sh --update
+```
+
+`make update-po`, `make vlc.pot-update` and `make dist` will *not* do it: the
+rule in `po/Makefile.in.in` now refuses and prints a pointer to this script,
+leaving `po/vlc.pot` untouched. That guard is there because extracting through
+make silently destroys translations:
+
+* the 21 headers `uic` generates from `modules/gui/qt/ui/*.ui` exist only in the
+  build tree, so `po/POTFILES.in` has to keep them commented out (`config.status`
+  turns every active line into a `$(POTFILES)` prerequisite, and make would then
+  demand files that are not in the sources);
+* an extraction without those headers loses ~360 Qt interface strings, `msgmerge`
+  marks them obsolete (`#~`) in all 105 catalogs, `msgfmt` stops compiling them
+  into the `.gmo` files, and those parts of the UI revert to English.
+
+That is exactly what the 2026-07-25 template did to the fork's own strings
+(Crystal HD, Blu-ray pop-up menu, hardware DVD, browser extension,
+Radio-Browser, adaptive Quality menu, SFTP private key…): 2029 entries wrongly
+marked obsolete across 62 catalogs.
+
+What `update-pot.sh` does, in order:
+
+1. builds the Qt headers with `uic`, using the same recipe as the `.ui.h:` rule
+   in `modules/gui/qt/Makefile.am`, into a staging tree;
+2. uncomments the `#modules/gui/qt/ui/*.h` lines of `POTFILES.in` for that run
+   only, and checks that every active line resolves to a real file — a path that
+   does not resolve is skipped by `xgettext` without any warning;
+3. runs `xgettext` with the exact options from `po/Makevars`, passing the
+   staging tree as a second `--directory`;
+4. **compares the msgid sets** of the old and new template. Any string that
+   disappears aborts the run unless it is listed in `po/POT-REMOVED.txt`;
+5. only then writes `vlc.pot`, runs `msgmerge --previous` over the 105 catalogs,
+   rebuilds the `.gmo` files with `msgfmt -c`, and reports the obsolete count
+   before and after.
+
+If step 4 reports unjustified losses, there are only two right answers:
+
+* the string really left the code (file deleted, wording changed) — verify with
+  a `grep -rF` over `modules/ src/ include/ bin/ lib/`, then add the msgid to
+  `po/POT-REMOVED.txt`;
+* the string is still in the code — then `POTFILES.in` has a gap, add the source
+  file to it. `modules/access/rist.h`, `modules/video_output/macosx_qt.m` and ten
+  others were missing that way until 2026-08-11.
+
+Note that `share/lua/i18n/<ext>/<code>.lua` is a **separate** mechanism for the
+Lua extensions; it has nothing to do with the `.po` catalogs.
+
+⚠ **Those catalogues once shipped stale for ten days, silently.** The bundle
+merges two install trees into one directory
+(`package.mak`: `$prefix/share/vlc/lua` then `$prefix/lib/vlc/lua`, the second
+overwriting the first), and `make install` never removes what it no longer
+installs. When the catalogues moved from `vlclibdir` to `vlcdatadir` the copies
+from before the move stayed in the prefix and, being copied second, won: 72
+files — 18 languages × 4 extensions — frozen at the day of the move, beside
+extension code that was perfectly up to date. Nothing failed; the app simply
+showed old wording, or English where a new string had been added.
+
+Two things now stop it, and neither needs remembering:
+
+* `build.sh` deletes both lua trees out of the prefix just before `make VLC.app`,
+  so what lands in the bundle is exactly what the current install rules produce;
+* `package.mak` refuses to build at all if the two trees hold the same relative
+  path, listing the offending files. A future move between the directories is
+  therefore a build failure that names itself, not a quiet wrong bundle.
+
+To check a bundle by hand:
+
+```bash
+diff -rq share/lua/i18n build<target>/PowerVLC.app/Contents/MacOS/share/lua/i18n
+```
+
 ### 5.3 Which slices carry which interface
 The PowerPC and Intel‑32 targets are built with `--disable-macosx` (the modern
 Cocoa interface needs 10.7+, which never ran there), so they contain only the

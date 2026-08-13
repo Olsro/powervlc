@@ -22,6 +22,7 @@
 
 #include <vlc_common.h>
 #include <vlc_interface.h>
+#include <vlc_input.h>
 
 @class VLCLegacyAppleRemote;
 @class VLCLegacyMediaKeyTap;
@@ -35,12 +36,44 @@
     int64_t timeA;      /* A->B loop bounds, microseconds (0 = unset) */
     int64_t timeB;
 
+    /* clip creation mode: both seek bar knobs define the clip bounds
+     * (fractional positions, 0..1); Record then saves that range.
+     * clipInput identifies the input the mode was entered on, held so the
+     * pointer stays comparable; the mode ends when the input changes. */
+    BOOL b_clipCreationMode;
+    double clipStartPos;
+    double clipEndPos;
+    BOOL b_clipRecordingActive;
+    input_thread_t *clipInput;
+    double clipLastPollPos;          /* last polled position, -1 = none */
+    NSTimeInterval clipLastInteraction; /* last knob drag/click */
+    int clipSelectedKnob;            /* frame-step target: 1 start, 2 end */
+    BOOL b_clipRecordWaitingForStart; /* record armed, waiting for the
+                                      * seek to the clip start to land */
+    int clipPausedAtEnd;             /* 0 none, 1 pause requested at the
+                                      * end-bound crossing, 2 confirmed;
+                                      * playing again from 2 replays the
+                                      * clip from its start bound */
+    /* fast extraction: a second headless input writes the clip at disk
+     * speed, leaving the playback alone. NULL when the core refused it
+     * (unseekable stream, unknown length) and the realtime recording
+     * above is used instead. */
+    input_clip_export_t *p_clipExport;
+
     /* Apple Remote / media keys (created by setupRemoteAndMediaKeys
      * according to the legacy-macosx-appleremote/-mediakeys options) */
     VLCLegacyAppleRemote *remote;
     VLCLegacyMediaKeyTap *mediaKeyTap;
     BOOL b_remote_button_hold;   /* hold button repeat is active */
     BOOL b_mediakeyJustJumped;   /* anti-bounce for repeat-seeks */
+
+    /* "Hide controls during playback" (Video menu, persisted in the
+     * legacy-macosx-hide-controls option). The window flags the hidden
+     * state here so it reaches the libvlc "intf-controls-hidden" bool:
+     * the core then shows the fullscreen-style OSD and turns the video
+     * double-click into a reveal request ("intf-reveal-controls"). */
+    BOOL b_autoHideControls;
+    BOOL b_controlsHiddenForPlayback;
 
     /* external music players (legacy-macosx-control-itunes) */
     BOOL b_has_itunes_paused;
@@ -82,8 +115,50 @@
 - (void)resetAtoB;
 - (void)updateAtoB;
 
+/* clip creation mode (port of -[VLCCoreInteraction toggleClipCreationMode]).
+ * updateClipModeForInput: must be called periodically with the current
+ * input (or NULL): it leaves the mode when the input stops or changes and
+ * ends a running clip recording at the end bound. */
+- (BOOL)clipCreationMode;
+- (double)clipStartPosition;
+- (void)setClipStartPosition:(double)pos;
+- (double)clipEndPosition;
+- (void)setClipEndPosition:(double)pos;
+- (BOOL)clipRecordingActive;
+/* bound the frame-step shortcuts act on: 1 = start, 2 = end (default
+ * when entering the mode); follows the last knob the user grabbed */
+- (int)clipSelectedKnob;
+- (void)setClipSelectedKnob:(int)knob;
+/* nudge the selected bound, with preview seek: one frame for the step
+ * shortcuts, a signed amount of seconds for the longer jumps (also
+ * reached from the core hotkeys module through "clip-frame-step") */
+- (void)clipStepFrames:(int)direction;
+- (void)clipNudgeSelectedBoundBySeconds:(double)seconds;
+- (void)toggleClipCreationMode;
+- (void)exitClipCreationMode;
+/* Record while in clip mode: records exactly the [start..end] range.
+ * Extracted by a second headless input when the media allows it (fast,
+ * playback untouched), recorded live otherwise. */
+- (void)recordClipToggle;
+- (BOOL)clipExportInProgress;
+- (void)shutdownClipExport;
+- (BOOL)startClipExportForInput:(input_thread_t *)p_input;
+- (void)finishClipExportCancelled:(BOOL)cancelled;
+- (void)clipExportNotify:(NSString *)message;
+- (void)updateClipModeForInput:(input_thread_t *)p_input;
+
 /* seek by the configured "extrashort-jump-size" (bar hold-to-seek) */
 - (void)jumpExtraShort:(BOOL)forward;
+
+/* "Hide controls during playback" (see the ivar comment). The window
+ * polls autoHideControls on its refresh tick; setControlsHiddenForPlayback:
+ * is called by the window when it hides/reveals. shutdownAutoHide removes
+ * the libvlc callback (must run before the module unloads). */
+- (BOOL)autoHideControls;
+- (void)setAutoHideControls:(BOOL)enabled;
+- (BOOL)controlsHiddenForPlayback;
+- (void)setControlsHiddenForPlayback:(BOOL)hidden;
+- (void)shutdownAutoHide;
 
 /* audio */
 - (void)volumeUp;

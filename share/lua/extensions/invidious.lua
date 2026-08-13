@@ -30,6 +30,51 @@ local DIRECTORY_URL = "https://api.invidious.io/instances.json?sort_by=type,user
 local READ_CHUNK = 65536
 local SEARCH_FIELDS = "type,title,videoId,author,authorId,published,publishedText"
 
+-- A download moves on the extension's own timer, in bounded slices: a
+-- click queues up behind one slice rather than behind a whole file, and
+-- the progress line visibly lives. A video is a great deal bigger than
+-- the pages everything else here fetches, hence a megabyte a tick.
+local DL_TICK_MS = 15
+local DL_CHUNKS_PER_TICK = 8
+-- How long a tick may keep the thread before handing it back, whatever
+-- it managed to fetch. It used to stop on a byte count instead, and that
+-- is only the same thing at one speed: 4 MiB is five seconds of video
+-- stream and THIRTY-SEVEN of an audio one, so the progress bar sat still
+-- for half a minute at a time and Cancel took as long to answer. What
+-- the user watches is time, so time is what bounds this.
+local DL_TICK_BUDGET_US = 250000
+-- How many connections at once. The ceiling being worked around is per
+-- connection and applies to each stream at roughly its own bitrate, so
+-- this is the multiplier -- and it has to be this high because an audio
+-- track is a quarter of the bitrate of its video and would otherwise
+-- take just as long to fetch. Each one costs a request and a prefetch
+-- buffer, which on the machines this fork exists for is not free.
+local DL_CONNECTIONS = 8
+local DL_MIN_PARALLEL = 2 * 1024 * 1024
+-- A connection asks for a bounded piece and comes back for another, so
+-- that a file with fewer pieces than connections still uses them all,
+-- and so that one dead connection costs a piece rather than a quarter of
+-- the download.
+local DL_CHUNK_MIN = 1024 * 1024
+local DL_CHUNK_MAX = 8 * 1024 * 1024
+-- A dropped connection is put back in the queue; this bounds how often
+-- that may happen before the download is called failed rather than slow.
+local DL_MAX_RETRIES = 12
+
+-- The thumbnail. YouTube publishes mqdefault at 320x180 -- the smallest
+-- of the 16:9 ones, and the only size worth fetching on the machines
+-- this fork exists for: hqdefault is 4:3 with black bars baked in.
+--
+-- Two bounds because there are two possible files. Qt hangs the picture
+-- in a QLabel and only CLIPS it to the size stated (no setScaledContents),
+-- so a file bigger than its bounds comes out cut rather than shrunk: what
+-- is on disk has to be the size the layout is told about. The core's
+-- scaler gives us 240 wide, a third of the dialog; without it the file
+-- stays as it came and is declared at its own 320.
+local THUMB_SOURCE = "mqdefault.jpg"
+local THUMB_RAW_W, THUMB_RAW_H = 320, 180
+local THUMB_W, THUMB_H = 240, 135
+
             --[[ Translations ]]--
 
 -- The catalogues live one file per language under share/lua/i18n/invidious/
@@ -156,8 +201,13 @@ local app = {
   region = nil,      -- ISO 3166 country the results are asked for
   instances = {},    -- id -> instance base URL
   results = {},      -- id -> { kind, id, title, author, published }
-  video = nil,       -- currently opened video { title, author, ... }
+  video = nil,       -- currently opened video { id, title, author, ... }
   formats = {},      -- id -> { label, url }
+  thumb = nil,       -- the picture of that video { path, w, h }
+  -- The picture and sound just downloaded separately, when there are
+  -- any: { video, audio, out, dir }. What the Combine button acts on.
+  combine = nil,
+  thumb_for = nil,   -- which video id it was fetched for
   -- What the list was showing last, so that coming back from a video
   -- lands on it again rather than on an empty search: the query and mode
   -- as typed, the items themselves, and the channel they came from when
@@ -183,6 +233,28 @@ local app = {
   navigating = false,        -- the tab is opening the page we asked for
   retry = nil,       -- what to re-run once the session comes back
   awaiting_challenge = false,  -- the challenge view is up and polling
+}
+
+-- The download in progress. Kept out of `app` because it outlives the
+-- view it was started from: going back to the list, or opening another
+-- video, leaves the bytes coming.
+local dl = {
+  active = false,
+  files = {},        -- { url, path, name } -- two when picture and sound
+  idx = 0,           -- which of them is being fetched (1-based once started)
+  -- The connections fetching the current file, one per part of it:
+  -- { stream, off = where its next byte goes, last = where it stops }.
+  slices = {},
+  queue = {},        -- the pieces not yet handed to a connection
+  retries = 0,       -- pieces put back after a connection dropped
+  fh = nil,
+  got = 0,           -- bytes of the current file, over all its slices
+  started = nil,     -- when it began, for the rate shown beside the bar
+  total = 0,         -- what that file announced, 0 when it would not say
+  written = {},      -- the paths finished, for the closing message
+  failed = 0,
+  dir = nil,         -- where they land
+  cancelled = false,
 }
 
 local dlg = nil
@@ -283,6 +355,16 @@ function deactivate()
   if vlc.timer then
     vlc.timer(0)
   end
+  -- A download has no thread of its own: with the timer gone nothing
+  -- would ever finish it, so the half-written file is closed here rather
+  -- than left to the garbage collector. What was written stays -- unlike
+  -- a cancellation, quitting is not the user saying they did not want it.
+  dl.active = false
+  if dl.fh then
+    dl.fh:close()
+    dl.fh = nil
+  end
+  dl.slices = {}
   if app.handoff then
     app.handoff:close()
     app.handoff = nil
@@ -312,6 +394,93 @@ local function still_alive()
   if vlc.keep_alive then
     pcall(vlc.keep_alive)
   end
+end
+
+-- A string a file system accepts as a name. The length is capped without
+-- ever cutting inside a UTF-8 sequence -- a video title is whatever its
+-- author felt like, and half a character is not a name.
+local function sanitize_filename(s)
+  s = tostring(s or "")
+  s = string.gsub(s, "[/\\:%*%?\"<>|%c]", "_")
+  s = trim(s)
+  s = string.gsub(s, "^%.+", "_")
+  if s == "" then
+    s = "_"
+  end
+  if #s > 120 then
+    -- Judged on the first byte DROPPED, not on the last one kept: a
+    -- continuation byte there is what says the cut falls inside a
+    -- character. Walking back from the last byte kept instead throws away
+    -- a whole character when the cut happened to land cleanly -- and, on
+    -- a lead byte, leaves it dangling with its continuation gone, which
+    -- is not text any more.
+    local cut = 120
+    while cut > 0 do
+      local b = string.byte(s, cut + 1)
+      if not b or b < 128 or b >= 192 then
+        break
+      end
+      cut = cut - 1
+    end
+    s = trim(string.sub(s, 1, cut))
+  end
+  return s
+end
+
+local function file_exists(path)
+  local f = path and io.open(path, "rb")
+  if f then
+    f:close()
+    return true
+  end
+  return false
+end
+
+-- vlc.io.mkdir creates one level at a time
+local function mkdir_p(path)
+  if not (vlc.io and vlc.io.mkdir) then
+    return false
+  end
+  local built = ""
+  if string.sub(path, 1, 1) == "/" then
+    built = "/"
+  end
+  for part in string.gmatch(path, "[^/]+") do
+    built = built .. part
+    vlc.io.mkdir(built, "0755")
+    built = built .. "/"
+  end
+  return true
+end
+
+local function format_bytes(bytes)
+  bytes = tonumber(bytes)
+  if not bytes or bytes < 0 then
+    return "?"
+  end
+  if bytes >= 1073741824 then
+    return string.format("%.2f", bytes / 1073741824) .. " GiB"
+  end
+  if bytes >= 1048576 then
+    return string.format("%.1f", bytes / 1048576) .. " MiB"
+  end
+  return math.floor(bytes / 1024) .. " KiB"
+end
+
+-- Drawn out of block characters rather than asked of the interface: the
+-- dialog API has no progress widget, and this one line is rewritten in
+-- place several times a second.
+local function progress_bar(got, total)
+  local width = 24
+  local filled = 0
+  if total > 0 then
+    filled = math.floor(got * width / total)
+  end
+  if filled > width then
+    filled = width
+  end
+  return string.rep("\226\150\136", filled)
+      .. string.rep("\226\150\145", width - filled)
 end
 
 local function set_message(text)
@@ -1540,6 +1709,7 @@ local RELAY_JS = [==[
 (function(){
  var BASE='{{BASE}}', TARGET='__TARGET__', WANT='__WANT__';
  var tab=null, lastHello=0, lastCookie='', job=null, busy=false, live=null;
+ var pending=null;
  var st=document.getElementById('st');
  function say(t){ if(st) st.innerHTML=t; }
  /* The bookmark half of the page is only of use until something is
@@ -1559,12 +1729,19 @@ local RELAY_JS = [==[
    var x=new XMLHttpRequest(); x.open(m,u,true);
    x.onreadystatechange=function(){ if(x.readyState==4&&cb) cb(x); };
    try{ x.send(b||null); }catch(err){ if(cb) cb(x); }
+   return x;
  }
  window.addEventListener('message',function(e){
    if(e.origin!==TARGET) return;
    var d=e.data; if(!d||d.pv!==1) return;
    if(d.hello){
-     tab=e.source; lastHello=new Date().getTime(); busy=!!d.busy;
+     tab=e.source; lastHello=new Date().getTime();
+     var was=busy; busy=!!d.busy;
+     /* the parked /next says "free" or "busy" for as long as it sits
+        there: when the tab changes its mind, cut it short so the next
+        one speaks the truth -- and so a job is not handed to a poll
+        that predates the check the tab walked into */
+     if(pending&&was!==busy){ try{pending.abort();}catch(e9){} }
      /* tell the page its messages are arriving: without this it has no
         way to know whether the opener it found is really us */
      /* tell it which video is wanted, so that a tab showing that very
@@ -1630,16 +1807,24 @@ local RELAY_JS = [==[
         for the seconds it takes to walk it (7 to 9 measured on the G3),
         and its script dies with each document on the way. Without this
         the player declared "relay gone" on a browser that was busy
-        earning the very session it had been asked for. */
+        earning the very session it had been asked for. Busy knocks are
+        answered at once, so the beat stays at one a second. */
      if(tab&&quiet<=25000){ xhr('GET',BASE+'/next?busy=1'); }
      say(busy?'__BUSY__':'__OFF__'); setTimeout(loop,1000); return;
    }
-   xhr('GET',BASE+'/next',null,function(x){
+   /* The player holds this open until it has work or ~10 s pass (long
+      poll): an answer is news, not a beat to keep. Asking used to cost
+      2.5 requests a second for nothing, which the core's byte-by-byte
+      header reads turned into ~1300 system calls a second. */
+   pending=xhr('GET',BASE+'/next',null,function(x){
+     pending=null;
      var t=x.responseText||'';
      if(t){ var i=t.indexOf(' ');
             job={id:t.substring(0,i),url:t.substring(i+1)};
-            tab.postMessage({pv:1,id:job.id,url:job.url},TARGET); }
-     setTimeout(loop,400);
+            /* gone busy while the answer was in flight: hold the job,
+               the hello handler puts it to the tab once it is free */
+            if(!busy&&tab){ try{ tab.postMessage({pv:1,id:job.id,url:job.url},TARGET); }catch(e8){} } }
+     setTimeout(loop,t?150:250);
    });
  }
  loop();
@@ -1762,6 +1947,23 @@ end
 -- come up with no poll armed at all.
 local CHALLENGE_POLL_MS = 1200
 
+-- One pending timer callback exists per extension -- vlc.timer() replaces
+-- whatever was armed before it -- so the two jobs that need waking up
+-- share a single tick, and each arming has to ask for the shorter of the
+-- two deadlines. Two names would silently disarm each other: opening a
+-- guarded video while a download runs would arm the poll over it, and the
+-- download would stop dead with no error anywhere.
+local function arm_tick()
+  if not vlc.timer then
+    return
+  end
+  if dl.active then
+    vlc.timer(DL_TICK_MS, "invidious_tick")
+  elseif app.awaiting_challenge then
+    vlc.timer(CHALLENGE_POLL_MS, "invidious_tick")
+  end
+end
+
 -- Opens the local page and remembers what to resume once the browser has
 -- done its part.
 function start_challenge(instance, retry_fn)
@@ -1848,9 +2050,7 @@ function show_challenge()
   ui.message = dlg:add_label(lang.msg_challenge_needed, 1, 6, 4, 1)
   dlg:show()
   app.awaiting_challenge = true
-  if vlc.timer then
-    vlc.timer(CHALLENGE_POLL_MS, "challenge_tick")
-  end
+  arm_tick()
 end
 
 function click_challenge_copy()
@@ -1879,15 +2079,14 @@ function click_challenge_open()
   end
 end
 
-function challenge_tick()
-  if not app.awaiting_challenge then
-    return
-  end
-  if challenge_resume(true) then
-    return
-  end
-  if vlc.timer then
-    vlc.timer(CHALLENGE_POLL_MS, "challenge_tick")
+-- The poll half of the shared tick: the browser has nothing to announce
+-- itself with, so the answer is looked for again and again while the
+-- challenge view is up. challenge_resume() takes the view down itself
+-- once something arrives, and app.awaiting_challenge going false is what
+-- stops the next arming.
+local function challenge_poll()
+  if app.awaiting_challenge then
+    challenge_resume(true)
   end
 end
 
@@ -2225,10 +2424,17 @@ end
 -- latest_version stream exit still works without authentication.
 -- Probe the standard combined/audio itags and offer whichever answer.
 local function fallback_formats(result)
+  -- The type is spelt out rather than read back off the address: these
+  -- go through the instance's own /latest_version, which says nothing
+  -- about what it is about to serve. It is the itag that decides, and
+  -- these three are fixed by YouTube.
   local candidates = {
-    { itag = "22", label = "720p — mp4 (" .. lang.combined .. ")" },
-    { itag = "18", label = "360p — mp4 (" .. lang.combined .. ")" },
-    { itag = "140", label = lang.audio_only .. " — 128 kb/s (m4a)" },
+    { itag = "22", label = "720p — mp4 (" .. lang.combined .. ")",
+      mime = "video/mp4" },
+    { itag = "18", label = "360p — mp4 (" .. lang.combined .. ")",
+      mime = "video/mp4" },
+    { itag = "140", label = lang.audio_only .. " — 128 kb/s (m4a)",
+      mime = "audio/mp4", sound_only = true },
   }
   local formats = {}
   for _, c in ipairs(candidates) do
@@ -2243,15 +2449,21 @@ local function fallback_formats(result)
       -- The relay stays as the fallback when googlevideo refuses us
       -- (IP-bound URL): see dash_formats for the whole rationale.
       if probe_stream(url) then
-        table.insert(formats, { label = c.label, url = url })
+        table.insert(formats, { label = c.label, url = url,
+                              mime = c.mime,
+                              sound_only = c.sound_only })
       else
         url = url .. "&local=true"
         if probe_stream(url) then
-          table.insert(formats, { label = c.label, url = url })
+          table.insert(formats, { label = c.label, url = url,
+                                  mime = c.mime,
+                                  sound_only = c.sound_only })
         end
       end
     elseif probe_stream(url) then
-      table.insert(formats, { label = c.label, url = url })
+      table.insert(formats, { label = c.label, url = url,
+                              mime = c.mime,
+                              sound_only = c.sound_only })
     end
   end
   return formats
@@ -2271,6 +2483,31 @@ local function without_local(url)
   return url
 end
 
+-- DASH writes frameRate either as a plain number or as "num/den"
+-- (30000/1001). Returns nil when absent or unreadable: an unknown rate must
+-- never be held against a stream.
+local function parse_frame_rate(s)
+  if not s then return nil end
+  local num, den = string.match(s, "^(%d+)/(%d+)$")
+  if num then
+    num, den = tonumber(num), tonumber(den)
+    if num and den and den > 0 then return num / den end
+    return nil
+  end
+  return tonumber(s)
+end
+
+-- Above this, a stream is "high frame rate": 30000/1001 and 30 stay under,
+-- 50 and 60 do not. Those are exactly the ones that push 1080p past H.264
+-- level 4.1 -- out of reach of the Crystal HD, and out of reach of software
+-- decoding on every machine this fork exists for.
+local FPS_PLAIN_MAX = 30.5
+
+local function fps_penalty(fps)
+  if not fps then return 0 end   -- unknown: judged as before, on codec alone
+  return fps > FPS_PLAIN_MAX and 1 or 0
+end
+
 local function parse_dash_manifest(body, origin)
   local function absolute(url)
     url = (string.gsub(url, "&amp;", "&"))
@@ -2281,18 +2518,25 @@ local function parse_dash_manifest(body, origin)
   end
 
   local audio, audio_rate = nil, -1
+  local audio_mime = nil
   local videos = {}
 
   for set in string.gmatch(body, "<AdaptationSet.-</AdaptationSet>") do
     local is_audio = string.find(set, 'contentType="audio"', 1, true)
                   or string.find(set, 'mimeType="audio', 1, true)
+    -- DASH allows mimeType on either element, and Invidious writes it on
+    -- the set. Only the download reads it, to give the file a name that
+    -- matches what is inside it.
+    local set_mime = string.match(set, 'mimeType="([%w%-]+/[%w%-%.]+)"')
     for rep in string.gmatch(set, "<Representation.-</Representation>") do
       local url = string.match(rep, "<BaseURL>(.-)</BaseURL>")
       local rate = tonumber(string.match(rep, 'bandwidth="(%d+)"') or "") or 0
+      local mime = string.match(rep, 'mimeType="([%w%-]+/[%w%-%.]+)"')
+                or set_mime
       if url then
         if is_audio then
           if rate > audio_rate then
-            audio, audio_rate = absolute(url), rate
+            audio, audio_rate, audio_mime = absolute(url), rate, mime
           end
         else
           local height = tonumber(string.match(rep, 'height="(%d+)"') or "")
@@ -2300,6 +2544,11 @@ local function parse_dash_manifest(body, origin)
             table.insert(videos, {
               height = height,
               codec = string.match(rep, 'codecs="([^".]*)') or "?",
+              -- DASH allows frameRate on either element; the Representation
+              -- wins when both carry it.
+              fps = parse_frame_rate(string.match(rep, 'frameRate="([%d/]+)"')
+                                  or string.match(set, 'frameRate="([%d/]+)"')),
+              mime = mime,
               url = absolute(url),
             })
           end
@@ -2308,7 +2557,7 @@ local function parse_dash_manifest(body, origin)
     end
   end
 
-  return audio, videos
+  return audio, videos, audio_mime
 end
 
 local function dash_formats(manifest_url)
@@ -2318,7 +2567,7 @@ local function dash_formats(manifest_url)
   end
   local origin = string.match(manifest_url, "^(https?://[^/]+)") or ""
 
-  local audio, videos = parse_dash_manifest(body, origin)
+  local audio, videos, audio_mime = parse_dash_manifest(body, origin)
 
   if not audio or #videos == 0 then
     return nil
@@ -2353,7 +2602,7 @@ local function dash_formats(manifest_url)
       end
       -- NOT inlined into `direct_body and parse_...`: an and/or expression
       -- truncates multiple return values to the first one.
-      local direct_audio, direct_videos =
+      local direct_audio, direct_videos, direct_audio_mime =
           parse_dash_manifest(direct_body, origin)
       -- "Direct" only counts when the URLs actually leave the instance:
       -- companion-based instances rewrite the BaseURLs to their own
@@ -2392,6 +2641,7 @@ local function dash_formats(manifest_url)
       end
       if replaced > 0 then
         audio = direct_audio
+        audio_mime = direct_audio_mime or audio_mime
         vlc.msg.info("[Invidious] streams: direct googlevideo ("
                      .. replaced .. "/" .. #videos
                      .. " qualities), instance relay kept as fallback")
@@ -2403,13 +2653,26 @@ local function dash_formats(manifest_url)
     end
   end
 
-  -- one entry per resolution, keeping the most widely decodable codec:
-  -- AV1 is out of reach of the machines this fork exists for
+  -- One entry per resolution AND cadence, keeping within each the most
+  -- widely decodable codec (AV1 is out of reach of the machines this fork
+  -- exists for).
+  --
+  -- The cadence used to be ignored, so a 60 fps upload -- which YouTube
+  -- publishes at both cadences -- collapsed to whichever the manifest
+  -- happened to list first, at random. That matters here: 1080p60 is H.264
+  -- level 4.2, past the Crystal HD's 4.1 ceiling, and the card takes such a
+  -- stream, decodes under a second of it and then stops dead (measured:
+  -- 56 pictures). 1080p30 of the same video decodes in hardware.
+  --
+  -- Both are offered rather than the low one imposed: 60 fps is worth having
+  -- on a machine that can carry it, and that is the viewer's call, not ours.
+  -- The label says which is which.
   local best = {}
   for _, v in ipairs(videos) do
     local rank = CODEC_RANK[string.sub(v.codec, 1, 3)] or 9
-    if not best[v.height] or rank < best[v.height].rank then
-      best[v.height] = { rank = rank, video = v }
+    local key  = v.height .. "/" .. fps_penalty(v.fps)
+    if not best[key] or rank < best[key].rank then
+      best[key] = { rank = rank, video = v }
     end
   end
 
@@ -2417,15 +2680,38 @@ local function dash_formats(manifest_url)
   for _, entry in pairs(best) do
     table.insert(formats, {
       height = entry.video.height,
-      label = entry.video.height .. "p — " .. entry.video.codec,
+      hifps  = fps_penalty(entry.video.fps),
+      -- "1080p — avc1 — 60 fps": spelt out rather than folded into the
+      -- resolution the way YouTube writes it ("1080p60"), because this is
+      -- what the choice actually turns on. Two entries differing only by
+      -- their cadence sit next to each other in the menu, and the one the
+      -- hardware cannot take is readable as such instead of having to be
+      -- deduced. Rounded to the nearest whole frame: 30000/1001 is "30 fps"
+      -- to a viewer, and 23.976 is "24". Omitted when the manifest does not
+      -- say, which is the one case where nothing can be claimed.
+      label = entry.video.height .. "p — " .. entry.video.codec
+              .. (entry.video.fps
+                    and (" — " .. math.floor(entry.video.fps + 0.5) .. " fps")
+                    or ""),
       url = entry.video.url,
+      mime = entry.video.mime,
       -- the video stream carries no sound of its own
       options = { ":input-slave=" .. audio },
+      -- ... which is why the download has to be told about it by name:
+      -- it writes files, and a file of this URL alone would be silent.
+      audio = audio,
+      audio_mime = audio_mime,
       -- pasting a video-only URL would be useless: hand out the manifest
       copy = manifest_url,
     })
   end
-  table.sort(formats, function(a, b) return a.height > b.height end)
+  -- Tallest first, and at equal height the plain cadence before the high one.
+  -- The tie-break is not cosmetic: table.sort is not stable, so without it
+  -- 1080p and 1080p60 would swap places from one call to the next.
+  table.sort(formats, function(a, b)
+    if a.height ~= b.height then return a.height > b.height end
+    return a.hifps < b.hifps
+  end)
   return formats
 end
 
@@ -2440,7 +2726,7 @@ local function open_video_html(result)
 
   local formats = {}
   for _, src in ipairs(info.sources) do
-    local label
+    local label, manifest
     if src.label == "dash" or (src.mime and string.find(src.mime, "dash", 1, true)) then
       -- expand the manifest into per-resolution entries, and keep the
       -- manifest itself as the last "let VLC decide" option
@@ -2451,18 +2737,23 @@ local function open_video_html(result)
         end
       end
       label = lang.dash_auto
+      -- a description of where the streams are, not a stream
+      manifest = true
     else
       label = (src.label or "?") .. " — "
            .. (src.mime and string.match(src.mime, "/([%w-]+)") or "?")
            .. " (" .. lang.combined .. ")"
     end
-    table.insert(formats, { label = label, url = src.url })
+    table.insert(formats, { label = label, url = src.url,
+                            mime = not manifest and src.mime or nil,
+                            playlist = manifest })
   end
   if #formats == 0 then
     return false, "no source"
   end
 
-  app.video = { title = info.title or result.title,
+  app.video = { id = result.id,
+                title = info.title or result.title,
                 author = info.author or result.author or "?",
                 published = result.published,
                 publishedText = result.publishedText }
@@ -2507,7 +2798,8 @@ function open_video(result)
       set_message(lang.msg_video_fail .. err)
       return
     end
-    app.video = { title = result.title, author = result.author or "?",
+    app.video = { id = result.id, title = result.title,
+                  author = result.author or "?",
                   published = result.published }
     app.formats = formats
     show_video()
@@ -2524,6 +2816,7 @@ function open_video(result)
       table.insert(combined, {
         label = quality .. " — " .. container .. " (" .. lang.combined .. ")",
         url = fs.url,
+        mime = fs.type,
         rank = quality_rank(quality)
       })
     end
@@ -2533,7 +2826,9 @@ function open_video(result)
     table.insert(formats, f)
   end
   if obj.hlsUrl and obj.hlsUrl ~= "" then
-    table.insert(formats, { label = lang.live_hls, url = obj.hlsUrl })
+    -- a playlist of segments, not a file: playable, not downloadable
+    table.insert(formats, { label = lang.live_hls, url = obj.hlsUrl,
+                            playlist = true })
   end
   for _, af in ipairs(obj.adaptiveFormats or {}) do
     if af.url and string.match(af.type or "", "^audio/") then
@@ -2543,12 +2838,15 @@ function open_video(result)
         label = lang.audio_only
              .. (rate and (" — " .. math.floor(rate / 1000) .. " kb/s") or "")
              .. " (" .. container .. ")",
-        url = af.url
+        url = af.url,
+        mime = af.type,
+        sound_only = true
       })
     end
   end
 
-  app.video = { title = obj.title or result.title,
+  app.video = { id = result.id,
+                title = obj.title or result.title,
                 author = obj.author or result.author or "?",
                 published = obj.published or result.published,
                 publishedText = obj.publishedText }
@@ -2556,23 +2854,137 @@ function open_video(result)
   show_video()
 end
 
+-- The picture that goes with the video, fetched from the instance and
+-- from nowhere else. i.ytimg.com would answer this in one line and never
+-- fail -- and would tell Google what is being watched from this machine
+-- even when the streams themselves were routed through the instance on
+-- purpose. No picture is the better failure.
+--
+-- It is written next to the other user data because the image widget
+-- takes a file rather than bytes. One video at a time: the previous
+-- picture goes as soon as another video is opened.
+local function fetch_thumbnail(id)
+  local dir = vlc.config.userdatadir()
+  if not id or not dir or dir == "" then
+    return nil
+  end
+
+  local function usable(path)
+    local f = io.open(path, "rb")
+    if not f then
+      return false
+    end
+    local size = f:seek("end")
+    f:close()
+    return size ~= nil and size > 128
+  end
+  -- The size is part of the name, and there are two names because there
+  -- are two answers the scaler can give: what is on disk is then never
+  -- guessed at, and a file kept from a version that asked for other
+  -- bounds is not taken for this one.
+  local base = dir .. "/invidious-thumb-" .. id .. "-"
+  local scaled_path = base .. THUMB_W .. "x" .. THUMB_H .. ".jpg"
+  local raw_path = base .. THUMB_RAW_W .. "x" .. THUMB_RAW_H .. ".jpg"
+
+  -- One video at a time. Whatever was kept for the previous one goes
+  -- here, at the top, rather than on the way out: this is reached only
+  -- when the video has changed, and doing it beside each answer left the
+  -- old picture behind on every path that gives none.
+  if app.thumb then
+    os.remove(app.thumb.path)
+    app.thumb = nil
+  end
+
+  -- already fetched for this video: opening it again costs nothing
+  if usable(scaled_path) then
+    return { path = scaled_path, w = THUMB_W, h = THUMB_H }
+  end
+  if usable(raw_path) then
+    return { path = raw_path, w = THUMB_RAW_W, h = THUMB_RAW_H }
+  end
+
+  set_message(lang.msg_loading_thumb)
+  local body = get_body(app.instance .. "/vi/" .. id .. "/" .. THUMB_SOURCE)
+  if not body or #body < 128 then
+    return nil
+  end
+  local f = io.open(raw_path, "wb")
+  if not f then
+    return nil
+  end
+  f:write(body)
+  f:close()
+
+  -- 320 wide is nearly half the dialog, and an instance is free to answer
+  -- with something else entirely -- a proxy that converted to WebP, which
+  -- the older machines cannot display at all. The core decodes whatever
+  -- came and writes a JPEG of the size the layout is told about. Without
+  -- it, the file stays as it arrived and is declared at its own size.
+  if vlc.misc and vlc.misc.image_scale then
+    local ok, w, h = pcall(vlc.misc.image_scale, raw_path, scaled_path,
+                           THUMB_W, THUMB_H)
+    if ok and w and h and usable(scaled_path) then
+      os.remove(raw_path)
+      return { path = scaled_path, w = w, h = h }
+    end
+    os.remove(scaled_path)
+  end
+  return { path = raw_path, w = THUMB_RAW_W, h = THUMB_RAW_H }
+end
+
 function show_video()
+  -- Fetched before the view it belongs to is built, so that the "getting
+  -- the thumbnail" line lands on a dialog that is still up -- and once
+  -- per video, so that coming back to a video already seen costs nothing.
+  if app.video.id and app.thumb_for ~= app.video.id then
+    app.thumb_for = app.video.id
+    app.thumb = fetch_thumbnail(app.video.id)
+  end
+
   close_dlg()
   dlg = vlc.dialog(lang.title_video)
   dlg:set_size(DIALOG_WIDTH, 0)
-  dlg:add_label(app.video.title, 1, 1, 3, 1)
+  dlg:add_label(app.video.title, 1, 1, 4, 1)
   dlg:add_label(lang.lbl_by .. " " .. app.video.author .. " — "
-                .. format_date(app.video), 1, 2, 3, 1)
+                .. format_date(app.video), 1, 2, 4, 1)
   dlg:add_label(lang.lbl_quality, 1, 3, 1, 1)
-  ui.quality = dlg:add_dropdown(2, 3, 2, 1)
+  ui.quality = dlg:add_dropdown(2, 3, 3, 1)
   for i, f in ipairs(app.formats) do
     ui.quality:add_value(f.label, i)
   end
   dlg:add_button(lang.btn_play, click_play, 1, 4, 1, 1)
-  dlg:add_button(lang.btn_copy, click_copy, 2, 4, 1, 1)
-  dlg:add_button(lang.btn_back, show_search, 3, 4, 1, 1)
-  ui.link = dlg:add_text_input("", 1, 5, 3, 1)
-  ui.message = dlg:add_label("", 1, 6, 3, 1)
+  -- One button for the two states of the only download there is room to
+  -- run: what a download already going offers is to stop it. It also has
+  -- to be put back to what it says here, because a download outlives the
+  -- view it was started from and this may be a rebuilt one.
+  ui.download = dlg:add_button(dl.active and lang.btn_dl_cancel
+                                          or lang.btn_download,
+                               click_download, 2, 4, 1, 1)
+  dlg:add_button(lang.btn_copy, click_copy, 3, 4, 1, 1)
+  dlg:add_button(lang.btn_back, show_search, 4, 4, 1, 1)
+  -- A second row for the actions that are not the main one: the sound on
+  -- its own, and -- once there is a pair on disk -- putting it back
+  -- together. The first row stays four plain buttons whatever happens.
+  local row = 5
+  dlg:add_button(lang.btn_download_audio, click_download_audio, 1, row, 2, 1)
+  -- Only when there is really a pair sitting on disk: a button that acts
+  -- on files somebody has since moved is worse than no button.
+  if app.combine and app.combine.id == app.video.id
+                 and file_exists(app.combine.video)
+                 and file_exists(app.combine.audio) then
+    dlg:add_button(lang.btn_combine, click_combine, 3, row, 2, 1)
+  end
+  row = row + 1
+  ui.link = dlg:add_text_input("", 1, row, 4, 1)
+  ui.message = dlg:add_label("", 1, row + 1, 4, 1)
+  -- A column of its own for the whole height of the view: the picture
+  -- belongs to the video, not to any one row of it. The bounds are the
+  -- size of the file itself and are stated because Qt only ever CLIPS an
+  -- image to what it is told (a QLabel with no scaled contents), so a
+  -- picture declared smaller than it is comes out cut.
+  if app.thumb then
+    dlg:add_image(app.thumb.path, 5, 1, 1, row + 1, app.thumb.w, app.thumb.h)
+  end
   if #app.formats == 0 then
     set_message(lang.msg_no_formats)
   end
@@ -2625,4 +3037,677 @@ function click_copy()
   else
     set_message(lang.msg_copy_fallback)
   end
+end
+
+            --[[ Putting the two files back together ]]--
+
+-- Above 720p, YouTube has no combined stream and nothing in this player
+-- can mux one: the mp4 muxer takes H.264 and AAC and there is no
+-- matroska muxer in the bundle at all, so a VP9+Opus pair would have
+-- nowhere to go. Rather than half a feature, this hands the job to
+-- ffmpeg -- which the user installs, or does not.
+--
+-- Nothing is run behind anyone's back: a script is written next to the
+-- files, and a terminal window is opened on it. The user sees the
+-- command, sees ffmpeg's own output, and sees the error if ffmpeg is not
+-- there. os.execute is the standard library's (extension.c calls
+-- luaL_openlibs), and vlc.browser.open is deliberately not used: it
+-- refuses anything that is not http(s), and that guard is worth keeping.
+
+-- ⚠⚠⚠ A FUNCTION, not a top-level value. The scanner reads descriptor()
+-- in a bare Lua state -- no libraries at all, `require` a stub (see the
+-- note at the top of this file) -- and `package` is nil there. One
+-- top-level `package.config` was enough to make the whole extension
+-- disappear from the menu: the file raises while being loaded, so it is
+-- never listed, and nothing anywhere says why.
+local function is_windows()
+  return package ~= nil and package.config ~= nil
+     and string.sub(package.config, 1, 1) == "\\"
+end
+
+local function is_macos()
+  local f = io.open("/usr/bin/open", "r")
+  if f then
+    f:close()
+    return true
+  end
+  return false
+end
+
+-- Everything that reaches a shell goes through one of these. A video
+-- title is whatever its author felt like -- quotes, dollars, backticks --
+-- and it ends up in a file name.
+local function sh_quote(s)
+  return "'" .. string.gsub(tostring(s or ""), "'", "'\\''") .. "'"
+end
+
+local function bat_quote(s)
+  -- cmd.exe expands %VAR% even inside quotes; doubling is how a percent
+  -- survives being a percent
+  return '"' .. string.gsub(tostring(s or ""), "%%", "%%%%") .. '"'
+end
+
+-- The command itself, for the script and for the clipboard fall-back.
+local function ffmpeg_command(c, quote)
+  return "ffmpeg -y -i " .. quote(c.video) .. " -i " .. quote(c.audio)
+      .. " -c copy " .. quote(c.out)
+end
+
+local function write_combine_script(c)
+  local path, body
+  if is_windows() then
+    path = c.dir .. "\\powervlc-combine.bat"
+    body = table.concat({
+      "@echo off",
+      "cd /d " .. bat_quote(c.dir),
+      "echo PowerVLC: " .. lang.combine_banner,
+      "where ffmpeg >nul 2>nul || (echo " .. lang.combine_no_ffmpeg
+        .. " & pause & exit /b 1)",
+      ffmpeg_command(c, bat_quote),
+      "echo.",
+      "echo " .. lang.combine_done .. " " .. bat_quote(c.out),
+      "pause",
+      "",
+    }, "\r\n")
+  else
+    -- .command rather than .sh: on macOS that is the extension the
+    -- Finder and /usr/bin/open hand to Terminal. Elsewhere the name
+    -- does not matter, the terminal is told to run it.
+    path = c.dir .. "/powervlc-combine.command"
+    body = table.concat({
+      "#!/bin/sh",
+      "# Written by PowerVLC. Safe to delete.",
+      "cd " .. sh_quote(c.dir) .. " || exit 1",
+      'printf "%s\\n" ' .. sh_quote(lang.combine_banner),
+      'if ! command -v ffmpeg >/dev/null 2>&1; then',
+      '  printf "%s\\n" ' .. sh_quote(lang.combine_no_ffmpeg),
+      '  exit 1',
+      'fi',
+      ffmpeg_command(c, sh_quote),
+      'status=$?',
+      '[ "$status" -eq 0 ] && printf "%s\\n" '
+        .. sh_quote(lang.combine_done .. " " .. c.out),
+      'exit "$status"',
+      "",
+    }, "\n")
+  end
+  local f = io.open(path, "wb")
+  if not f then
+    return nil
+  end
+  f:write(body)
+  f:close()
+  return path
+end
+
+-- Open a terminal window running that script. Returns true when
+-- something was launched -- not that ffmpeg succeeded, which is the
+-- window's business to show.
+local function launch_terminal(script)
+  local cmd
+  if is_windows() then
+    cmd = 'start "" ' .. bat_quote(script)
+  elseif is_macos() then
+    -- chmod first: /usr/bin/open hands a .command to Terminal only if it
+    -- is executable, and silently opens a text editor otherwise.
+    cmd = "/bin/chmod +x " .. sh_quote(script)
+       .. " && /usr/bin/open " .. sh_quote(script)
+  else
+    -- No agreed way to say "open a terminal" on Linux: try the ones that
+    -- exist, in the order a desktop is likely to have them.
+    local q = sh_quote(script)
+    cmd = "/bin/chmod +x " .. q .. " ; "
+       .. "for t in x-terminal-emulator gnome-terminal konsole xfce4-terminal"
+       .. " mate-terminal xterm ; do "
+       .. "command -v \"$t\" >/dev/null 2>&1 && { \"$t\" -e " .. q
+       .. " & exit 0 ; } ; done ; exit 1"
+  end
+  local ok = os.execute(cmd)
+  -- os.execute answers true/false in 5.2+, an exit status in 5.1
+  return ok == true or ok == 0
+end
+
+function click_combine()
+  local c = app.combine
+  if not (c and file_exists(c.video) and file_exists(c.audio)) then
+    set_message(lang.msg_combine_gone)
+    return
+  end
+  local script = write_combine_script(c)
+  if script and launch_terminal(script) then
+    set_message(lang.msg_combine_launched)
+    return
+  end
+  -- No terminal to be had: the command is still the answer, so hand it
+  -- over in the one place the user can paste from.
+  local line = ffmpeg_command(c, is_windows() and bat_quote or sh_quote)
+  if ui.link then
+    ui.link:set_text(line)
+  end
+  if copy_to_clipboard(line) then
+    set_message(lang.msg_combine_copied)
+  else
+    set_message(lang.msg_combine_fallback)
+  end
+end
+
+            --[[ Downloading ]]--
+
+-- What the file is called. The address says what is inside it -- every
+-- googlevideo URL carries "&mime=video%2Fmp4", and a DASH manifest names
+-- the same thing on its Representation -- so the extension follows the
+-- contents rather than a guess. Getting it wrong costs a name that does
+-- not match the file, which is why the fall-backs are the commonest of
+-- each kind rather than nothing at all.
+local function stream_extension(mime, url, sound_only)
+  mime = mime or ""
+  if mime == "" then
+    local from_url = string.match(url or "", "[?&]mime=([^&]+)")
+    if from_url then
+      mime = (string.gsub(from_url, "%%2[Ff]", "/"))
+    end
+  end
+  -- "video/mp4; codecs=..." -- the parameters are not part of the type
+  local kind, sub = string.match(mime, "^(%a+)/([%w%-%.]+)")
+  if sub then
+    sub = string.match(sub, "^[%w%-]+")
+  end
+  if sound_only or kind == "audio" then
+    if sub == "webm" then return "weba" end
+    if sub == "mp4" then return "m4a" end
+    return sub or "m4a"
+  end
+  if sub == "3gpp" then return "3gp" end
+  return sub or "mp4"
+end
+
+-- The folder every browser on the machine would have used, made if it is
+-- not there yet.
+local function download_dir()
+  local home = vlc.config.homedir()
+  if not home or home == "" then
+    return nil
+  end
+  local dir = home .. "/Downloads"
+  mkdir_p(dir)
+  return dir
+end
+
+-- The clock, for the rate shown while a download runs. vlc.misc.mdate is
+-- this fork's; os.time() answers in whole seconds and os.clock() counts
+-- CPU, which is exactly the part a download does NOT spend.
+local function now_us()
+  return (vlc.misc and vlc.misc.mdate) and vlc.misc.mdate() or nil
+end
+
+local function dl_progress()
+  if not dl.files[dl.idx] then
+    return
+  end
+  local percent = 0
+  if dl.total > 0 then
+    percent = math.floor(dl.got * 100 / dl.total)
+  end
+  -- No file name in here: this line is rewritten several times a second,
+  -- and a window that grows to fit a long title never shrinks back. The
+  -- names are in the closing message, which is written once.
+  local line = string.format(lang.dl_progress,
+    progress_bar(dl.got, dl.total), percent, dl.idx, #dl.files,
+    format_bytes(dl.got), dl.total > 0 and format_bytes(dl.total) or "?")
+  -- The rate, appended rather than put in the catalogues: "KiB/s" reads
+  -- the same in every language this fork is translated into, and a figure
+  -- the user can watch is what turns "it feels slow" into a measurement.
+  if dl.started then
+    local wall = (now_us() - dl.started) / 1000000
+    -- not before half a second: a rate worked out on a first chunk is a
+    -- number that jumps about and says nothing
+    if wall > 0.5 then
+      line = line .. string.format(" — %.0f KiB/s", dl.got / 1024 / wall)
+    end
+  end
+  set_message(line)
+end
+
+local function dl_close_current()
+  if dl.fh then
+    dl.fh:close()
+    dl.fh = nil
+  end
+  -- Dropping the last reference is what closes a stream -- the Lua API
+  -- has no close of its own -- and a download holds several at once, so
+  -- letting one go while keeping the others would leak the connection.
+  dl.slices = {}
+  dl.queue = {}
+  collectgarbage()
+end
+
+local function dl_finish(cancelled)
+  dl_close_current()
+  dl.active = false
+  if ui.download then
+    ui.download:set_text(lang.btn_download)
+  end
+  if cancelled or dl.failed > 0 then
+    -- A half-written file is not something anybody asked for, and a
+    -- picture whose sound never arrived is no better: the two streams
+    -- were one download and they go together, including into the bin.
+    for _, f in ipairs(dl.files) do
+      os.remove(f.path)
+    end
+    set_message(cancelled and lang.dl_cancelled
+                          or (lang.dl_error .. tostring(dl.error or "?")))
+  elseif #dl.written > 1 then
+    -- The two halves are on disk: remember them so the view can offer to
+    -- put them back together. Matroska on purpose -- it takes every pair
+    -- YouTube serves (H.264+AAC as readily as VP9+Opus), and it cannot
+    -- collide with either of the files it is made from.
+    local base = string.gsub(dl.written[1], "%.[%w]+$", "")
+    app.combine = { video = dl.files[1].path, audio = dl.files[2].path,
+                    out = dl.dir .. "/" .. base .. ".mkv", dir = dl.dir,
+                    -- Which video these two came from: the record outlives
+                    -- the view, and a Combine button offered while another
+                    -- video is open would act on the wrong pair.
+                    id = app.video and app.video.id or nil }
+    -- ⚠ The view was built before the download started, and this runs on
+    -- the timer: setting the record above adds no button to a window
+    -- that already exists. It has to be built again -- but only when the
+    -- video view is the one on screen, since a download outlives the
+    -- view it was started from and dragging someone back from their
+    -- search results would be worse than no button at all.
+    -- ui.quality is the marker: no other view has a quality picker.
+    if ui.quality and app.video and app.combine.id == app.video.id then
+      show_video()
+    end
+    set_message(string.format(lang.dl_done_pair, dl.written[1],
+                              dl.written[2], dl.dir))
+  else
+    set_message(string.format(lang.dl_done, dl.written[1] or "?", dl.dir))
+  end
+end
+
+-- One connection positioned at `from`, or nil and why. The seek is what
+-- makes a slice: the HTTP access turns it into a Range request, so each
+-- connection asks the server for its own part of the file and nothing
+-- else. A server that will not do ranges says so here, by failing the
+-- seek, and the caller falls back to one plain connection.
+local function dl_open_at(url, from)
+  -- vlc.stream reports a refusal two ways -- it returns nil and a
+  -- message, and it raises -- so both are read here rather than only the
+  -- one that happens to come up first.
+  local ok, stream, why = pcall(vlc.stream, url)
+  if not ok then
+    return nil, tostring(stream)
+  end
+  if not stream then
+    return nil, tostring(why or "stream error")
+  end
+  if from > 0 and not stream:seek(from) then
+    return nil, "not seekable"
+  end
+  return stream
+end
+
+-- Take the next piece off the queue and point this connection at it.
+-- False when there is nothing left, or when the connection could not be
+-- opened -- in which case the piece goes back for someone else to take.
+local function dl_take_chunk(sl, url)
+  -- Dropping the reference is what closes a stream (the Lua API has no
+  -- close of its own), and it has to happen BEFORE the next one is
+  -- opened: waiting for the collector to come round in its own time is
+  -- how a download ends up holding a hundred sockets at once.
+  sl.stream = nil
+  collectgarbage()
+  local chunk = table.remove(dl.queue, 1)
+  if not chunk then
+    return false
+  end
+  local s = dl_open_at(url, chunk.from)
+  if not s then
+    table.insert(dl.queue, 1, chunk)
+    return false
+  end
+  sl.stream, sl.off, sl.last = s, chunk.from, chunk.to
+  return true
+end
+
+-- Open the file the tick is about to fetch, and lay out the pieces it
+-- will be fetched in.
+--
+-- ⚠ Measured 2026-08-12 against googlevideo, twice over: 210 KiB/s per
+-- connection on a video whose own bitrate is 210 KiB/s, and 28 KiB/s per
+-- connection on its audio track, whose own bitrate is 28 KiB/s. The
+-- server hands each connection the stream at the speed it would be
+-- played at -- so the count of connections IS the multiplier, and an
+-- audio track, at a quarter of the bitrate, takes just as long to fetch
+-- as the video it belongs to unless there are enough of them.
+--
+-- No thread is needed for any of this. Every vlc.stream() carries the
+-- "prefetch" filter (added by stream_AccessNew, src/input/access.c),
+-- which runs a background thread of its own and reads up to 16 MiB
+-- ahead: N streams fill their buffers concurrently while this single Lua
+-- thread walks round them taking what has arrived.
+local function dl_begin_file(cur)
+  local stream, why = dl_open_at(cur.url, 0)
+  if not stream then
+    return nil, why
+  end
+  -- getsize() RAISES when the answer carries no length rather than
+  -- returning nothing, and a server that will not say how long a stream
+  -- is must cost the progress bar -- and the slicing -- not the download.
+  local total = 0
+  local known, size = pcall(stream.getsize, stream)
+  if known and tonumber(size) then
+    total = tonumber(size)
+  end
+
+  local fh = io.open(cur.path, "wb")
+  if not fh then
+    return nil, cur.path
+  end
+
+  dl.total = total
+  dl.got = 0
+  dl.started = now_us()
+  dl.fh = fh
+  dl.queue = {}
+  dl.retries = 0
+
+  -- One connection below the threshold, and whenever the length is
+  -- unknown: without it there is nothing to divide, and the extra
+  -- connections would cost a request each for a file that is over before
+  -- they have opened.
+  if total < DL_MIN_PARALLEL or DL_CONNECTIONS < 2 then
+    dl.slices = { { stream = stream, off = 0, last = total > 0 and total or nil } }
+    return true
+  end
+
+  -- Twice as many pieces as connections, so that one that finishes early
+  -- has something to go on with -- bounded at both ends, because a piece
+  -- too small costs more in requests than it carries.
+  local span = math.floor(total / (DL_CONNECTIONS * 2))
+  if span < DL_CHUNK_MIN then span = DL_CHUNK_MIN end
+  if span > DL_CHUNK_MAX then span = DL_CHUNK_MAX end
+  local from = 0
+  while from < total do
+    local to = from + span
+    -- a last piece not worth a request of its own joins the one before it
+    if to > total or (total - to) < math.floor(span / 4) then
+      to = total
+    end
+    table.insert(dl.queue, { from = from, to = to })
+    from = to
+  end
+
+  -- The stream opened above has read nothing yet and sits at 0, so it
+  -- takes the first piece rather than being thrown away.
+  local first = table.remove(dl.queue, 1)
+  dl.slices = { { stream = stream, off = first.from, last = first.to } }
+
+  for i = 2, DL_CONNECTIONS do
+    local chunk = dl.queue[1]
+    if not chunk then
+      break
+    end
+    local s = dl_open_at(cur.url, chunk.from)
+    if not s then
+      if i == 2 then
+        -- Ranges are refused here: one connection reads the whole file
+        -- from the top, exactly as it did before any of this existed.
+        -- All or nothing -- half a set of pieces is a corrupt file.
+        vlc.msg.dbg("[Invidious] no ranged connections here, one it is")
+        dl.queue = {}
+        dl.slices = { { stream = stream, off = 0, last = total } }
+        return true
+      end
+      break   -- fewer connections than asked for, but the ones open work
+    end
+    table.remove(dl.queue, 1)
+    table.insert(dl.slices, { stream = s, off = chunk.from, last = chunk.to })
+  end
+  vlc.msg.info("[Invidious] " .. cur.name .. ": " .. #dl.slices
+               .. " connections, " .. (#dl.queue + #dl.slices) .. " pieces of "
+               .. math.floor(span / 1048576) .. " MiB")
+  return true
+end
+
+local function dl_step()
+  if dl.cancelled then
+    dl_finish(true)
+    return
+  end
+
+  if #dl.slices == 0 then
+    dl.idx = dl.idx + 1
+    local cur = dl.files[dl.idx]
+    if not cur then
+      dl_finish(false)
+      return
+    end
+    local ok, why = dl_begin_file(cur)
+    if not ok then
+      dl.failed = dl.failed + 1
+      dl.error = tostring(why or cur.name)
+      vlc.msg.err("[Invidious] cannot download " .. cur.url
+                  .. " to " .. tostring(cur.path))
+      dl_finish(false)
+      return
+    end
+  end
+
+  local url = dl.files[dl.idx].url
+  -- Bounded by the clock, and only then by a byte count: what the user
+  -- watches is time. Each turn takes one chunk from every connection
+  -- that still has something to give -- read in turn on this thread,
+  -- while their prefetch threads keep all of them pulling at once.
+  local deadline = now_us() and (now_us() + DL_TICK_BUDGET_US) or nil
+  local finished = false
+  for _ = 1, DL_CHUNKS_PER_TICK do
+    -- Between chunks rather than between ticks: a megabyte over a slow
+    -- link is well past the ten seconds after which the core offers to
+    -- kill the extension, and a download is not a hung script.
+    still_alive()
+
+    for _, sl in ipairs(dl.slices) do
+      if sl.stream then
+        local left = sl.last and (sl.last - sl.off) or nil
+        if left and left <= 0 then
+          dl_take_chunk(sl, url)          -- this piece is done, next one
+        else
+          local want = READ_CHUNK
+          if left and left < want then
+            want = left
+          end
+          local data = sl.stream:read(want)
+          if not data or #data == 0 then
+            if left and left > 0 then
+              -- The connection went before its piece was complete. What
+              -- is left of it goes back in the queue rather than leaving
+              -- a hole in the file -- that is the whole reason the work
+              -- is a queue and not a fixed carve-up.
+              dl.retries = dl.retries + 1
+              if dl.retries <= DL_MAX_RETRIES then
+                vlc.msg.warn("[Invidious] connection dropped at " .. sl.off
+                             .. ", " .. (sl.last - sl.off)
+                             .. " o back in the queue")
+                table.insert(dl.queue, 1, { from = sl.off, to = sl.last })
+              else
+                vlc.msg.err("[Invidious] too many dropped connections")
+                dl.queue = {}
+              end
+            end
+            dl_take_chunk(sl, url)
+          else
+            -- Each connection writes where its own piece belongs: one
+            -- file, filled from several places at once.
+            dl.fh:seek("set", sl.off)
+            dl.fh:write(data)
+            sl.off = sl.off + #data
+            dl.got = dl.got + #data
+          end
+        end
+      end
+    end
+
+    local live = false
+    for _, sl in ipairs(dl.slices) do
+      if sl.stream then
+        live = true
+      end
+    end
+    if not live then
+      finished = true
+      break
+    end
+    if deadline and now_us() > deadline then
+      break
+    end
+  end
+
+  if finished then
+    dl_close_current()
+    -- A connection that dropped leaves a file that looks like a download
+    -- and is not one. The length announced is what says so; when none was
+    -- announced, only an empty answer can be judged.
+    if dl.got == 0 or (dl.total > 0 and dl.got < dl.total) then
+      dl.failed = dl.failed + 1
+      dl.error = dl.files[dl.idx].name
+      vlc.msg.err("[Invidious] " .. dl.files[dl.idx].name .. " stopped short: "
+                  .. dl.got .. "/" .. dl.total .. " o")
+      dl_finish(false)
+      return
+    end
+    table.insert(dl.written, dl.files[dl.idx].name)
+  end
+  dl_progress()
+end
+
+-- The one timer callback this extension has: both jobs are looked at,
+-- and arm_tick() re-arms it for whichever still has work to do.
+function invidious_tick()
+  if dl.active then
+    dl_step()
+  end
+  challenge_poll()
+  arm_tick()
+end
+
+-- Everything a download needs, whichever button asked for it: the
+-- streams to fetch, and the tag that goes in the file name.
+local function begin_download(entries, tag)
+  if not vlc.timer then
+    -- Nothing else moves the bytes along: the extension has no thread of
+    -- its own, and a download is what the timer is for.
+    set_message(lang.msg_dl_unsupported)
+    return
+  end
+  local dir = download_dir()
+  if not dir then
+    set_message(lang.msg_dl_no_dir)
+    return
+  end
+
+  -- "Title [1080p].mp4": the quality belongs in the name, so that the
+  -- same video fetched twice at two qualities is two files rather than
+  -- one overwritten. Not translated -- it is a file name, and one that
+  -- changes with the interface language would not be found again.
+  local base = sanitize_filename(app.video.title or "?")
+            .. (tag and (" [" .. tag .. "]") or "")
+
+  dl.files = {}
+  dl.written = {}
+  dl.slices = {}
+  dl.queue = {}
+  dl.idx, dl.got, dl.total, dl.failed = 0, 0, 0, 0
+  dl.error = nil
+  dl.cancelled = false
+  dl.dir = dir
+
+  for _, e in ipairs(entries) do
+    local name = base .. "." .. stream_extension(e.mime, e.url, e.sound_only)
+    table.insert(dl.files, { url = e.url, name = name,
+                             path = dir .. "/" .. name })
+  end
+
+  dl.active = true
+  if ui.download then
+    ui.download:set_text(lang.btn_dl_cancel)
+  end
+  set_message(lang.dl_preparing)
+  arm_tick()
+end
+
+function click_download()
+  -- The button is the same one, and a download already running is what it
+  -- offers to stop. Only the flag is set here: the tick owns the files.
+  if dl.active then
+    dl.cancelled = true
+    return
+  end
+  local f = selected_format()
+  if not f then
+    return
+  end
+  -- HLS and the DASH manifest are descriptions of where the streams are,
+  -- not streams: written to disk they would be a few kilobytes of XML.
+  if f.playlist then
+    set_message(lang.msg_dl_playlist)
+    return
+  end
+  local entries = { { url = f.url, mime = f.mime, sound_only = f.sound_only } }
+  -- A per-resolution DASH stream carries no sound of its own. Playing it
+  -- pulls the audio in as a slave input, which a file on disk cannot do,
+  -- so the sound is fetched as a second file and the closing message says
+  -- the two go together.
+  if f.audio then
+    table.insert(entries, { url = f.audio, mime = f.audio_mime,
+                            sound_only = true })
+  end
+  begin_download(entries, string.match(f.label or "", "(%d+p)")
+                       or (f.sound_only and "audio") or nil)
+end
+
+-- The sound of this video on its own. Three places to look, in the order
+-- that respects what the user has chosen: the entry selected when it is
+-- already a sound-only one, the sound that goes with it when the chosen
+-- quality keeps picture and sound apart, and failing both, whatever
+-- sound-only stream the list holds -- which is what makes this work in
+-- HTML mode, where the quality list has no sound-only entry of its own
+-- but every DASH entry names its audio track.
+local function audio_only_stream()
+  local f = app.formats[ui.quality and ui.quality:get_value() or 1]
+  if f and f.sound_only then
+    return { url = f.url, mime = f.mime, sound_only = true }
+  end
+  if f and f.audio then
+    return { url = f.audio, mime = f.audio_mime, sound_only = true }
+  end
+  for _, other in ipairs(app.formats) do
+    if other.sound_only then
+      return { url = other.url, mime = other.mime, sound_only = true }
+    end
+    if other.audio then
+      return { url = other.audio, mime = other.audio_mime, sound_only = true }
+    end
+  end
+  return nil
+end
+
+function click_download_audio()
+  if dl.active then
+    set_message(lang.msg_dl_busy)
+    return
+  end
+  if #app.formats == 0 then
+    set_message(lang.msg_no_formats)
+    return
+  end
+  local sound = audio_only_stream()
+  if not sound then
+    -- Every stream this video offers carries picture and sound together;
+    -- pulling the sound out of one would be a re-encode, which is the
+    -- ffmpeg button's business, not this one's.
+    set_message(lang.msg_no_audio_stream)
+    return
+  end
+  begin_download({ sound }, "audio")
 end

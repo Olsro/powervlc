@@ -50,6 +50,7 @@ static void     Close   ( vlc_object_t * );
 #define DST_PREFIX_TEXT N_("Destination prefix")
 #define DST_PREFIX_LONGTEXT N_( \
     "Prefix of the destination file automatically generated" )
+#define START_TIME_TEXT N_("Preferred start bound of the capture (µs)")
 
 #define SOUT_CFG_PREFIX "sout-record-"
 
@@ -64,6 +65,13 @@ vlc_module_begin ()
 
     add_string( SOUT_CFG_PREFIX "dst-prefix", "", DST_PREFIX_TEXT,
                 DST_PREFIX_LONGTEXT, true )
+    /* PowerVLC clip creation: preferred start bound (µs, stream time).
+     * When the demuxer delivered data from before that time, the capture
+     * starts at the LAST key frame at or before it instead of the first
+     * key frame received -- the closest possible clip start without
+     * re-encoding. 0 keeps the historic behavior. */
+    add_integer( SOUT_CFG_PREFIX "start-time", 0, START_TIME_TEXT,
+                 START_TIME_TEXT, true )
 
     set_callbacks( Open, Close )
 vlc_module_end ()
@@ -71,6 +79,7 @@ vlc_module_end ()
 /* */
 static const char *const ppsz_sout_options[] = {
     "dst-prefix",
+    "start-time",
     NULL
 };
 
@@ -110,10 +119,15 @@ struct sout_stream_sys_t
     int              i_id;
     sout_stream_id_sys_t **id;
     vlc_tick_t  i_dts_start;
+    /* highest audio/video tick seen while probing, to detect a seek */
+    vlc_tick_t  i_probe_last_dts;
+    /* preferred start bound (µs, stream time base), 0 = none */
+    vlc_tick_t  i_start_bound;
 };
 
 static void OutputStart( sout_stream_t *p_stream );
 static void OutputSend( sout_stream_t *p_stream, sout_stream_id_sys_t *id, block_t * );
+static vlc_tick_t BlockTick( const block_t *p_block );
 
 /*****************************************************************************
  * Open:
@@ -156,6 +170,9 @@ static int Open( vlc_object_t *p_this )
 #endif
     p_sys->b_drop = false;
     p_sys->i_dts_start = 0;
+    p_sys->i_probe_last_dts = 0;
+    p_sys->i_start_bound = var_GetInteger( p_stream,
+                                           SOUT_CFG_PREFIX "start-time" );
     TAB_INIT( p_sys->i_id, p_sys->id );
 
     return VLC_SUCCESS;
@@ -232,6 +249,46 @@ static int Send( sout_stream_t *p_stream, sout_stream_id_sys_t *id,
                  block_t *p_buffer )
 {
     sout_stream_sys_t *p_sys = p_stream->p_sys;
+
+    /* A seek right after arming the record (clip creation jumps to the
+     * clip start bound) makes the timestamps jump while we are still
+     * probing: the buffered pre-seek blocks would end up muxed next to
+     * post-seek ones, producing a broken file. Drop everything buffered
+     * so far and re-arm the key frame waits: the post-seek stream begins
+     * at the key frame the demuxer resumed from, which is exactly what
+     * the clip should start with. Audio/video only: subtitle ticks are
+     * legitimately sparse. */
+    if( !p_sys->p_out &&
+        ( id->fmt.i_cat == AUDIO_ES || id->fmt.i_cat == VIDEO_ES ) )
+    {
+        vlc_tick_t i_tick = BlockTick( p_buffer );
+        if( i_tick != 0 )
+        {
+            if( p_sys->i_probe_last_dts != 0 &&
+                ( i_tick < p_sys->i_probe_last_dts - 2*CLOCK_FREQ ||
+                  i_tick > p_sys->i_probe_last_dts + 2*CLOCK_FREQ ) )
+            {
+                msg_Dbg( p_stream, "timestamp discontinuity while probing "
+                         "(%"PRId64" -> %"PRId64"): restarting capture",
+                         p_sys->i_probe_last_dts, i_tick );
+                for( int i = 0; i < p_sys->i_id; i++ )
+                {
+                    sout_stream_id_sys_t *p_id = p_sys->id[i];
+                    if( p_id->p_first )
+                        block_ChainRelease( p_id->p_first );
+                    p_id->p_first = NULL;
+                    p_id->pp_last = &p_id->p_first;
+                    p_id->b_wait_key = true;
+                    p_id->b_wait_start = true;
+                }
+                p_sys->i_size = 0;
+                p_sys->i_dts_start = 0;
+                p_sys->i_probe_last_dts = i_tick;
+            }
+            else if( i_tick > p_sys->i_probe_last_dts )
+                p_sys->i_probe_last_dts = i_tick;
+        }
+    }
 
     if( p_sys->i_date_start < 0 )
         p_sys->i_date_start = mdate();
@@ -318,16 +375,13 @@ static int OutputNew( sout_stream_t *p_stream,
     if( asprintf( &psz_tmp, "%s%s%s",
                   psz_prefix, psz_extension ? "." : "", psz_extension ? psz_extension : "" ) < 0 )
     {
+        psz_tmp = NULL;
         goto error;
     }
 
     psz_file = config_StringEscape( psz_tmp );
     if( !psz_file )
-    {
-        free( psz_tmp );
         goto error;
-    }
-    free( psz_tmp );
 
     if( asprintf( &psz_output,
                   "std{access=file{no-append,no-format,no-overwrite},"
@@ -356,9 +410,18 @@ static int OutputNew( sout_stream_t *p_stream,
             i_count++;
     }
 
+    /* ⚠ What listens to "record-file" wants the PATH of the file just
+     * written -- the media library adds it, the clip export matches it
+     * against the prefix it asked for -- not the piece of sout syntax that
+     * went into the chain. The two are the same string on Unix, which is
+     * how publishing the escaped copy went unnoticed; on Windows every
+     * backslash of the path comes back DOUBLED and no listener recognises
+     * its own file. The clip export then announced "export failed" over a
+     * clip it had just written perfectly (Windows XP, 13/08/2026). */
     if( psz_file && psz_extension )
-        var_SetString( p_stream->obj.libvlc, "record-file", psz_file );
+        var_SetString( p_stream->obj.libvlc, "record-file", psz_tmp );
 
+    free( psz_tmp );
     free( psz_file );
     free( psz_output );
 
@@ -366,6 +429,7 @@ static int OutputNew( sout_stream_t *p_stream,
 
 error:
 
+    free( psz_tmp );
     free( psz_file );
     free( psz_output );
     return -1;
@@ -515,6 +579,7 @@ static void OutputStart( sout_stream_t *p_stream )
     /* Compute highest timestamp of first I over all streams */
     p_sys->i_dts_start = 0;
     vlc_tick_t i_highest_head_dts = 0;
+    vlc_tick_t i_video_key = 0;
     for( int i = 0; i < p_sys->i_id; i++ )
     {
         sout_stream_id_sys_t *id = p_sys->id[i];
@@ -531,18 +596,59 @@ static void OutputStart( sout_stream_t *p_stream )
             i_highest_head_dts = i_dts;
         }
 
+        /* PowerVLC clip creation: when a start bound is set and the
+         * buffer reaches back before it, prefer the LAST key frame at or
+         * before the bound over the first key frame received -- the
+         * capture then starts as close to the bound as decodability
+         * allows. VIDEO only: audio samples are all flagged as key
+         * frames, so a bounded pick there would slide i_dts_start up to
+         * the bound itself and cut the chosen video key frame off.
+         * Without a bound (or when the buffer starts after it) this
+         * degrades to the historic first-key-frame behavior. */
+        const bool b_bounded = p_sys->i_start_bound > 0
+                            && id->fmt.i_cat == VIDEO_ES;
+        bool b_found_key = false;
         for( ; p_block != NULL; p_block = p_block->p_next )
         {
-            if( p_block->i_flags & BLOCK_FLAG_TYPE_I )
+            if( !( p_block->i_flags & BLOCK_FLAG_TYPE_I ) )
+                continue;
+            vlc_tick_t i_key_dts = BlockTick( p_block );
+            if( !b_found_key )
             {
-                i_dts = BlockTick( p_block );
-                break;
+                i_dts = i_key_dts;
+                b_found_key = true;
+                if( !b_bounded )
+                    break;
             }
+            else if( i_key_dts <= p_sys->i_start_bound + VLC_TS_0 )
+                i_dts = i_key_dts;
+            else
+                break;
         }
+
+        if( b_found_key && id->fmt.i_cat == VIDEO_ES && i_dts > i_video_key )
+            i_video_key = i_dts;
+
+        msg_Dbg( p_stream, "stream %d cat %d: head %"PRId64" chosen key "
+                 "%"PRId64" (bound %"PRId64") found_key=%d", i, id->fmt.i_cat,
+                 BlockTick( id->p_first ), i_dts, p_sys->i_start_bound,
+                 (int)b_found_key );
 
         if( i_dts > p_sys->i_dts_start )
             p_sys->i_dts_start = i_dts;
     }
+
+    /* The chosen video key frame has the last word, bound or not: the
+     * usual highest-first-I alignment lets an audio stream whose first
+     * block sits a few ms later push the start PAST that key frame, which
+     * is then dropped -- and the video, still waiting for a key frame,
+     * only resumes at the next one, one whole GOP later. Measured on a
+     * clip cut right on a key frame (what the clip creation mode always
+     * does): audio from 0, video from 0.996 s, i.e. a black second at the
+     * head of the file. Audio missing those few milliseconds instead is
+     * harmless. */
+    if( i_video_key > 0 && i_video_key < p_sys->i_dts_start )
+        p_sys->i_dts_start = i_video_key;
 
     if( p_sys->i_dts_start == 0 )
         p_sys->i_dts_start = i_highest_head_dts;

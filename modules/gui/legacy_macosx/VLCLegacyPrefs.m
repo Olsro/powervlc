@@ -695,6 +695,11 @@ static BOOL haveConfig(const char *name)
         label:_NS("Continue playback") at:y in:pane];
     if (continuePopup)
         y += 30;
+    /* off by default on the PowerPC builds: the preview decode makes the
+     * playback stutter on those machines (see macosx.c) */
+    [self checkbox:_NS("Show a preview image when hovering the seek bar")
+            config:"legacy-macosx-hover-thumbnails" at:y in:pane];
+    y += 24;
     /* Apple Remote / media keys, backed by the legacy module options */
     [self checkbox:_NS("Control playback with the Apple Remote")
             config:"legacy-macosx-appleremote" at:y in:pane];

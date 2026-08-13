@@ -155,7 +155,31 @@ stamp-po: $(srcdir)/$(DOMAIN).pot
 # The determination of whether the package xyz is a GNU one is based on the
 # heuristic whether some file in the top level directory mentions "GNU xyz".
 # If GNU 'find' is available, we avoid grepping through monster files.
+#
+# PowerVLC SAFETY NET. This rule cannot produce a correct template for this
+# tree: the 21 headers uic generates from modules/gui/qt/ui/*.ui exist only in
+# the build tree, and POTFILES.in keeps them commented out. Extracting this way
+# drops ~360 Qt interface strings, the following msgmerge marks them obsolete
+# (`#~`) in all 105 catalogs, they stop being compiled into the .gmo files and
+# the application falls back to English. That is what the 2026-07-25 template
+# did.
+#
+# So as long as po/vlc.pot exists we refuse to touch it and point at
+# po/update-pot.sh, which builds the Qt headers and verifies that no string
+# disappears. `make dist` and `make update-po` keep working; they simply leave
+# the template in place alone.
 $(DOMAIN).pot-update: $(POTFILES) $(srcdir)/POTFILES.in remove-potcdate.sed
+	@if test -f $(srcdir)/$(DOMAIN).pot; then \
+	  echo "*** po/: template regeneration SKIPPED (PowerVLC safety net)."; \
+	  echo "***      $(srcdir)/$(DOMAIN).pot is left untouched."; \
+	  echo "***      To regenerate it for real:  ./po/update-pot.sh --check"; \
+	  echo "***                            then:  ./po/update-pot.sh --update"; \
+	  exit 0; \
+	else \
+	  echo "*** po/: $(srcdir)/$(DOMAIN).pot is missing." >&2; \
+	  echo "***      Run ./po/update-pot.sh --update to build it." >&2; \
+	  exit 1; \
+	fi; \
 	package_gnu="$(PACKAGE_GNU)"; \
 	test -n "$$package_gnu" || { \
 	  if { if (LC_ALL=C find --version) 2>/dev/null | grep GNU >/dev/null; then \
@@ -199,6 +223,10 @@ $(DOMAIN).pot-update: $(POTFILES) $(srcdir)/POTFILES.in remove-potcdate.sed
 	      --msgid-bugs-address="$$msgid_bugs_address" \
 	    ;; \
 	esac
+	@# PowerVLC: second half of the rule, run in a separate shell — the guard
+	@# above does not stop it. A $(DOMAIN).po left over from an earlier attempt
+	@# would overwrite the template, so refuse here too.
+	@if test -f $(srcdir)/$(DOMAIN).pot; then exit 0; fi; \
 	test ! -f $(DOMAIN).po || { \
 	  if test -f $(srcdir)/$(DOMAIN).pot-header; then \
 	    sed -e '1,/^#$$/d' < $(DOMAIN).po > $(DOMAIN).1po && \

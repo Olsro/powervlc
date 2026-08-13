@@ -25,6 +25,10 @@
 #import "VLCLegacyControls.h"
 #import "misc.h"
 
+#include <vlc_common.h>
+
+#define _NS(s) ((NSString *)[NSString stringWithUTF8String:vlc_gettext(s)])
+
 static BOOL b_legacy_dark = NO;
 
 BOOL VLCLegacyDarkMode(void)
@@ -380,6 +384,36 @@ NSButton *VLCLegacyImageButton(NSView *parent, NSString *imageName,
 - (void)setIndefinite:(BOOL)flag { indefinite = flag; }
 - (BOOL)indefinite { return indefinite; }
 
+- (void)dealloc
+{
+    [chapterFractions release];
+    [chapterNames release];
+    [super dealloc];
+}
+
+- (void)setChapterFractions:(NSArray *)fractions names:(NSArray *)names
+{
+    if (fractions != chapterFractions) {
+        [chapterFractions release];
+        chapterFractions = [fractions retain];
+    }
+    if (names != chapterNames) {
+        [chapterNames release];
+        chapterNames = [names retain];
+    }
+}
+- (NSArray *)chapterFractions { return chapterFractions; }
+- (NSArray *)chapterNames { return chapterNames; }
+
+- (void)setClipKnobsActive:(BOOL)active { clipKnobsActive = active; }
+- (BOOL)clipKnobsActive { return clipKnobsActive; }
+- (void)setClipEndValue:(double)value { clipEndValue = value; }
+- (double)clipEndValue { return clipEndValue; }
+- (void)setPlaybackMarkerValue:(double)value { playbackMarkerValue = value; }
+- (double)playbackMarkerValue { return playbackMarkerValue; }
+- (void)setActiveClipKnob:(int)knob { activeClipKnob = knob; }
+- (int)activeClipKnob { return activeClipKnob; }
+
 - (BOOL)isDark
 {
     return alwaysDark || VLCLegacyDarkMode();
@@ -439,13 +473,10 @@ NSButton *VLCLegacyImageButton(NSView *parent, NSString *imageName,
     return diameter;
 }
 
-- (NSRect)knobRectFlipped:(BOOL)flipped
+- (NSRect)knobRectForFraction:(float)fraction
 {
     NSRect bounds = [[self controlView] bounds];
     float diameter = [self knobDiameter];
-    double range = [self maxValue] - [self minValue];
-    float fraction = range > 0
-        ? (float)(([self doubleValue] - [self minValue]) / range) : 0.0f;
     if (fraction < 0.0f)
         fraction = 0.0f;
     else if (fraction > 1.0f)
@@ -456,6 +487,23 @@ NSButton *VLCLegacyImageButton(NSView *parent, NSString *imageName,
                           + (float)floor((bounds.size.height - diameter)
                                          / 2.0f),
                       diameter, diameter);
+}
+
+- (float)normalizedFraction:(double)value
+{
+    double range = [self maxValue] - [self minValue];
+    return range > 0 ? (float)((value - [self minValue]) / range) : 0.0f;
+}
+
+- (NSRect)knobRectFlipped:(BOOL)flipped
+{
+    return [self knobRectForFraction:
+        [self normalizedFraction:[self doubleValue]]];
+}
+
+- (NSRect)clipEndKnobRect
+{
+    return [self knobRectForFraction:[self normalizedFraction:clipEndValue]];
 }
 
 /* NSGradient is 10.5+; approximate the vertical track gradient with
@@ -559,6 +607,16 @@ static void drawVerticalGradient(NSBezierPath *path, NSRect rect,
     NSRect filled = rect;
     filled.size.width = knobRect.origin.x + knobRect.size.width / 2
                       - rect.origin.x;
+    if (clipKnobsActive && !volumeStyle) {
+        /* fill the clip range [start knob .. end knob] instead */
+        NSRect endKnobRect = [self clipEndKnobRect];
+        float startX = knobRect.origin.x + knobRect.size.width / 2.0f;
+        float endX = endKnobRect.origin.x + endKnobRect.size.width / 2.0f;
+        if (endX < startX)
+            endX = startX;
+        filled.origin.x = startX;
+        filled.size.width = endX - startX;
+    }
     if (filled.size.width > 3.0f) {
         [NSGraphicsContext saveGraphicsState];
         [emptyTrack addClip];
@@ -566,6 +624,33 @@ static void drawVerticalGradient(NSBezierPath *path, NSRect rect,
         [(dark ? [NSColor colorWithCalibratedWhite:0.15f alpha:1.0f]
                : [NSColor colorWithCalibratedWhite:0.55f alpha:1.0f]) set];
         [filledTrack fill];
+        [NSGraphicsContext restoreGraphicsState];
+    }
+
+    /* chapter separators, before the border stroke so they never sit on
+     * top of it; positioned with the knob-center mapping so each mark is
+     * exactly where the knob lands when seeking to that chapter */
+    if (!volumeStyle && [chapterFractions count] > 1) {
+        NSRect cellBounds = [[self controlView] bounds];
+        float diameter = [self knobDiameter];
+        [(dark
+            ? [NSColor colorWithDeviceWhite:0.45f alpha:1.0f]
+            : [NSColor colorWithDeviceWhite:0.42f alpha:1.0f]) set];
+        [NSGraphicsContext saveGraphicsState];
+        [emptyTrack addClip];
+        unsigned int chapterIndex;
+        for (chapterIndex = 0; chapterIndex < [chapterFractions count];
+             chapterIndex++) {
+            float fraction = [[chapterFractions objectAtIndex:chapterIndex]
+                                 floatValue];
+            if (fraction <= 0.0f || fraction >= 1.0f)
+                continue;
+            float x = cellBounds.origin.x
+                    + fraction * (cellBounds.size.width - diameter)
+                    + diameter / 2.0f;
+            NSRectFill(NSMakeRect((float)floor(x), rect.origin.y + 1.0f,
+                                  1.0f, rect.size.height - 2.0f));
+        }
         [NSGraphicsContext restoreGraphicsState];
     }
 
@@ -643,12 +728,38 @@ static void drawVerticalGradient(NSBezierPath *path, NSRect rect,
 
 - (void)drawKnob:(NSRect)knobRect
 {
+    /* in clip creation mode the start bound is drawn as the LEFT half of
+     * the disc (see -drawKnobInRect:half:) */
+    [self drawKnobInRect:knobRect
+                    half:(clipKnobsActive && !volumeStyle) ? -1 : 0];
+}
+
+/* half < 0: only the left half of the disc, half > 0: only the right one.
+ * The clip bounds use those so the flat edge sits exactly on the bound and
+ * the two handles never cover each other, however close they get. */
+- (void)drawKnobInRect:(NSRect)knobRect half:(int)half
+{
     if (indefinite)
         return;
     BOOL dark = [self isDark];
     /* knobRectFlipped: already returns the final circle */
-    NSBezierPath *knob = [NSBezierPath bezierPathWithOvalInRect:
-        NSInsetRect(knobRect, 0.5f, 0.5f)];
+    NSRect discRect = NSInsetRect(knobRect, 0.5f, 0.5f);
+    NSBezierPath *knob;
+    if (half == 0) {
+        knob = [NSBezierPath bezierPathWithOvalInRect:discRect];
+    } else {
+        NSPoint center = NSMakePoint(discRect.origin.x
+                                         + discRect.size.width / 2.0f,
+                                     discRect.origin.y
+                                         + discRect.size.height / 2.0f);
+        knob = [NSBezierPath bezierPath];
+        /* non-flipped coordinates: 90 = top, 270 = bottom, ccw */
+        [knob appendBezierPathWithArcWithCenter:center
+                                         radius:discRect.size.width / 2.0f
+                                     startAngle:(half < 0 ? 90.0f : 270.0f)
+                                       endAngle:(half < 0 ? 270.0f : 90.0f)];
+        [knob closePath];
+    }
 
     NSColor *fill;
     NSColor *stroke;
@@ -669,6 +780,656 @@ static void drawVerticalGradient(NSBezierPath *path, NSRect rect,
     [stroke set];
     [knob setLineWidth:0.5f];
     [knob stroke];
+}
+
+- (void)drawWithFrame:(NSRect)cellFrame inView:(NSView *)controlView
+{
+    [super drawWithFrame:cellFrame inView:controlView];
+
+    if (!clipKnobsActive || volumeStyle || indefinite)
+        return;
+
+    /* thin marker for the actual playback position, so the user does not
+     * lose track of it while both knobs hold the clip bounds */
+    NSRect bounds = [controlView bounds];
+    float diameter = [self knobDiameter];
+    float fraction = [self normalizedFraction:playbackMarkerValue];
+    /* the playback can sit slightly outside the bounds (the end-of-clip
+     * pause lands a few frames past the end knob): keep the marker cut
+     * by the knob centers, where the clip logically starts and ends */
+    float startFraction = [self normalizedFraction:[self doubleValue]];
+    float endFraction = [self normalizedFraction:clipEndValue];
+    if (fraction < startFraction)
+        fraction = startFraction;
+    else if (fraction > endFraction)
+        fraction = endFraction;
+    float x = bounds.origin.x + fraction * (bounds.size.width - diameter)
+            + diameter / 2.0f;
+    [[NSColor colorWithCalibratedRed:0.20f green:0.55f blue:0.91f
+                               alpha:1.0f] set];
+    NSRectFill(NSMakeRect((float)floor(x) - 1.0f,
+                          bounds.origin.y + 3.0f,
+                          2.0f, bounds.size.height - 6.0f));
+
+    /* the clip end knob: right half only */
+    [self drawKnobInRect:[self clipEndKnobRect] half:1];
+}
+
+@end
+
+/* private hover methods, declared up front: GCC 4 warns about messages
+ * to methods only defined further down the file */
+@interface VLCLegacySeekSlider (HoverPrivate)
+- (void)resetHoverTrackingRect;
+- (void)hoverTimerFired:(NSTimer *)timer;
+- (double)hoverMatchTolerance;
+- (void)updateHoverTooltipForPoint:(NSPoint)local;
+- (void)thumbnailDebounceFired:(NSTimer *)timer;
+@end
+
+/*****************************************************************************
+ * VLCLegacySeekTooltipWindow: borderless floating panel following the
+ * mouse on the seek bar, showing the hovered time, the chapter (when
+ * any) and, when the provider answered, a preview thumbnail. Port of the
+ * modern VLCSeekTooltipWindow with a Jaguar API floor: rounded corners
+ * from arcs, -convertBaseToScreen: instead of -convertRectToScreen:
+ * (10.7+), no -setHidden: (10.3+) — the image view is collapsed to a
+ * zero frame instead.
+ *****************************************************************************/
+
+@interface VLCLegacySeekTooltipBackgroundView : NSView
+@end
+
+@implementation VLCLegacySeekTooltipBackgroundView
+- (void)drawRect:(NSRect)dirtyRect
+{
+    [[NSColor colorWithCalibratedWhite:0.12f alpha:0.92f] set];
+    [VLCLegacyRoundedRectPath([self bounds], 4.0f) fill];
+}
+@end
+
+@interface VLCLegacySeekTooltipWindow : NSWindow
+{
+    NSTextField *textField;
+    NSImageView *imageView;
+}
+- (void)updateWithText:(NSString *)text
+                 image:(NSImage *)image
+        atScreenBottom:(NSPoint)bottomCenter;
+@end
+
+@implementation VLCLegacySeekTooltipWindow
+
+- (id)init
+{
+    self = [super initWithContentRect:NSMakeRect(0, 0, 120, 24)
+                            styleMask:NSBorderlessWindowMask
+                              backing:NSBackingStoreBuffered
+                                defer:NO];
+    if (self) {
+        [self setOpaque:NO];
+        [self setHasShadow:YES];
+        [self setBackgroundColor:[NSColor clearColor]];
+        [self setLevel:NSFloatingWindowLevel];
+        [self setIgnoresMouseEvents:YES];
+        [self setReleasedWhenClosed:NO];
+
+        NSView *content = [[[VLCLegacySeekTooltipBackgroundView alloc]
+            initWithFrame:NSZeroRect] autorelease];
+        [self setContentView:content];
+
+        imageView = [[[NSImageView alloc] initWithFrame:NSZeroRect]
+                        autorelease];
+        [imageView setImageScaling:NSScaleProportionally];
+        [imageView setEditable:NO];
+        [content addSubview:imageView];
+
+        textField = [[[NSTextField alloc] initWithFrame:NSZeroRect]
+                        autorelease];
+        [textField setEditable:NO];
+        [textField setSelectable:NO];
+        [textField setBezeled:NO];
+        [textField setBordered:NO];
+        [textField setDrawsBackground:NO];
+        [textField setAlignment:NSCenterTextAlignment];
+        [textField setTextColor:[NSColor whiteColor]];
+        [textField setFont:[NSFont systemFontOfSize:11.0f]];
+        [content addSubview:textField];
+    }
+    return self;
+}
+
+- (void)updateWithText:(NSString *)text
+                 image:(NSImage *)image
+        atScreenBottom:(NSPoint)bottomCenter
+{
+    const float padding = 5.0f;
+    const float thumbWidth = 160.0f;
+
+    [textField setStringValue:text];
+    [textField sizeToFit];
+    NSSize textSize = [textField frame].size;
+
+    float width = textSize.width + 2.0f * padding;
+    float height = textSize.height + 2.0f * padding;
+
+    NSSize thumbSize = NSMakeSize(0.0f, 0.0f);
+    if (image) {
+        NSSize imgSize = [image size];
+        float aspect = (imgSize.width > 0)
+            ? imgSize.height / imgSize.width : 0.5625f;
+        thumbSize = NSMakeSize(thumbWidth, thumbWidth * aspect);
+        if (width < thumbWidth + 2.0f * padding)
+            width = thumbWidth + 2.0f * padding;
+        height += thumbSize.height + padding;
+    }
+
+    [imageView setImage:image];
+    /* no -setHidden: on 10.2: a zero frame hides it just as well */
+    [imageView setFrame:image
+        ? NSMakeRect((width - thumbSize.width) / 2.0f,
+                     textSize.height + 2.0f * padding,
+                     thumbSize.width, thumbSize.height)
+        : NSZeroRect];
+    [textField setFrame:NSMakeRect((width - textSize.width) / 2.0f, padding,
+                                   textSize.width, textSize.height)];
+
+    NSRect frame = NSMakeRect(bottomCenter.x - width / 2.0f, bottomCenter.y,
+                              width, height);
+    /* keep the tooltip inside the screen */
+    NSScreen *screen = [self screen] ? [self screen] : [NSScreen mainScreen];
+    if (screen) {
+        NSRect visible = [screen visibleFrame];
+        if (NSMaxX(frame) > NSMaxX(visible))
+            frame.origin.x = NSMaxX(visible) - NSWidth(frame);
+        if (NSMinX(frame) < NSMinX(visible))
+            frame.origin.x = NSMinX(visible);
+    }
+    [self setFrame:frame display:YES];
+    /* early Quartz caches the shadow of transparent windows: without
+     * this, resized tooltips drag a stale halo around (10.2/10.3) */
+    [self invalidateShadow];
+
+    if (![self isVisible])
+        [self orderFront:nil];
+}
+
+@end
+
+/*****************************************************************************
+ * VLCLegacySeekSlider: plain NSSlider outside the clip creation mode; in
+ * the mode it tracks the two bound knobs itself (on the knobs: drag that
+ * bound; between them: plain seek/scrub; outside: pull the nearest
+ * bound), sending the regular action for every step so the target seeks.
+ *****************************************************************************/
+
+static NSString *VLCLegacyHoverTimeString(double seconds)
+{
+    if (seconds < 0.0)
+        seconds = 0.0;
+    int total = (int)(seconds + 0.5);
+    if (total >= 3600)
+        return [NSString stringWithFormat:@"%d:%02d:%02d",
+                total / 3600, (total / 60) % 60, total % 60];
+    return [NSString stringWithFormat:@"%02d:%02d",
+            total / 60, total % 60];
+}
+
+@implementation VLCLegacySeekSlider
+
+- (void)dealloc
+{
+    [hoverTimer invalidate];
+    [thumbnailDebounceTimer invalidate];
+    [tooltipWindow release];
+    [hoverThumbnail release];
+    [super dealloc];
+}
+
+- (void)setMediaDuration:(double)seconds { mediaDuration = seconds; }
+- (void)setHoverDelegate:(id)delegate { hoverDelegate = delegate; }
+
+#pragma mark Hover tracking (classic tracking rect + mouse-follow timer)
+
+- (void)resetHoverTrackingRect
+{
+    if (hoverTrackingTag) {
+        [self removeTrackingRect:hoverTrackingTag];
+        hoverTrackingTag = 0;
+    }
+    if ([self window])
+        hoverTrackingTag = [self addTrackingRect:[self bounds]
+                                           owner:self
+                                        userData:NULL
+                                    assumeInside:NO];
+}
+
+- (void)viewDidMoveToWindow
+{
+    if (![self window]) {
+        /* the mouseExited that would stop the timer can never arrive */
+        [hoverTimer invalidate];
+        hoverTimer = nil;
+        [self hideHoverTooltip];
+    }
+    [self resetHoverTrackingRect];
+}
+
+- (void)setFrameSize:(NSSize)newSize
+{
+    [super setFrameSize:newSize];
+    [self resetHoverTrackingRect];
+}
+
+- (void)mouseEntered:(NSEvent *)event
+{
+    if (hoverTimer)
+        return;
+    /* -mouseMoved: goes to the first responder, not to the hovered view;
+     * a 10 Hz timer while inside is the 10.2-safe equivalent (it pauses
+     * on its own during drags: event tracking runs another runloop mode) */
+    hoverTimer = [NSTimer scheduledTimerWithTimeInterval:0.1
+                                                  target:self
+                                                selector:@selector(hoverTimerFired:)
+                                                userInfo:nil
+                                                 repeats:YES];
+    [self hoverTimerFired:nil];
+}
+
+- (void)mouseExited:(NSEvent *)event
+{
+    [hoverTimer invalidate];
+    hoverTimer = nil;
+    [self hideHoverTooltip];
+}
+
+- (void)hoverTimerFired:(NSTimer *)timer
+{
+    NSWindow *win = [self window];
+    if (!win) {
+        [hoverTimer invalidate];
+        hoverTimer = nil;
+        [self hideHoverTooltip];
+        return;
+    }
+    NSPoint local = [self convertPoint:[win mouseLocationOutsideOfEventStream]
+                              fromView:nil];
+    if (NSMouseInRect(local, [self bounds], [self isFlipped])) {
+        /* only rebuild when the mouse actually moved: rebuilding every
+         * tick would re-arm the 1 s thumbnail debounce forever */
+        if (!hasLastHoverPoint
+            || fabs(local.x - lastHoverPoint.x) >= 1.0
+            || fabs(local.y - lastHoverPoint.y) >= 1.0) {
+            lastHoverPoint = local;
+            hasLastHoverPoint = YES;
+            [self updateHoverTooltipForPoint:local];
+        }
+    } else {
+        /* belt and braces: the exit event can get lost during window
+         * drags or when another window slides over the bar */
+        [hoverTimer invalidate];
+        hoverTimer = nil;
+        [self hideHoverTooltip];
+    }
+}
+
+- (void)hideHoverTooltip
+{
+    hovering = NO;
+    hasLastHoverPoint = NO;
+    [tooltipWindow orderOut:nil];
+    [thumbnailDebounceTimer invalidate];
+    thumbnailDebounceTimer = nil;
+}
+
+
+/* Tolérance du « c'est bien la position demandée », en FRACTION de barre.
+ *
+ * ⚠⚠⚠ Elle était exprimée en SECONDES DE FILM (2 s). Sur un long média, un
+ * seul pixel de barre en vaut bien davantage — mesuré : ~13 s sur un film de
+ * 2 h 20 étalé sur 640 px —, si bien que le moindre frémissement de souris
+ * pendant les ~2 s de décodage faisait JETER la vignette. Elle était pourtant
+ * bien produite : trouvée dans le dossier temporaire de l'instance, 128 Ko,
+ * horodatée pendant que l'utilisateur survolait la barre. Résultat : aperçu
+ * jamais visible sur les longs films, et parfaitement visible sur les courts.
+ *
+ * On raisonne donc en PIXELS, avec l'ancien seuil en secondes comme plancher
+ * (sur un média court, deux secondes peuvent valoir plus de trois pixels). */
+- (double)hoverMatchTolerance
+{
+    float width = [self frame].size.width;
+    if (width < 1.f)
+        width = 1.f;
+    double byPixels = 3.0 / (double)width;
+    double bySeconds = (mediaDuration > 0.0) ? 2.0 / mediaDuration : 0.0;
+    return byPixels > bySeconds ? byPixels : bySeconds;
+}
+
+- (void)updateHoverTooltipForPoint:(NSPoint)local
+{
+    if (![self isEnabled] || mediaDuration <= 0.0) {
+        [self hideHoverTooltip];
+        return;
+    }
+
+    double value = [self valueForLocationX:(float)local.x];
+    double range = [self maxValue] - [self minValue];
+    double fraction = range > 0 ? (value - [self minValue]) / range : 0.0;
+    hovering = YES;
+    hoverFraction = fraction;
+
+    NSString *text = VLCLegacyHoverTimeString(fraction * mediaDuration);
+
+    /* chapter (when any): last one starting at or before the position */
+    VLCLegacyProgressSliderCell *cell =
+        (VLCLegacyProgressSliderCell *)[self cell];
+    NSArray *fractions = [cell chapterFractions];
+    NSArray *names = [cell chapterNames];
+    unsigned int count = [fractions count];
+    if (count > 0 && [names count] == count) {
+        int selected = -1;
+        unsigned int i;
+        for (i = 0; i < count; i++) {
+            if ([[fractions objectAtIndex:i] doubleValue] <= fraction)
+                selected = (int)i;
+        }
+        if (selected >= 0) {
+            NSString *name = [names objectAtIndex:(unsigned int)selected];
+            if ([name length] > 0)
+                /* em dash through UTF-8 explicitly: 10.2's Foundation
+                 * reads high-bit bytes of CONSTANT strings as MacRoman
+                 * (@"—" renders as ",Äî" there) */
+                text = [NSString stringWithFormat:@"%@%@%@", name,
+                        [NSString stringWithUTF8String:" \xE2\x80\x94 "],
+                        text];
+        }
+    }
+
+    /* in clip creation mode, hovering the clip range also shows the
+     * clip's current total duration */
+    if ([cell clipKnobsActive]) {
+        double startFraction = ([self doubleValue] - [self minValue])
+                             / (range > 0 ? range : 1.);
+        double endFraction = ([cell clipEndValue] - [self minValue])
+                           / (range > 0 ? range : 1.);
+        if (fraction >= startFraction && fraction <= endFraction) {
+            text = [NSString stringWithFormat:@"%@%@%@ %@", text,
+                    [NSString stringWithUTF8String:" \xE2\x80\x94 "],
+                    _NS("Clip:"),
+                    VLCLegacyHoverTimeString(
+                        (endFraction - startFraction) * mediaDuration)];
+        }
+    }
+
+    if (!tooltipWindow)
+        tooltipWindow = [[VLCLegacySeekTooltipWindow alloc] init];
+    /* stay above whatever hosts the slider (the fullscreen panel floats
+     * at the same level as the tooltip: +1 makes the order explicit) */
+    int wantedLevel = [[self window] level] + 1;
+    if ([tooltipWindow level] != wantedLevel)
+        [tooltipWindow setLevel:wantedLevel];
+
+    /* only show a cached thumbnail matching the hovered position (within
+     * two seconds), else wait for the (debounced) provider */
+    NSImage *thumbnail = nil;
+    if (hoverThumbnail
+        && fabs(hoverThumbnailFraction - fraction) <= [self hoverMatchTolerance])
+        thumbnail = hoverThumbnail;
+
+    /* anchor the tooltip 6 pt above the slider TOP edge, whatever the
+     * flippedness: convert the top-edge point explicitly instead of
+     * relying on NSMaxY(bounds) meaning "up" */
+    NSRect sliderBounds = [self bounds];
+    NSPoint topLocal = NSMakePoint(local.x, [self isFlipped]
+        ? NSMinY(sliderBounds) : NSMaxY(sliderBounds));
+    NSPoint base = [self convertPoint:topLocal toView:nil];
+    /* -convertRectToScreen: is 10.7+; the classic conversion is fine */
+    NSPoint screenPoint = [[self window] convertBaseToScreen:base];
+    screenPoint.y += 6.0f;
+    [tooltipWindow updateWithText:text image:thumbnail
+                   atScreenBottom:screenPoint];
+
+    /* the thumbnail request is debounced so a frantic hover does not
+     * spam the thumbnailer: it fires once the mouse has settled for a
+     * third of a second (measured: the rest of the chain costs ~1.6 s) (a full second at first; shortened for responsiveness --
+     * a hover preview still costs a secondary decode, which is why the
+     * debounce stays, and why it can be turned off entirely on slow
+     * machines). No re-arm when the shown thumbnail already matches, or
+     * a delivery would restart the cycle forever */
+    if (hoverDelegate && !thumbnail) {
+        [thumbnailDebounceTimer invalidate];
+        thumbnailDebounceTimer =
+            [NSTimer scheduledTimerWithTimeInterval:0.3
+                                             target:self
+                                           selector:@selector(thumbnailDebounceFired:)
+                                           userInfo:nil
+                                            repeats:NO];
+    }
+}
+
+- (void)thumbnailDebounceFired:(NSTimer *)timer
+{
+    thumbnailDebounceTimer = nil;
+    if (!hovering)
+        return;
+    if ([hoverDelegate respondsToSelector:
+            @selector(seekSlider:hoverThumbnailWantedAtFraction:)])
+        [hoverDelegate seekSlider:self
+            hoverThumbnailWantedAtFraction:hoverFraction];
+}
+
+- (void)setHoverThumbnail:(NSImage *)image forFraction:(double)fraction
+{
+    if (image != hoverThumbnail) {
+        [hoverThumbnail release];
+        hoverThumbnail = [image retain];
+    }
+    hoverThumbnailFraction = fraction;
+    if (!hovering || !image)
+        return;
+    /* Repaint the tooltip around the image, for the very point it was
+     * built for: sampling the mouse again here would re-read a pointer
+     * that has drifted by a pixel in the meantime, and the announced time
+     * would visibly jump (a pixel is several seconds on a long media)
+     * just because the preview landed. */
+    if (mediaDuration > 0
+        && fabs(fraction - hoverFraction) <= [self hoverMatchTolerance]) {
+        if (hasLastHoverPoint)
+            [self updateHoverTooltipForPoint:lastHoverPoint];
+    }
+}
+
+- (double)valueForLocationX:(float)x
+{
+    VLCLegacyProgressSliderCell *cell =
+        (VLCLegacyProgressSliderCell *)[self cell];
+    NSRect bounds = [self bounds];
+    float diameter = [cell knobDiameter];
+    float usable = bounds.size.width - diameter;
+    if (usable <= 0.0f)
+        return [self minValue];
+    double fraction = (x - bounds.origin.x - diameter / 2.0f) / usable;
+    if (fraction < 0.)
+        fraction = 0.;
+    else if (fraction > 1.)
+        fraction = 1.;
+    return [self minValue] + fraction * ([self maxValue] - [self minValue]);
+}
+
+- (void)moveClipKnob:(int)knob toLocationX:(float)x
+{
+    VLCLegacyProgressSliderCell *cell =
+        (VLCLegacyProgressSliderCell *)[self cell];
+    double value = [self valueForLocationX:x];
+    if (knob == 1) {
+        if (value > [cell clipEndValue])
+            value = [cell clipEndValue];
+        [self setDoubleValue:value];
+    } else if (knob == 2) {
+        if (value < [self doubleValue])
+            value = [self doubleValue];
+        [cell setClipEndValue:value];
+    } else {
+        /* scrub: only the playback marker moves, clamped to the clip */
+        if (value < [self doubleValue])
+            value = [self doubleValue];
+        else if (value > [cell clipEndValue])
+            value = [cell clipEndValue];
+        [cell setPlaybackMarkerValue:value];
+    }
+    [self setNeedsDisplay:YES];
+}
+
+/* Plain (non clip mode) click and drag, tracked by hand.
+ *
+ * AppKit turns a click on the bar into a value with a knob width of its
+ * own (~11 pt measured), while the knob drawn here is 15 pt and the hover
+ * tooltip converts with THAT geometry: the two disagree by a couple of
+ * pixels, which on a 1.5 h media is a seek landing up to ~17 s away from
+ * the time the tooltip just announced (reported by the user, reproduced:
+ * tooltip 07:39, seek 07:48). Overriding -knobThickness does not help,
+ * AppKit ignores it while tracking, so the conversion is done here with
+ * -valueForLocationX: -- the very function the tooltip uses, and the
+ * exact inverse of the knob drawing. */
+- (void)trackPlainSeekFromEvent:(NSEvent *)event
+{
+    while (event != nil && [event type] != NSLeftMouseUp) {
+        NSPoint local = [self convertPoint:[event locationInWindow]
+                                  fromView:nil];
+        [self setDoubleValue:[self valueForLocationX:(float)local.x]];
+        [self setNeedsDisplay:YES];
+        [self sendAction:[self action] to:[self target]];
+
+        event = [[self window] nextEventMatchingMask:
+                 (NSLeftMouseDraggedMask | NSLeftMouseUpMask)];
+    }
+}
+
+- (void)mouseDown:(NSEvent *)event
+{
+    /* the tooltip in front of a drag is only in the way */
+    [self hideHoverTooltip];
+
+    VLCLegacyProgressSliderCell *cell =
+        (VLCLegacyProgressSliderCell *)[self cell];
+    if (![self isEnabled]) {
+        [super mouseDown:event];
+        return;
+    }
+    if (![cell clipKnobsActive]) {
+        [self trackPlainSeekFromEvent:event];
+        return;
+    }
+
+    /* each bound is drawn as a half disc pointing away from the clip, so
+     * its grab area is that half (plus a couple of pixels of slop) and the
+     * two areas can never overlap: the midpoint between both bounds always
+     * splits them, however close they get */
+    NSPoint local = [self convertPoint:[event locationInWindow] fromView:nil];
+    NSRect startKnobRect = [cell knobRectFlipped:NO];
+    NSRect endKnobRect = [cell clipEndKnobRect];
+    float radius = (float)(NSWidth(startKnobRect) / 2);
+    const float slop = 2.0f;
+    float startX = (float)NSMidX(startKnobRect);
+    float endX = (float)NSMidX(endKnobRect);
+    float middleX = (startX + endX) / 2.0f;
+    /* inner edges, never crossing the midpoint between the two bounds */
+    float startInnerX = startX + slop;
+    float endInnerX = endX - slop;
+    if (startInnerX > middleX)
+        startInnerX = middleX;
+    if (endInnerX < middleX)
+        endInnerX = middleX;
+    int knob;
+    if (local.x >= startX - radius - slop && local.x <= startInnerX)
+        knob = 1;
+    else if (local.x >= endInnerX && local.x <= endX + radius + slop)
+        knob = 2;
+    else if (local.x > startX && local.x < endX)
+        knob = 3; /* scrub between the bounds */
+    else
+        knob = (local.x <= startX) ? 1 : 2;
+
+    [cell setActiveClipKnob:knob];
+    [cell setHighlighted:YES];
+
+    [self moveClipKnob:knob toLocationX:(float)local.x];
+    [self sendAction:[self action] to:[self target]];
+
+    /* The knob follows the mouse at full rate, the preview seek behind it
+     * is PACED -- but never dropped. A seek is not free (an accurate one
+     * decodes from the preceding key frame), so firing one per mouse
+     * event just queues positions that are already stale when they are
+     * served, and the picture trails the handle. One every 100 ms then,
+     * with a TRAILING one: a single pixel nudge, which frame-accurate
+     * trimming is made of, still gets previewed within 100 ms even though
+     * no further event follows it. The release always previews too, so
+     * what stays on screen is the exact bound. */
+    NSTimeInterval lastPreview = [NSDate timeIntervalSinceReferenceDate];
+    BOOL pendingPreview = NO;
+
+    for (;;) {
+        NSDate *limit = pendingPreview
+            ? [NSDate dateWithTimeIntervalSinceNow:0.02]
+            : [NSDate distantFuture];
+        event = [[self window] nextEventMatchingMask:
+                     (NSLeftMouseDraggedMask | NSLeftMouseUpMask)
+                                           untilDate:limit
+                                              inMode:NSEventTrackingRunLoopMode
+                                             dequeue:YES];
+        if (event) {
+            local = [self convertPoint:[event locationInWindow] fromView:nil];
+            [self moveClipKnob:knob toLocationX:(float)local.x];
+            if ([event type] == NSLeftMouseUp) {
+                [self sendAction:[self action] to:[self target]];
+                break;
+            }
+            pendingPreview = YES;
+        }
+
+        NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+        if (pendingPreview && now - lastPreview >= 0.1) {
+            lastPreview = now;
+            pendingPreview = NO;
+            [self sendAction:[self action] to:[self target]];
+        }
+    }
+
+    [cell setHighlighted:NO];
+    [cell setActiveClipKnob:0];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)scrollWheel:(NSEvent *)event
+{
+    /* scrolling would silently move the clip start bound */
+    if ([(VLCLegacyProgressSliderCell *)[self cell] clipKnobsActive])
+        return;
+    [super scrollWheel:event];
+}
+
+/* clicking a knob makes the slider the first responder: the bare arrow
+ * keys then land here (NSSlider would nudge its own value) instead of
+ * reaching the core hotkeys module. In clip mode they must behave like
+ * everywhere else: one-frame nudge of the selected bound, routed
+ * through the delegate (it owns the core interaction). */
+- (void)keyDown:(NSEvent *)event
+{
+    if ([(VLCLegacyProgressSliderCell *)[self cell] clipKnobsActive]) {
+        NSString *characters = [event charactersIgnoringModifiers];
+        if ([characters length] == 1) {
+            unichar key = [characters characterAtIndex:0];
+            if (key == NSLeftArrowFunctionKey
+                || key == NSRightArrowFunctionKey) {
+                if ([hoverDelegate respondsToSelector:
+                        @selector(seekSlider:clipStepFrames:)])
+                    [hoverDelegate seekSlider:self clipStepFrames:
+                        (key == NSRightArrowFunctionKey ? 1 : -1)];
+                return;
+            }
+        }
+    }
+    [super keyDown:event];
 }
 
 @end

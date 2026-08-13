@@ -60,6 +60,20 @@ int VLCLegacyEventHotkeyMatch(intf_thread_t *p_intf, NSEvent *event);
  * the core hotkeys. */
 void VLCLegacyHandleScrollWheel(intf_thread_t *p_intf, NSEvent *event);
 
+/* Command+<digit> for a keyboard whose digits need Shift (AZERTY, QWERTZ):
+ * returns the same event carrying the digit its key BEARS, so menu
+ * equivalents and core hotkeys match. Returns the event untouched when it
+ * is not concerned. See the implementation for why this is needed. */
+NSEvent *VLCLegacyEventWithDigitRowFallback(NSEvent *event);
+
+/* Gives a menu item the key equivalent of a core hotkey option ("key-quit",
+ * "key-snapshot", ...), the way -[VLCMainMenu setupMenus] does: the menu
+ * bar then shows whatever the user configured in the Preferences instead of
+ * the compiled-in default. Clears the equivalent when the option is unset.
+ * Port of -[VLCStringUtility VLCKeyToString:]/-VLCModifiersToCocoa:. */
+void VLCLegacyApplyHotkeyToMenuItem(intf_thread_t *p_intf, NSMenuItem *item,
+                                    const char *psz_option);
+
 /* Single volume-stepping entry point of the interface: the volume always
  * lands on the multiple of 5% nearest to the current value in the
  * direction of the change. b_osd shows the hotkeys-style OSD (wheel). */
@@ -215,4 +229,17 @@ void VLCLegacySortDictionariesByTitle(NSMutableArray *array);
 - (BOOL)hasMenuBar;
 - (BOOL)hasDock;
 - (CGDirectDisplayID)displayID;
+/* Hauteur de la bande réservée en haut de l'écran : l'encoche des MacBook Pro
+ * 14/16 pouces. Zéro partout ailleurs. */
+- (CGFloat)vlcTopSafeAreaInset;
 @end
+
+/* Le cadre à donner à la VUE vidéo dans une fenêtre de plein écran.
+ *
+ * ⚠ La FENÊTRE, elle, garde tout l'écran : une fenêtre qu'on rétrécit pour
+ * éviter l'encoche laisse voir le BUREAU dans la bande, et une fenêtre-cache
+ * posée par-dessus est repoussée par AppKit (mesuré : y=950 demandé, y=118
+ * obtenu, quel que soit le niveau). C'est donc le fond NOIR de la fenêtre de
+ * plein écran qui remplit la bande — le rendu du plein écran natif — et la
+ * vue vidéo qui s'arrête dessous. */
+NSRect VLCLegacySafeContentRect(NSWindow *window, NSScreen *screen);

@@ -24,6 +24,9 @@
 #include <vlc_common.h>
 #import <Cocoa/Cocoa.h>
 
+/* Posted whenever the clip creation mode is entered or left */
+extern NSString *VLCClipCreationModeChangedNotification;
+
 @interface VLCCoreInteraction : NSObject
 
 + (VLCCoreInteraction *)sharedInstance;
@@ -68,6 +71,41 @@
 - (void)setAtoB;
 - (void)resetAtoB;
 - (void)updateAtoB;
+
+/* Clip creation mode: both seek bar knobs define the clip bounds
+ * (fractional positions, 0..1); "Record" then saves exactly that range. */
+@property (readonly) BOOL clipCreationMode;
+@property (readwrite) double clipStartPosition;
+@property (readwrite) double clipEndPosition;
+@property (readonly) BOOL clipRecordingActive;
+/* a fast extraction (second headless input, no playback involved) is
+ * writing the clip right now */
+@property (readonly) BOOL clipExportInProgress;
+/* bound the frame-step shortcuts act on: 1 = start, 2 = end (the
+ * default when entering the mode); follows the last knob the user
+ * grabbed on the seek bar */
+@property (readwrite) int clipSelectedKnob;
+/* nudge the selected bound, with preview seek (also reached from the
+ * core hotkeys module through "clip-frame-step"): by one frame for the
+ * step shortcuts, by the configured jump size for the longer ones */
+- (void)clipStepFrames:(int)direction;
+- (void)clipNudgeSelectedBoundBySeconds:(double)seconds;
+- (void)toggleClipCreationMode;
+- (void)exitClipCreationMode;
+- (void)updateClipRecording;
+/* called on every knob drag/click, to suppress the end-bound auto-pause
+ * while the user is interacting with the bounds */
+- (void)noteClipInteraction;
+/* record state as reported by INPUT_EVENT_RECORD */
+- (void)recordStateChanged:(BOOL)b_recording;
+
+/* "Hide controls during playback": master switch (menu Video, persisted
+ * in "macosx-hide-controls"); the video windows poll it */
+@property (nonatomic, readwrite) BOOL autoHideControls;
+/* set by the video window while its controls are auto-hidden; mirrored
+ * into the libvlc "intf-controls-hidden" bool so the core shows the
+ * fullscreen-style OSD and reroutes the video double-click */
+@property (nonatomic, readwrite) BOOL controlsHiddenForPlayback;
 
 - (void)volumeUp;
 - (void)volumeDown;

@@ -454,6 +454,7 @@ create_toolbar_item(NSString *itemIdent, NSString *name, NSString *desc, NSStrin
 
     [_intf_playbackControlBox setTitle:_NS("Playback control")];
     [_intf_continueplaybackLabel setStringValue:_NS("Continue playback")];
+    [_intf_hoverThumbnailsCheckbox setTitle: _NS("Show a preview image when hovering the seek bar")];
     [_intf_appleremoteCheckbox setTitle: _NS("Control playback with the Apple Remote")];
     [_intf_mediakeysCheckbox setTitle: _NS("Control playback with media keys")];
     [_intf_appleremote_sysvolCheckbox setTitle: _NS("Control system volume with the Apple Remote")];
@@ -695,6 +696,7 @@ static inline const char * __config_GetLabel(vlc_object_t *p_this, const char *p
         [_intf_continueplaybackPopup setEnabled: YES];
     }
 
+    [self setupButton:_intf_hoverThumbnailsCheckbox forBoolValue: "macosx-hover-thumbnails"];
     [self setupButton:_intf_appleremoteCheckbox forBoolValue: "macosx-appleremote"];
     [self setupButton:_intf_appleremote_sysvolCheckbox forBoolValue: "macosx-appleremote-sysvol"];
     [self setupButton:_intf_statusIconCheckbox forBoolValue: "macosx-statusicon"];
@@ -1061,6 +1063,7 @@ static inline void save_string_list(intf_thread_t * p_intf, id object, const cha
 
         config_PutInt(p_intf, "metadata-network-access", [_intf_artCheckbox state]);
 
+        config_PutInt(p_intf, "macosx-hover-thumbnails", [_intf_hoverThumbnailsCheckbox state]);
         config_PutInt(p_intf, "macosx-appleremote", [_intf_appleremoteCheckbox state]);
         config_PutInt(p_intf, "macosx-appleremote-sysvol", [_intf_appleremote_sysvolCheckbox state]);
         config_PutInt(p_intf, "macosx-statusicon", [_intf_statusIconCheckbox state]);

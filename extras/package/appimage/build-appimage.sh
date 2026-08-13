@@ -100,12 +100,26 @@ fi
 # ELF NEEDED entries - never sees it and would leave it out. Copy it in beside
 # the other libraries (AppRun puts usr/lib on the library path). Without it the
 # Blu-ray plugin plays homemade discs only.
+# Where the VLC libraries landed. The core is libpowervlccore since the
+# file-name rebrand; keep matching the stock name too so this still works on an
+# unbranded tree. Resolve it ONCE, and never through `dirname` of a possibly
+# empty string: that yields "." (non-empty!), which sails past a [ -n ] guard
+# and silently drops files into $PWD instead of the AppDir. That is exactly how
+# libaacs/libbdplus stopped being bundled when libvlccore was renamed.
+CORE_LIB="$(find "$APPDIR" \( -name 'libpowervlccore.so.*' -o \
+                              -name 'libvlccore.so.*' \) -print -quit)"
+if [ -n "$CORE_LIB" ]; then
+    LIBDIR="$(dirname "$CORE_LIB")"
+else
+    LIBDIR="$APPDIR/usr/lib"
+    echo "WARNING: no libpowervlccore.so.*/libvlccore.so.* under $APPDIR;" >&2
+    echo "         falling back to $LIBDIR for bundled libraries." >&2
+fi
+
 BLURAY_PLUGIN="$(find "$APPDIR" -name '*bluray_plugin.so' -print -quit)"
 if [ -n "$BLURAY_PLUGIN" ]; then
     LIBAACS="$(ldconfig -p 2>/dev/null | sed -n 's/.*libaacs\.so\.0 (.*) => \(.*\)/\1/p' | head -1)"
     if [ -n "$LIBAACS" ] && [ -e "$LIBAACS" ]; then
-        LIBDIR="$(dirname "$(find "$APPDIR" -name 'libvlccore.so.*' -print -quit)")"
-        [ -n "$LIBDIR" ] || LIBDIR="$APPDIR/usr/lib"
         mkdir -p "$LIBDIR"
         cp -L "$LIBAACS" "$LIBDIR/libaacs.so.0"
         echo "  bundled     : $LIBAACS -> $LIBDIR/libaacs.so.0"
@@ -123,8 +137,6 @@ if [ -n "$BLURAY_PLUGIN" ]; then
     # menu opens that folder).
     LIBBDPLUS="$(ldconfig -p 2>/dev/null | sed -n 's/.*libbdplus\.so\.0 (.*) => \(.*\)/\1/p' | head -1)"
     if [ -n "$LIBBDPLUS" ] && [ -e "$LIBBDPLUS" ]; then
-        LIBDIR="$(dirname "$(find "$APPDIR" -name 'libvlccore.so.*' -print -quit)")"
-        [ -n "$LIBDIR" ] || LIBDIR="$APPDIR/usr/lib"
         mkdir -p "$LIBDIR"
         cp -L "$LIBBDPLUS" "$LIBDIR/libbdplus.so.0"
         echo "  bundled     : $LIBBDPLUS -> $LIBDIR/libbdplus.so.0"
@@ -151,6 +163,26 @@ fi
 
 echo "  desktop file: $DESKTOP_FILE"
 echo "  icon file   : $ICON_FILE"
+
+# Leave exactly ONE desktop file in the staged tree.
+#
+# `make install` also lays down vlc-open{bd,cda,dvd,vcd}.desktop: MIME helpers
+# for a system install, all NoDisplay=true and none carrying a Categories= key.
+# A bundle registers no MIME handlers, so they do nothing inside an AppImage --
+# and at packaging time they are actively harmful. linuxdeploy's AppDir
+# finalisation symlinks EVERY desktop file it finds into the AppDir root, and
+# appimagetool then takes the first one alphabetically: vlc-opendvd.desktop
+# sorts before vlc.desktop, so the build died with ".desktop file is missing a
+# Categories= key". Had the helper carried one, the outcome would have been
+# worse than a clean failure -- the AppImage would have taken its name and icon
+# from the DVD helper. (Latent all along; only surfaced once packaging moved to
+# a second linuxdeploy run, which is what re-scans the applications directory.)
+_apps_dir="$(dirname "$DESKTOP_FILE")"
+for _d in "$_apps_dir"/vlc-open*.desktop; do
+    [ -e "$_d" ] || continue
+    rm -f "$_d"
+    echo "  dropped     : $(basename "$_d") (MIME helper, inert in a bundle)"
+done
 
 # ---- 2. fetch linuxdeploy + the Qt plugin (if absent) --------------------
 
@@ -242,17 +274,101 @@ done
 # suitable executable for Exec entry"). Reduce Exec/TryExec to the basename.
 sed -i -E 's,^(Exec=)[^ ]*/powervlc,\1powervlc, ; s,^(TryExec=).*/powervlc$,\1powervlc,' "$DESKTOP_FILE"
 
+# Deploy only for now: the AppImage is packaged in step 5, AFTER the RUNPATHs
+# have been repaired. ARCH is required by linuxdeploy so it can name/label the
+# AppImage correctly.
 set -- --appdir "$APPDIR" --plugin qt \
        --desktop-file "$DESKTOP_FILE" --icon-file "$ICON_FILE"
 [ -n "$MAIN_BIN" ]    && set -- "$@" --executable "$MAIN_BIN"
 [ -n "$PLUGINS_DIR" ] && set -- "$@" --deploy-deps-only "$PLUGINS_DIR"
-set -- "$@" --output appimage
 
-# OUTPUT controls the final AppImage filename (honoured by the appimage plugin).
-# ARCH is required by linuxdeploy so it can name/label the AppImage correctly.
-echo "--- Running linuxdeploy (qt plugin, appimage output) ..."
+echo "--- Running linuxdeploy (qt plugin, deploy only) ..."
 echo "  main binary : ${MAIN_BIN:-<none found>}"
 echo "  plugins dir : ${PLUGINS_DIR:-<none found>}"
-OUTPUT="$OUTFILE" ARCH="$ARCH" "$LINUXDEPLOY" "$@"
+ARCH="$ARCH" "$LINUXDEPLOY" "$@"
+
+# ---- 4. repair the RUNPATHs linuxdeploy leaves behind --------------------
+#
+# linuxdeploy sets a usable RUNPATH on the main executable ($ORIGIN/../lib) but
+# gives every file it merely SCANS with --deploy-deps-only a RUNPATH of plain
+# "$ORIGIN". For a VLC plugin that resolves to
+# AppDir/usr/lib/vlc/plugins/<category>/ -- never to AppDir/usr/lib, where the
+# libraries it just bundled actually sit. Nothing fails at build time, and the
+# AppImage even passes a --version smoke test, because that path never loads a
+# plugin's own dependencies. At run time it breaks in two very different ways:
+#
+#   * Plugins whose dependencies are not already loaded drop out silently:
+#     "cannot load module libx264_plugin.so (libx264.so.160: cannot open shared
+#     object file)" -- libx264/libx265/libebml/libdvbpsi/libtag/libupnp/
+#     libprotobuf-lite/libplacebo, AND VLC's own private helpers in usr/lib/vlc
+#     (libvlc_xcb_events.so.0, libvlc_pulse.so.0, libvlc_vdpau.so.0), which
+#     takes out xcb_x11, xcb_xv and gl -- i.e. EVERY X11 video output. Only
+#     libraries the main binary already pulled in resolve, matched by SONAME
+#     among the already-loaded objects.
+#
+#   * The Qt interface CRASHES. libqt_plugin.so cannot see the bundled Qt, so
+#     ld.so falls back to /etc/ld.so.cache and hands it the HOST's
+#     libQt5Core/Gui/Widgets, while libQt5XcbQpa, the libqxcb platform plugin
+#     and libxkbcommon-x11 still come from the AppImage (their own RUNPATHs are
+#     correct). The two Qt builds mix and QXcbConnection dies inside
+#     xkb_x11_keymap_new_from_device(). Observed 2026-08-10 on Debian 13 i386:
+#     instant SIGSEGV at startup, no message.
+#
+# Repair the RUNPATHs rather than exporting LD_LIBRARY_PATH from the AppRun.
+# An environment variable would work for our own code, but it is INHERITED BY
+# CHILD PROCESSES: system helpers the app spawns -- dbus-launch above all --
+# then load our older bundled libraries and die
+# ("dbus-launch: .../libdbus-1.so.3: version `LIBDBUS_PRIVATE_1.16.2' not
+# found"), taking the D-Bus/MPRIS interface with them. DT_RUNPATH is a property
+# of the file, so it never leaks. Measured on the i386 AppImage: 472 -> 511
+# modules loaded, zero load failures, D-Bus intact.
+if ! command -v patchelf >/dev/null 2>&1; then
+    echo "ERROR: patchelf is required to repair the plugin RUNPATHs." >&2
+    echo "       Install it (Debian/Ubuntu: patchelf) and re-run." >&2
+    exit 1
+fi
+
+echo "--- Repairing plugin RUNPATHs ..."
+# From AppDir/usr/lib/vlc/plugins/<category>/: '..' = plugins, '../..' =
+# usr/lib/vlc (private helpers), '../../..' = usr/lib (everything else).
+_n=0
+if [ -n "$PLUGINS_DIR" ]; then
+    for _so in "$PLUGINS_DIR"/*/*.so; do
+        [ -f "$_so" ] || continue
+        patchelf --set-rpath '$ORIGIN:$ORIGIN/../..:$ORIGIN/../../..' "$_so"
+        _n=$((_n + 1))
+    done
+fi
+# The private helpers themselves live one level below usr/lib.
+_m=0
+for _so in "$LIBDIR"/vlc/*.so.*; do
+    [ -f "$_so" ] || continue
+    patchelf --set-rpath '$ORIGIN:$ORIGIN/..' "$_so"
+    _m=$((_m + 1))
+done
+echo "  plugins patched : $_n"
+echo "  helpers patched : $_m"
+
+# ---- 5. package the AppImage --------------------------------------------
+#
+# A second linuxdeploy run with nothing but --appdir/--output re-deploys
+# nothing and leaves the RUNPATHs above untouched (verified against linuxdeploy
+# continuous, 2026-08-10). OUTPUT controls the final filename.
+echo "--- Packaging the AppImage ..."
+OUTPUT="$OUTFILE" ARCH="$ARCH" "$LINUXDEPLOY" --appdir "$APPDIR" --output appimage
+
+# ---- 6. sanity check -----------------------------------------------------
+#
+# If the RUNPATH repair ever silently stops applying, the AppImage still builds
+# and still passes --version -- it just segfaults the moment the Qt interface
+# starts and quietly loses a third of its plugins. Fail loudly instead.
+_probe="$(find "$APPDIR" -name 'libqt_plugin.so' -print -quit)"
+if [ -n "$_probe" ] && ! patchelf --print-rpath "$_probe" | grep -q '\.\./\.\./\.\.'; then
+    echo "ERROR: $_probe still has RUNPATH '$(patchelf --print-rpath "$_probe")'." >&2
+    echo "       It cannot reach the bundled libraries in usr/lib: the Qt" >&2
+    echo "       interface would segfault and many plugins would fail to load." >&2
+    echo "       Do not ship $OUTFILE." >&2
+    exit 1
+fi
 
 echo "=== Done: $WORKDIR/$OUTFILE ==="

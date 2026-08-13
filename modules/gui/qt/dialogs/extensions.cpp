@@ -474,6 +474,24 @@ void ExtensionDialog::ResizeToHint()
                                   layout->heightForWidth( cap ) ) );
     }
 
+    /* Once on screen, only ever grow.
+     *
+     * A rebuilt widget is empty for an instant, and the layout's wish collapses
+     * with it: resizing to that wish shrinks the window, and the next moment --
+     * when the widget has its content back -- grows it again. The user sees the
+     * window snap small and back for every update. Invidious' "list public
+     * instances" does it twice, once when it clears the list and once when it
+     * fills it, and both were plainly visible.
+     *
+     * Only while the dialog is already visible: an unmapped QWidget reports a
+     * default 640x480 that has nothing to do with its content, and honouring it
+     * would floor every extension dialog at that size. Shrinking is not lost
+     * either -- changing view inside an extension destroys the dialog and
+     * builds the next one, which starts from its own hint (see
+     * DialogCorners()). */
+    if( isVisible() )
+        hint = hint.expandedTo( size() );
+
     resize( hint );
 }
 
@@ -911,6 +929,12 @@ void ExtensionDialog::UpdateWidgets()
 {
     assert( p_dialog );
     extension_widget_t *p_widget;
+    /* Resize once, at the end. Resizing inside the loop made the window jump
+     * to a new size for every widget added, updated or removed: filling a list
+     * of public Invidious instances redrew the frame a dozen times in a row,
+     * which reads as flicker. The end result is identical -- sizeHint() is a
+     * property of the finished layout, not of the order it was built in. */
+    bool resize_pending = false;
     FOREACH_ARRAY( p_widget, p_dialog->widgets )
     {
         if( !p_widget ) continue; /* Some widgets may be NULL at this point */
@@ -940,7 +964,7 @@ void ExtensionDialog::UpdateWidgets()
             if( ( p_widget->i_width > 0 ) && ( p_widget->i_height > 0 ) )
                 widget->resize( p_widget->i_width, p_widget->i_height );
             p_widget->p_sys_intf = widget;
-            ResizeToHint();
+            resize_pending = true;
             /* If an update was required, cancel it as we just created the widget */
             p_widget->b_update = false;
         }
@@ -952,6 +976,8 @@ void ExtensionDialog::UpdateWidgets()
             {
                 msg_Warn( p_intf, "Could not update a widget for dialog %s",
                           p_dialog->psz_title );
+                if( resize_pending )
+                    ResizeToHint();
                 return;
             }
             widget->setVisible( !p_widget->b_hide );
@@ -959,7 +985,7 @@ void ExtensionDialog::UpdateWidgets()
             if( ( p_widget->i_width > 0 ) && ( p_widget->i_height > 0 ) )
                 widget->resize( p_widget->i_width, p_widget->i_height );
             p_widget->p_sys_intf = widget;
-            ResizeToHint();
+            resize_pending = true;
 
             /* Do not update again */
             p_widget->b_update = false;
@@ -968,10 +994,13 @@ void ExtensionDialog::UpdateWidgets()
         {
             DestroyWidget( p_widget );
             p_widget->p_sys_intf = NULL;
-            ResizeToHint();
+            resize_pending = true;
         }
     }
     FOREACH_END()
+
+    if( resize_pending )
+        ResizeToHint();
 
     /* The extension may ask for more room than its widgets need (a list of
      * long URLs is unreadable at its natural width). Only ever grow. */

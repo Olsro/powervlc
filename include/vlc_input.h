@@ -231,7 +231,7 @@ struct input_thread_t
  * Record prefix string.
  * TODO make it configurable.
  */
-#define INPUT_RECORD_PREFIX "vlc-record-%Y-%m-%d-%Hh%Mm%Ss-$ N-$ p"
+#define INPUT_RECORD_PREFIX "powervlc-record-%Y-%m-%d-%Hh%Mm%Ss-$ N-$ p"
 
 /*****************************************************************************
  * Input events and variables
@@ -714,6 +714,40 @@ VLC_API void input_DecoderFlush( decoder_t * );
  * This function creates a sane filename path.
  */
 VLC_API char * input_CreateFilename( input_thread_t *, const char *psz_path, const char *psz_prefix, const char *psz_extension ) VLC_USED;
+
+/**
+ * Fast clip extraction (PowerVLC clip creation mode).
+ *
+ * Writes [i_start, i_stop] of what \p p_source plays into a recording file,
+ * through a second headless input: there is no audio or video output, hence
+ * no clock, so the extraction runs at the speed of the disk instead of the
+ * speed of the media, and the playback of \p p_source is left untouched.
+ * The recording chain is the regular one, so the file is named and muxed
+ * like any other recording.
+ *
+ * The result is polled: -IsRunning tells whether it is over, -Progress
+ * gives the completion of the clip (0..1) and -Finish ends it (aborting it
+ * if it is still running) and hands over the path of the produced file.
+ *
+ * \return NULL when the source cannot be extracted from (a stream that
+ * cannot be seeked, or of unknown length): record it live instead.
+ */
+typedef struct input_clip_export_t input_clip_export_t;
+
+VLC_API input_clip_export_t * input_ClipExportNew( vlc_object_t *p_parent,
+                                                   input_thread_t *p_source,
+                                                   vlc_tick_t i_start,
+                                                   vlc_tick_t i_stop ) VLC_USED;
+#define input_ClipExportNew(a,b,c,d) input_ClipExportNew(VLC_OBJECT(a),b,c,d)
+
+VLC_API bool input_ClipExportIsRunning( input_clip_export_t * );
+VLC_API float input_ClipExportProgress( input_clip_export_t * );
+
+/**
+ * Ends an extraction and releases it.
+ * \return the path of the produced file (to be freed), NULL if none.
+ */
+VLC_API char * input_ClipExportFinish( input_clip_export_t * ) VLC_USED;
 
 /**
  * It creates an empty input resource handler.

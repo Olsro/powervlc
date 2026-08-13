@@ -83,6 +83,13 @@ typedef float CGFloat;
     NSPanel *jumpPanel;             /* "Jump to Time", on double-click */
     NSTextField *jumpField;
     NSSlider *seekSlider;
+    /* chapter separators cache: refetched when any of these change (an
+     * input pointer alone can be reused by a fresh allocation), and
+     * retried while it has yielded nothing (chaptersRetryTicks) */
+    char *chaptersUri;      /* identité du média, cf. .m */
+    int chaptersTitle;
+    int64_t chaptersDuration;
+    int chaptersRetryTicks;
     NSSlider *volumeSlider;
 
     NSSplitView *splitView;
@@ -178,6 +185,40 @@ typedef float CGFloat;
     /* Pause the video playback when minimized */
     BOOL pausedByMiniaturize;
 
+    /* "Hide controls during playback" (Video menu, driven by the
+     * legacy-macosx-hide-controls option). Poll-based: the refresh tick
+     * watches the mouse against the window frame — 10.2 has no better
+     * primitive and the 3 s delay does not need one. While hidden the
+     * window is shrunk onto the aspect-corrected picture; the title bar
+     * can only go away where -setStyleMask: exists (10.6+, so on the
+     * modern machines the legacy interface is tested on — the PowerPC
+     * systems keep their title bar, only the controls bar goes). */
+    NSView *bottomBar;                   /* weak: owned by contentView */
+    BOOL controlsHiddenForPlayback;
+    double mouseOutsideSince;            /* 0 = mouse inside / not armed */
+    int autoHideRevealTicks;             /* video-gone streak while hidden */
+    NSRect frameBeforeHidingControls;
+    NSRect hiddenControlsInitialFrame;   /* to carry drags across reveal */
+    NSUInteger styleMaskBeforeHidingControls;
+    NSString *titleBeforeHidingControls;   /* le cadre recree revient vide */
+    BOOL styleMaskChangedForHiddenControls;
+    NSSize lastNativeVideoSize;          /* from setVideoViewSizeFromValue */
+    NSSize lastRequestedVideoSize;       /* to spot a plain restart */
+    float lastVideoZoom;                 /* to spot a zoom the user asked */
+    BOOL videoDragActive;                /* a drag is under way */
+    NSSize pictureBox;                   /* box a shape change fits in */
+    NSTimer *hiddenCursorTimer;          /* 10 Hz, corner grip cursors */
+    int hiddenCursorZone;                /* 0 none, 1 NW/SE, 2 NE/SW */
+    NSPoint hiddenDragStartMouse;        /* screen coords, drag-to-move */
+    NSPoint hiddenDragStartOrigin;
+    /* the bare window has no grow box and its video view swallows the
+     * mouse: a drag started in a CORNER resizes (picture ratio kept,
+     * opposite corner anchored), anywhere else moves */
+    NSRect hiddenDragStartFrame;
+    BOOL hiddenDragIsResize;
+    int hiddenDragResizeH;               /* -1 left edge, +1 right edge */
+    int hiddenDragResizeV;               /* -1 bottom edge, +1 top edge */
+
     /* Black screens in fullscreen */
     NSMutableArray *fsBlackWindows;
 }
@@ -198,6 +239,9 @@ typedef float CGFloat;
 /* Window > Playlist...: bring the window up showing the playlist view */
 - (void)showPlaylistView;
 
+/* Edit > Find: put the caret in the playlist search field */
+- (void)highlightSearchField;
+
 /* View menu behaviors (VLC 3.0 parity) */
 - (void)toggleJumpButtons;
 - (void)togglePlaymodeButtons;
@@ -206,6 +250,23 @@ typedef float CGFloat;
 - (BOOL)sidebarVisible;
 - (BOOL)playlistColumnShown:(NSString *)identifier;
 - (void)togglePlaylistColumn:(NSString *)identifier;
+
+/* "Hide controls during playback": all main-thread. updateAutoHideControls
+ * is driven by the refresh tick; the double click on the video (directly,
+ * or relayed by the core through "intf-reveal-controls") reveals. The
+ * drag entry points let the video view move the whole window while it is
+ * the only thing left on screen. */
+- (BOOL)controlsHiddenForPlayback;
+- (void)updateAutoHideControls;
+- (void)hideControlsForPlayback;
+- (void)revealControlsForPlayback;
+- (void)beginHiddenControlsDragAtScreenPoint:(NSPoint)point;
+/* dragging the picture always moves the window; the corner resize zones
+ * only exist while the controls are auto-hidden (no window frame left) */
+- (void)beginVideoDragAtScreenPoint:(NSPoint)point allowResize:(BOOL)allowResize;
+- (void)dragHiddenControlsToScreenPoint:(NSPoint)point;
+- (void)endVideoDrag;
+- (BOOL)videoIsFullscreen;
 
 /* Embedded video handling (main thread only). acquireVideoView returns nil
  * when the window already hosts a video; the caller then falls back to a
@@ -216,5 +277,6 @@ typedef float CGFloat;
 - (void)releaseVideoView;
 - (void)setVideoViewSizeFromValue:(NSValue *)size;
 - (void)setVideoFullscreenFromNumber:(NSNumber *)fullscreen;
+- (void)setVideoAboveOthersFromNumber:(NSNumber *)above;
 
 @end

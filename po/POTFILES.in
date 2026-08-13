@@ -208,6 +208,7 @@ modules/access/pulse.c
 modules/access/radiobrowser.c
 modules/access/rdp.c
 modules/access/rist.c
+modules/access/rist.h
 modules/access/rtp/rtp.c
 modules/access/rtsp/access.c
 modules/access/satip.c
@@ -220,6 +221,7 @@ modules/access/smb.c
 modules/access/smb_common.h
 modules/access/srt.c
 modules/access/srt_common.c
+modules/access/srt_common.h
 modules/access/tcp.c
 modules/access/timecode.c
 modules/access/udp.c
@@ -300,6 +302,7 @@ modules/codec/audiotoolbox_midi.c
 modules/codec/arib/aribsub.c
 modules/codec/avcodec/avcodec.c
 modules/codec/avcodec/avcodec.h
+modules/codec/avcodec/avcommon.h
 modules/codec/avcodec/d3d11va.c
 modules/codec/avcodec/dxva2.c
 modules/codec/avcodec/encoder.c
@@ -336,6 +339,7 @@ modules/codec/oggspots.c
 modules/codec/omxil/mediacodec.c
 modules/codec/omxil/omxil.c
 modules/codec/omxil/vout.c
+modules/codec/openapv.c
 modules/codec/opus.c
 modules/codec/png.c
 modules/codec/qsv.c
@@ -364,6 +368,7 @@ modules/codec/ttml/ttml.c
 modules/codec/ttml/ttml.h
 modules/codec/twolame.c
 modules/codec/uleaddvaudio.c
+modules/codec/vda.c
 modules/codec/videotoolbox.m
 modules/codec/vorbis.c
 modules/codec/vpx.c
@@ -388,6 +393,7 @@ modules/control/ntservice.c
 modules/control/oldrc.c
 modules/control/win_msg.c
 modules/demux/adaptive/adaptive.cpp
+modules/demux/adaptive/PlaylistManager.cpp
 modules/demux/aiff.c
 modules/demux/asf/asf.c
 modules/demux/au.c
@@ -401,6 +407,7 @@ modules/demux/cdg.c
 modules/demux/demuxdump.c
 modules/demux/dirac.c
 modules/demux/directory.c
+modules/demux/dmxmus.c
 modules/demux/filter/noseek.c
 modules/demux/flac.c
 modules/demux/gme.c
@@ -1112,6 +1119,7 @@ modules/misc/addons/vorepository.c
 modules/misc/audioscrobbler.c
 modules/misc/fingerprinter.c
 modules/misc/gnutls.c
+modules/misc/inhibit/darwin_legacy.c
 modules/misc/inhibit/dbus.c
 modules/misc/inhibit/xdg.c
 modules/misc/logger.c
@@ -1289,10 +1297,13 @@ modules/video_output/decklink.cpp
 modules/video_output/drawable.c
 modules/video_output/evas.c
 modules/video_output/fb.c
+modules/video_output/flaschen.c
 modules/video_output/glx.c
 modules/video_output/ios.m
 modules/video_output/kva.c
 modules/video_output/macosx.m
+modules/video_output/macosx_gl1.m
+modules/video_output/macosx_qt.m
 modules/video_output/opengl/display.c
 modules/video_output/opengl/egl.c
 modules/video_output/opengl/vout_helper.h
@@ -1301,6 +1312,7 @@ modules/video_output/win32/direct3d11.c
 modules/video_output/win32/directdraw.c
 modules/video_output/win32/events.c
 modules/video_output/win32/glwin32.c
+modules/video_output/win32/inhibit.c
 modules/video_output/win32/wingdi.c
 modules/video_output/win32/wgl.c
 modules/video_output/vdummy.c
@@ -1341,7 +1353,16 @@ share/lua/sd/radiobrowser.lua
 
 
 # qt .ui files
-# uncomment (and prepend $builddir} if you want to generate a proper vlc.pot
+# Headers uic generates from the .ui files. They exist ONLY in the build tree,
+# never in the sources, so they stay commented out here: config.status expands
+# every active line into the $(POTFILES) prerequisite list, and make would then
+# demand files that are not there.
+#
+# po/update-pot.sh builds them and uncomments these lines on the fly. Do NOT
+# regenerate the template any other way: an extraction without these headers
+# drops ~360 Qt interface strings, the following msgmerge marks them obsolete
+# (`#~`) in all 105 catalogs, and they stop being compiled into the .gmo files.
+# That is what happened to the 2026-07-25 template.
 
 #modules/gui/qt/ui/about.h
 #modules/gui/qt/ui/equalizer.h

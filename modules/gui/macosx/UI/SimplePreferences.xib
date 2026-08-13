@@ -61,6 +61,7 @@
                 <outlet property="input_urlhandlerButton" destination="3742" id="1GV-O9-8SF"/>
                 <outlet property="intfView" destination="2311" id="pUM-XM-2rM"/>
                 <outlet property="intf_appleremoteCheckbox" destination="3542" id="Oxt-Lr-ogk"/>
+                <outlet property="intf_hoverThumbnailsCheckbox" destination="hTn-01-btn" id="hTn-07-out"/>
                 <outlet property="intf_appleremote_sysvolCheckbox" destination="3738" id="uwy-oj-7yn"/>
                 <outlet property="intf_artCheckbox" destination="3928" id="HND-nW-BHK"/>
                 <outlet property="intf_continueplaybackLabel" destination="3919" id="ZJO-qY-UCq"/>
@@ -389,6 +390,16 @@ Gw
                         <rect key="frame" x="3" y="3" width="411" height="125"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
+                            <button verticalHuggingPriority="750" mirrorLayoutDirectionWhenInternationalizing="always" translatesAutoresizingMaskIntoConstraints="NO" id="hTn-01-btn">
+                                <rect key="frame" x="15" y="94" width="300" height="18"/>
+                                <buttonCell key="cell" type="check" title="Show a preview image when hovering the seek bar" bezelStyle="regularSquare" imagePosition="left" alignment="left" inset="2" id="hTn-02-cel">
+                                    <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
+                                    <font key="font" metaFont="system"/>
+                                </buttonCell>
+                                <connections>
+                                    <action selector="interfaceSettingChanged:" target="-2" id="hTn-03-act"/>
+                                </connections>
+                            </button>
                             <button verticalHuggingPriority="750" mirrorLayoutDirectionWhenInternationalizing="always" translatesAutoresizingMaskIntoConstraints="NO" id="3542">
                                 <rect key="frame" x="15" y="67" width="265" height="18"/>
                                 <buttonCell key="cell" type="check" title="Control playback with the Apple Remote" bezelStyle="regularSquare" imagePosition="left" alignment="left" inset="2" id="3547">
@@ -454,7 +465,10 @@ Gw
                             <constraint firstItem="3919" firstAttribute="leading" secondItem="3542" secondAttribute="leading" id="jfe-Eg-0AO"/>
                             <constraint firstItem="3738" firstAttribute="top" secondItem="3543" secondAttribute="bottom" constant="14" id="pw3-AG-3aR"/>
                             <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="3543" secondAttribute="trailing" constant="17" id="stN-2i-k8h"/>
-                            <constraint firstItem="3542" firstAttribute="top" secondItem="3919" secondAttribute="bottom" constant="14" id="vZI-fE-nJ7"/>
+                            <constraint firstItem="hTn-01-btn" firstAttribute="leading" secondItem="3919" secondAttribute="leading" id="hTn-04-cst"/>
+                            <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="hTn-01-btn" secondAttribute="trailing" constant="17" id="hTn-05-cst"/>
+                            <constraint firstItem="hTn-01-btn" firstAttribute="top" secondItem="3919" secondAttribute="bottom" constant="14" id="hTn-06-cst"/>
+                            <constraint firstItem="3542" firstAttribute="top" secondItem="hTn-01-btn" secondAttribute="bottom" constant="13" id="vZI-fE-nJ7"/>
                         </constraints>
                     </view>
                 </box>

@@ -22,6 +22,9 @@ dvdnav: libdvdnav-$(LIBDVDNAV_VERSION).tar.xz .sum-dvdnav
 	$(APPLY) $(SRC)/dvdnav/0001-configure-don-t-use-ms-style-packing.patch
 	# PowerVLC: Tiger raw-device physio bug (mounted DVD images, round 88)
 	$(APPLY) $(SRC)/dvdnav/0003-read_cache-page-align-and-pre-fault-chunk-buffers.patch
+	# PowerVLC: "no subpicture selected" was indistinguishable from "stream 0,
+	# forced only", so the first subtitle track got picked on some DVDs
+	$(APPLY) $(SRC)/dvdnav/0004-fill-the-logical-SPU-stream-number-in-the-stream-chan.patch
 	$(MOVE)
 
 DEPS_dvdnav = dvdread $(DEPS_dvdread)

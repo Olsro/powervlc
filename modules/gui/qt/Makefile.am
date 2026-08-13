@@ -129,6 +129,7 @@ libqt_plugin_la_SOURCES = \
 	gui/qt/util/animators.cpp gui/qt/util/animators.hpp \
 	gui/qt/util/input_slider.cpp gui/qt/util/input_slider.hpp \
 	gui/qt/util/timetooltip.cpp gui/qt/util/timetooltip.hpp \
+	gui/qt/util/seek_thumbnailer.cpp gui/qt/util/seek_thumbnailer.hpp \
 	gui/qt/util/customwidgets.cpp gui/qt/util/customwidgets.hpp \
 	gui/qt/util/searchlineedit.cpp gui/qt/util/searchlineedit.hpp \
 	gui/qt/util/registry.cpp gui/qt/util/registry.hpp \
@@ -239,6 +240,7 @@ nodist_libqt_plugin_la_SOURCES = \
 	gui/qt/util/animators.moc.cpp \
 	gui/qt/util/input_slider.moc.cpp \
 	gui/qt/util/timetooltip.moc.cpp \
+	gui/qt/util/seek_thumbnailer.moc.cpp \
 	gui/qt/util/customwidgets.moc.cpp \
 	gui/qt/util/searchlineedit.moc.cpp \
 	gui/qt/util/qmenuview.moc.cpp \

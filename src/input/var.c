@@ -72,6 +72,9 @@ static int BookmarkCallback( vlc_object_t *p_this, char const *psz_cmd,
 static int RecordCallback( vlc_object_t *p_this, char const *psz_cmd,
                            vlc_value_t oldval, vlc_value_t newval,
                            void *p_data );
+static int RecordClipCallback( vlc_object_t *p_this, char const *psz_cmd,
+                               vlc_value_t oldval, vlc_value_t newval,
+                               void *p_data );
 static int FrameNextCallback( vlc_object_t *p_this, char const *psz_cmd,
                               vlc_value_t oldval, vlc_value_t newval,
                               void *p_data );
@@ -107,6 +110,7 @@ static const vlc_input_callback_t p_input_callbacks[] =
     CALLBACK( "audio-es", EsAudioCallback ),
     CALLBACK( "spu-es", EsSpuCallback ),
     CALLBACK( "record", RecordCallback ),
+    CALLBACK( "record-clip-position", RecordClipCallback ),
     CALLBACK( "frame-next", FrameNextCallback ),
 
     CALLBACK( NULL, NULL )
@@ -492,6 +496,15 @@ void input_ConfigVarInit ( input_thread_t *p_input )
     var_Create( p_input, "record", VLC_VAR_BOOL );
     var_SetBool( p_input, "record", false );
 
+    /* PowerVLC clip creation: setting this to a position fraction seeks
+     * there and starts recording in ONE input control, so the recording
+     * captures from the very key frame the seek resumed at. See also
+     * "record-stop-time" (read by es_out to end the recording at an
+     * absolute time). */
+    var_Create( p_input, "record-clip-position", VLC_VAR_FLOAT );
+    var_Create( p_input, "record-stop-time", VLC_VAR_INTEGER );
+    var_Create( p_input, "record-start-time", VLC_VAR_INTEGER );
+
     var_Create( p_input, "teletext-es", VLC_VAR_INTEGER );
     var_SetInteger( p_input, "teletext-es", -1 );
 
@@ -833,6 +846,18 @@ static int RecordCallback( vlc_object_t *p_this, char const *psz_cmd,
     VLC_UNUSED(psz_cmd); VLC_UNUSED(oldval); VLC_UNUSED(p_data);
 
     input_ControlPush( p_input, INPUT_CONTROL_SET_RECORD_STATE, &newval );
+
+    return VLC_SUCCESS;
+}
+
+static int RecordClipCallback( vlc_object_t *p_this, char const *psz_cmd,
+                               vlc_value_t oldval, vlc_value_t newval,
+                               void *p_data )
+{
+    input_thread_t *p_input = (input_thread_t*)p_this;
+    VLC_UNUSED(psz_cmd); VLC_UNUSED(oldval); VLC_UNUSED(p_data);
+
+    input_ControlPush( p_input, INPUT_CONTROL_RECORD_CLIP, &newval );
 
     return VLC_SUCCESS;
 }

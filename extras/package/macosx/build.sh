@@ -232,8 +232,18 @@ case $ARCH in
         SDKROOT="$LEGACY_TOOLCHAIN_ROOT/sdks/MacOSX10.5.sdk"
         HOST_TRIPLET="$LEGACY_TRIPLE"
         ;;
-    # x86_64 (10.5.8+) stays on the modern clang path below: 64-bit
-    # apps require 10.5 anyway and the clang build already targets it.
+    x86_64)
+        # ⚠ 10.6, PAS 10.5. Le défaut de ce script (10.5) faisait tomber la
+        # tranche x64 sous la porte GCD de configure.ac (« targeting Mac OS X
+        # < 10.6: the modern interface cannot be built (ARC), using the legacy
+        # one ») : l'interface MODERNE n'y était donc jamais construite, alors
+        # que BUILD-POWERVLC.md l'annonce et que les Macs 10.7+ doivent en
+        # profiter. Constaté sur un bundle x64 dépourvu de
+        # libmacosx_plugin.dylib. 10.6 est aussi le plancher que la tranche
+        # revendique déjà côté plist, et le premier Mac Intel 64 bits (2006)
+        # peut y monter ; un Intel resté en 10.5 prend la tranche x86.
+        MINIMAL_OSX_VERSION="10.6"
+        ;;
     aarch64|arm64)
         # Apple Silicon: macOS 11.0 is the first arm64 release.
         MINIMAL_OSX_VERSION="11.0"
@@ -619,6 +629,16 @@ make .bluray
 make .aacs
 make .bdplus
 
+# libdvdnav for exactly the same reason, and it bit us once: the DVD virtual
+# machine lives in there, and contrib/src/dvdnav/ carries PowerVLC patches that
+# change what the player is told about the disc (the Tiger raw-device read
+# path, and the logical subpicture number without which the first subtitle
+# track is picked on some discs). Purging its stamp, its unpacked source and
+# its .pc left the build linking happily against the PREVIOUS static library --
+# no error, no warning, and a fix that appeared not to work.
+info "Making sure the DVD contribs are current"
+make .dvdnav
+
 # libcrystalhd for the same reason, and with a sharper failure mode than the
 # rest. Its patches do not merely build the library: they define the ioctl
 # layout it uses to talk to the BroadcomCrystalHD kext, which is installed
@@ -874,6 +894,57 @@ info "Running make -j$JOBS"
 make -j$JOBS
 
 info "Preparing VLC.app"
+# ⚠ The install prefix is never cleaned by "make install": it only ever
+# adds. A file that USED to be installed somewhere stays there for ever,
+# and package.mak copies both lua trees into one directory in the bundle
+# -- so a leftover silently overwrites the file that is current.
+#
+# Measured 2026-08-12: the extension translation catalogues moved from
+# vlclibdir to vlcdatadir (they must be in the data dir, pvlc_i18n.load()
+# builds the path from it), but the copies under lib/vlc/lua/i18n from
+# before the move were still sitting in the prefix. Being copied second,
+# they won: every bundle since had 72 catalogues -- 18 languages x 4
+# extensions -- frozen at the day of the move, with no error anywhere and
+# the extension code itself perfectly up to date beside them.
+#
+# Emptied rather than guarded against: these trees are small, they are
+# reinstalled a second later by the "install" the VLC.app rule depends
+# on, and this way what ends up in the bundle is exactly what the current
+# install rules produce. package.mak refuses the overlap as well, so a
+# future move is caught in the open instead of shipping quietly.
+#
+# One rm, no test: this runs under "set -e", and a [ -d ] that answers no
+# on the last turn of a loop is a non-zero status that would end the build.
+# rm -rf is happy with a path that is not there.
+rm -rf vlc_install_dir/lib/vlc/lua vlc_install_dir/share/vlc/lua
+
+# Same trap, on a PLUGIN this time, and with teeth: a module that stops being
+# built keeps its previously installed copy for ever -- and automake does not
+# remove the object either, so comparing the prefix against modules/.libs sees
+# two stale files agreeing with each other.
+#
+# The case that bit us: keychain.m is compiled with ARC, whose runtime only
+# exists from Mac OS X 10.7. configure now skips the ARC plugins below that
+# (HAVE_OBJC_ARC), but an incremental tree still carried the copy built when
+# it did not, and packaging shipped it. On 10.6.8 that copy is fatal -- dyld
+# kills the process as it is dlopen()ed:
+#   Symbol not found: _objc_retainAutoreleasedReturnValue
+#   Referenced from: .../plugins/libkeychain_plugin.dylib
+# which took the player down the moment anything reached the keystore.
+#
+# Keyed on the deployment target, the same criterion configure uses.
+case "$MINIMAL_OSX_VERSION" in
+    10.2|10.3|10.4|10.5|10.6)
+        for _stale in modules/.libs/libkeychain_plugin.* \
+                      modules/libkeychain_plugin.la \
+                      vlc_install_dir/lib/vlc/plugins/keystore/libkeychain_plugin.*; do
+            [ -e "$_stale" ] || continue
+            echo "  dropping ARC-only plugin ${_stale##*/} (needs 10.7, target $MINIMAL_OSX_VERSION)"
+            rm -f "$_stale"
+        done
+        ;;
+esac
+
 make VLC.app
 
 # Workaround for macOS 10.7: CFNetwork only exists as part of CoreServices framework

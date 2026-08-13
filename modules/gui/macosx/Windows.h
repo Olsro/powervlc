@@ -89,6 +89,13 @@ static const float f_min_video_height = 70.0;
 - (void)hideControlsBar;
 - (void)showControlsBar;
 
+/* "Hide controls during playback" (Video menu): once the mouse has left
+ * the window for a few seconds during windowed playback, the controls
+ * bar and the title bar go away; a double click on the video brings
+ * them back (a plain click only focuses the window, dragging moves it) */
+@property (readonly) BOOL controlsHiddenForPlayback;
+- (void)revealControlsForPlayback;
+
 - (void)windowWillEnterFullScreen:(NSNotification *)notification;
 - (void)windowDidEnterFullScreen:(NSNotification *)notification;
 - (void)windowWillExitFullScreen:(NSNotification *)notification;

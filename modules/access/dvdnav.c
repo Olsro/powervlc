@@ -38,6 +38,7 @@
 #endif
 
 #include <assert.h>
+#include <ctype.h>      /* isalpha() */
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -173,6 +174,21 @@ struct demux_sys_t
     uint32_t clut[16];
     uint8_t  palette[4][4];
     bool b_spu_change;
+    /* SPST_REG tel que la machine virtuelle du disque le porte, publié par
+     * DVDNAV_SPU_STREAM_CHANGE : 0-31 = flux réellement choisi, bit 0x40 =
+     * affiché (sinon « forcés seulement »), au-delà = AUCUN sous-titre
+     * choisi.  -1 tant qu'aucun évènement n'est arrivé. */
+    int i_spu_logical;
+    /* Dernières position et heure STABILISÉES, tenues pendant les fenêtres où
+     * la machine virtuelle du disque n'a pas encore fixé sa position (cf.
+     * DEMUX_GET_POSITION). */
+    bool   b_position_known;
+    double f_last_position;
+    vlc_tick_t i_last_time;
+    vlc_tick_t i_stable_wall;   /* mdate() au dernier relevé stable */
+    vlc_tick_t i_explicit_anchor_wall;  /* mdate() au dernier saut DEMANDÉ */
+    bool       b_paused;
+    vlc_tick_t i_pause_wall;
 
     /* Aspect ration */
     struct {
@@ -286,6 +302,7 @@ static void DemuxForceStill( demux_t * );
 
 static void DemuxTitles( demux_t * );
 static void ESSubtitleUpdate( demux_t * );
+static vlc_tick_t DvdnavExtrapolatedTime( demux_sys_t * );
 static void ButtonUpdate( demux_t *, bool );
 
 static void ESNew( demux_t *, int );
@@ -327,6 +344,7 @@ static int CommonOpen( vlc_object_t *p_this,
     p_sys->dvdnav = p_dvdnav;
 
     ps_track_init( p_sys->tk );
+    p_sys->i_spu_logical = -1;
     p_sys->b_readahead = b_readahead;
 
     /* Surveillance du support (cf. `i_last_block`). Le chemin n'est connu que
@@ -697,57 +715,182 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
 
     switch( i_query )
     {
-        case DEMUX_SET_POSITION:
-        case DEMUX_GET_POSITION:
+        /* ⚠⚠⚠ La DURÉE ne dépend pas de la position en secteurs. Elle était
+         * pourtant rendue sous la même garde : quand `dvdnav_get_position()`
+         * échoue — ce qui arrive en cours de lecture, aux frontières de
+         * cellule et sur les images fixes — on renvoyait EGENERIC et le cœur
+         * remettait la longueur à ZÉRO, alors que `i_pgc_length` était juste
+         * là et parfaitement connue.
+         *
+         * Mesuré sur un DVD ROBOTS : à t=233,560 s le journal porte
+         * `pgc_length=433303200` (4814,48 s) et, un dixième de seconde plus
+         * tard, la barre voyait `len=0` — pour ne plus revenir avant une
+         * bonne minute. Conséquences vues par l'utilisateur : le survol de la
+         * barre n'ouvrait plus son infobulle et le seek ne menait nulle part
+         * (les deux convertissent une fraction en temps, donc en rien du
+         * tout), et le champ de temps SAUTAIT — il retombe sur le temps
+         * écoulé quand la durée est nulle, au lieu du temps restant. Puis
+         * tout « se réparait seul » dès que la position redevenait lisible.
+         *
+         * La longueur est donc rendue AVANT la garde, et la garde ne protège
+         * plus que ce qui a réellement besoin des secteurs. */
         case DEMUX_GET_LENGTH:
-        {
-            uint32_t pos, len;
-            if( dvdnav_get_position( p_sys->dvdnav, &pos, &len ) !=
-                  DVDNAV_STATUS_OK || len == 0 )
+            if( p_sys->i_pgc_length > 0 )
             {
-                return VLC_EGENERIC;
+                *va_arg( args, int64_t * ) = (int64_t)p_sys->i_pgc_length;
+                return VLC_SUCCESS;
+            }
+            return VLC_EGENERIC;
+
+        /* ⚠⚠⚠ `dvdnav_get_position()` échoue en pleine lecture, et pas
+         * qu'un instant. Deux causes dans `searching.c` : « New position not
+         * yet determined » (l'état de la VM a bougé — saut de canal, domaine,
+         * VTS, redémarrage de cellule — et la position mémorisée ne
+         * correspond plus) et une cellule courante que le balayage saute
+         * (bloc d'angles dont on ne joue pas la première cellule — ce DVD a
+         * bien plusieurs angles, ses pré-commandes portent des `SetSTN
+         * angle=1/2`). Le curseur restait alors collé au début et le seek
+         * ramenait à la position de départ.
+         *
+         * Or le TEMPS, lui, est parfaitement disponible
+         * (`dvdnav_get_current_time()`, cf. DEMUX_GET_TIME) et la durée du
+         * PGC aussi. On se rabat donc dessus : c'est la même grandeur, par
+         * un autre chemin. Même chose pour le saut, via
+         * `dvdnav_jump_to_sector_by_time()` — exactement ce que fait
+         * DEMUX_SET_TIME, qui n'a jamais posé de problème. */
+        /* ⚠⚠⚠ UN SEUL AXE : LE TEMPS.
+         *
+         * La barre est graduée en temps de bout en bout — l'infobulle affiche
+         * `fraction × durée`, les marqueurs de chapitre sont des décalages
+         * temporels, et le clic cherche par le temps. Faire avancer le curseur
+         * avec la position en SECTEURS mélangeait deux axes qui ne coïncident
+         * pas sur un flux à débit variable : le curseur ne tombait jamais sur
+         * ses propres marqueurs.
+         *
+         * Les deux fonctions de libdvdnav sont écartées, chacune pour une
+         * raison mesurée sur un DVD ROBOTS :
+         *  - `dvdnav_get_position()` (secteurs) échoue durablement dans les
+         *    blocs d'angles — sa boucle saute la cellule courante et rend −1 ;
+         *  - `dvdnav_get_current_time()` additionne les cellules précédentes
+         *    et compte DEUX FOIS les blocs d'angles : 4 min 16 annoncées pour
+         *    une image à 2 min 09, et 4 min 29 après un saut à 6 min 58.
+         *
+         * On tient donc le temps nous-mêmes : une ANCRE reposée à chaque
+         * frontière de chapitre (`dvdnav_describe_title_chapters()`, la table
+         * même qui place les marqueurs) et à chaque saut demandé, plus
+         * l'horloge entre deux. La dérive est bornée par la longueur d'un
+         * chapitre et les pauses sont défalquées. La position en secteurs ne
+         * sert plus que de dernier recours, avant qu'aucune ancre n'existe. */
+        case DEMUX_GET_POSITION:
+        {
+            if( p_sys->b_position_known && p_sys->i_pgc_length > 0 )
+            {
+                vlc_tick_t i_now = DvdnavExtrapolatedTime( p_sys );
+                double f_pos = (double)i_now / (double)p_sys->i_pgc_length;
+                if( f_pos < 0. )
+                    f_pos = 0.;
+                if( f_pos > 1. )
+                    f_pos = 1.;
+                *va_arg( args, double* ) = f_pos;
+                return VLC_SUCCESS;
             }
 
-            switch( i_query )
+            uint32_t pos, len;
+            if( dvdnav_get_position( p_sys->dvdnav, &pos, &len ) ==
+                  DVDNAV_STATUS_OK && len != 0 )
             {
-            case DEMUX_GET_POSITION:
                 *va_arg( args, double* ) = (double)pos / (double)len;
                 return VLC_SUCCESS;
+            }
+            return VLC_EGENERIC;
+        }
 
-            case DEMUX_SET_POSITION:
-                pos = va_arg( args, double ) * len;
-                if( dvdnav_sector_search( p_sys->dvdnav, pos, SEEK_SET ) ==
-                      DVDNAV_STATUS_OK )
-                {
-                    /* NOTE: do NOT fire ES_OUT_RESET_PCR from here "to
-                     * close the stale window before the HOP lands" --
-                     * tried in round 74 and it made things WORSE (the
-                     * title-entry churn also traverses this control and
-                     * the extra reset re-mixed the pipeline: 892 late
-                     * pictures vs 234 without it). The deferred
-                     * HOP_CHANNEL reset is the lesser evil: ~1 s of
-                     * pre-seek cushion plays before the episode
-                     * re-arms. */
-                    return VLC_SUCCESS;
-                }
-                break;
+        case DEMUX_SET_POSITION:
+        {
+            double f_pos = va_arg( args, double );
+            uint32_t pos, len;
 
-            case DEMUX_GET_LENGTH:
-                if( p_sys->i_pgc_length > 0 )
-                {
-                    *va_arg( args, int64_t * ) = (int64_t)p_sys->i_pgc_length;
-                    return VLC_SUCCESS;
-                }
-                break;
+            /* Un saut réussi est la meilleure estimation qu'on ait : elle
+             * remplace l'ancre, sinon on tiendrait la position d'AVANT le
+             * saut pendant que la VM se refixe.
+             *
+             * ⚠⚠⚠ REPOSER AUSSI L'HORODATAGE. Une ancre est un COUPLE
+             * (temps, instant) : ne remettre que le temps laissait
+             * l'extrapolation ajouter tout le délai écoulé depuis le relevé
+             * PRÉCÉDENT. Mesuré : un clic sur 00:00 affichait 00:12, et
+             * l'écart grossissait à chaque clic — 01:16 après quelques-uns. */
+            p_sys->f_last_position = f_pos;
+            p_sys->i_last_time =
+                (vlc_tick_t)( f_pos * (double)p_sys->i_pgc_length );
+            p_sys->i_stable_wall = mdate();
+            p_sys->b_position_known = true;
+
+            /* ⚠⚠⚠ CHERCHER PAR LE TEMPS D'ABORD. La barre est graduée en
+             * TEMPS de bout en bout : l'infobulle affiche `fraction × durée`,
+             * et les marqueurs de chapitre sont posés sur des décalages
+             * temporels. Chercher en SECTEURS, sur un flux à débit variable,
+             * ne tombe pas au même endroit — mesuré : infobulle à 6 min 58,
+             * atterrissage à 5 min 56, soit 62 s d'écart. Le clic doit mener
+             * là où la barre l'a promis ; la recherche par secteur ne sert
+             * plus que de secours. */
+            p_sys->i_explicit_anchor_wall = mdate();
+
+            /* ⚠ Ne jamais viser la toute fin du PGC. Un titre de DVD se
+             * termine par des post-commandes — c'est elles qui enchaînent sur
+             * le générique, souvent un AUTRE titre. Atterrir sur les derniers
+             * instants ne laisse pas de quoi les atteindre : la lecture
+             * s'arrêtait là, et il fallait viser un peu avant pour que la
+             * bascule se fasse. On garde donc une seconde de marge : le clic
+             * mène au bout du film, la lecture y arrive normalement, et le
+             * disque enchaîne de lui-même. */
+            vlc_tick_t i_target =
+                (vlc_tick_t)( f_pos * (double)p_sys->i_pgc_length );
+            if( i_target > p_sys->i_pgc_length - CLOCK_FREQ )
+                i_target = p_sys->i_pgc_length - CLOCK_FREQ;
+            if( i_target < 0 )
+                i_target = 0;
+
+            if( p_sys->i_pgc_length > 0
+             && dvdnav_jump_to_sector_by_time( p_sys->dvdnav,
+                    i_target * 9 / 100, SEEK_SET ) == DVDNAV_STATUS_OK )
+            {
+                p_sys->i_last_time = i_target;
+                p_sys->f_last_position =
+                    (double)i_target / (double)p_sys->i_pgc_length;
+                return VLC_SUCCESS;   /* voir la NOTE ci-dessous */
+            }
+
+            if( dvdnav_get_position( p_sys->dvdnav, &pos, &len ) ==
+                  DVDNAV_STATUS_OK && len != 0
+             && dvdnav_sector_search( p_sys->dvdnav, (uint32_t)( f_pos * len ),
+                                      SEEK_SET ) == DVDNAV_STATUS_OK )
+            {
+                /* NOTE: do NOT fire ES_OUT_RESET_PCR from here "to
+                 * close the stale window before the HOP lands" --
+                 * tried in round 74 and it made things WORSE (the
+                 * title-entry churn also traverses this control and
+                 * the extra reset re-mixed the pipeline: 892 late
+                 * pictures vs 234 without it). The deferred
+                 * HOP_CHANNEL reset is the lesser evil: ~1 s of
+                 * pre-seek cushion plays before the episode
+                 * re-arms. */
+                return VLC_SUCCESS;
             }
             return VLC_EGENERIC;
         }
 
         case DEMUX_GET_TIME:
+            /* même axe que DEMUX_GET_POSITION ci-dessus : sans ça le chrono
+             * et le curseur racontaient deux histoires différentes */
+            if( p_sys->b_position_known )
+            {
+                *va_arg( args, vlc_tick_t * ) = DvdnavExtrapolatedTime( p_sys );
+                return VLC_SUCCESS;
+            }
             if( p_sys->i_pgc_length > 0 )
             {
                 *va_arg( args, vlc_tick_t * ) =
-                        dvdnav_get_current_time( p_sys->dvdnav ) * 100 / 9;
+                    dvdnav_get_current_time( p_sys->dvdnav ) * 100 / 9;
                 return VLC_SUCCESS;
             }
             break;
@@ -758,8 +901,17 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
             if( dvdnav_jump_to_sector_by_time( p_sys->dvdnav,
                                                i_time * 9 / 100,
                                                SEEK_SET ) == DVDNAV_STATUS_OK )
+            {
+                p_sys->i_last_time = i_time;
+                p_sys->i_stable_wall = mdate();
+                p_sys->i_explicit_anchor_wall = p_sys->i_stable_wall;
+                p_sys->b_position_known = true;
+                if( p_sys->i_pgc_length > 0 )
+                    p_sys->f_last_position =
+                        (double)i_time / (double)p_sys->i_pgc_length;
                 /* See DEMUX_SET_POSITION: no eager reset here. */
                 return VLC_SUCCESS;
+            }
             msg_Err( p_demux, "can't set time to %" PRId64, i_time );
             return VLC_EGENERIC;
         }
@@ -773,7 +925,18 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
             return VLC_SUCCESS;
 
         case DEMUX_SET_PAUSE_STATE:
+        {
+            /* suivi pour DvdnavExtrapolatedTime() : une extrapolation qui
+             * continue d'avancer pendant une pause afficherait un chrono qui
+             * tourne sur une image figée */
+            bool b_paused = (bool)va_arg( args, int );
+            if( b_paused && !p_sys->b_paused )
+                p_sys->i_pause_wall = mdate();
+            else if( !b_paused && p_sys->b_paused )
+                p_sys->i_stable_wall += mdate() - p_sys->i_pause_wall;
+            p_sys->b_paused = b_paused;
             return VLC_SUCCESS;
+        }
 
         case DEMUX_GET_TITLE_INFO:
             ppp_title = va_arg( args, input_title_t*** );
@@ -847,6 +1010,28 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
                 msg_Warn( p_demux, "cannot set title/chapter" );
                 return VLC_EGENERIC;
             }
+            /* ⚠⚠ Réancrer le temps sur le DÉBUT DU CHAPITRE visé. Sans ça,
+             * l'ancre restait celle d'avant le saut : la position se met à
+             * flotter dès que la VM bouge (ce qu'un saut de chapitre fait
+             * forcément), on tenait puis on extrapolait la valeur d'AVANT, et
+             * le chapitre choisi paraissait retomber là où on se trouvait
+             * (mesuré : « Chapitre 2 » affiché à 00:07). Le début du chapitre
+             * est déjà connu — c'est celui-là même qui place le marqueur sur
+             * la barre (DemuxTitles / dvdnav_describe_title_chapters). */
+            if( p_sys->cur_title > 0 && p_sys->cur_title < p_sys->i_title
+             && i >= 0 && i < p_sys->title[p_sys->cur_title]->i_seekpoint )
+            {
+                p_sys->i_last_time =
+                    p_sys->title[p_sys->cur_title]->seekpoint[i]->i_time_offset;
+                if( p_sys->i_pgc_length > 0 )
+                    p_sys->f_last_position = (double)p_sys->i_last_time
+                                           / (double)p_sys->i_pgc_length;
+                p_sys->i_stable_wall = mdate();
+                p_sys->b_position_known = true;
+            }
+            else
+                p_sys->b_position_known = false;   /* rien de fiable à tenir */
+
             p_demux->info.i_update |= INPUT_UPDATE_SEEKPOINT;
             p_sys->cur_seekpoint = i;
             return VLC_SUCCESS;
@@ -1284,6 +1469,36 @@ static int Demux( demux_t *p_demux )
                  event->physical_letterbox);
         msg_Dbg( p_demux, "     - physical_pan_scan=%d",
                  event->physical_pan_scan );
+        msg_Dbg( p_demux, "     - logical=%d", event->logical );
+
+        /* ⚠ Cet évènement arrive APRÈS le changement de cellule qui a déjà fait
+         * naître les pistes de sous-titres : mesuré sur un DVD ROBOTS, les
+         * cinq `es_out_Add` précèdent de trois lignes de journal le premier
+         * SPU_STREAM_CHANGE. Elles ont donc été créées sans connaître le
+         * registre du disque. Comme le drapeau « forcés seulement » est figé
+         * dans le format à la création, on ne peut pas se contenter de
+         * re-sélectionner : quand le registre change de sens, on jette les
+         * pistes SPU et on laisse le HACK ci-dessous les recréer — c'est le
+         * même démontage que sur un changement de VTS, et il ne coûte que les
+         * sous-titres. */
+        if( p_sys->i_spu_logical != event->logical )
+        {
+            p_sys->i_spu_logical = event->logical;
+
+            for( i = 0; i < 0x20; i++ )
+            {
+                ps_track_t *tk = &p_sys->tk[ps_id_to_tk(0xbd20 + i)];
+                if( !tk->b_configured )
+                    continue;
+                es_format_Clean( &tk->fmt );
+                if( tk->es )
+                {
+                    es_out_Del( p_demux->out, tk->es );
+                    tk->es = NULL;
+                }
+                tk->b_configured = false;
+            }
+        }
 
         ESSubtitleUpdate( p_demux );
         p_sys->b_spu_change = true;
@@ -1349,6 +1564,8 @@ static int Demux( demux_t *p_demux )
         DvdnavCacheInhibitUpdate( p_demux );
 
         /* Store the length in time of the current PGC */
+        if( p_sys->i_pgc_length != event->pgc_length / 90 * 1000 )
+            p_sys->b_position_known = false;  /* autre PGC : cache périmé */
         p_sys->i_pgc_length = event->pgc_length / 90 * 1000;
         p_sys->i_vobu_index = 0;
         p_sys->i_vobu_flush = 0;
@@ -1368,6 +1585,39 @@ static int Demux( demux_t *p_demux )
                 if( i_part >= 1 && i_part <= p_sys->title[i_title]->i_seekpoint )
                 {
                     p_demux->info.i_update |= INPUT_UPDATE_SEEKPOINT;
+
+                    /* ⚠⚠⚠ Ré-ancrage sur le DÉBUT DU CHAPITRE. C'est la seule
+                     * heure de ce disque en laquelle on puisse avoir
+                     * confiance : elle vient de `dvdnav_describe_title_chapters()`,
+                     * la même table qui place les marqueurs de la barre.
+                     * `dvdnav_get_current_time()`, lui, additionne les
+                     * cellules précédentes et compte DEUX FOIS les blocs
+                     * d'angles — mesuré sur ce disque : 4 min 16 annoncées
+                     * pour une image réellement à 2 min 09.
+                     * Le chapitre est atteint quel que soit le chemin (menus
+                     * du disque compris), donc l'ancre se remet d'aplomb
+                     * toute seule à chaque frontière ; entre deux, c'est
+                     * l'horloge qui avance (DvdnavExtrapolatedTime). Un
+                     * relevé de position en secteurs, quand il redevient
+                     * disponible, reprend la main aussitôt. */
+                    /* ⚠ mais PAS juste après un saut demandé par
+                     * l'utilisateur : on a atterri au MILIEU d'un chapitre et
+                     * le début de ce chapitre serait une régression. */
+                    if( ( p_sys->cur_seekpoint != i_part - 1
+                          || !p_sys->b_position_known )
+                     && mdate() - p_sys->i_explicit_anchor_wall
+                            > 3 * CLOCK_FREQ )
+                    {
+                        p_sys->i_last_time = p_sys->title[i_title]
+                                                 ->seekpoint[i_part - 1]
+                                                 ->i_time_offset;
+                        if( p_sys->i_pgc_length > 0 )
+                            p_sys->f_last_position =
+                                (double)p_sys->i_last_time
+                                / (double)p_sys->i_pgc_length;
+                        p_sys->i_stable_wall = mdate();
+                        p_sys->b_position_known = true;
+                    }
                     p_sys->cur_seekpoint = i_part - 1;
                 }
             }
@@ -1473,38 +1723,87 @@ static int Demux( demux_t *p_demux )
 /* Get a 2 char code
  * FIXME: partiallyy duplicated from src/input/es_out.c
  */
-static char *DemuxGetLanguageCode( demux_t *p_demux, const char *psz_var )
+static const iso639_lang_t *DemuxFindLanguage( const char *psz_lang )
 {
-    const iso639_lang_t *pl;
-    char *psz_lang;
-    char *p;
+    if( psz_lang == NULL || *psz_lang == '\0' )
+        return NULL;
 
-    psz_lang = var_CreateGetString( p_demux, psz_var );
-    if( !psz_lang )
-        return strdup(LANGUAGE_DEFAULT);
-
-    /* XXX: we will use only the first value
-     * (and ignore other ones in case of a list) */
-    if( ( p = strchr( psz_lang, ',' ) ) )
-        *p = '\0';
-
-    for( pl = p_languages; pl->psz_eng_name != NULL; pl++ )
+    for( const iso639_lang_t *pl = p_languages; pl->psz_eng_name != NULL; pl++ )
     {
-        if( *psz_lang == '\0' )
-            continue;
         if( !strcasecmp( pl->psz_eng_name, psz_lang ) ||
             !strcasecmp( pl->psz_iso639_1, psz_lang ) ||
             !strcasecmp( pl->psz_iso639_2T, psz_lang ) ||
             !strcasecmp( pl->psz_iso639_2B, psz_lang ) )
-            break;
+            return pl;
+    }
+    return NULL;
+}
+
+/* Langue de l'INTERFACE, telle que gettext la voit.
+ *
+ * Les registres de langue du disque (SPRM 0, 16 et 18) ne choisissent pas une
+ * piste : ils disent au DVD ce que l'utilisateur préfère, et ce sont les
+ * pré-commandes du disque qui en déduisent la piste audio et les sous-titres à
+ * activer. Retomber sur « en » quand aucune préférence n'est saisie revient
+ * donc à se déclarer anglophone auprès de TOUS les disques — un DVD zone 2 qui
+ * compare SPRM18 à « fr » prenait systématiquement sa branche anglaise.
+ *
+ * On prend plutôt la langue de l'interface : sur macOS `system_Init()` recopie
+ * déjà la préférence système dans LANG (src/darwin/specific.c), et ailleurs
+ * c'est l'environnement qui la porte. Ordre de priorité de gettext. */
+static const char *DemuxGetUILanguage( char *psz_buffer, size_t i_size )
+{
+    static const char *const ppsz_vars[] =
+        { "LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG" };
+
+    for( size_t i = 0; i < ARRAY_SIZE(ppsz_vars); i++ )
+    {
+        const char *psz_env = getenv( ppsz_vars[i] );
+        if( psz_env == NULL )
+            continue;
+
+        /* « fr », « fr_FR », « fr_FR.UTF-8 », « fr_FR@euro », « fr:en » */
+        size_t i_len = 0;
+        while( isalpha( (unsigned char)psz_env[i_len] ) )
+            i_len++;
+        /* écarte « C » et « POSIX », qui ne sont pas des langues */
+        if( i_len < 2 || i_len > 3 || i_len >= i_size )
+            continue;
+
+        memcpy( psz_buffer, psz_env, i_len );
+        psz_buffer[i_len] = '\0';
+        return psz_buffer;
+    }
+    return NULL;
+}
+
+static char *DemuxGetLanguageCode( demux_t *p_demux, const char *psz_var )
+{
+    const iso639_lang_t *pl = NULL;
+    char *psz_lang = var_CreateGetString( p_demux, psz_var );
+
+    if( psz_lang != NULL )
+    {
+        /* XXX: we will use only the first value
+         * (and ignore other ones in case of a list) */
+        char *p = strchr( psz_lang, ',' );
+        if( p != NULL )
+            *p = '\0';
+
+        pl = DemuxFindLanguage( psz_lang );
+        free( psz_lang );
     }
 
-    free( psz_lang );
+    if( pl == NULL )
+    {
+        char psz_ui[8];
+        pl = DemuxFindLanguage( DemuxGetUILanguage( psz_ui, sizeof(psz_ui) ) );
+        if( pl != NULL )
+            msg_Dbg( p_demux, "no \"%s\" preference, telling the disc the "
+                     "interface language \"%s\"", psz_var, pl->psz_iso639_1 );
+    }
 
-    if( pl->psz_eng_name != NULL )
-        return strdup( pl->psz_iso639_1 );
-
-    return strdup(LANGUAGE_DEFAULT);
+    return strdup( pl != NULL ? pl->psz_iso639_1 : LANGUAGE_DEFAULT );
 }
 
 static void DemuxTitles( demux_t *p_demux )
@@ -1651,6 +1950,54 @@ static void ButtonUpdate( demux_t *p_demux, bool b_mode )
         var_SetBool( p_demux->p_input, "highlight", false );
     }
     vlc_global_unlock( VLC_HIGHLIGHT_MUTEX );
+}
+
+/* Le disque a-t-il RÉELLEMENT choisi un sous-titre ?
+ *
+ * ⚠⚠⚠ dvdnav_get_active_spu_stream() ne permet pas de répondre. Quand
+ * SPST_REG ne porte aucune sélection valable — c'est son état au réarmement
+ * de la machine virtuelle, où libdvdnav y met 62 —, la résolution échoue et
+ * la bibliothèque se rabat EN SILENCE sur le premier flux disponible, puis le
+ * marque « masqué » puisque le registre n'a pas son bit d'affichage. On
+ * croyait donc que le disque demandait « flux 0, forcés seulement » et on
+ * sélectionnait cette piste : sur un DVD ROBOTS zone 2 (5 pistes ar/en/fr/fr/fr,
+ * toutes en code_extension 0), c'est la piste ARABE qui démarrait, marquée
+ * forcée, alors que le disque ne demande aucun sous-titre.
+ *
+ * On lit donc SPST_REG lui-même, publié par le champ `logical` de
+ * DVDNAV_SPU_STREAM_CHANGE (cf. contrib/src/dvdnav/0004-*.patch : libdvdnav
+ * documente ce champ mais ne le remplit que pour l'audio). Avec une libdvdnav
+ * NON corrigée il n'est pas initialisé : hors de la plage d'un registre à
+ * 6 bits, on s'en remet au comportement d'origine plutôt que de refuser
+ * toute sélection. */
+static bool DvdnavSpuIsSelected( demux_sys_t *p_sys )
+{
+    if( p_sys->i_spu_logical < 0 || p_sys->i_spu_logical > 0x3f )
+        return true;                        /* libdvdnav non corrigée */
+    return (p_sys->i_spu_logical & ~0x40) < 32;
+}
+
+/* Temps de lecture pendant une panne DURABLE de la position (cf.
+ * DEMUX_GET_POSITION, mode B). On repart du dernier relevé stable et on
+ * avance à l'horloge, en défalquant les pauses.
+ *
+ * ⚠ Surtout PAS `dvdnav_get_current_time()` ici. Dans un bloc d'angles, la
+ * somme des cellules précédentes suit un AUTRE chemin sur le disque et
+ * surcompte : mesuré, le chrono a sauté d'une minute à 4 min 25 en pleine
+ * lecture. Une extrapolation ne peut ni sauter ni reculer ; elle dérive au
+ * pire de la durée de la panne, et se recale dès que la position revient. */
+static vlc_tick_t DvdnavExtrapolatedTime( demux_sys_t *p_sys )
+{
+    vlc_tick_t i_wall = p_sys->b_paused ? p_sys->i_pause_wall : mdate();
+    vlc_tick_t i_elapsed = i_wall - p_sys->i_stable_wall;
+
+    if( i_elapsed < 0 )
+        i_elapsed = 0;
+
+    vlc_tick_t i_time = p_sys->i_last_time + i_elapsed;
+    if( p_sys->i_pgc_length > 0 && i_time > p_sys->i_pgc_length )
+        i_time = p_sys->i_pgc_length;
+    return i_time;
 }
 
 static void ESSubtitleUpdate( demux_t *p_demux )
@@ -1896,6 +2243,7 @@ static void ESNew( demux_t *p_demux, int i_id )
 
         /* Subtitle track description from code_extension */
         subp_attr_t subp_attr;
+        memset( &subp_attr, 0, sizeof(subp_attr) );
         if( dvdnav_get_spu_attr( p_sys->dvdnav, i_id&0x1f, &subp_attr )
             == DVDNAV_STATUS_OK )
         {
@@ -1915,14 +2263,21 @@ static void ESNew( demux_t *p_demux, int i_id )
 
         /* We select only when we are not in the menu */
         int i_active_spu = dvdnav_get_active_spu_stream( p_sys->dvdnav );
-        if( dvdnav_current_title_info( p_sys->dvdnav, &i_title, &i_part ) == DVDNAV_STATUS_OK &&
-            i_title > 0 && i_active_spu != -1 &&
+        int i_title_ok = dvdnav_current_title_info( p_sys->dvdnav, &i_title, &i_part );
+        if( i_title_ok == DVDNAV_STATUS_OK &&
+            i_title > 0 && i_active_spu != -1 && DvdnavSpuIsSelected( p_sys ) &&
             (i_active_spu & 0x1f) == (i_id&0x1f) )
         {
             b_select = true;
             if( i_active_spu & DVDNAV_SPU_HIDDEN )
                 tk->fmt.subs.b_forced = true;
         }
+        msg_Dbg( p_demux, "spu es 0x%2.2x (subp %d) lang=%4.4x code_ext=%d "
+                 "active_spu=%d (0x%2.2x) reg=%d title=%d select=%d forced=%d",
+                 i_id, i_id & 0x1f, i_lang, subp_attr.code_extension,
+                 i_active_spu, i_active_spu & 0xff, p_sys->i_spu_logical,
+                 i_title_ok == DVDNAV_STATUS_OK ? i_title : -1,
+                 b_select, tk->fmt.subs.b_forced );
     }
 
     tk->fmt.i_id = i_id;

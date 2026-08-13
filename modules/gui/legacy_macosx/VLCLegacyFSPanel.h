@@ -44,6 +44,11 @@
     NSTextField *mediaTitleField;   /* media title, like the 3.0 panel */
     NSTimer *pollTimer;
 
+    /* chapter separators cache, same keys as the main window */
+    void *chaptersInput;
+    int chaptersTitle;
+    int64_t chaptersDuration;
+
     NSPoint lastMouseLocation;
     double lastActivity;    /* NSTimeInterval since reference date */
     BOOL fullscreenActive;

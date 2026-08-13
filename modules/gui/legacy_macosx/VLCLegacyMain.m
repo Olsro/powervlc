@@ -521,6 +521,8 @@ static const vlc_dialog_cbs dialog_callbacks = {
     if ([NSApp delegate] == self)
         [NSApp setDelegate:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [core shutdownAutoHide];
+    [core shutdownClipExport];
     [core shutdownRemoteAndMediaKeys];
     vlc_dialog_provider_set_callbacks(p_intf, NULL, NULL);
     [messages shutdown];

@@ -34,6 +34,7 @@
 #include "snapshot.h"
 #include "statistic.h"
 #include "chrono.h"
+#include "vout_autocrop.h"
 
 /* It should be high enough to absorbe jitter due to difficult picture(s)
  * to decode but not too high as memory is not that cheap.
@@ -162,6 +163,29 @@ struct vout_thread_sys_t
     /* */
     bool            is_late_dropped;
 
+    /* The crop that was last asked for, remembered on the *vout* and not
+     * only on the display. A display is torn down and rebuilt on every
+     * input format change -- which a looping stream does at every turn --
+     * and comes back uncropped; re-applying this at ThreadStart is what
+     * keeps the picture (and the window) from jumping back to the full
+     * frame for a moment. */
+    struct {
+        enum {
+            VOUT_CROP_RATIO,
+            VOUT_CROP_WINDOW,
+            VOUT_CROP_BORDER,
+        } mode;
+        unsigned num, den;                  /* RATIO */
+        unsigned x, y, width, height;       /* WINDOW */
+        unsigned left, top, right, bottom;  /* BORDER */
+        /* Source the WINDOW/BORDER values were computed against: they are
+         * pixel counts, so they mean nothing on a source of another size. */
+        unsigned src_width, src_height;
+        /* crop=auto: the border above is then decided by the detector. */
+        bool             automatic;
+        vout_autocrop_t *detector;
+    } crop;
+
     /* Video filter2 chain */
     struct {
         vlc_mutex_t     lock;
@@ -192,6 +216,8 @@ void vout_ControlChangeSampleAspectRatio(vout_thread_t *, unsigned num, unsigned
 void vout_ControlChangeCropRatio(vout_thread_t *, unsigned num, unsigned den);
 void vout_ControlChangeCropWindow(vout_thread_t *, int x, int y, int width, int height);
 void vout_ControlChangeCropBorder(vout_thread_t *, int left, int top, int right, int bottom);
+void vout_ControlChangeCropAuto(vout_thread_t *);
+void vout_ControlForgetCrop(vout_thread_t *);
 void vout_ControlChangeFilters(vout_thread_t *, const char *);
 void vout_ControlChangeSubSources(vout_thread_t *, const char *);
 void vout_ControlChangeSubFilters(vout_thread_t *, const char *);

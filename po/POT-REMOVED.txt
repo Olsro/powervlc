@@ -1,0 +1,148 @@
+# POT-REMOVED.txt — msgids that are deliberately gone from the template.
+#
+# po/update-pot.sh refuses to regenerate vlc.pot when a string of the template
+# in place is no longer extracted, UNLESS it is listed here. Each line is a raw
+# msgid, with \n for a newline (and \t for a tab); a msgid that carries a
+# context is written msgctxt<EOT>msgid, using byte 0x04 as the separator.
+#
+# Do not add anything here without checking that the string really left the
+# code: a string that is still present but not extracted is a POTFILES.in gap.
+#
+# 2026-08-11 audit: 123 real removals, each verified by searching modules/
+# src/ include/ bin/ lib/.
+
+
+# --- schroedinger module (Dirac/VC-2): removed from the tree ---
+4:2:0
+4:2:2
+4:4:4
+Add Noise
+Also known as DWT levels
+Amount of prefiltering
+CBR bitrate (kbps)
+Centre Weighted Median
+Constant bitrate mode (CBR)
+Constant error mode
+Constant lambda mode
+Constant noise threshold mode
+Constant quality factor
+Constant quality mode
+Dirac video decoder using libschroedinger
+Dirac video encoder using libschroedinger
+Disable arithmetic coding
+Enable Global Motion Estimation
+Enable Phase Correlation Estimation
+Enable Scene Change Detection
+Enable adaptive prefiltering
+Enable hierarchical Motion Estimation
+Enable multiple quantizers
+Enable multiple quantizers per subband (one per codeblock)
+Field coding is where interlaced fields are coded separately as opposed to a pseudo-progressive frame
+Force Profile
+GOP length
+GOP structure
+GOP structure used to encode the video sequence
+Gaussian Adaptive Low Pass Filter
+Gaussian Low Pass Filter
+Higher value implies more prefiltering
+Horizontal slices per frame
+I-frame only sequence
+Inter picture DWT filter
+Inter pictures can refer to previous or future pictures
+Inter pictures refere to previous pictures only
+Intra picture DWT filter
+Lossless mode
+Low Delay mode
+Low Pass Filter
+Maximum bitrate (kbps)
+Maximum bitrate in kbps when encoding in constant bitrate mode
+Method used to encode the video sequence
+Minimum bitrate (kbps)
+Minimum bitrate in kbps when encoding in constant bitrate mode
+Motion Vector precision
+Motion Vector precision in pels
+No fixed gop structure. A picture can be intra or inter and refer to previous or future pictures.
+No pre-filtering
+Noise Threshold
+Noise threshold to use in constant noise threshold mode
+Number of DWT iterations
+Number of horizontal slices per frame in low delay mode
+Number of levels of downsampling
+Number of levels of downsampling in hierarchical motion estimation mode
+Number of pictures between successive sequence headers i.e. length of the group of pictures
+Number of vertical slices per frame in low delay mode
+Overlap of motion compensation blocks
+Picture coding mode
+Prefilter
+Quality factor to use in constant quality mode
+Rate control method
+Size of code blocks in each subband
+Size of motion compensation blocks
+Target bitrate in kbps when encoding in constant bitrate mode
+Three component motion estimation
+Use chroma as part of the motion estimation process
+Use variable length codes instead, useful for very high bitrates
+VC2 Low Delay Profile
+VC2 Main Profile
+VC2 Simple Profile
+Vertical slices per frame
+auto - let encoder decide based upon input (Best)
+automatic - let encoder decide based upon input (Best)
+force coding frame as separate interlaced fields
+force coding frame as single picture
+full - Motion compensation blocks fully overlap
+full - One code block per subband
+large - use large code blocks
+large - use large motion compensation blocks
+medium - use medium motion compensation blocks
+medium - use medium sized code blocks
+none - Motion compensation blocks do not overlap
+partial - Motion compensation blocks only partially overlap
+perceptual distance
+perceptual distance to calculate perceptual weight
+perceptual weighting method
+small - use small code blocks
+small - use small motion compensation blocks
+
+# --- RIST: options renamed or dropped in the librist rework ---
+Disable NACK output packets
+Do not check for a valid rtcp message from the encoder
+RIST latency (ms)
+RIST nack retry interval (ms)
+RIST reorder buffer (ms)
+Send nack messages even when we have not confirmed that the encoder is on our local network.
+This controls the maximum jitter that will be passed to the demux/decode chain. The lower the value, the more CPU cycles the algorithm will consume
+Use this to disable packet recovery
+Having this cache will guarantee that the packets going out are delivered at a spacing determined by the chain timestamps thus ensuring a near jitter free output. Be aware that this setting will also add to the overall latency of the stream.
+RIST data output caching size (ms)
+RIST target packet size (bytes)
+SSRC used in RTP output (default is random, i.e. 0)
+This Stream name will be sent to the receiver using the rist RTCP channel
+This must match the buffer size (latency) configured on the server side. If you are not sure, leave the default of 0 which will set it the maximum value and will use about 100MB of RAM
+Use this setting to specify a known SSRC for the RTP header. This is only useful if your receiver acts on it. When using VLC as receiver, it is not.
+
+# --- fork strings whose msgid moved from French to English (the French
+#     translations now live under the matching English msgid) ---
+Compose les sous-titres (SPU du DVD) et l'affichage à l'écran par-dessus l'image décodée par le GPU. Sans cette option, la sortie matérielle recouvre tout et les sous-titres restent invisibles. Ne concerne que la vidéo affichée dans la fenêtre de VLC.
+Confie les sous-titres du DVD au plan subpicture du décodeur matériel ATI : le GPU les compose lui-même sur l'image, sans aucun coût par image, là où l'incrustation par fenêtre coûte 15 à 50 ms sur ce matériel. Sans effet si le décodage matériel n'est pas actif — le rendu logiciel prend alors le relais.
+Décodage matériel des macroblocs field-predicted (flux entrelacés, DVD). 0 = désactivé (l'entrelacé retombe sur le processeur) ; 4 = prédiction frame équivalente (défaut : le moteur par champ du GPU déchire en mouvement) ; 1/2/3 = moteur par champ natif, réservés à la mise au point.
+Décode les flux MPEG-2 sur le GPU (pipeline AppleVA du lecteur DVD d'Apple) quand un décodeur matériel est présent (ATI, Intel GMA950, nVidia), avec repli automatique sur le décodage logiciel libmpeg2. Réduit fortement la charge CPU sur les vieux Mac.
+Mode field du décodage MPEG-2 matériel (avancé)
+Sous-titres DVD incrustés par le GPU
+Sous-titres et OSD par-dessus la vidéo accélérée
+Utiliser l'accélération matérielle MPEG2 si disponible
+Héberge la vidéo intégrée dans une fenêtre enfant sans bordure : le passage en plein écran est instantané et n'interrompt pas le décodage accéléré. Désactiver rétablit l'ancien comportement (fenêtre de plein écran séparée).
+Vidéo intégrée dans une fenêtre enfant
+
+# --- reworded strings (the <b>%1</b> markup is now part of the msgid) ---
+Key or combination: 
+Key: 
+Press the new key or combination for 
+Warning: this key or combination is already assigned to 
+
+# --- already-dead strings, still carried by the catalogs but absent from
+#     the 2026-07-25 template (PowerVLC rebranding, AACS moved) ---
+Missing AACS configuration file!
+Running vlc with the default interface. Use 'cvlc' to use vlc without interface.
+This Blu-ray Disc needs a library for AACS decoding, and your system does not have it.
+VLC version %s (%s)\n

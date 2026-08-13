@@ -53,7 +53,27 @@ static void CloseClient (vlc_tls_creds_t *);
 
 vlc_module_begin ()
     set_description(N_("TLS support for OS X and iOS"))
-    set_capability("tls client", 2)
+    /* ⚠⚠⚠ SCORE NUL : jamais choisi automatiquement, seulement si on le
+     * nomme (cf. module_match_name : « Plugins with zero score must be
+     * matched explicitly »). PowerVLC parle TLS par SA PROPRE pile, gnutls,
+     * pour trois raisons :
+     *
+     *  1. Secure Transport plafonne à TLS 1.0 avant Mac OS X 10.8 — un
+     *     serveur d'aujourd'hui refuse en dessous de TLS 1.2 et répond par
+     *     une alerte « protocol_version ». Mesuré sur 10.6.8 face à un
+     *     Jellyfin : `handshake returned error -9836`, présenté à
+     *     l'utilisateur comme un serveur injoignable alors qu'il répondait.
+     *     Ce module ayant le score le plus haut, il raflait le choix et
+     *     condamnait tout HTTPS moderne sur ces systèmes.
+     *  2. Reproductibilité : une même version du lecteur doit négocier de la
+     *     même façon partout, pas au gré de l'âge du système.
+     *  3. Certificats : notre gnutls charge le paquet d'autorités À JOUR que
+     *     l'on livre, ET les ancres du trousseau quand le système les expose
+     *     — le trousseau d'un système de 2011 est bien trop périmé pour
+     *     servir seul. On ne perd donc rien des autorités ajoutées par
+     *     l'utilisateur sur un mac récent.
+     */
+    set_capability("tls client", 0)
     set_callbacks(OpenClient, CloseClient)
     set_category(CAT_ADVANCED)
     set_subcategory(SUBCAT_ADVANCED_NETWORK)
@@ -66,7 +86,8 @@ vlc_module_begin ()
 #if !TARGET_OS_IPHONE
     add_submodule()
         set_description(N_("TLS server support for OS X"))
-        set_capability("tls server", 2)
+        /* même raison que le client ci-dessus */
+        set_capability("tls server", 0)
         set_callbacks(OpenServer, CloseServer)
         set_category(CAT_ADVANCED)
         set_subcategory(SUBCAT_ADVANCED_NETWORK)

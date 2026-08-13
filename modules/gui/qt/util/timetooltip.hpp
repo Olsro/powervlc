@@ -26,6 +26,7 @@
 
 #include <QWidget>
 #include <QPainterPath>
+#include <QPixmap>
 
 class TimeTooltip : public QWidget
 {
@@ -33,6 +34,10 @@ class TimeTooltip : public QWidget
 public:
     explicit TimeTooltip( QWidget *parent = 0 );
     void setTip( const QPoint& pos, const QString& time, const QString& text );
+    /* PowerVLC: preview of the hovered position, drawn above the text. A
+     * null pixmap removes it, which is what a move to another position
+     * does until its own preview is ready. */
+    void setPreview( const QPixmap& preview );
     virtual void show();
 
 protected:
@@ -46,7 +51,9 @@ private:
     QString mText;
     QString mDisplayedText;
     QFont mFont;
-    QRect mBox;
+    QRect mBox;          /* the whole tooltip: preview and text */
+    QRect mTextBox;      /* where the text goes inside it */
+    QPixmap mPreview;
     QPainterPath mPainterPath;
     int mTipX;
 };

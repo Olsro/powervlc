@@ -170,10 +170,20 @@ void ActionsManager::playlist()
 
 void ActionsManager::record()
 {
+    /* while creating a clip, Record saves exactly the [start..end] range */
+    InputManager *im = THEMIM->getIM();
+    if( im->clipCreationMode() )
+    {
+        im->recordClipToggle();
+        return;
+    }
+
     input_thread_t *p_input = THEMIM->getInput();
     if( p_input )
     {
         /* This method won't work fine if the stream can't be cut anywhere */
+        var_SetInteger( p_input, "record-stop-time", 0 );
+        var_SetInteger( p_input, "record-start-time", 0 );
         var_ToggleBool( p_input, "record" );
 #if 0
         else

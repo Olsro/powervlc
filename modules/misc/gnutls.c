@@ -42,6 +42,10 @@
 #include <gnutls/gnutls.h>
 #include <gnutls/x509.h>
 
+#ifdef __APPLE__
+# include "darwin_trust.h"
+#endif
+
 typedef struct vlc_tls_gnutls
 {
     vlc_tls_t tls;
@@ -548,6 +552,64 @@ error:
     return -1;
 }
 
+#ifdef __APPLE__
+struct gnutls_keychain_trust
+{
+    gnutls_certificate_credentials_t x509;
+    unsigned loaded;
+    unsigned rejected;
+};
+
+/* One anchor of the Mac OS X keychain, DER-encoded. GnuTLS turns down the
+ * odd unparsable or obsolete root -- some of those shipped with a 2011
+ * system predate its X.509 requirements -- and that is no reason to give up
+ * on the other two hundred.
+ *
+ * Adding them one at a time is not what costs: re-encoding the whole lot
+ * into a single PEM blob, the way the bundle file is loaded, was measured on
+ * the 10.6 bench at 169 ms against 176 ms here, i.e. the same. The ~170 ms
+ * are the price of the anchors themselves, paid once per set of credentials
+ * (the bundle's 119 roots cost 50 ms of it). */
+static void gnutls_AddKeychainAnchor(void *opaque, const unsigned char *der,
+                                     size_t len)
+{
+    struct gnutls_keychain_trust *ctx = opaque;
+    gnutls_datum_t datum = { (unsigned char *)der, len };
+
+    if (gnutls_certificate_set_x509_trust_mem(ctx->x509, &datum,
+                                              GNUTLS_X509_FMT_DER) > 0)
+        ctx->loaded++;
+    else
+        ctx->rejected++;
+}
+
+/* ★ Third source of trust, on top of the system store and of the bundle.
+ *
+ * gnutls_certificate_set_x509_system_trust() fails on EVERY Mac OS X release
+ * -- measured on 10.4.11, 10.5.8 and 10.6.8 alike -- because gnutls has no
+ * backend for the Apple keychain: it looks for the PEM files of a Unix
+ * distribution, which Mac OS X does not have. So whatever the user installed
+ * in his own keychain (an internal site, a company root, a recent root added
+ * by hand) was simply invisible to VLC. This reads it, and only it: the
+ * bundle above stays, because the keychain of a 2011 system is far too stale
+ * to be trusted on its own. */
+static void gnutls_LoadKeychainTrust(vlc_tls_creds_t *crd,
+                                     gnutls_certificate_credentials_t x509)
+{
+    struct gnutls_keychain_trust ctx = { x509, 0, 0 };
+
+    if (vlc_darwin_foreach_anchor(gnutls_AddKeychainAnchor, &ctx) < 0)
+    {
+        msg_Dbg(crd, "cannot load trusted Certificate Authorities "
+                "from %s: %s", "keychain", "unsupported by this system");
+        return;
+    }
+    msg_Dbg(crd, "loaded %u trusted CAs from %s", ctx.loaded, "keychain");
+    if (ctx.rejected > 0)
+        msg_Dbg(crd, "%u keychain anchors were rejected", ctx.rejected);
+}
+#endif /* __APPLE__ */
+
 /**
  * Initializes a client-side TLS credentials.
  */
@@ -570,33 +632,52 @@ static int OpenClient (vlc_tls_creds_t *crd)
     {
         val = gnutls_certificate_set_x509_system_trust(x509);
         if (val < 0)
-        {
             msg_Dbg(crd, "cannot load trusted Certificate Authorities "
                     "from %s: %s", "system", gnutls_strerror(val));
-            /* Mac OS X before 10.6 (and any OS without a trust store gnutls
-             * can read) reports the system trust as unimplemented. Fall
-             * back to the CA bundle shipped in the application data dir. */
-            char *datadir = config_GetDataDir();
-            if (datadir != NULL)
-            {
-                char *bundle;
-                if (asprintf(&bundle, "%s/ca-certificates.crt", datadir) >= 0)
-                {
-                    val = gnutls_certificate_set_x509_trust_file(
-                            x509, bundle, GNUTLS_X509_FMT_PEM);
-                    if (val < 0)
-                        msg_Err(crd, "cannot load bundled CAs from %s: %s",
-                                bundle, gnutls_strerror(val));
-                    else
-                        msg_Dbg(crd, "loaded %d trusted CAs from bundle",
-                                val);
-                    free(bundle);
-                }
-                free(datadir);
-            }
-        }
         else
             msg_Dbg(crd, "loaded %d trusted CAs from %s", val, "system");
+    }
+
+#ifdef __APPLE__
+    if (var_InheritBool(crd, "gnutls-keychain-trust"))
+        gnutls_LoadKeychainTrust(crd, x509);
+#endif
+
+    /* ★ The bundled root list, loaded IN ADDITION to the system store, not
+     * as a fallback for it.
+     *
+     * The systems this fork targets are the ones whose trust store stopped
+     * being updated years ago, and the failure is not "no store" but "a
+     * store that is missing the roots the modern web signs with" -- Windows
+     * XP has a CryptoAPI store gnutls reads perfectly well and which knows
+     * nothing of ISRG Root X1, so half of HTTPS fails with a certificate
+     * error while the fallback below never runs. Mac OS X before 10.6 is the
+     * other way round: no readable store at all. Adding both covers both,
+     * and gnutls is happy to be handed a CA it already has.
+     *
+     * ⚠ This does mean a root the administrator REMOVED from the system
+     * store is trusted again if it is in the bundle. Hence the option:
+     * --no-gnutls-bundled-trust restores the strict system-only behaviour. */
+    if (var_InheritBool(crd, "gnutls-bundled-trust"))
+    {
+        char *datadir = config_GetDataDir();
+        if (datadir != NULL)
+        {
+            char *bundle;
+            if (asprintf(&bundle, "%s"DIR_SEP"ca-certificates.crt",
+                         datadir) >= 0)
+            {
+                val = gnutls_certificate_set_x509_trust_file(
+                        x509, bundle, GNUTLS_X509_FMT_PEM);
+                if (val < 0)
+                    msg_Dbg(crd, "cannot load bundled CAs from %s: %s",
+                            bundle, gnutls_strerror(val));
+                else
+                    msg_Dbg(crd, "loaded %d trusted CAs from bundle", val);
+                free(bundle);
+            }
+            free(datadir);
+        }
     }
 
     char *dir = var_InheritString(crd, "gnutls-dir-trust");
@@ -778,6 +859,21 @@ static void CloseServer (vlc_tls_creds_t *crd)
     "Trust the root certificates of Certificate Authorities stored in " \
     "the operating system trust database to authenticate TLS sessions.")
 
+#define BUNDLED_TRUST_TEXT N_("Also use the bundled root certificates")
+#define BUNDLED_TRUST_LONGTEXT N_( \
+    "Trust the up-to-date list of Certificate Authorities shipped with the " \
+    "application, in addition to the operating system's own. The trust " \
+    "store of an older system is often years out of date and missing the " \
+    "roots much of the web now signs with; this makes those sites work " \
+    "again. Turn it off to trust only what the system does.")
+
+#define KEYCHAIN_TRUST_TEXT N_("Also use the keychain root certificates")
+#define KEYCHAIN_TRUST_LONGTEXT N_( \
+    "Trust the Certificate Authorities of the Mac OS X keychain, including " \
+    "the ones you installed yourself. GnuTLS cannot read the keychain on " \
+    "its own, so without this an authority you added by hand is ignored. " \
+    "Authorities you marked as untrusted stay untrusted.")
+
 #define DIR_TRUST_TEXT N_("Trust directory")
 #define DIR_TRUST_LONGTEXT N_( \
     "Trust the root certificates of Certificate Authorities stored in " \
@@ -809,6 +905,12 @@ vlc_module_begin ()
     set_subcategory( SUBCAT_ADVANCED_NETWORK )
     add_bool("gnutls-system-trust", true, SYSTEM_TRUST_TEXT,
              SYSTEM_TRUST_LONGTEXT, true)
+#ifdef __APPLE__
+    add_bool("gnutls-keychain-trust", true, KEYCHAIN_TRUST_TEXT,
+             KEYCHAIN_TRUST_LONGTEXT, true)
+#endif
+    add_bool("gnutls-bundled-trust", true, BUNDLED_TRUST_TEXT,
+             BUNDLED_TRUST_LONGTEXT, true)
     add_string("gnutls-dir-trust", NULL, DIR_TRUST_TEXT,
                DIR_TRUST_LONGTEXT, true)
     add_string ("gnutls-priorities", "NORMAL", PRIORITIES_TEXT,
