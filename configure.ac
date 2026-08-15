@@ -32,7 +32,7 @@ AC_SUBST(PKGDIR)
 CONFIGURE_LINE="`echo "$0 $ac_configure_args" | sed -e 's/\\\/\\\\\\\/g'`"
 CODENAME="Vetinari"
 dnl PowerVLC product version, distinct from the VLC core version above
-POWERVLC_VERSION="1.3.0"
+POWERVLC_VERSION="1.3.1"
 AC_SUBST(POWERVLC_VERSION)
 dnl Split for the Win32 VERSIONINFO resources, which want a numeric 4-tuple.
 dnl Without these the file properties, the Add/Remove Programs entry and the

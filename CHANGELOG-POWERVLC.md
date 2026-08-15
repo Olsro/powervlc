@@ -2,6 +2,213 @@
 
 PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more legacy systems, not affiliated with VideoLAN.
 
+## 1.3.1 (2026-08-15)
+
+### Fixes — all platforms
+
+- **Recording and clip export: a cut landing on an open-GOP key frame gave
+  a degraded picture.** Modern encoders open a group of pictures with a
+  frame that is followed, in the order pictures are decoded, by pictures
+  that are *shown before it* and that reference the past. The capture cut
+  those away by timestamp, which was right for them but took the first
+  full picture of the new group with them — everything referencing it then
+  decoded to rubbish until the next key frame. Measured on an HEVC clip
+  cut at such a frame: 175 of 403 pictures unusable, seven seconds of
+  visibly broken video. The buffer is now cut where the key frame actually
+  sits in the stream, not by timestamp.
+- **The exported clip now holds the tracks you are watching.** The fast
+  clip export ran a second, headless input, and an input that writes to a
+  file selects *every* track of the media: the clip carried all the audio
+  tracks of the file and players opened whichever one was flagged as the
+  default, never the one being played, and the pile of tracks pushed the
+  container choice onto a fallback that mangled H.264 timestamps. The
+  export now names the playing video, audio and subtitle tracks
+  explicitly, so the clip has exactly them — and lands in a container that
+  fits (MP4/TS rather than ASF).
+- **Subtitles are exported with the clip.** Embedded text subtitles ride
+  along as a track; external subtitle files (the usual movie plus `.srt`)
+  are now attached to the export as well, which the copied input had been
+  dropping. Picture-based subtitles from Blu-ray remuxes (PGS) and DVDs
+  (VOBSUB) are carried too — see the Matroska entry below.
+- **An exported subtitle is now selected when its clip is opened.** The
+  export already keeps the subtitle that was playing, but Matroska files
+  did not say that it was the default track. The player opening the clip
+  could therefore leave subtitles off. That selected track now carries the
+  container's default-track flag; ordinary recordings and clips without a
+  subtitle are unchanged.
+
+### Recording and clip export
+
+- **Recordings and clips can now be written as Matroska**, and it is what
+  they use whenever no other container fits. That is what finally lets a
+  clip keep its subtitles: styled ASS/SSA, Blu-ray PGS bitmaps and DVD
+  VOBSUB images are copied across untouched, where before every one of
+  them was dropped in silence. It also rescues the raw PCM soundtrack of a
+  Blu-ray remux, which used to drag the whole recording down to AVI or
+  ASF. Nothing is re-encoded.
+- **A subtitle track could be left out of a recording entirely.** The
+  container is decided as soon as the buffer fills, and on a 26 Mbit/s
+  remux that happens six seconds in — long before a subtitle first has
+  anything to say. The decision now waits for the tracks the player knows
+  it selected, and a track that still turns up too late is reported rather
+  than dropped without a word.
+- **Pictures went missing from Matroska recordings, then stuttered once a
+  second.** libavformat drops a picture whose decode timestamp does not
+  advance, and the timestamps VLC carries for a straight copy are not
+  reliably ordered: on an H.264 Blu-ray remux that cost 108 pictures out
+  of 1339, three at every key frame. Pushing the offending timestamps
+  forward brought the pictures back but crammed three of them into three
+  milliseconds at each key frame — a visible hiccup every second. The
+  decode order is now rebuilt from the presentation times themselves, so
+  a recording keeps every picture *and* shows each one exactly when the
+  source does.
+- Where a clip can begin on a picture that resets the decoder, it now
+  does, which removes the last two mis-predicted frames at the very start.
+  On material whose reset points are minutes apart it stays where it is
+  rather than throw away what was asked for.
+
+### Extensions
+
+- **Invidious: the two halves of a high-definition download are now put
+  back together by the player itself.** Above 720p YouTube serves the
+  picture and the sound separately, and combining them used to mean
+  ffmpeg — a program to install, a script written next to the files and a
+  terminal window opening on it. The Matroska output added in this
+  release takes every pair YouTube serves, H.264+AAC as readily as
+  VP9+Opus, so the *Combine* button now does the work in place, without
+  re-encoding, at disk speed, and without interrupting whatever is
+  playing. Progress is shown while it runs, and the ffmpeg route is gone
+  entirely — nothing is written next to your files any more.
+- **Invidious: “this extension is not responding” during a download.**
+  YouTube hands each connection the stream at the speed it would be
+  played at, so on a soundtrack — a quarter of the bitrate — a single
+  read takes over two seconds, and a full turn of the eight connections
+  nearly twenty. The extension only claimed to be alive once per turn,
+  which is twice the ten seconds after which the player offers to kill
+  it. It now says so before every read, and hands the thread back as soon
+  as its share of it is up rather than at the end of a turn.
+
+### Fixes — disc menus
+
+- **Blu-ray discs were always told the user speaks English.** A disc does
+  not pick its own menu language: the player declares a preference and the
+  disc branches on it. DVDs have been told the interface language since
+  1.2.0 when no preference is set; Blu-ray never was, so a French disc took
+  its English branch and its BD-J menus came up in English on a French
+  install. It now answers the same way a DVD does. An explicit "Menu
+  language" preference still wins, as before.
+- **On Windows the interface language was invisible to discs.** The
+  launcher only exports it to the environment when a language has been
+  picked by hand; left on automatic — the default — the interface gets its
+  language straight from Windows and the environment stays empty, so discs
+  fell back to English even though the menus, buttons and dialogs were in
+  French. Discs are now told what Windows says the user reads. Linux and
+  macOS already carried it in the environment and are unchanged.
+- **Blu-ray menu graphics could disappear when the display could not
+  compose them itself.** The software compositor advertised two packed
+  pixel layouts that it cannot actually blend, so a menu delivered in one
+  of them was accepted and then silently discarded. Such menus are now
+  converted to a supported layout before blending; they also remain
+  present in snapshots.
+- **Choosing whether to run disc menus is now explicit on macOS.** Both
+  the modern and legacy Open Disc panels have separate *DVD menus* and
+  *Blu-ray menus* checkboxes. The Blu-ray choice follows a preference but
+  can still be overridden for one disc, and the interfaces now make clear
+  that BD-J menus can occupy a processor core. The Qt Open Disc panel
+  carries the same warning.
+
+### Fixes — DVD playback
+
+- **DVDs played without menus now use the disc's actual timeline.** The
+  old reader estimated time and seeking from the number of sectors, an
+  assumption that drifts on variable-bitrate titles and counts alternate
+  camera angles more than once. Elapsed time, total duration, the seek bar
+  and the requested seek position now share the timestamps and cell path
+  recorded on the disc. Chapter separators consequently appear at their
+  real times and remain in agreement with the chapter named in the seek
+  tooltip.
+
+### Fixes — hardware decoding on legacy Macs
+
+- **Fixes related to accelerated DVD playback (ATI)** It should work better, but still need more attention
+- **CrystalHD no longer freezes interlaced MPEG-2 video after a seek.** A
+  flush that occurred between the two fields of a picture left the
+  decoder permanently waiting for the missing field while audio carried
+  on. The pending-field state is now reset with the hardware buffers.
+
+### Fixes — Windows
+
+- **Blu-ray discs can now be read on Windows XP.** XP's UDF driver stops at
+  version 2.01 and a Blu-ray is 2.5, so the disc never mounts: Explorer
+  shows an empty drive and the player could not open it either. The data
+  was always readable — the player carries its own UDF reader — it simply
+  had to be pointed at the raw volume instead of at a mount point that
+  does not exist. A drive that refuses to open the ordinary way is now
+  retried that way, which also brings AACS and BD-J with it. Windows Vista
+  and later mount the disc themselves and are unaffected.
+
+### Fixes — Windows and Linux (Qt interface)
+
+- **The hover preview never appeared on a subtitled media.** The picture
+  is produced by a silent second reader writing a PNG, and that reader was
+  told to leave subtitles out — with the switch that governs playback, not
+  the one that governs a file being written. So a media whose subtitle
+  track is flagged as default, which is to say an ordinary film, had that
+  track written into the file *in front of* the picture, and the image
+  loader refused a file beginning with a line of dialogue instead of a
+  PNG. The macOS interfaces were spared because their image loaders skip
+  ahead to the picture. The reader now leaves subtitles out for real, and
+  the loader starts at the picture whatever precedes it.
+
+### Clip creation mode
+
+- **A held step key now accelerates.** Nudging a clip bound by one frame
+  is the right amount for one press, but on a twenty minute film a frame
+  is a fortieth of a pixel on the seek bar — holding the key looked like
+  it did nothing. The step now stays at one frame for the first presses,
+  so a tap is still exact to the frame, then climbs gradually — a frame at
+  a time at first, up to twenty-five frames a press — while the key stays
+  down, and returns to one frame as soon as it is released. Three seconds
+  of held key travel about half a minute of media. All three interfaces
+  get this from the core.
+
+### Fixes — legacy interface (macOS)
+
+- **The separate video window's seek bar was a plain one.** It showed no
+  chapter separators and no live tooltip, while the same bar in the
+  playlist window and in the fullscreen controls showed both. It is now
+  the same seek bar everywhere: chapter separators, hovered time, chapter
+  name, preview thumbnail, and the two clip-creation knobs.
+- **The separate video's time and chapter controls now match the main
+  window and fullscreen controls.** The right-hand field shows elapsed
+  time by default, changes between elapsed and remaining time when
+  clicked, and opens *Jump to Time* on a double-click with the current
+  time already filled in. Chapter information is retried when a DVD makes
+  it available late, unnamed DVD chapters receive the usual generic
+  names, and the hover tooltip remains visible and correctly tracked
+  after resizing or changing window mode, including on Panther.
+- **Window shadows are now optional.** They remain enabled by default on
+  machines with AltiVec, but are disabled by default on G3 systems where
+  measurements showed lost displayed frames. The legacy preference takes
+  effect immediately; an active ATI video session keeps the window shape
+  required by its hardware overlay.
+- **The separate video window offered the system's own fullscreen.**
+  macOS grants it to any resizable window, and this one fought with the
+  player's own fullscreen. Refused, like the other windows of this
+  interface already did; the green button zooms again, and the player's
+  fullscreen is unaffected.
+- **Fullscreen left a strip of desktop along the bottom of the screen.**
+  Hiding the menu bar changes the screen layout, and macOS answers by
+  nudging the window back down into what it thinks is the visible area —
+  by exactly the height of the menu bar it has just hidden. The window
+  accepted the nudge; it now holds its ground, and the picture reaches
+  the bottom edge again.
+- **Opening the fullscreen controls could crash on Tiger.** Its AppKit
+  advertises the cell line-breaking selector used for the media title but can
+  dereference an invalid internal object when it is applied to a newly created
+  text cell. Tiger now uses the same safe single-line clipping fallback as
+  Panther and Jaguar; Leopard and later retain ellipsis truncation.
+
 ## 1.3.0 (2026-08-13)
 
 ### New features — all platforms (modern machines included)

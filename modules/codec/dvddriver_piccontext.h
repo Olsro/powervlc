@@ -29,6 +29,9 @@
 #define DVDDRIVER_VAR_PRESENT "dvddriver-present"
 /* Callback d'escamotage de la surface (cf. dvddriver_set_surface_hidden). */
 #define DVDDRIVER_VAR_HIDE    "dvddriver-hide"
+/* Effacement immédiat du plan subpicture matériel. Comme PRESENT, ce callback
+ * évite au vout de lier directement les symboles privés du plugin codec. */
+#define DVDDRIVER_VAR_SP_HIDE "dvddriver-sp-hide"
 /* Sous-titres/OSD par-dessus la surface HW (chantier S) — SOURCE DE VÉRITÉ
  * UNIQUE, posée par le décodeur à l'ouverture HW (option `mpeg2-hwaccel-subs`)
  * et lue par le vout au premier present matériel (avant, elle n'a pas encore sa
@@ -66,6 +69,7 @@
  * autre fenêtre) ; le décodeur ré-attache alors sa surface, sans quoi elle reste
  * liée à une fenêtre invisible et l'écran est noir. */
 typedef void (*dvddriver_hide_cb)(dvddriver_ctx *hw, bool hidden);
+typedef bool (*dvddriver_sp_hide_cb)(dvddriver_ctx *hw);
 
 typedef bool (*dvddriver_present_cb)(dvddriver_ctx *hw, picture_context_t *pctx,
                                      int wid, int x, int y, int w, int h);

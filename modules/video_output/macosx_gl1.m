@@ -289,8 +289,12 @@ vlc_module_end ()
     /* Chantier S — fenêtre enfant transparente portant sous-titres et OSD
      * au-dessus de la surface matérielle (cf. VLCGL1SubsOverlayView). */
     NSWindow *_subsOverlay;
-    /* ⚠⚠ Fenêtre PARENTE de l'incrustation, suivie PAR NOUS (référence faible,
-     * jamais retenue). NE PAS demander `-[NSWindow parentWindow]` : sur 10.2 cet
+    /* ⚠⚠ Fenêtre PARENTE de l'incrustation, suivie PAR NOUS et RETENUE
+     * tant que l'incrustation lui appartient. Une référence faible devient
+     * pendante quand Jaguar détruit son ancienne fenêtre plein écran avant le
+     * refresh suivant : une pause qui vide alors le sous-titre plante dans
+     * objc_msgSend sur removeChildWindow:. NE PAS demander
+     * `-[NSWindow parentWindow]` : sur 10.2 cet
      * accesseur CRASHE (EXC_BAD_ACCESS à 0x0 dans un objc_msgSend interne,
      * relevé en direct le 2026-07-29 sur 10.2.8, pendant une pause) — la
      * machinerie de fenêtres enfants de Jaguar est celle dont nos notes disent
@@ -353,6 +357,10 @@ struct vout_display_sys_t
 
     picture_pool_t *pool;
     bool has_first_frame;
+    /* Une image HW compte comme première image pour la politique de redraw
+     * AppKit, mais elle n'a créé aucune texture GL. Les confondre faisait
+     * déréférencer draw_tex_set == NULL lors d'un resize. */
+    bool has_gl_frame;
 
     /* Textures backed by client storage (GL_APPLE_client_storage):
      * the driver DMAs straight from the picture buffers instead of
@@ -1166,6 +1174,17 @@ static void OpenglDraw (vout_display_sys_t *sys)
     const GLuint *tex = sys->per_buffer_tex ? sys->draw_tex_set
                                             : sys->textures[sys->tex_index];
 
+    /* Une fermeture du décodeur ATI peut dépublier son contexte juste avant
+     * que la dernière picture matérielle déjà ordonnancée atteigne display.
+     * Cette picture n'a jamais été uploadée : en mode planar draw_tex_set est
+     * donc NULL. Ne jamais déréférencer un jeu de textures qui n'existe pas ;
+     * le noir déjà produit par glClear est le seul repli correct. */
+    if (tex == NULL)
+    {
+        DrawRegions (sys);
+        return;
+    }
+
     /* One pass: the fragment program holds the whole colour matrix, so the
      * three planes are just three texture units read by a single quad. */
     if (sys->fragprog)
@@ -1640,6 +1659,8 @@ static int Open (vlc_object_t *this)
          * lectures ne préviennent pas quand le décodeur n'est pas MPEG-2 HW. */
         var_Create(vd->obj.libvlc, DVDDRIVER_VAR_CTX,     VLC_VAR_ADDRESS);
         var_Create(vd->obj.libvlc, DVDDRIVER_VAR_PRESENT, VLC_VAR_ADDRESS);
+        var_Create(vd->obj.libvlc, DVDDRIVER_VAR_SP_HIDE, VLC_VAR_ADDRESS);
+        var_Create(vd->obj.libvlc, DVDDRIVER_VAR_HOLD,    VLC_VAR_BOOL);
         /* Chantier S — mode sous-titres matériel : décidé par le décodeur, lu
          * ici au premier present (cf. hw_subs_mode). var_Create est refcompté :
          * la créer aussi côté vout évite un avertissement quand le décodeur
@@ -1856,6 +1877,8 @@ void Close (vlc_object_t *this)
         var_Destroy(vd->obj.libvlc, "dvddriver-vout-rect-h");
         var_Destroy(vd->obj.libvlc, DVDDRIVER_VAR_CTX);
         var_Destroy(vd->obj.libvlc, DVDDRIVER_VAR_PRESENT);
+        var_Destroy(vd->obj.libvlc, DVDDRIVER_VAR_SP_HIDE);
+        var_Destroy(vd->obj.libvlc, DVDDRIVER_VAR_HOLD);
         var_Destroy(vd->obj.libvlc, DVDDRIVER_VAR_SUBS);
 
         var_Destroy (vd, "drawable-nsobject");
@@ -2392,6 +2415,20 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
         return;
     }
 
+    /* Fin/recréation d'un input ATI : le décodeur dépublie `hw` avant que le
+     * vout ait consommé toutes les pictures déjà ordonnancées. Une picture qui
+     * porte encore son contexte matériel n'a aucun plan logiciel valide et ne
+     * doit surtout pas tomber dans OpenglDraw. `hw_subs_known` signifie qu'un
+     * present ATI a réellement eu lieu dans ce vout ; il évite de confondre le
+     * contexte opaque d'un autre décodeur matériel avec le nôtre. */
+    if (sys->hw_subs_known && pic->context != NULL
+     && (hw == NULL || present == NULL)) {
+        picture_Release (pic);
+        if (subpicture)
+            subpicture_Delete(subpicture);
+        return;
+    }
+
     /* ★★ SCINTILLEMENT (Panther/Jaguar) : quand le décodeur MATÉRIEL est engagé
      * (hw non NULL), une picture SANS contexte matériel est une picture que le
      * synchro a fait sauter — en mode remplacement ses plans logiciels n'ont
@@ -2451,6 +2488,7 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
         picture_Release (sys->held_pics[sys->tex_index]);
     sys->held_pics[sys->tex_index] = pic;
     sys->has_first_frame = true;
+    sys->has_gl_frame = true;
 
     if (subpicture)
         subpicture_Delete(subpicture);
@@ -3324,8 +3362,9 @@ static void OpenglSwap (vlc_gl_t *gl)
     if (_subsOverlay != nil && _subsOverlayParent != nil
         && _subsOverlayParent != win) {
         [_subsOverlayParent removeChildWindow:_subsOverlay];
+        [_subsOverlayParent release];
         [win addChildWindow:_subsOverlay ordered:NSWindowAbove];
-        _subsOverlayParent = win;
+        _subsOverlayParent = [win retain];
         _subsOverlayRect = NSZeroRect;
         @synchronized (self) {
             if (vd) msg_Dbg (vd, "incrustation ré-adoptée par la fenêtre %d "
@@ -3485,8 +3524,12 @@ static void OpenglSwap (vlc_gl_t *gl)
          * L'adoption ordonne aussi la fenêtre à l'écran — d'où sa place ICI,
          * après le dessin (cf. le flash blanc du premier sous-titre). */
         if (_subsOverlayParent != win) {
+            if (_subsOverlayParent != nil) {
+                [_subsOverlayParent removeChildWindow:_subsOverlay];
+                [_subsOverlayParent release];
+            }
             [win addChildWindow:_subsOverlay ordered:NSWindowAbove];
-            _subsOverlayParent = win;
+            _subsOverlayParent = [win retain];
         } else if (!wasVisible)
             [_subsOverlay orderFront:nil];
     }
@@ -3510,6 +3553,7 @@ static void OpenglSwap (vlc_gl_t *gl)
     if (_subsOverlay == nil)
         return;
     [_subsOverlayParent removeChildWindow:_subsOverlay];
+    [_subsOverlayParent release];
     _subsOverlayParent = nil;
     [_subsOverlay orderOut:nil];
     [_subsOverlay close];
@@ -3564,14 +3608,14 @@ static void OpenglSwap (vlc_gl_t *gl)
     if ([self canSkipRendering])
         return;
 
-    BOOL hasFirstFrame;
+    BOOL hasGLFrame;
     vout_display_t *aVd;
     @synchronized(self) { // vd can be accessed from multiple threads
         aVd = vd;
-        hasFirstFrame = vd && vd->sys->has_first_frame;
+        hasGLFrame = vd && vd->sys->has_gl_frame;
     }
 
-    if (hasFirstFrame)
+    if (hasGLFrame)
         /* redraw the last uploaded frame */
         OpenglDraw (aVd->sys);
     else
@@ -3663,8 +3707,34 @@ static void OpenglSwap (vlc_gl_t *gl)
                 NSRect wf = [win frame];
                 long wx = lround(wf.origin.x);
                 long wy = lround(screenH - (wf.origin.y + wf.size.height));
-                vd->sys->hw_x = (int)(rx - wx);
-                vd->sys->hw_y = (int)(ry - wy);
+                int new_hw_x = (int)(rx - wx);
+                int new_hw_y = (int)(ry - wy);
+                /* Le plan SP ATI conserve son dernier bitmap aux anciennes
+                 * coordonnées. L'effacer AVANT de publier le nouveau cadre
+                 * évite qu'un sous-titre reste figé pendant une bascule plein
+                 * écran (ou un redimensionnement) jusqu'au paquet suivant. */
+                bool window_changed = vd->sys->hw_place_valid
+                                   && vd->sys->hw_wid != (int)widNum;
+                if (vd->sys->hw_place_valid
+                 && (window_changed
+                  || vd->sys->hw_x != new_hw_x || vd->sys->hw_y != new_hw_y
+                  || vd->sys->hw_w != (int)rw || vd->sys->hw_h != (int)rh)) {
+                    /* Sous 10.2/10.3 le chemin intégré déménage la vue dans une
+                     * autre NSWindow. Jaguar invalide les mappings SP dès ce
+                     * déménagement, avant que libmpeg2 n'atteigne l'image I où
+                     * il détecte le nouveau wid. Suspendre immédiatement vout
+                     * ET ordonnanceur SPU ferme cette fenêtre de course. */
+                    if (window_changed)
+                        var_SetBool(vd->obj.libvlc, DVDDRIVER_VAR_HOLD, true);
+                    dvddriver_ctx *sp_hw = var_GetAddress(vd->obj.libvlc,
+                                                          DVDDRIVER_VAR_CTX);
+                    dvddriver_sp_hide_cb sp_hide = (dvddriver_sp_hide_cb)
+                        var_GetAddress(vd->obj.libvlc, DVDDRIVER_VAR_SP_HIDE);
+                    if (sp_hw != NULL && sp_hide != NULL)
+                        sp_hide(sp_hw);
+                }
+                vd->sys->hw_x = new_hw_x;
+                vd->sys->hw_y = new_hw_y;
                 vd->sys->hw_w = (int)rw;
                 vd->sys->hw_h = (int)rh;
                 vd->sys->hw_place_valid = (rw > 0 && rh > 0);

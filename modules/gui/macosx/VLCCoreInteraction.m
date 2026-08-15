@@ -69,12 +69,13 @@ static int ClipStepCallback(vlc_object_t *p_this, const char *psz_var,
 {
     VLC_UNUSED(p_this); VLC_UNUSED(psz_var);
     VLC_UNUSED(oldval); VLC_UNUSED(p_data);
-    /* value convention (see hotkeys.c): +-1 = one frame, else signed
-     * microseconds */
+    /* value convention (see hotkeys.c): a small value is a signed count of
+     * FRAMES, which ramps up while the key is held down; anything larger is
+     * a signed offset in microseconds */
     int64_t value = newval.i_int;
     /* hotkeys thread -> main thread, where the clip state lives */
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (value == 1 || value == -1)
+        if (value != 0 && value >= -1000 && value <= 1000)
             [[VLCCoreInteraction sharedInstance] clipStepFrames:(int)value];
         else
             [[VLCCoreInteraction sharedInstance]

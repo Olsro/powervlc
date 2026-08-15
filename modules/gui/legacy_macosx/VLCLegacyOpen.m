@@ -978,17 +978,27 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
     /* DVD with menus */
     discDVDView = [[NSView alloc] initWithFrame:subRect];
     discDVDLabel = [self discTitleLabelIn:discDVDView y:140];
-    [self button:_NS("Disable DVD menus")
-          action:@selector(dvdreadOptionChanged:)
-           frame:NSMakeRect(20, 96, 300, 28) in:discDVDView];
+    discDVDMenusCheckbox = [self checkbox:_NS("DVD menus")
+                                    frame:NSMakeRect(20, 101, 320, 18)
+                                   action:@selector(dvdreadOptionChanged:)
+                                       in:discDVDView];
+    [discDVDMenusCheckbox setState:NSOnState];
+    [discDVDMenusCheckbox setToolTip:
+        _NS("Play the disc with its own menus. Unticking this plays a title "
+            "directly and lets you pick the title and chapter numbers.")];
     [self videoTSButtonIn:discDVDView y:60];
 
     /* DVD without menus */
     discDVDwomenusView = [[NSView alloc] initWithFrame:subRect];
     discDVDwomenusLabel = [self discTitleLabelIn:discDVDwomenusView y:150];
-    [self button:_NS("Enable DVD menus")
-          action:@selector(dvdreadOptionChanged:)
-           frame:NSMakeRect(20, 110, 300, 28) in:discDVDwomenusView];
+    discDVDwomenusMenusCheckbox = [self checkbox:_NS("DVD menus")
+                                           frame:NSMakeRect(20, 115, 320, 18)
+                                          action:@selector(dvdreadOptionChanged:)
+                                              in:discDVDwomenusView];
+    [discDVDwomenusMenusCheckbox setState:NSOffState];
+    [discDVDwomenusMenusCheckbox setToolTip:
+        _NS("Play the disc with its own menus. Unticking this plays a title "
+            "directly and lets you pick the title and chapter numbers.")];
     [self addTitleChapterRowTo:discDVDwomenusView y:76
                     titleField:&discDVDwomenusTitleField
                   titleStepper:&discDVDwomenusTitleStepper
@@ -1011,6 +1021,19 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
     /* Blu-ray */
     discBDView = [[NSView alloc] initWithFrame:subRect];
     discBDLabel = [self discTitleLabelIn:discBDView y:140];
+    discBDMenusCheckbox = [self checkbox:_NS("Blu-ray menus")
+                                   frame:NSMakeRect(20, 104, 320, 18)
+                                  action:NULL in:discBDView];
+    /* Seed it here as well: the pane may never be shown before the user hits
+     * Open on a bluray:// address typed into the MRL field. */
+    [discBDMenusCheckbox setState:
+        var_InheritBool(p_intf, "bluray-menu") ? NSOnState : NSOffState];
+    [discBDMenusCheckbox setToolTip:
+        _NS("Play the disc with its own menus. Some discs run their menus as "
+            "a Java (BD-J) application that keeps one processor core busy for "
+            "as long as the disc is playing, which older Macs may not have to "
+            "spare. Unticking this starts the main feature directly. The "
+            "initial state of this box comes from the preferences.")];
     [self videoTSButtonIn:discBDView y:60];
 
     return pane;
@@ -1152,6 +1175,10 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
             bdLabel = [[NSFileManager defaultManager]
                           displayNameAtPath:opticalDevicePath];
         [discBDLabel setStringValue:bdLabel];
+        /* Preselect from the preferences every time the pane is shown, so the
+         * box always mirrors the setting the user last chose there. */
+        [discBDMenusCheckbox setState:
+            var_InheritBool(p_intf, "bluray-menu") ? NSOnState : NSOffState];
         [self showOpticalMediaView:discBDView withIcon:image];
         [self setMRL:[NSString stringWithFormat:@"bluray://%@",
             opticalDevicePath]];
@@ -1202,21 +1229,25 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
 {
     NSString *devicePath = [self selectedDiscDevicePath];
 
-    if (sender && [sender isKindOfClass:[NSButton class]]) {
-        NSString *title = [sender title];
-        if ([title isEqualToString:_NS("Enable DVD menus")]) {
-            b_nodvdmenus = NO;
-            [self setMRL:[NSString stringWithFormat:@"dvdnav://%@",
-                devicePath]];
-            [self showOpticalMediaView:discDVDView
-                              withIcon:[discIconView image]];
-            return;
-        }
-        if ([title isEqualToString:_NS("Disable DVD menus")]) {
-            b_nodvdmenus = YES;
-            [self showOpticalMediaView:discDVDwomenusView
-                              withIcon:[discIconView image]];
-        }
+    /* Key on the control itself: matching against the translated title used
+     * to work only as long as both strings kept their exact wording in every
+     * locale. Each box then goes back to the state its own view stands for,
+     * since the click that brought us here toggled it. */
+    if (sender == discDVDwomenusMenusCheckbox) {
+        b_nodvdmenus = NO;
+        [discDVDMenusCheckbox setState:NSOnState];
+        [discDVDwomenusMenusCheckbox setState:NSOffState];
+        [self setMRL:[NSString stringWithFormat:@"dvdnav://%@", devicePath]];
+        [self showOpticalMediaView:discDVDView
+                          withIcon:[discIconView image]];
+        return;
+    }
+    if (sender == discDVDMenusCheckbox) {
+        b_nodvdmenus = YES;
+        [discDVDMenusCheckbox setState:NSOnState];
+        [discDVDwomenusMenusCheckbox setState:NSOffState];
+        [self showOpticalMediaView:discDVDwomenusView
+                          withIcon:[discIconView image]];
     }
 
     if (sender == discDVDwomenusTitleStepper)
@@ -1878,6 +1909,13 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
         return;
 
     NSMutableArray *options = [NSMutableArray array];
+
+    /* Blu-ray menus. Keyed on the MRL rather than on the selected pane so a
+     * bluray:// address typed by hand gets the box's value too, and always
+     * passed explicitly so this item overrides the preference. */
+    if ([theMrl hasPrefix:@"bluray://"])
+        [options addObject:([discBDMenusCheckbox state] == NSOnState)
+            ? @"bluray-menu" : @"no-bluray-menu"];
 
     if ([fileSubCheckbox state] == NSOnState && subPath) {
         [options addObject:

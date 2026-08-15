@@ -85,6 +85,10 @@ void dvddriver_picture_mb_block(dvddriver_ctx *ctx, const int16_t *dctblock,
                                 const uint8_t *scan);
 void dvddriver_picture_mb_block_rl(dvddriver_ctx *ctx, const int16_t (*rl)[2],
                                    int n);
+/* Le DVDDriver Rage 128 — et les DVDDriver de Jaguar sur les deux familles
+ * testées — interprètent les positions selon le zigzag classique, même si le
+ * flux MPEG-2 annonce alternate_scan. */
+bool dvddriver_uses_fixed_zigzag(const dvddriver_ctx *ctx);
 void dvddriver_picture_mb_end(dvddriver_ctx *ctx);
 int  dvddriver_picture_submit(dvddriver_ctx *ctx);
 /* Soumission asynchrone : Decode sur un worker dédié, recouvert par la VLD de

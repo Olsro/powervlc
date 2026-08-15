@@ -83,6 +83,19 @@ void VLCLegacyStepVolume(intf_thread_t *p_intf, int direction, bool b_osd);
  * Gestalt/CoreServices dependency and no @available, forbidden here). */
 BOOL VLCLegacyOSVersionAtLeast(int major, int minor, int micro);
 
+/* Window drop shadows ("legacy-macosx-window-shadows"): read once at
+ * interface startup and refreshed when the preferences are saved. The
+ * video paths drop the shadow while playing when this returns NO (measured
+ * on the G3: ~16% more late pictures with it, on an already saturated
+ * machine). Default is on everywhere but the G3 slice (see macosx.c). */
+BOOL VLCLegacyWindowShadows(void);
+void VLCLegacySetWindowShadows(BOOL enabled);
+
+/* True while the MPEG-2 decoder has published its hardware-display bus.
+ * The vout window uses this before the ATI surface is committed, when the
+ * context pointer itself can legitimately still be NULL. */
+BOOL VLCLegacyHwDecoderArmed(intf_thread_t *p_intf);
+
 /* Spawns a detached "sleep 1; open -n <bundle>" and returns; the caller
  * quits VLC afterwards so the new instance starts fresh (used when
  * switching between the legacy and modern interfaces). */
@@ -193,9 +206,9 @@ void VLCLegacyResizeLastColumnOnly(NSTableView *table);
  * This looks in the detached set too. */
 NSView *VLCLegacyViewWithTag(NSView *root, NSInteger tag);
 
-/* -[NSCell setLineBreakMode:] is 10.4. Below it, -setWraps: is the only
- * control over long text: the ellipsis is lost and the text is clipped or
- * wrapped, which is what these labels did before 10.4 existed. */
+/* -[NSCell setLineBreakMode:] is only used from 10.5: Tiger advertises it but
+ * its NSTextFieldCell implementation crashes in the fullscreen panel. Earlier
+ * systems use -setWraps:, losing the ellipsis but retaining safe clipping. */
 void VLCLegacySetCellLineBreakMode(NSCell *cell, NSLineBreakMode mode);
 
 /* +[NSFont systemFontSizeForControlSize:] is 10.3. Small and regular are the

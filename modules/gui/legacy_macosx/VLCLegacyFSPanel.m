@@ -136,6 +136,7 @@ static NSButton *fsTemplateButton(NSView *parent, NSString *name,
 - (void)dealloc
 {
     [pollTimer invalidate];
+    free(chaptersUri);
     [panel release];
     [core release];
     [super dealloc];
@@ -569,10 +570,28 @@ static NSString *fsTimeToString(int seconds)
         (VLCLegacyProgressSliderCell *)[seekSlider cell];
 
     int title = p_input ? (int)var_GetInteger(p_input, "title") : -1;
-    if ((void *)p_input == chaptersInput && title == chaptersTitle
-        && i_length == chaptersDuration)
+    char *psz_uri = NULL;
+    if (p_input != NULL) {
+        input_item_t *p_item = input_GetItem(p_input);
+        if (p_item != NULL)
+            psz_uri = input_item_GetURI(p_item);
+    }
+    BOOL sameMedia = ((psz_uri == NULL && chaptersUri == NULL)
+                      || (psz_uri != NULL && chaptersUri != NULL
+                          && strcmp(psz_uri, chaptersUri) == 0))
+                     && title == chaptersTitle;
+    BOOL sameSource = sameMedia && i_length == chaptersDuration;
+    if (!sameMedia) {
+        free(chaptersUri);
+        chaptersUri = psz_uri;
+        psz_uri = NULL;
+    }
+    free(psz_uri);
+    if (sameSource && [cell chapterFractions] != nil)
         return;
-    chaptersInput = (void *)p_input;
+    if (sameSource && ++chaptersRetryTicks < 8)
+        return;
+    chaptersRetryTicks = 0;
     chaptersTitle = title;
     chaptersDuration = i_length;
 
@@ -593,9 +612,10 @@ static NSString *fsTimeToString(int seconds)
                 int i;
                 for (i = 0; i < p_title->i_seekpoint; i++) {
                     seekpoint_t *point = p_title->seekpoint[i];
-                    NSString *name = point->psz_name
+                    NSString *name =
+                        (point->psz_name != NULL && *point->psz_name != '\0')
                         ? [NSString stringWithUTF8String:point->psz_name]
-                        : nil;
+                        : [NSString stringWithFormat:_NS("Chapter %i"), i + 1];
                     [mutableFractions addObject:
                         [NSNumber numberWithDouble:
                             (double)point->i_time_offset / (double)i_length]];
@@ -609,6 +629,8 @@ static NSString *fsTimeToString(int seconds)
     }
 
     if (!fractions && ![cell chapterFractions])
+        return;
+    if (!fractions && sameMedia)
         return;
     [cell setChapterFractions:fractions names:names];
     [seekSlider setNeedsDisplay:YES];

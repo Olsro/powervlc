@@ -997,11 +997,20 @@ static NSString *VLCLegacyHoverTimeString(double seconds)
         [self removeTrackingRect:hoverTrackingTag];
         hoverTrackingTag = 0;
     }
-    if ([self window])
+    if ([self window]) {
+        NSPoint local = [self convertPoint:
+            [[self window] mouseLocationOutsideOfEventStream] fromView:nil];
+        BOOL mouseInside = NSMouseInRect(local, [self bounds], [self isFlipped]);
         hoverTrackingTag = [self addTrackingRect:[self bounds]
                                            owner:self
                                         userData:NULL
-                                    assumeInside:NO];
+                                    assumeInside:mouseInside];
+        /* Après un redimensionnement ou un retour de plein écran, le nouveau
+         * tracking rect peut naître sous un pointeur déjà immobile : AppKit
+         * n'envoie alors aucun mouseEntered:. Amorcer nous-mêmes le suivi. */
+        if (mouseInside)
+            [self mouseEntered:nil];
+    }
 }
 
 - (void)viewDidMoveToWindow
@@ -1166,6 +1175,10 @@ static NSString *VLCLegacyHoverTimeString(double seconds)
     /* stay above whatever hosts the slider (the fullscreen panel floats
      * at the same level as the tooltip: +1 makes the order explicit) */
     int wantedLevel = [[self window] level] + 1;
+    /* Le plan ATI est une surface CGS distincte. Sur Panther, un niveau juste
+     * au-dessus d'une fenêtre normale peut encore être composé derrière elle. */
+    if (wantedLevel < NSFloatingWindowLevel)
+        wantedLevel = NSFloatingWindowLevel;
     if ([tooltipWindow level] != wantedLevel)
         [tooltipWindow setLevel:wantedLevel];
 

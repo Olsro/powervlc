@@ -44,10 +44,11 @@
     NSTextField *mediaTitleField;   /* media title, like the 3.0 panel */
     NSTimer *pollTimer;
 
-    /* chapter separators cache, same keys as the main window */
-    void *chaptersInput;
+    /* chapter cache, stable across recycled input_thread_t addresses */
+    char *chaptersUri;
     int chaptersTitle;
     int64_t chaptersDuration;
+    int chaptersRetryTicks;
 
     NSPoint lastMouseLocation;
     double lastActivity;    /* NSTimeInterval since reference date */

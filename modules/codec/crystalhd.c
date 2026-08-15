@@ -2623,6 +2623,17 @@ static bool PullPictures( decoder_t *p_dec )
     {
         picture_Release( p_sys->p_pic );
         p_sys->p_pic = NULL;
+        /* ⚠ And forget that a pair was half built. Releasing the picture
+         * without lowering this left the interlaced path claiming the next
+         * pull was a second field: crystal_PrepareOutput then skips the
+         * allocation (a second field reuses the first one's picture), finds
+         * p_pic NULL and returns an error -- silently, and for ever. The
+         * output thread polls on, the card fills its eight buffers and
+         * stops, and the picture stays frozen while the audio plays on. It
+         * takes a flush landing between the two fields of a pair, so only
+         * interlaced content is exposed: measured on MPEG-2 DVD, where every
+         * seek froze the video for good, while H.264 Blu-ray never did. */
+        p_sys->b_second_field = false;
         p_sys->i_last_date = VLC_TICK_INVALID;
         p_sys->i_extrapolated = 0;
     }

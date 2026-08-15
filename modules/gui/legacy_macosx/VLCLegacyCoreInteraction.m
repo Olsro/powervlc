@@ -573,7 +573,9 @@ static int VLCLegacyRevealControlsCallback(vlc_object_t *p_this,
 - (void)clipStepFromCallback:(NSNumber *)value
 {
     long long v = [value longLongValue];
-    if (v == 1 || v == -1)
+    /* small value = a count of frames (it ramps up while the key is held),
+     * larger = microseconds; see the convention in hotkeys.c */
+    if (v != 0 && v >= -1000 && v <= 1000)
         [self clipStepFrames:(int)v];
     else
         [self clipNudgeSelectedBoundBySeconds:(double)v / CLOCK_FREQ];

@@ -438,6 +438,7 @@ create_toolbar_item(NSString *itemIdent, NSString *name, NSString *desc, NSStrin
     [_input_skipLoopLabel setStringValue: _NS("Skip the loop filter for H.264 decoding")];
     [_input_urlhandlerButton setTitle: _NS("Edit default application settings for network protocols")];
     [_input_skipFramesCheckbox setTitle: _NS("Skip frames")];
+    [_input_blurayMenusCheckbox setTitle: _NS("Blu-ray menus")];
 
     /* url handler */
     [_urlhandler_titleLabel setStringValue: _NS("Open network streams using the following protocols")];
@@ -832,6 +833,23 @@ static inline const char * __config_GetLabel(vlc_object_t *p_this, const char *p
     [_input_postprocTextField setIntValue: config_GetInt(p_intf, "postproc-q")];
     [_input_postprocTextField setToolTip: _NS(config_GetLabel(p_intf, "postproc-q"))];
     [self setupButton:_input_skipFramesCheckbox forBoolValue: "skip-frames"];
+    /* The Blu-ray access module can be left out of a build; hide the box
+     * rather than query an option that does not exist. The tooltip is set
+     * after setupButton:, which otherwise overwrites it with the short
+     * label from the module description. */
+    if (config_GetType("bluray-menu")) {
+        [self setupButton:_input_blurayMenusCheckbox forBoolValue: "bluray-menu"];
+        [_input_blurayMenusCheckbox setToolTip:
+            _NS("Play Blu-ray discs with their own menus. Some discs run "
+                "their menus as a Java (BD-J) application that keeps one "
+                "processor core busy for as long as the disc is playing; on "
+                "an older Mac, turning this off starts the main feature "
+                "directly and gives that core back. This sets the initial "
+                "state of the box in the Open Disc window, which can still "
+                "be changed disc by disc.")];
+        [_input_blurayMenusCheckbox setHidden: NO];
+    } else
+        [_input_blurayMenusCheckbox setHidden: YES];
     [self setupButton:_input_aviPopup forIntList: "avi-index"];
     [self setupButton:_input_skipLoopPopup forIntList: "avcodec-skiploopfilter"];
 
@@ -1167,6 +1185,8 @@ static inline void save_string_list(intf_thread_t * p_intf, id object, const cha
             config_PutInt(p_intf, "crystalhd", [_input_hardwareAccelerationCheckbox state]);
         config_PutInt(p_intf, "postproc-q", [_input_postprocTextField intValue]);
         config_PutInt(p_intf, "skip-frames", [_input_skipFramesCheckbox state]);
+        if (config_GetType("bluray-menu"))
+            config_PutInt(p_intf, "bluray-menu", [_input_blurayMenusCheckbox state]);
 
         SaveIntList(_input_aviPopup, "avi-index");
 

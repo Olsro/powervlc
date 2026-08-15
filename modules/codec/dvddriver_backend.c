@@ -26,6 +26,12 @@
 
 #include "dvddriver_backend.h"
 
+/* DVD Player n'emploie que 0..3, mais VLC conserve ses picture_t plus longtemps
+ * et a besoin du cinquième slot annoncé par OpenDevice pour ne pas affamer le
+ * décodeur. VLC réordonne ensuite les images en ordre PTS : le Show demandé par
+ * le vout doit donc sélectionner ce slot, contrairement à la FIFO de DVD Player. */
+#define DD_MP_SURFACES 5
+
 /* U4 — INSTANCE UNIQUE par process. Le device DVDDriver/ATI n'admet qu'un
  * décodeur HW à la fois ; un 2e dvddriver_open() (2e flux MPEG-2 simultané)
  * renvoie NULL → l'appelant retombe sur libmpeg2 CPU. */
@@ -603,6 +609,11 @@ struct dvddriver_ctx
      * sur 10.4). Il faut donc poser à sa place le mot couleurs/contrastes que
      * la version 10.4 extrait du descripteur. */
     bool     lay_sp_stub;
+    /* Version majeure Darwin du pilote chargé. Certains champs de pic_desc ont
+     * un contrat différent sur le DVDDriver RV200 de Tiger : conserver ici le
+     * système réellement détecté évite de faire dépendre ce protocole du seul
+     * layout subpicture. */
+    int      darwin_major;
     /* valeurs de SORTIE d'OpenDevice, jusqu'ici ignorées */
     uint32_t open_caps, open_dims[4];
     uint16_t open_five, open_eight;
@@ -938,20 +949,12 @@ static void dd_recycle_locked(dvddriver_ctx *ctx, int keep)
 {
     while (ctx->n_pending > keep && !ctx->closed
            && ctx->Show != NULL && ctx->dev_ctx != NULL) {
-        int idx = ctx->pending[0];
-        /* ★ SECOND chemin d'affichage de surfaces PÉRIMÉES — il faut le traiter
-         * comme la boucle de drainage de `dvddriver_present_index`, sinon les
-         * « retours en arrière » subsistent. Celui-ci se déclenche sur
-         * contre-pression (Decode trop long) et en filet anti-famine : sur une
-         * machine saturée il tire souvent, ce qui explique que corriger la seule
-         * boucle de present n'ait rien changé à l'œil.
-         * Même principe : on garde l'APPEL, qui est ce qui vide la file interne
-         * du pilote, mais on ré-affiche la surface DÉJÀ à l'écran. */
-        if (ctx->drain_shows_current
-            && ctx->last_shown >= 0 && ctx->last_shown < 5)
-            idx = ctx->last_shown;
         ctx->n_show_recycle++;
-        ctx->Show(ctx->dev_ctx, (uint32_t) idx, NULL, NULL);
+        /* Ce chemin ne correspond à aucune image demandée par l'horloge VLC :
+         * il ne fait que rendre un tampon sous contre-pression ou à la fermeture.
+         * Comme DVD.framework pour sa FIFO, avancer avec zéro est sûr ici. Un
+         * index arbitraire dans ce chemin a bloqué le RV200 dans MapMemory. */
+        ctx->Show(ctx->dev_ctx, 0, NULL, NULL);
         for (int r = 1; r < ctx->n_pending; r++)
             ctx->pending[r - 1] = ctx->pending[r];
         ctx->n_pending--;
@@ -1679,6 +1682,7 @@ dvddriver_ctx *dvddriver_open(unsigned width, unsigned height, int display_mode,
          * sur 10.4, la garde NULL restant en place. Ce drapeau n'existe que pour
          * refuser le déréférencement sur un layout NON relevé (une version
          * future, ou un pilote inconnu). */
+        ctx->darwin_major = darwin;
         ctx->lay_sp_stub  = (darwin > 0 && darwin < 7);
         /* ⚠⚠ La taille du contexte CHANGE avec le système. Sur le Rage 128 elle
          * tombe de 760 o (10.3/10.4) à 348 o (10.2) : sans cette correction, les
@@ -1874,8 +1878,17 @@ dvddriver_ctx *dvddriver_open(unsigned width, unsigned height, int display_mode,
      * synchro : une picture INTRA sans aucun coefficient (tous les MB en
      * mb_type=0, cbp=0) — c'est la soumission la plus inoffensive possible : pas
      * de référence à lire, pas de vecteur de mouvement, pas de coefficient.
-     * /tmp/hw_nowarmup désactive (A/B). */
-    if (dd_gate_read("/tmp/hw_nowarmup") <= 0)
+     *
+     * Sur le DVDDriver RV200 de Tiger, ShowMPBuffer(0) ne rend PAS la surface
+     * choisie par Decode (la mire part normalement dans le slot 1). Cette
+     * surface reste occupée sans picture_t capable de la présenter ; les trois
+     * premières vraies images remplissent les slots restants, puis le décodeur
+     * attend indéfiniment avant toute image à l'écran. Robots rend ce défaut
+     * déterministe. Le premier vrai Decode ne coûte que 13–20 ms sur ce pilote :
+     * aucun préchauffage n'y est nécessaire. On le conserve sur Jaguar/Panther,
+     * dont les chemins validés ne changent pas. /tmp/hw_nowarmup le désactive
+     * aussi sur ces systèmes pour l'A/B. */
+    if (ctx->darwin_major != 8 && dd_gate_read("/tmp/hw_nowarmup") <= 0)
     {
         unsigned nb_mbs = ((width + 15) / 16) * ((height + 15) / 16);
         if (dvddriver_picture_begin(ctx, 1 /*I*/, 3 /*frame*/, nb_mbs) == 0) {
@@ -1996,36 +2009,12 @@ static int dd_pick_output(dvddriver_ctx *ctx)
     pthread_mutex_lock(&ctx->lock);
     int sel = -1;
     for (int attempt = 0; attempt < 6 && sel < 0 && !ctx->closed; attempt++) {
-        for (int k = 1; k <= 5; k++) {
-            int s = (ctx->rr_out + k) % 5;
-            /* ★ Ne JAMAIS choisir la surface actuellement à l'écran. Elle
-             * n'était protégée que tant que VLC détenait sa picture ; dès la
-             * destruction du contexte, `surf_hold` retombe à 0 et l'image
-             * suivante se décodait PAR-DESSUS celle en cours de balayage.
-             * Mesuré : 59 surfaces présentées deux fois de suite sur 1441
-             * (≈ une par seconde) — invisible pour l'histogramme de cadence,
-             * mais bien visible à l'œil, la première image n'ayant qu'un cycle
-             * pour être composée avant d'être écrasée. */
-            /* ★★ Ne JAMAIS décoder dans la surface À L'ÉCRAN, même si VLC a
-             * déjà relâché sa picture : quand la surface est composée en
-             * direct (app active à la création — 10.3), la réécrire fait
-             * apparaître l'image FUTURE à l'écran avant l'heure, puis le
-             * present suivant revient en arrière — mesuré sur film au ralenti
-             * (trajectoire du panoramique : bonds +16 puis reculs -2). */
-            /* ⚠ /tmp/hw_noprev : lève la SEULE exclusion qui ne protège pas une
-             * référence ni l'image à l'écran. Avec 5 surfaces imposées par le
-             * pilote (constante `li 0,5` d'OpenDevice), quatre exclusions ne
-             * laissent qu'un candidat : le décodeur attend 40 % du temps et le
-             * moindre Decode long (mesuré jusqu'à 80 ms) devient une saccade,
-             * faute de coussin. `prev_shown` avait été ajouté pour la
-             * composition DIRECTE de 10.3 ; à vérifier à l'œil avant d'en faire
-             * un défaut, l'artefact d'origine étant une image future montrée en
-             * avance. */
-            static int s_noprev = -1;
-            if (s_noprev < 0) s_noprev = (dd_gate_read("/tmp/hw_noprev") > 0);
+        for (int k = 1; k <= DD_MP_SURFACES; k++) {
+            int s = (ctx->rr_out + k) % DD_MP_SURFACES;
+            /* Les références et les picture_t encore détenues sont les seules
+             * surfaces indisponibles. Exclure aussi last_shown/prev_shown ne
+             * laissait plus assez de coussin à VLC et affamait Decode. */
             if (s != ctx->ref_idx[0] && s != ctx->ref_idx[1]
-                && s != ctx->last_shown
-                && (s_noprev || s != ctx->prev_shown)
                 && ctx->surf_hold[s] == 0) {
                     sel = s;
                 break;
@@ -2123,14 +2112,29 @@ int dvddriver_picture_begin(dvddriver_ctx *ctx, int coding_type,
         ctx->out_idx = 0;
         return -1;
     }
-    if (coding_type == 1) {                 /* I : aucune référence */
-        ctx->fwd_ref = 0xff; ctx->bwd_ref = 0xff;
-    } else if (coding_type == 2) {          /* P : forward = dernière I/P */
-        ctx->fwd_ref = (ctx->ref_idx[0] >= 0) ? ctx->ref_idx[0] : 0xff;
-        ctx->bwd_ref = 0xff;
+    if (ctx->darwin_major == 8) {
+        /* Contrat PowerVLC 1.2.0 validé sur le RV200/Tiger. Le pilote y attend
+         * 0xff pour une référence absente ; lui donner la surface 0 sur la
+         * première I d'un menu peut engager une lecture circulaire et bloquer
+         * le FIFO Radeon jusque dans le noyau. */
+        if (coding_type == 1) {
+            ctx->fwd_ref = ctx->bwd_ref = 0xff;
+        } else if (coding_type == 2) {
+            ctx->fwd_ref = (ctx->ref_idx[0] >= 0) ? ctx->ref_idx[0] : 0xff;
+            ctx->bwd_ref = 0xff;
+        } else {
+            ctx->fwd_ref = (ctx->ref_idx[1] >= 0) ? ctx->ref_idx[1] : 0xff;
+            ctx->bwd_ref = (ctx->ref_idx[0] >= 0) ? ctx->ref_idx[0] : 0xff;
+        }
+    } else if (coding_type == 1) {          /* I : refs ignorées mais valides */
+        ctx->fwd_ref = ctx->bwd_ref =
+            (ctx->ref_idx[0] >= 0) ? ctx->ref_idx[0] : 0;
+    } else if (coding_type == 2) {          /* P : Apple duplique la dernière I/P */
+        ctx->fwd_ref = ctx->bwd_ref =
+            (ctx->ref_idx[0] >= 0) ? ctx->ref_idx[0] : 0;
     } else {                                /* B : fwd=avant-dernière, bwd=dernière */
-        ctx->fwd_ref = (ctx->ref_idx[1] >= 0) ? ctx->ref_idx[1] : 0xff;
-        ctx->bwd_ref = (ctx->ref_idx[0] >= 0) ? ctx->ref_idx[0] : 0xff;
+        ctx->fwd_ref = (ctx->ref_idx[1] >= 0) ? ctx->ref_idx[1] : 0;
+        ctx->bwd_ref = (ctx->ref_idx[0] >= 0) ? ctx->ref_idx[0] : 0;
     }
     return 0;
 }
@@ -2193,7 +2197,9 @@ void dvddriver_picture_mb_begin(dvddriver_ctx *ctx, int mb_type, int dct_type,
     {
         static int s_nozero = -1;
         if (s_nozero < 0) s_nozero = (dd_gate_read("/tmp/hw_nozero") > 0);
-        if (!s_nozero) {
+        /* La 1.1.0 transmettait les huit valeurs brutes sur Jaguar. Le nettoyage
+         * ci-dessous vient d'une trace Tiger et change les descripteurs 10.2. */
+        if (!s_nozero && !ctx->lay_sp_stub) {
             if (mb_type == 1 || mb_type == 5) {        /* AVANT seul */
                 lmv[2] = lmv[3] = lmv[6] = lmv[7] = 0;
                 lfs[1] = lfs[3] = 0;
@@ -2243,15 +2249,24 @@ void dvddriver_picture_mb_begin(dvddriver_ctx *ctx, int mb_type, int dct_type,
          * « arrière » du descripteur est un RESTE du macrobloc précédent. La
          * comparer revenait à trancher sur des données qui ne servent pas, et
          * faisait refuser des macroblocs parfaitement convertibles. */
-        const bool b_fwd = (mb_type == 5 || mb_type == 7);
-        const bool b_bwd = (mb_type == 6 || mb_type == 7);
-        b_cvt_exact = true;
-        if (b_fwd)
+        if (ctx->lay_sp_stub && ctx->field_exp == 4) {
+            /* Contrat 1.1.0/Jaguar : une conversion field→frame n'est admise
+             * que si le descripteur COMPLET des deux champs est identique. */
             b_cvt_exact = lmv[0] == lmv[4] && lmv[1] == lmv[5]
-                && (!b_fs || lfs[0] == lfs[2]);
-        if (b_bwd)
-            b_cvt_exact = b_cvt_exact && lmv[2] == lmv[6] && lmv[3] == lmv[7]
-                && (!b_fs || lfs[1] == lfs[3]);
+                       && lmv[2] == lmv[6] && lmv[3] == lmv[7];
+            if (b_cvt_exact && b_fs)
+                b_cvt_exact = lfs[0] == lfs[2] && lfs[1] == lfs[3];
+        } else {
+            const bool b_fwd = (mb_type == 5 || mb_type == 7);
+            const bool b_bwd = (mb_type == 6 || mb_type == 7);
+            b_cvt_exact = true;
+            if (b_fwd)
+                b_cvt_exact = lmv[0] == lmv[4] && lmv[1] == lmv[5]
+                    && (!b_fs || lfs[0] == lfs[2]);
+            if (b_bwd)
+                b_cvt_exact = b_cvt_exact && lmv[2] == lmv[6]
+                    && lmv[3] == lmv[7] && (!b_fs || lfs[1] == lfs[3]);
+        }
 
         /* ★★★ TRAITEMENT DES MACROBLOCS NON CONVERTIBLES EXACTEMENT.
          *
@@ -2469,6 +2484,13 @@ void dvddriver_picture_mb_block_rl(dvddriver_ctx *ctx, const int16_t (*rl)[2],
     ctx->cur_block++;
 }
 
+bool dvddriver_uses_fixed_zigzag(const dvddriver_ctx *ctx)
+{
+    /* Testé sur Hardware : nécessaire à la fois sur Rage et RV200 
+    de Jaguar à Tiger */
+    return ctx != NULL;
+}
+
 void dvddriver_picture_mb_end(dvddriver_ctx *ctx)
 {
     if (ctx->mb_index < ctx->nb_mbs)
@@ -2670,6 +2692,10 @@ int dvddriver_picture_submit(dvddriver_ctx *ctx)
 
     uint8_t pic[0x40];
     memset(pic, 0, sizeof(pic));
+    /* Le contrat 1.2.0 validé sur Tiger laisse [0] nul. Les autres pilotes
+     * conservent la capture Apple utilisée pour corriger le chemin Jaguar. */
+    if (ctx->darwin_major != 8)
+        pic[0x00] = (uint8_t) ctx->coding_type;
     pic[0x02] = (uint8_t) ctx->pic_structure;      /* 3=frame */
 
     /* ★ CHAMPS PAR-PASSE de pic_desc (piste field, jamais testée jusqu'ici).
@@ -2688,13 +2714,13 @@ int dvddriver_picture_submit(dvddriver_ctx *ctx)
      * prédiction de champ — d'où une erreur INVISIBLE en mouvement lent (les deux
      * prédictions de champ sont quasi identiques) et TRÈS visible en mouvement
      * rapide, exactement la signature observée.
-     * Dial d'expérience `/tmp/hw_picdesc` (bitmask) : 1 = type de picture en
-     * [0x00]/[0x01], 2 = structure aussi en [0x03], 4 = type en [0x04]/[0x05]. */
+     * Dial d'expérience `/tmp/hw_picdesc` (bitmask) : 1 = duplique le type en
+     * [0x01], 2 = structure aussi en [0x03], 4 = type en [0x04]/[0x05].
+     * Le bit 1 reste un essai : Apple laisse [1] à zéro. */
     {
         static int s_pd = -2;
         if (s_pd == -2) { int v = dd_gate_read("/tmp/hw_picdesc"); s_pd = (v > 0) ? v : 0; }
-        if (s_pd & 1) { pic[0x00] = (uint8_t) ctx->coding_type;
-                        pic[0x01] = (uint8_t) ctx->coding_type; }
+        if (s_pd & 1)   pic[0x01] = (uint8_t) ctx->coding_type;
         if (s_pd & 2)   pic[0x03] = (uint8_t) ctx->pic_structure;
         if (s_pd & 4) { pic[0x04] = (uint8_t) ctx->coding_type;
                         pic[0x05] = (uint8_t) ctx->coding_type; }
@@ -3358,15 +3384,13 @@ static bool dd_sp_set_display(dvddriver_ctx *ctx, const uint32_t bufs_b[8],
     if (pkt == NULL)
         return false;
 
-    /* ★★★ L'OPACITÉ NE VIENT PAS DE LA PALETTE — elle vient de `SET_CONTR`.
-     * La palette du pilote est { 00, Y, Cb, Cr } : elle ne porte AUCUN alpha.
-     * Sans la commande SPU 0x04, tout le plan est transparent : parfaitement
-     * rempli et parfaitement invisible (des heures perdues là-dessus).
-     * `ApplySPDCSQ` applique UNE COMMANDE PAR APPEL — arg3 = offset de la
-     * commande dans le tampon, arg4 = sa longueur. On envoie donc, à
-     * l'affichage : SET_COLOR (indices de palette) puis SET_CONTR (contraste)
-     * avant STA_DSP. Séquence validée à l'écran sur le Rage 128. */
-    if (cmd == 0x01) {
+    /* Le Rage 128 exige de rejouer SET_COLOR et SET_CONTR avant STA_DSP : sa
+     * palette ne porte pas l'opacité. Le RV200/Tiger, lui, a déjà reçu ces deux
+     * valeurs dans le descripteur de SetSPBuffer. Lui envoyer les trois DCSQ
+     * synchrones à chaque apparition provoque une grosse saccade ; le plugin
+     * 1.1 fluide n'y envoyait que STA_DSP. `sp_swap_words` distingue ici la
+     * famille Rage 128, seule famille validée avec la séquence étendue. */
+    if (cmd == 0x01 && ctx->sp_swap_words) {
         /* ⚠ Les VRAIES valeurs du sous-titre, pas des constantes : figer
          * SET_COLOR à 0x2222 donnait la même entrée de palette au texte et à son
          * fond — parfait pour une mire uniforme, invisible pour un sous-titre. */
@@ -3437,7 +3461,7 @@ static bool dd_sp_arm(dvddriver_ctx *ctx, const uint8_t palette[64])
 
 bool dvddriver_sp_usable(dvddriver_ctx *ctx)
 {
-    return ctx != NULL && ctx->sp_available && ctx->dev_ctx != NULL
+    return ctx != NULL && !ctx->closed && ctx->sp_available && ctx->dev_ctx != NULL
         && ctx->GetSPBuffer && ctx->SetSPBuffer && ctx->ShowSPBuffer
         && ctx->SetSPPalette && ctx->EnableSP;
 }
@@ -3453,6 +3477,13 @@ bool dvddriver_sp_submit(dvddriver_ctx *ctx, const dvddriver_sp_picture *sp,
         return false;
 
     pthread_mutex_lock(&ctx->lock);
+    /* Le test extérieur peut précéder dvddriver_close(), puis attendre ici
+     * derrière sa fermeture du device. Ne jamais poursuivre avec les pointeurs
+     * SP et les mappings que Jaguar vient d'invalider. */
+    if (!dvddriver_sp_usable(ctx)) {
+        pthread_mutex_unlock(&ctx->lock);
+        return false;
+    }
     dd_wait_gpu_idle_locked(ctx);
     if (!dd_sp_rate_ok(ctx)) {
         ctx->sp_dropped++;
@@ -3864,18 +3895,35 @@ bool dvddriver_sp_hide(dvddriver_ctx *ctx)
     if (!dvddriver_sp_usable(ctx))
         return false;
     pthread_mutex_lock(&ctx->lock);
+    if (!dvddriver_sp_usable(ctx)) {
+        pthread_mutex_unlock(&ctx->lock);
+        return false;
+    }
     dd_wait_gpu_idle_locked(ctx);
     if (!ctx->sp_visible) {
         pthread_mutex_unlock(&ctx->lock);
         return false;
     }
-    /* Un bitmap ENTIÈREMENT transparent est plus sûr qu'un EnableSP(0) : il
-     * laisse le plan armé (donc pas de nouvelle négociation avec le driver) et
-     * n'emprunte que le chemin déjà validé. */
+    /* Jaguar a un pilote SP différent : ses buffers vivent dans un global du
+     * bundle et deviennent invalides lors d'un changement de surface. Après
+     * une bascule plein écran, GetSPBuffer peut encore rendre leurs anciennes
+     * adresses et le premier ShowSPBuffer du bitmap transparent plante dans
+     * DVDDriverEndDecode. La commande STP_DSP, elle, ne touche qu'au drapeau
+     * d'affichage (ctx[0x14F] sur Rage 128) et le prochain paquet le réarme par
+     * STA_DSP. Elle suffit donc sur 10.2, sans relancer aucun blit ni désarmer
+     * le plan avec EnableSP(0). Le paquet brut sera recopié au prochain submit,
+     * donc l'octet 0 utilisé ici peut être écrasé sans effet durable. */
     uint32_t bufs_a[8], bufs_b[8];
     memset(bufs_a, 0, sizeof(bufs_a));
     memset(bufs_b, 0, sizeof(bufs_b));
     if (ctx->GetSPBuffer(ctx->dev_ctx, bufs_a, bufs_b) == 0) {
+        if (ctx->lay_sp_stub) {
+            dd_sp_set_display(ctx, bufs_b, ctx->sp_show_idx & 7, 0x02);
+            goto hidden;
+        }
+
+        /* Sur Panther/Tiger, le bitmap ENTIÈREMENT transparent reste le
+         * chemin validé : il laisse le plan armé et ne renégocie rien. */
         const int idx = ctx->sp_next_buf & 7;
         const int show_idx = idx;
         ctx->sp_next_buf++;
@@ -3898,6 +3946,7 @@ bool dvddriver_sp_hide(dvddriver_ctx *ctx)
             dd_sp_set_display(ctx, bufs_b, idx, 0x02);
         }
     }
+hidden:
     ctx->sp_visible = false;
     ctx->sp_hide_at_us = 0;
     ctx->sp_hidden++;
@@ -4090,69 +4139,9 @@ static void dd_show_locked(dvddriver_ctx *ctx, int idx)
      * identifié ; mais la vraie parade est de ne jamais rouvrir le décodeur en
      * cours de lecture, cf. libmpeg2.c Reset().) */
 
-    /* ★ SCINTILLEMENT (Panther/Jaguar) : les tampons soumis puis jamais
-     * présentés (pictures que le vout n'affichera pas) doivent être rendus au
-     * driver par ShowMPBuffer — qui AFFICHE. Les rendre au fil de l'eau avant
-     * chaque Decode intercalait des images HORS ORDRE entre les présents du
-     * vout : invisible sur Tiger (2 jetées/108), 1-2 images/s de travers sur
-     * Panther (26 %% de jetées) — le scintillement constaté à l'œil. Ici on les
-     * draine DANS L'ORDRE DE SOUMISSION, juste avant l'image courante, sous le
-     * même verrou : entre deux composites du WindowServer seul le DERNIER Show
-     * est visible, les périmées ne touchent jamais l'écran. */
-    for (int guard = 0; ctx->n_pending > 0 && guard < 8; guard++) {
-        int p0 = ctx->pending[0];
-        if (p0 == idx)
-            break;                       /* la cible sera montrée ci-dessous */
-        /* ⚠⚠⚠ CAUSE CONNUE, DEUX REMÈDES ESSAYÉS ET RÉGRESSIFS (2026-08-05).
-         * DIAGNOSTIC (solide) : `pending` est en ordre de SOUMISSION, qui n'est
-         * PAS l'ordre d'affichage dès qu'il y a des images B. Sur `I P B B`,
-         * présenter le premier B trouve le P en tête de file et l'AFFICHE juste
-         * avant : image FUTURE poussée à l'écran, puis retour en arrière. C'est
-         * l'origine des 2-3 « retours en arrière » par lecture vus à l'œil sur
-         * le Rage 128, où l'absence de `CGSFlushSurface` (`apple_display_seq`)
-         * laisse la composition asynchrone échantillonner un Show intermédiaire.
-         *
-         * ⛔ NE PAS retenir un Show au motif que la surface sera présentée plus
-         * tard (`surf_hold != 0`). MESURÉ, les deux variantes régressent :
-         *   - `break` sur la 1re surface portée   -> saccades ÉNORMES ;
-         *   - `continue` (sauter, drainer les orphelines plus loin dans la file)
-         *     -> 874 images décodées en 55 s au lieu de ~1265 (16 im/s), attente
-         *        de surface 29,5 s au lieu de 20,5.
-         * Ce `Show` n'est donc pas qu'un affichage : c'est ce qui vide la file
-         * interne du pilote, et la retarder met Decode en contre-pression.
-         * ⇒ La seule sortie propre est de RENDRE UN TAMPON SANS L'AFFICHER.
-         * Piste identifiée au désassemblage : `ShowMPBuffer(ctx, idx, p_mode)`
-         * lit `*(u16 *) p_mode` (2 par défaut quand l'argument est NULL) et le
-         * transmet tel quel à l'appel IOKit **sélecteur 10**, avec `{idx, mode}`.
-         * Reste à relever les valeurs de mode qu'emploie le lecteur d'Apple
-         * (spy `sp4.c`, en journalisant `*(u16 *)arg3` — le pilote déréférence
-         * lui-même ce pointeur, la lecture est donc sûre). `ClearMP` a été
-         * écarté : il ne prend pas d'index et ne touche que l'anneau. */
-        memmove(ctx->pending, ctx->pending + 1,
-                (--ctx->n_pending) * sizeof ctx->pending[0]);
-        /* ★★★ LA CORRECTION DES « RETOURS EN ARRIÈRE » (2026-08-05, validée à
-         * l'œil) : garder l'APPEL — c'est lui qui vide la file interne du
-         * pilote, les deux régressions ci-dessus le prouvent — mais RÉ-AFFICHER
-         * LA SURFACE DÉJÀ À L'ÉCRAN au lieu de la périmée. Même nombre d'appels
-         * IOKit, au même moment, donc aucune contre-pression ; et l'image
-         * affichée ne recule jamais.
-         * ★ Fait nouveau qui rend cela possible : **le pilote n'a PAS besoin de
-         * l'index exact pour rendre le tampon**, l'appel IOKit suffit. Mesuré :
-         * 1363 images décodées sur 55 s (référence ~1265-1351), attente de
-         * surface 20,3 s (référence 20,5) — aucune dégradation.
-         * `/tmp/hw_drain_last` force ce comportement sur les familles où il
-         * n'est pas le défaut (RV200), pour pouvoir l'y éprouver. */
-        int shown = p0;
-        if (ctx->last_shown >= 0 && ctx->last_shown < 5) {
-            static int g = -1;
-            if (g < 0) g = (dd_gate_read("/tmp/hw_drain_last") > 0);
-            if (ctx->drain_shows_current || g)
-                shown = ctx->last_shown;
-        }
-        ctx->n_show_drain++;
-        ctx->Show(ctx->dev_ctx, (uint32_t) shown, NULL, NULL);
-        pthread_cond_broadcast(&ctx->surf_cv);
-    }
+    /* Un rappel du vout produit exactement un Show. L'ancien drainage ajoutait
+     * presque un Show par image (1183 pour 1202 rappels) et exposait l'ordre de
+     * soumission I/P/B/B au lieu de l'ordre PTS : saccades régulières garanties. */
     /* ⚠ RETIRÉ (29/07, établi par DÉSASSEMBLAGE de CoreGraphics 10.3) : une
      * transaction CGSDisableUpdate/ReenableUpdate autour du present est
      * CONTRE-PRODUCTIVE. Dans `CGXFlushSurface`, le blit accéléré
@@ -4179,16 +4168,11 @@ static void dd_show_locked(dvddriver_ctx *ctx, int idx)
     ctx->prev_shown = ctx->last_shown;
     ctx->last_shown = idx;
 
-    /* ⚠ 2e argument de ShowMPBuffer : le lecteur d'Apple y passe TOUJOURS 0
-     * (trace sptrace.c), jamais un index. Or c'est cet argument que la routine
-     * d'expansion du subpicture DÉRÉFÉRENCE (à +0x204) — lui donner un petit
-     * entier revient à lui donner un pointeur invalide, ce qui explique les
-     * plantages répétés du plan SP. Le chemin vidéo, lui, ne le déréférence
-     * pas : d'où une lecture qui fonctionne malgré tout.
-     * /tmp/hw_show_zero adopte la convention d'Apple, le temps de vérifier que
-     * l'ordre d'affichage reste correct sans passer l'index ici. */
-    static int s_show_zero = -2;
-    if (s_show_zero == -2) s_show_zero = (dd_gate_read("/tmp/hw_show_zero") > 0);
+    /* Le lecteur Apple passe toujours zéro (trace sptrace.c), car son frontend
+     * consomme la FIFO dans l'ordre. VLC remet les B en ordre PTS : son rappel
+     * de present doit au contraire passer `idx`, comme les plugins 1.1/1.2.
+     * L'incident MapMemory venait d'un Show indexé dans dd_recycle_locked, hors
+     * de tout present demandé, et non de cette sélection de la surface cible. */
     /* SP5c — le blit subpicture s'exécute-t-il ? On lit quatre mots à la
      * destination (ctx[0x204]) juste avant et juste après le Show, sur les
      * premières images seulement. Lecture pure : aucun appel supplémentaire. */
@@ -4203,7 +4187,10 @@ static void dd_show_locked(dvddriver_ctx *ctx, int idx)
             for (w = 0; w < 16384; w += 16)
                 h1 = (h1 * 31u) ^ dst[w];
             ctx->n_show_target++;
-            ctx->Show(ctx->dev_ctx, s_show_zero ? 0 : (uint32_t) idx, NULL, NULL);
+            /* VLC présente en ordre PTS, différent de l'ordre de soumission
+             * dès qu'il y a des B : le plugin 1.2 fluide sélectionne ici la
+             * surface cible. Le zéro Apple n'est valable que pour sa FIFO. */
+            ctx->Show(ctx->dev_ctx, (uint32_t) idx, NULL, NULL);
             for (w = 0; w < 16384; w += 16)
                 h2 = (h2 * 31u) ^ dst[w];
             ctx->sp_dest_before[ctx->sp_dest_probes][0] = h1;
@@ -4213,9 +4200,10 @@ static void dd_show_locked(dvddriver_ctx *ctx, int idx)
         }
     }
     ctx->n_show_target++;
-    ctx->Show(ctx->dev_ctx, s_show_zero ? 0 : (uint32_t) idx, NULL, NULL);
+    ctx->Show(ctx->dev_ctx, (uint32_t) idx, NULL, NULL);
 shown:;
-    dd_pending_drop(ctx, idx);        /* buffer MP rendu au driver par ce Show */
+    dd_pending_drop(ctx, idx);
+    pthread_cond_broadcast(&ctx->surf_cv);
 
     /* ★★★ RÉ-ÉTALEMENT DU SUBPICTURE APRÈS L'IMAGE VIDÉO.
      * Le `ShowMPBuffer` qui vient de s'exécuter a réécrit la surface : sur les

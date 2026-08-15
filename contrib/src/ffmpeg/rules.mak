@@ -83,6 +83,13 @@ FFMPEGCONF += --enable-libmp3lame
 DEPS_ffmpeg += lame $(DEPS_lame)
 else
 FFMPEGCONF += --disable-encoders --disable-muxers
+# ⚠ …except Matroska. It is the ONLY container the player can write that
+# carries ASS/SSA styling and Blu-ray PGS subtitle bitmaps, and the only one
+# that takes an HEVC or H.264 film together with its raw PCM track. Without
+# it, recording and clip export silently drop those subtitle tracks and fall
+# back to AVI or ASF for the rest (see modules/stream_out/record.c).
+# A MUXER, not an encoder: nothing here re-encodes, the streams are copied.
+FFMPEGCONF += --enable-muxer=matroska
 endif
 
 ifneq ($(findstring amf,$(PKGS)),)

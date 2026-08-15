@@ -26,6 +26,11 @@
 #endif
 
 #include <assert.h>
+#include <ctype.h>      /* isalpha() */
+#ifdef _WIN32
+# include <windows.h>   /* GetUserDefaultUILanguage() */
+# include <wctype.h>    /* iswalpha() */
+#endif
 
 #ifdef HAVE_GETMNTENT_R
 # include <mntent.h>
@@ -75,7 +80,11 @@
 
 #define BD_MENU_TEXT        N_("Blu-ray menus")
 #define BD_MENU_LONGTEXT    N_("Use Blu-ray menus. If disabled, "\
-                                "the movie will start directly")
+                                "the movie will start directly. Some discs "\
+                                "run their menus as a Java (BD-J) application "\
+                                "that keeps one processor core busy for as "\
+                                "long as the disc is playing, so disabling "\
+                                "menus can matter on an older machine.")
 #define BD_REGION_TEXT      N_("Region code")
 #define BD_REGION_LONGTEXT  N_("Blu-Ray player region code. "\
                                 "Some discs can be played only with a correct region code.")
@@ -358,38 +367,108 @@ static void unref_subpicture_updater(subpicture_updater_sys_t *p_sys)
 /* Get a 3 char code
  * FIXME: partiallyy duplicated from src/input/es_out.c
  */
-static const char *DemuxGetLanguageCode( demux_t *p_demux, const char *psz_var )
+static const iso639_lang_t *DemuxFindLanguage( const char *psz_lang )
 {
-    const iso639_lang_t *pl;
-    char *psz_lang;
-    char *p;
+    if( psz_lang == NULL || *psz_lang == '\0' )
+        return NULL;
 
-    psz_lang = var_CreateGetString( p_demux, psz_var );
-    if( !psz_lang )
-        return LANGUAGE_DEFAULT;
-
-    /* XXX: we will use only the first value
-     * (and ignore other ones in case of a list) */
-    if( ( p = strchr( psz_lang, ',' ) ) )
-        *p = '\0';
-
-    for( pl = p_languages; pl->psz_eng_name != NULL; pl++ )
+    for( const iso639_lang_t *pl = p_languages; pl->psz_eng_name != NULL; pl++ )
     {
-        if( *psz_lang == '\0' )
-            continue;
         if( !strcasecmp( pl->psz_eng_name, psz_lang ) ||
             !strcasecmp( pl->psz_iso639_1, psz_lang ) ||
             !strcasecmp( pl->psz_iso639_2T, psz_lang ) ||
             !strcasecmp( pl->psz_iso639_2B, psz_lang ) )
-            break;
+            return pl;
+    }
+    return NULL;
+}
+
+/* Interface language, the way gettext sees it. Kept in step with the same
+ * helper in dvdnav.c -- a Blu-ray reads its player language registers
+ * (PSR16/17/18) exactly as a DVD reads its SPRMs, and answering "eng" to a
+ * disc because nobody typed a preference declares the user an English
+ * speaker to EVERY disc: a French Blu-ray then takes its English branch and
+ * its BD-J menus come up in English on a French install (measured on
+ * Windows XP with RIO, 14/08/2026). */
+static const char *DemuxGetUILanguage( char *psz_buffer, size_t i_size )
+{
+    static const char *const ppsz_vars[] =
+        { "LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG" };
+
+    for( size_t i = 0; i < ARRAY_SIZE(ppsz_vars); i++ )
+    {
+        const char *psz_env = getenv( ppsz_vars[i] );
+        if( psz_env == NULL )
+            continue;
+
+        /* "fr", "fr_FR", "fr_FR.UTF-8", "fr_FR@euro", "fr:en" */
+        size_t i_len = 0;
+        while( isalpha( (unsigned char)psz_env[i_len] ) )
+            i_len++;
+        /* rejects "C" and "POSIX", which are not languages */
+        if( i_len < 2 || i_len > 3 || i_len >= i_size )
+            continue;
+
+        memcpy( psz_buffer, psz_env, i_len );
+        psz_buffer[i_len] = '\0';
+        return psz_buffer;
     }
 
-    free( psz_lang );
+#ifdef _WIN32
+    /* An empty environment does not mean "no preference" here: winvlc only
+     * exports LANG when a language was picked by hand, and on "auto" gettext
+     * asks Windows itself (GETTEXT_MUI). Ask it the same question. */
+    {
+        LANGID langid = GetUserDefaultUILanguage();
+        wchar_t wbuf[16];
+        int i_wlen = GetLocaleInfoW( MAKELCID( langid, SORT_DEFAULT ),
+                                     LOCALE_SISO639LANGNAME,
+                                     wbuf, ARRAY_SIZE(wbuf) );
+        size_t i_len = 0;
+        while( i_wlen > 0 && wbuf[i_len] != L'\0'
+            && iswalpha( wbuf[i_len] ) && i_len + 1 < i_size )
+        {
+            psz_buffer[i_len] = (char)wbuf[i_len];
+            i_len++;
+        }
+        if( i_len >= 2 )
+        {
+            psz_buffer[i_len] = '\0';
+            return psz_buffer;
+        }
+    }
+#endif
 
-    if( pl->psz_eng_name != NULL )
-        return pl->psz_iso639_2T;
+    return NULL;
+}
 
-    return LANGUAGE_DEFAULT;
+static const char *DemuxGetLanguageCode( demux_t *p_demux, const char *psz_var )
+{
+    const iso639_lang_t *pl = NULL;
+    char *psz_lang = var_CreateGetString( p_demux, psz_var );
+
+    if( psz_lang != NULL )
+    {
+        /* XXX: we will use only the first value
+         * (and ignore other ones in case of a list) */
+        char *p = strchr( psz_lang, ',' );
+        if( p != NULL )
+            *p = '\0';
+
+        pl = DemuxFindLanguage( psz_lang );
+        free( psz_lang );
+    }
+
+    if( pl == NULL )
+    {
+        char psz_ui[8];
+        pl = DemuxFindLanguage( DemuxGetUILanguage( psz_ui, sizeof(psz_ui) ) );
+        if( pl != NULL )
+            msg_Dbg( p_demux, "no \"%s\" preference, telling the disc the "
+                     "interface language \"%s\"", psz_var, pl->psz_iso639_1 );
+    }
+
+    return pl != NULL ? pl->psz_iso639_2T : LANGUAGE_DEFAULT;
 }
 
 /*****************************************************************************
@@ -1105,7 +1184,52 @@ static int blurayOpen(vlc_object_t *object)
         /* If we're passed a block device, try to convert it to the mount point. */
         FindMountPoint(&p_sys->psz_bd_path);
 
+        msg_Dbg(p_demux, "opening Blu-ray at %s", p_sys->psz_bd_path);
         p_sys->bluray = bd_open(p_sys->psz_bd_path, NULL);
+
+#ifdef _WIN32
+        /* Windows XP tops out at UDF 2.01 and a Blu-ray is UDF 2.5: the
+         * volume never mounts, Explorer shows nothing, and the open above
+         * dies on "failed opening UDF image H:\". The data is perfectly
+         * readable all the same -- libbluray carries its own UDF reader --
+         * but it has to be handed the RAW VOLUME, because libudfread opens
+         * whatever path it is given with a plain _wopen() and never adds the
+         * device prefix itself (contrib/libudfread, block_input_new()).
+         *
+         * So on a drive root that would not open, try again as \\.\X:.
+         * Second, not first: Vista and later mount the disc perfectly well,
+         * and the mounted path is the one the rest of the world (and the
+         * user's own file manager) agrees on. This is the same reasoning as
+         * the raw-device path above for macOS, whose 10.6 UDF driver reads
+         * 2 KB at a time.
+         *
+         * Measured on Windows XP SP3 with RIO: unreadable before, and after
+         * this "HDMV Titles: 5, BD-J Titles: 86", AACS decrypted, BD-J
+         * running (14/08/2026). */
+        if (p_sys->bluray == NULL
+         && p_sys->psz_bd_path != NULL
+         && ((p_sys->psz_bd_path[0] >= 'A' && p_sys->psz_bd_path[0] <= 'Z')
+          || (p_sys->psz_bd_path[0] >= 'a' && p_sys->psz_bd_path[0] <= 'z'))
+         && p_sys->psz_bd_path[1] == ':'
+         && (p_sys->psz_bd_path[2] == '\0'
+          || ((p_sys->psz_bd_path[2] == '\\' || p_sys->psz_bd_path[2] == '/')
+              && p_sys->psz_bd_path[3] == '\0'))) {
+            char *psz_raw;
+            if (asprintf(&psz_raw, "\\\\.\\%c:", p_sys->psz_bd_path[0]) >= 0) {
+                msg_Dbg(p_demux, "%s did not open, trying the raw volume %s",
+                        p_sys->psz_bd_path, psz_raw);
+                p_sys->bluray = bd_open(psz_raw, NULL);
+                if (p_sys->bluray != NULL) {
+                    /* keep it: libaacs and the disc-eject path below both
+                     * use psz_bd_path, and only this spelling reaches the
+                     * disc on this system */
+                    free(p_sys->psz_bd_path);
+                    p_sys->psz_bd_path = psz_raw;
+                } else
+                    free(psz_raw);
+            }
+        }
+#endif
 #endif
     }
     if (!p_sys->bluray) {

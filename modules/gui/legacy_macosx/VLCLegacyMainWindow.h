@@ -275,6 +275,9 @@ typedef float CGFloat;
 /* Vue vidéo si elle est réellement affichée, sinon nil (masquage du curseur). */
 - (NSView *)videoViewIfVisible;
 - (void)releaseVideoView;
+/* Re-applies the "Draw window shadows" preference to the live window, so
+ * the checkbox takes effect without waiting for the next playback. */
+- (void)applyWindowShadowSetting;
 - (void)setVideoViewSizeFromValue:(NSValue *)size;
 - (void)setVideoFullscreenFromNumber:(NSNumber *)fullscreen;
 - (void)setVideoAboveOthersFromNumber:(NSNumber *)above;

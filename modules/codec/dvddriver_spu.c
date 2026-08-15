@@ -117,6 +117,7 @@ typedef struct
     vlc_cond_t   wait;
     bool         b_thread;
     bool         b_quit;
+    unsigned     i_flush_generation; /* invalide une soumission GPU en vol */
     sp_entry_t  *queue;           /* SP_QUEUE entrées                          */
     unsigned     i_head, i_tail;
     vlc_tick_t   i_hide_at;       /* échéance de l'incrustation en cours       */
@@ -364,6 +365,11 @@ static void SpCropToHighlight(uint8_t *p_bitmap, const int rect[4])
  * cache : le décodeur vidéo peut le fermer à tout moment. */
 static dvddriver_ctx *SpHw(decoder_t *p_dec)
 {
+    /* La vue vient de changer de fenêtre mais le décodeur vidéo n'atteindra
+     * l'image I où il ferme l'ancien device que quelques images plus tard.
+     * Pendant cet intervalle les tampons SP de Jaguar sont déjà invalides. */
+    if( var_GetBool( p_dec->obj.libvlc, DVDDRIVER_VAR_HOLD ) )
+        return NULL;
     dvddriver_ctx *p_hw =
         var_GetAddress( p_dec->obj.libvlc, DVDDRIVER_VAR_CTX );
     return ( p_hw != NULL && dvddriver_sp_usable( p_hw ) ) ? p_hw : NULL;
@@ -812,6 +818,7 @@ static void *SpThread(void *p_data)
         SpBuildPicture( p_dec, e, &sp );
         const vlc_tick_t i_hide = e->i_hide;
         const vlc_tick_t i_late = mdate() - e->i_show;
+        const unsigned i_generation = p_sys->i_flush_generation;
         p_sys->i_tail++;
         p_sys->b_visible = true;
         p_sys->i_hide_at = i_hide;
@@ -852,6 +859,19 @@ static void *SpThread(void *p_data)
                      (int16_t) (dw[4] >> 16), (int16_t) dw[4],
                      (int16_t) (dw[5] >> 16), (int16_t) dw[5] );
         vlc_mutex_lock( &p_sys->lock );
+        /* Flush peut s'exécuter pendant dvddriver_sp_submit(), appelé hors du
+         * verrou. Son premier hide précède alors la soumission et l'ancien
+         * sous-titre réapparaît après le seek. La génération détecte ce cas ;
+         * ce fil étant l'unique soumissionnaire, le second hide ne peut pas
+         * effacer un nouveau sous-titre. */
+        if( i_generation != p_sys->i_flush_generation )
+        {
+            p_sys->b_visible = false;
+            p_sys->i_hide_at = 0;
+            vlc_mutex_unlock( &p_sys->lock );
+            dvddriver_sp_hide( SpHw( p_dec ) );
+            vlc_mutex_lock( &p_sys->lock );
+        }
     }
     vlc_mutex_unlock( &p_sys->lock );
     return NULL;
@@ -976,6 +996,7 @@ static void Flush(decoder_t *p_dec)
     dvddriver_spu_sys_t *p_sys = p_dec->p_sys;
 
     vlc_mutex_lock( &p_sys->lock );
+    p_sys->i_flush_generation++;
     p_sys->i_tail = p_sys->i_head;
     p_sys->i_hide_at = 0;
     const bool b_was_visible = p_sys->b_visible;

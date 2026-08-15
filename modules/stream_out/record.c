@@ -51,6 +51,8 @@ static void     Close   ( vlc_object_t * );
 #define DST_PREFIX_LONGTEXT N_( \
     "Prefix of the destination file automatically generated" )
 #define START_TIME_TEXT N_("Preferred start bound of the capture (µs)")
+#define EXPECT_STREAMS_TEXT N_("Number of elementary streams to wait for")
+#define DEFAULT_SPU_TEXT N_("Mark the subtitle track as default")
 
 #define SOUT_CFG_PREFIX "sout-record-"
 
@@ -72,6 +74,16 @@ vlc_module_begin ()
      * re-encoding. 0 keeps the historic behavior. */
     add_integer( SOUT_CFG_PREFIX "start-time", 0, START_TIME_TEXT,
                  START_TIME_TEXT, true )
+    /* PowerVLC: how many elementary streams the caller knows it selected.
+     * See the note in Send(): the container is chosen from the streams
+     * present at that instant, and a sparse one -- a subtitle -- can turn
+     * up long after. 0 keeps the historic behaviour. */
+    add_integer( SOUT_CFG_PREFIX "expect-streams", 0, EXPECT_STREAMS_TEXT,
+                 EXPECT_STREAMS_TEXT, true )
+    /* Used by clip export only: an extracted subtitle must still be enabled
+     * when the resulting file is opened in another player. */
+    add_bool( SOUT_CFG_PREFIX "default-spu", false, DEFAULT_SPU_TEXT,
+              DEFAULT_SPU_TEXT, true )
 
     set_callbacks( Open, Close )
 vlc_module_end ()
@@ -80,6 +92,8 @@ vlc_module_end ()
 static const char *const ppsz_sout_options[] = {
     "dst-prefix",
     "start-time",
+    "expect-streams",
+    "default-spu",
     NULL
 };
 
@@ -100,6 +114,12 @@ struct sout_stream_id_sys_t
 
     bool b_wait_key;
     bool b_wait_start;
+
+    /* last tick seen on THIS stream while probing, to detect a seek */
+    vlc_tick_t i_probe_last_dts;
+    /* the buffer was already cut at its start frame: the start-time
+     * threshold must not be applied to it a second time */
+    bool b_trimmed;
 };
 
 struct sout_stream_sys_t
@@ -119,10 +139,12 @@ struct sout_stream_sys_t
     int              i_id;
     sout_stream_id_sys_t **id;
     vlc_tick_t  i_dts_start;
-    /* highest audio/video tick seen while probing, to detect a seek */
-    vlc_tick_t  i_probe_last_dts;
     /* preferred start bound (µs, stream time base), 0 = none */
     vlc_tick_t  i_start_bound;
+    /* how many streams the caller selected, 0 = it did not say */
+    int         i_expect_streams;
+    /* ask a capable muxer to make the sole exported subtitle selected */
+    bool        b_default_spu;
 };
 
 static void OutputStart( sout_stream_t *p_stream );
@@ -170,13 +192,17 @@ static int Open( vlc_object_t *p_this )
 #endif
     p_sys->b_drop = false;
     p_sys->i_dts_start = 0;
-    p_sys->i_probe_last_dts = 0;
+    p_sys->b_default_spu = var_GetBool( p_stream,
+                                        SOUT_CFG_PREFIX "default-spu" );
     p_sys->i_start_bound = var_GetInteger( p_stream,
                                            SOUT_CFG_PREFIX "start-time" );
+    p_sys->i_expect_streams = var_GetInteger( p_stream,
+                                          SOUT_CFG_PREFIX "expect-streams" );
     TAB_INIT( p_sys->i_id, p_sys->id );
 
     return VLC_SUCCESS;
 }
+
 
 /*****************************************************************************
  * Close:
@@ -212,6 +238,15 @@ static sout_stream_id_sys_t *Add( sout_stream_t *p_stream, const es_format_t *p_
     id->id = NULL;
     id->b_wait_key = true;
     id->b_wait_start = true;
+    id->i_probe_last_dts = 0;
+    id->b_trimmed = false;
+
+    /* Nothing can be done for it here -- the muxer has its header written
+     * and takes no new stream -- but it used to vanish without a word. */
+    if( p_sys->p_out != NULL )
+        msg_Warn( p_stream, "stream %4.4s only appeared after the output was "
+                  "opened: it cannot be recorded",
+                  (char *)&p_fmt->i_codec );
 
     TAB_APPEND( p_sys->i_id, p_sys->id, id );
 
@@ -257,20 +292,29 @@ static int Send( sout_stream_t *p_stream, sout_stream_id_sys_t *id,
      * so far and re-arm the key frame waits: the post-seek stream begins
      * at the key frame the demuxer resumed from, which is exactly what
      * the clip should start with. Audio/video only: subtitle ticks are
-     * legitimately sparse. */
+     * legitimately sparse.
+     *
+     * ⚠ The reference tick is kept PER STREAM. A single shared one compares
+     * the video clock against the audio clock, and an interleave offset of
+     * more than the tolerance then reads as a seek on every single block:
+     * measured on an MKV export, the capture restarted ~40 times in a row
+     * and the clip lost its whole first GOP (2,7 s), a BluRay remux with
+     * PCM 5.1 lost more. Each elementary stream is only ever compared with
+     * itself now; a real seek moves them all, so seeing it on one is enough
+     * to flush everything. */
     if( !p_sys->p_out &&
         ( id->fmt.i_cat == AUDIO_ES || id->fmt.i_cat == VIDEO_ES ) )
     {
         vlc_tick_t i_tick = BlockTick( p_buffer );
         if( i_tick != 0 )
         {
-            if( p_sys->i_probe_last_dts != 0 &&
-                ( i_tick < p_sys->i_probe_last_dts - 2*CLOCK_FREQ ||
-                  i_tick > p_sys->i_probe_last_dts + 2*CLOCK_FREQ ) )
+            if( id->i_probe_last_dts != 0 &&
+                ( i_tick < id->i_probe_last_dts - 2*CLOCK_FREQ ||
+                  i_tick > id->i_probe_last_dts + 2*CLOCK_FREQ ) )
             {
                 msg_Dbg( p_stream, "timestamp discontinuity while probing "
                          "(%"PRId64" -> %"PRId64"): restarting capture",
-                         p_sys->i_probe_last_dts, i_tick );
+                         id->i_probe_last_dts, i_tick );
                 for( int i = 0; i < p_sys->i_id; i++ )
                 {
                     sout_stream_id_sys_t *p_id = p_sys->id[i];
@@ -280,21 +324,43 @@ static int Send( sout_stream_t *p_stream, sout_stream_id_sys_t *id,
                     p_id->pp_last = &p_id->p_first;
                     p_id->b_wait_key = true;
                     p_id->b_wait_start = true;
+                    /* their buffers are gone: nothing to compare against
+                     * until each of them delivers again */
+                    if( p_id != id )
+                        p_id->i_probe_last_dts = 0;
                 }
                 p_sys->i_size = 0;
                 p_sys->i_dts_start = 0;
-                p_sys->i_probe_last_dts = i_tick;
+                id->i_probe_last_dts = i_tick;
             }
-            else if( i_tick > p_sys->i_probe_last_dts )
-                p_sys->i_probe_last_dts = i_tick;
+            else if( i_tick > id->i_probe_last_dts )
+                id->i_probe_last_dts = i_tick;
         }
     }
 
     if( p_sys->i_date_start < 0 )
         p_sys->i_date_start = mdate();
+
+    /* ⚠⚠⚠ The container is chosen from the streams present AT THAT
+     * INSTANT, and a stream that turns up afterwards is never added to it:
+     * its blocks are dropped, in silence (see Add()). Subtitles are the
+     * victims, being sparse by nature -- on a 26 Mbit/s BluRay remux the
+     * 20 MiB probe fills in SIX SECONDS of film, long before the first
+     * cue. Measured 14/08/2026 on such a remux: the ASS track announced
+     * itself 37 log lines after the muxer had been settled, and simply
+     * was not in the clip.
+     *
+     * So when the caller has told us how many streams it selected, hold
+     * the SIZE trigger until they have all shown themselves. Never the
+     * clock one: a live recording has to start within i_max_wait whatever
+     * happens, and a subtitle track can stay silent for minutes. The wait
+     * is bounded by memory too -- four probe buffers and no more. */
+    const bool b_wait_streams = p_sys->i_expect_streams > p_sys->i_id
+                             && p_sys->i_size < 4 * p_sys->i_max_size;
+
     if( !p_sys->p_out &&
         ( mdate() - p_sys->i_date_start > p_sys->i_max_wait ||
-          p_sys->i_size > p_sys->i_max_size ) )
+          ( p_sys->i_size > p_sys->i_max_size && !b_wait_streams ) ) )
     {
         msg_Dbg( p_stream, "Starting recording, waited %ds and %dbyte",
                  (int)((mdate() - p_sys->i_date_start)/1000000), (int)p_sys->i_size );
@@ -311,8 +377,13 @@ static int Send( sout_stream_t *p_stream, sout_stream_id_sys_t *id,
  *****************************************************************************/
 typedef struct
 {
-    const char  psz_muxer[4];
-    const char  psz_extension[4];
+    /* ⚠ These were `char [4]`, which fits "asf" and "mp4" and nothing else:
+     * a longer name silently ran over into the extension field beside it
+     * ("avformat{mux=matroska}" came out as "avfomkv"). That is why the
+     * avformat entries below the table were commented out rather than used.
+     * Pointers to literals instead -- no length to get wrong. */
+    const char *psz_muxer;
+    const char *psz_extension;
     int         i_es_max;
     vlc_fourcc_t codec[128];
 } muxer_properties_t;
@@ -359,8 +430,55 @@ static const muxer_properties_t p_muxers[] = {
                                 VLC_CODEC_DTS,  VLC_CODEC_MP4A,
                                 VLC_CODEC_DVBS, VLC_CODEC_TELETEXT ),
 
-    M( "mkv", "mkv", 32,        VLC_CODEC_H264, VLC_CODEC_HEVC, VLC_CODEC_VP8, VLC_CODEC_MP4V,
-                                VLC_CODEC_A52,  VLC_CODEC_MP4A, VLC_CODEC_VORBIS, VLC_CODEC_FLAC ),
+    /* ⚠ There is NO native "mkv" muxer in VLC (modules/mux/ has asf, avi,
+     * mp4, ps, ts, ogg, wav and nothing else), so the entry that used to sit
+     * here could never load: it silently fell through to the brute-force
+     * probe below. Matroska comes from libavformat instead -- see the
+     * comment on the entry below, and contrib/src/ffmpeg/rules.mak, which
+     * has to enable that one muxer.
+     *
+     * Last on purpose: every earlier entry is a container the rest of the
+     * world expects for that particular set of streams (a recorded TV
+     * channel stays .ts, an H.264/AAC film stays .mp4). Matroska is what
+     * catches everything those cannot express -- which is most of what a
+     * modern film actually contains.
+     *
+     * It is the ONLY container here that can carry the two subtitle formats
+     * a stream copy otherwise has to drop on the floor: ASS/SSA styling and
+     * Blu-ray PGS bitmaps. Both were silently lost from every exported clip
+     * before this (measured 14/08/2026: "mp4 mux error: unsupported codec
+     * ssa in mp4", then avi, ogg and asf refusing in turn). It also rescues
+     * the raw PCM tracks of a BluRay remux, which used to drag the whole
+     * recording down to ASF or AVI.
+     *
+     * ⚠ Only codecs libavformat's Matroska muxer is known to accept are
+     * listed. A codec left out of this list is not lost: no entry matches,
+     * and the brute-force probe below runs exactly as it did before. Adding
+     * one it would REFUSE is the harmful direction -- an exact table match
+     * opens the muxer once and any stream it turns down is then dropped in
+     * silence. */
+    M( "avformat{mux=matroska}", "mkv", 32,
+                                /* video */
+                                VLC_CODEC_H264, VLC_CODEC_HEVC, VLC_CODEC_MPGV,
+                                VLC_CODEC_MP4V, VLC_CODEC_VP8,  VLC_CODEC_VP9,
+                                VLC_CODEC_AV1,  VLC_CODEC_THEORA,
+                                VLC_CODEC_MJPG, VLC_CODEC_DIRAC, VLC_CODEC_VC1,
+                                VLC_CODEC_WMV1, VLC_CODEC_WMV2, VLC_CODEC_WMV3,
+                                /* audio */
+                                VLC_CODEC_A52,  VLC_CODEC_EAC3, VLC_CODEC_DTS,
+                                VLC_CODEC_TRUEHD, VLC_CODEC_MLP,
+                                VLC_CODEC_MP4A, VLC_CODEC_MPGA, VLC_CODEC_MP3,
+                                VLC_CODEC_FLAC, VLC_CODEC_ALAC,
+                                VLC_CODEC_VORBIS, VLC_CODEC_OPUS, VLC_CODEC_SPEEX,
+                                VLC_CODEC_WAVPACK, VLC_CODEC_TTA,
+                                VLC_CODEC_WMA1, VLC_CODEC_WMA2,
+                                VLC_CODEC_WMAP, VLC_CODEC_WMAL,
+                                VLC_CODEC_AMR_NB, VLC_CODEC_AMR_WB,
+                                VLC_CODEC_U8,   VLC_CODEC_S16L, VLC_CODEC_S24L,
+                                VLC_CODEC_S32L, VLC_CODEC_F32L,
+                                /* subtitles -- the whole point */
+                                VLC_CODEC_SUBT, VLC_CODEC_SSA, VLC_CODEC_BD_PG,
+                                VLC_CODEC_SPU,  VLC_CODEC_DVBS ),
 };
 #undef M
 
@@ -370,7 +488,23 @@ static int OutputNew( sout_stream_t *p_stream,
     sout_stream_sys_t *p_sys = p_stream->p_sys;
     char *psz_file = NULL, *psz_tmp = NULL;
     char *psz_output = NULL;
+    char *psz_muxer_default_spu = NULL;
     int i_count;
+
+    /* Native muxers do not expose a portable default-subtitle flag. The
+     * Matroska path uses avformat, which does; add its private option only
+     * for a clip export that actually contains the selected subtitle. */
+    const char *psz_output_muxer = psz_muxer;
+    size_t i_muxer_len = strlen( psz_muxer );
+    if( p_sys->b_default_spu && i_muxer_len > 1
+     && !strncmp( psz_muxer, "avformat{", 9 )
+     && psz_muxer[i_muxer_len - 1] == '}' )
+    {
+        if( asprintf( &psz_muxer_default_spu, "%.*s,default-spu=1}",
+                      (int)( i_muxer_len - 1 ), psz_muxer ) < 0 )
+            goto error;
+        psz_output_muxer = psz_muxer_default_spu;
+    }
 
     if( asprintf( &psz_tmp, "%s%s%s",
                   psz_prefix, psz_extension ? "." : "", psz_extension ? psz_extension : "" ) < 0 )
@@ -385,7 +519,7 @@ static int OutputNew( sout_stream_t *p_stream,
 
     if( asprintf( &psz_output,
                   "std{access=file{no-append,no-format,no-overwrite},"
-                  "mux='%s',dst='%s'}", psz_muxer, psz_file ) < 0 )
+                  "mux='%s',dst='%s'}", psz_output_muxer, psz_file ) < 0 )
     {
         psz_output = NULL;
         goto error;
@@ -424,6 +558,7 @@ static int OutputNew( sout_stream_t *p_stream,
     free( psz_tmp );
     free( psz_file );
     free( psz_output );
+    free( psz_muxer_default_spu );
 
     return i_count;
 
@@ -432,6 +567,7 @@ error:
     free( psz_tmp );
     free( psz_file );
     free( psz_output );
+    free( psz_muxer_default_spu );
     return -1;
 
 }
@@ -444,6 +580,126 @@ static vlc_tick_t BlockTick( const block_t *p_block )
         return p_block->i_dts;
     else
         return p_block->i_pts;
+}
+
+/* Does this access unit RESET the reference chain -- an H.264 IDR, an HEVC
+ * IDR -- rather than merely being an I picture?
+ *
+ * ⚠ The distinction is the whole difference between a clean cut and two
+ * wrong pictures. A plain I picture only means "coded without reference";
+ * the pictures around it may still be predicted from before it, and the
+ * ones that follow it commonly use TEMPORAL DIRECT mode, whose motion
+ * comes from the co-located picture's OWN references. Cut in front of
+ * those and the decoder has nothing to derive them from -- it says "co
+ * located POCs unavailable" and guesses. Measured on an H.264 BluRay remux
+ * cut at an I picture: the two B pictures right after it differ from the
+ * source, every time (14/08/2026). An IDR forbids all of that by
+ * definition: nothing after it may look back.
+ *
+ * The packetizers hand us Annex B, so the NAL type is the low five bits of
+ * the byte after each start code (H.264), or bits 6-1 of the first of two
+ * (HEVC). */
+static bool BlockIsIDR( vlc_fourcc_t i_codec, const block_t *p_block )
+{
+    if( i_codec != VLC_CODEC_H264 && i_codec != VLC_CODEC_HEVC )
+        return false;
+
+    const uint8_t *p = p_block->p_buffer;
+    size_t i_size = p_block->i_buffer;
+
+    for( size_t i = 0; i + 4 < i_size; i++ )
+    {
+        if( p[i] != 0 || p[i+1] != 0 || p[i+2] != 1 )
+            continue;
+
+        const uint8_t *nal = &p[i+3];
+        if( i_codec == VLC_CODEC_H264 )
+        {
+            if( (nal[0] & 0x1f) == 5 )     /* coded slice of an IDR picture */
+                return true;
+        }
+        else
+        {
+            const uint8_t i_type = (nal[0] & 0x7e) >> 1;
+            if( i_type == 19 || i_type == 20 )   /* IDR_W_RADL, IDR_N_LP */
+                return true;
+        }
+    }
+    return false;
+}
+
+/* when the picture is DISPLAYED, as opposed to when it is decoded */
+static vlc_tick_t BlockDisplayTick( const block_t *p_block )
+{
+    if( unlikely(!p_block) )
+        return 0;
+    else if( likely(p_block->i_pts != 0) )
+        return p_block->i_pts;
+    else
+        return p_block->i_dts;
+}
+
+/* Cut a buffered video chain at the frame the capture must begin with.
+ *
+ * ⚠⚠⚠ This CANNOT be done with a timestamp threshold, which is what the
+ * generic path below does for the other streams. Decode order is not
+ * display order: an open-GOP key frame (an HEVC CRA, an H.264 recovery
+ * point) is followed in decode order by its LEADING pictures, which are
+ * displayed before it -- so their timestamps are lower than the key
+ * frame's, and so is the timestamp of nothing else. Cutting on "tick >=
+ * key frame tick" threw those leading pictures away, which is right, but
+ * it threw away with them the first P frame of the new GOP, whose dts
+ * sits in the same range and whose PTS does not: everything that
+ * referenced it then decoded to garbage until the next key frame.
+ * Measured on an MKV clip cut at a CRA: 175 of 403 frames unusable, i.e.
+ * seven seconds of visibly broken picture (12/08/2026 -- user report
+ * "the export gives a degraded picture, but not always": only cuts that
+ * land on an open-GOP key frame are hit).
+ *
+ * So: everything BEFORE the key frame in the chain goes, the leading
+ * pictures right after it go (they are undecodable once their references
+ * are outside the clip), and everything else stays whatever its dts. */
+static void OutputTrimToKeyFrame( sout_stream_t *p_stream,
+                                  sout_stream_id_sys_t *id, block_t *p_key )
+{
+    int i_dropped = 0;
+
+    while( id->p_first != NULL && id->p_first != p_key )
+    {
+        block_t *p_block = id->p_first;
+        id->p_first = p_block->p_next;
+        block_Release( p_block );
+        i_dropped++;
+    }
+
+    const vlc_tick_t i_key_display = BlockDisplayTick( p_key );
+    block_t **pp_next = &p_key->p_next;
+    while( *pp_next != NULL )
+    {
+        block_t *p_block = *pp_next;
+        const vlc_tick_t i_display = BlockDisplayTick( p_block );
+
+        /* leading pictures come as one run right after their key frame:
+         * the first picture displayed after it ends them */
+        if( i_display == 0 || i_display >= i_key_display )
+            break;
+
+        *pp_next = p_block->p_next;
+        block_Release( p_block );
+        i_dropped++;
+    }
+
+    /* the chain lost its tail marker along the way */
+    id->pp_last = &id->p_first;
+    for( block_t *p_block = id->p_first; p_block != NULL;
+         p_block = p_block->p_next )
+        id->pp_last = &p_block->p_next;
+
+    id->b_trimmed = true;
+
+    if( i_dropped > 0 )
+        msg_Dbg( p_stream, "capture starts on the key frame, %d earlier or "
+                 "leading picture(s) dropped", i_dropped );
 }
 
 static void OutputStart( sout_stream_t *p_stream )
@@ -503,7 +759,11 @@ static void OutputStart( sout_stream_t *p_stream )
         static const char ppsz_muxers[][2][4] = {
             { "avi", "avi" }, { "mp4", "mp4" }, { "ogg", "ogg" },
             { "asf", "asf" }, {  "ts",  "ts" }, {  "ps", "mpg" },
-            { "mkv", "mkv" },
+            /* ⚠ no "mkv" here: there is no native Matroska muxer to probe.
+             * The table above routes Matroska to libavformat by name, which
+             * is safe because it only ever happens on an exact codec match --
+             * probing avformat blind is what the disabled block below warns
+             * about. */
 #if 0
             // XXX ffmpeg sefault really easily if you try an unsupported codec
             // mov and avi at least segfault
@@ -587,7 +847,7 @@ static void OutputStart( sout_stream_t *p_stream )
         if( !id->id || !id->p_first )
             continue;
 
-        const block_t *p_block = id->p_first;
+        block_t *p_block = id->p_first;
         vlc_tick_t i_dts = BlockTick( p_block );
 
         if( i_dts > i_highest_head_dts &&
@@ -608,6 +868,7 @@ static void OutputStart( sout_stream_t *p_stream )
         const bool b_bounded = p_sys->i_start_bound > 0
                             && id->fmt.i_cat == VIDEO_ES;
         bool b_found_key = false;
+        block_t *p_key_block = NULL;
         for( ; p_block != NULL; p_block = p_block->p_next )
         {
             if( !( p_block->i_flags & BLOCK_FLAG_TYPE_I ) )
@@ -616,14 +877,45 @@ static void OutputStart( sout_stream_t *p_stream )
             if( !b_found_key )
             {
                 i_dts = i_key_dts;
+                p_key_block = p_block;
                 b_found_key = true;
                 if( !b_bounded )
                     break;
             }
             else if( i_key_dts <= p_sys->i_start_bound + VLC_TS_0 )
+            {
                 i_dts = i_key_dts;
+                p_key_block = p_block;
+            }
             else
                 break;
+        }
+
+        /* Prefer a picture that resets the reference chain (see BlockIsIDR):
+         * starting on a plain I picture leaves the two that follow it
+         * mis-predicted. The swap is only worth it while it is CHEAP --
+         * an IDR a long way further in would cost the user seconds of the
+         * clip they asked for, which is far worse than two frames. One
+         * second is the bound. */
+        if( b_found_key && id->fmt.i_cat == VIDEO_ES && p_key_block != NULL
+         && !BlockIsIDR( id->fmt.i_codec, p_key_block ) )
+        {
+            for( block_t *p_idr = p_key_block; p_idr != NULL;
+                 p_idr = p_idr->p_next )
+            {
+                if( !( p_idr->i_flags & BLOCK_FLAG_TYPE_I )
+                 || !BlockIsIDR( id->fmt.i_codec, p_idr ) )
+                    continue;
+                vlc_tick_t i_idr_dts = BlockTick( p_idr );
+                if( i_idr_dts - i_dts > CLOCK_FREQ )
+                    break;
+                msg_Dbg( p_stream, "starting on the IDR %"PRId64" µs in "
+                         "rather than on a plain I picture",
+                         i_idr_dts - i_dts );
+                p_key_block = p_idr;
+                i_dts = i_idr_dts;
+                break;
+            }
         }
 
         if( b_found_key && id->fmt.i_cat == VIDEO_ES && i_dts > i_video_key )
@@ -636,6 +928,10 @@ static void OutputStart( sout_stream_t *p_stream )
 
         if( i_dts > p_sys->i_dts_start )
             p_sys->i_dts_start = i_dts;
+
+        /* cut the video buffer here, where decode order is still known */
+        if( id->fmt.i_cat == VIDEO_ES && p_key_block != NULL )
+            OutputTrimToKeyFrame( p_stream, id, p_key_block );
     }
 
     /* The chosen video key frame has the last word, bound or not: the
@@ -700,7 +996,10 @@ static void OutputStart( sout_stream_t *p_stream )
                 p_cand->pp_last = &p_cand->p_first;
             p_block->p_next = NULL;
 
-            if( BlockTick( p_block ) >= p_sys->i_dts_start )
+            /* a trimmed chain already begins exactly where it should, and
+             * its own timestamps do not run in the order it holds */
+            if( p_cand->b_trimmed
+             || BlockTick( p_block ) >= p_sys->i_dts_start )
                 OutputSend( p_stream, p_cand, p_block );
             else
                 block_Release( p_block );
@@ -751,4 +1050,3 @@ static void OutputSend( sout_stream_t *p_stream, sout_stream_id_sys_t *id, block
         block_ChainLastAppend( &id->pp_last, p_block );
     }
 }
-

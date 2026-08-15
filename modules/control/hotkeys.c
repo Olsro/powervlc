@@ -67,6 +67,15 @@ struct intf_sys_t
         bool b_button_pressed;
         int x, y;
     } vrnav;
+
+    /* clip creation mode: ramp of the one-frame bound nudge, see
+     * ClipFrameStep() */
+    struct
+    {
+        vlc_tick_t last;
+        int        run;
+        int        sign;
+    } clip_step;
 };
 
 /*****************************************************************************
@@ -185,6 +194,69 @@ static int ButtonEvent( vlc_object_t *p_this, char const *psz_var,
         p_sys->vrnav.b_button_pressed = false;
 
     return VLC_SUCCESS;
+}
+
+/* PowerVLC clip creation mode: how many frames one press of a step key
+ * moves the selected bound.
+ *
+ * One frame is the right unit for a single press -- it is what trimming to
+ * the frame means -- but on anything longer than a few minutes it is also
+ * invisible: a frame of a 23 minute film is 0.04 s, i.e. one fortieth of a
+ * pixel on the seek bar, so holding the key down looked like it did
+ * nothing at all (user report, 14/08/2026). Held keys therefore ramp up:
+ * the first presses stay at one frame, so a tap is still exact, and a held
+ * key accelerates until the bound visibly travels.
+ *
+ * The ramp is driven by the auto-repeat cadence itself: presses closer
+ * together than IDLE are the same gesture, a longer gap or a change of
+ * direction starts over. */
+#define CLIP_STEP_IDLE  (VLC_TICK_FROM_MS(350))
+/* Upper bound of the "this is a frame count" half of the value convention
+ * below. The interfaces test against the same number; it sits far above
+ * anything the ramp produces and far below a microsecond offset, the
+ * smallest of which is one second. */
+#define CLIP_STEP_MAX_FRAMES 1000
+
+static int ClipFrameStep( intf_sys_t *p_sys, int sign )
+{
+    const vlc_tick_t now = mdate();
+
+    if( p_sys->clip_step.sign != sign
+     || now - p_sys->clip_step.last > CLIP_STEP_IDLE )
+        p_sys->clip_step.run = 0;
+
+    p_sys->clip_step.last = now;
+    p_sys->clip_step.sign = sign;
+    p_sys->clip_step.run++;
+
+    /* The climb, one entry per repeat. The first eight are a single frame,
+     * so roughly the first half second of a held key still trims frame by
+     * frame and a tap is exact; from there it grows a little at a time.
+     *
+     * ⚠ Written out rather than computed on purpose: this is a feel, and a
+     * feel is tuned by editing numbers. An earlier version went 1, 3, 10,
+     * 25 in three jumps and the user found it abrupt -- the middle of the
+     * range is where a bound is actually placed, so that is where the
+     * steps have to stay small. Past the end of the table the last value
+     * holds, which also caps a forgotten key. */
+    static const int pi_ramp[] = {
+        1, 1, 1, 1, 1, 1, 1, 1,
+        2, 2, 2,
+        3, 3, 3,
+        4, 4, 4,
+        5, 5, 5,
+        6, 6, 6,
+        7, 7, 8, 8, 9, 9,
+        10, 11, 12, 13, 14,
+        16, 18, 20, 22, 25,
+    };
+
+    /* stop counting at the top of the table: a key held for an hour must
+     * not run the counter into overflow */
+    if( p_sys->clip_step.run > (int)ARRAY_SIZE(pi_ramp) )
+        p_sys->clip_step.run = (int)ARRAY_SIZE(pi_ramp);
+
+    return sign * pi_ramp[ p_sys->clip_step.run - 1 ];
 }
 
 static void ChangeVout( intf_thread_t *p_intf, vout_thread_t *p_vout )
@@ -964,15 +1036,18 @@ static int PutAction( intf_thread_t *p_intf, input_thread_t *p_input,
              * the jump shortcuts then resize the clip through its
              * selected bound instead of seeking (the interface owns the
              * bound state, so the redirection has to go through it).
-             * Value convention: +1/-1 = one FRAME (extrashort/short
-             * steps, surgical trimming), anything else = signed offset
-             * in microseconds (medium/long jumps keep their size). */
+             * Value convention: a SMALL value (|v| <= CLIP_STEP_MAX_FRAMES)
+             * is a signed count of FRAMES -- what the extrashort and short
+             * steps send, ramping up while the key is held (ClipFrameStep);
+             * anything larger is a signed offset in MICROSECONDS, which is
+             * what the medium and long jumps keep sending. The two ranges
+             * cannot meet: the smallest jump size is a whole second. */
             if( var_Type( p_input, "clip-frame-step" ) != 0 )
             {
                 int64_t value;
                 if( !strcmp( varname, "extrashort-jump-size" )
                  || !strcmp( varname, "short-jump-size" ) )
-                    value = sign;
+                    value = ClipFrameStep( p_sys, sign );
                 else
                 {
                     vlc_tick_t size = var_InheritInteger( p_input, varname );
@@ -1037,7 +1112,8 @@ static int PutAction( intf_thread_t *p_intf, input_thread_t *p_input,
                  * navigation is meaningless while trimming a clip */
                 if( var_Type( p_input, "clip-frame-step" ) != 0 )
                 {
-                    var_SetInteger( p_input, "clip-frame-step", -1 );
+                    var_SetInteger( p_input, "clip-frame-step",
+                                    ClipFrameStep( p_sys, -1 ) );
                     break;
                 }
                 input_Control( p_input, INPUT_NAV_LEFT, NULL );
@@ -1048,7 +1124,8 @@ static int PutAction( intf_thread_t *p_intf, input_thread_t *p_input,
             {
                 if( var_Type( p_input, "clip-frame-step" ) != 0 )
                 {
-                    var_SetInteger( p_input, "clip-frame-step", 1 );
+                    var_SetInteger( p_input, "clip-frame-step",
+                                    ClipFrameStep( p_sys, +1 ) );
                     break;
                 }
                 input_Control( p_input, INPUT_NAV_RIGHT, NULL );

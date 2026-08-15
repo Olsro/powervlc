@@ -743,9 +743,21 @@ static int EsOutSetRecord(  es_out_t *out, bool b_record )
                      * at or before it (see modules/stream_out/record.c) */
                     vlc_tick_t i_record_start =
                         var_GetInteger( p_input, "record-start-time" );
+                    /* How many streams the recording chain must wait for
+                     * before it settles on a container: it picks one from
+                     * the streams that have delivered a block, and a
+                     * subtitle track can stay silent long enough to miss
+                     * the choice and be dropped (see record.c). These are
+                     * exactly the ES that get a recording decoder below. */
+                    int i_expect = 0;
+                    for( int i = 0; i < p_sys->i_es; i++ )
+                        if( p_sys->es[i]->p_dec && !p_sys->es[i]->p_master )
+                            i_expect++;
                     if( asprintf( &psz_sout, "#record{dst-prefix='%s',"
-                                  "start-time=%"PRId64"}", psz_file_esc,
-                                  i_record_start > 0 ? i_record_start : 0 ) < 0 )
+                                  "start-time=%"PRId64",expect-streams=%d}",
+                                  psz_file_esc,
+                                  i_record_start > 0 ? i_record_start : 0,
+                                  i_expect ) < 0 )
                         psz_sout = NULL;
                     free( psz_file_esc );
                 }
@@ -1250,18 +1262,27 @@ static void EsOutVideoCacheRelease( es_out_t *out, vlc_tick_t i_offset )
         {
             if( i_offset != 0 )
                 vout_OffsetCacheDates( p_vout, i_offset );
-            /* Drop the "Buffering %" OSD right away: a still-fading OSD
-             * forces the vout into the picture_Copy+blend path on every
-             * frame of the resumed playback -- measured at ~15% of the
-             * core on the Mini G4, enough to re-drain the fresh cache
-             * and loop the refill forever.
+            /* Drop the "Buffering %" OSD right away on SOFTWARE outputs: a
+             * still-fading OSD forces them into the picture_Copy+blend path on
+             * every frame of the resumed playback -- measured at ~15% of the
+             * core on the Mini G4, enough to re-drain the fresh cache and loop
+             * the refill forever.
+             *
+             * Do NOT flush it on the ATI DVD path. Its display composites OSD
+             * regions in a small overlay window, so there is no full-picture
+             * blend cost. More importantly, a keyboard seek posts its position
+             * OSD just before the refill: flushing the shared OSD channel here
+             * erased that user feedback. The failure looked intermittent
+             * because it depended on whether the seek opened a cache episode.
              * The display unhold itself is NOT queued here anymore: it
              * moved into input_DecoderStopWait (which every caller of
              * this function runs right after), where the decoder owner
              * lock orders it after any in-flight fill picture's
              * hold(true) -- queuing it from here could be overtaken by
              * such a straggler and wedge the vout held. */
-            vout_FlushSubpictureChannel( p_vout, VOUT_SPU_CHANNEL_OSD );
+            if( !var_GetBool( p_vout->obj.libvlc, "dvddriver-subs" ) )
+                vout_FlushSubpictureChannel( p_vout,
+                                             VOUT_SPU_CHANNEL_OSD );
             /* A virtual pause about to be materialized (see
              * EsOutDecodersStopBuffering) must reach the vout BEFORE
              * the unhold that input_DecoderStopWait queues right after

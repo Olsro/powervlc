@@ -146,3 +146,13 @@ Missing AACS configuration file!
 Running vlc with the default interface. Use 'cvlc' to use vlc without interface.
 This Blu-ray Disc needs a library for AACS decoding, and your system does not have it.
 VLC version %s (%s)\n
+
+# --- 2026-08-14: "Open Disc" pane now uses a checkbox for the disc menus ---
+# The DVD pane used a push button whose caption flipped between the two
+# wordings below; it is now a "DVD menus" checkbox, matching the Blu-ray one
+# added the same day (and matching Qt, which has always used a checkbox).
+Disable DVD menus
+Enable DVD menus
+# bluray-menu's long description gained a sentence on the cost of BD-J menus:
+# some discs busy-wait on a whole core for as long as the disc plays.
+Use Blu-ray menus. If disabled, the movie will start directly

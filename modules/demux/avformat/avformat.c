@@ -58,6 +58,12 @@ vlc_module_begin ()
     add_obsolete_string("ffmpeg-mux") /* removed since 2.1.0 */
     add_string( "sout-avformat-options", NULL, AV_OPTIONS_TEXT, AV_OPTIONS_LONGTEXT, true )
     add_bool( "sout-avformat-reset-ts", true /* FIXME: workaround #12713 */, AV_RESET_TS_TEXT, AV_RESET_TS_LONGTEXT, true )
+    /* Internal record-module option: make the sole subtitle of a clip
+     * selected when the resulting Matroska file is opened. */
+    add_bool( "sout-avformat-default-spu", false,
+              N_("Mark subtitle track as default"),
+              N_("Mark the exported subtitle track as selected by default."),
+              true )
     set_callbacks( avformat_OpenMux, avformat_CloseMux )
 #endif
 #ifndef MERGE_FFMPEG

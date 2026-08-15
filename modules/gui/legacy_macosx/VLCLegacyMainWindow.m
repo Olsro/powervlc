@@ -2359,6 +2359,20 @@ static const struct {
 
         [jumpPanel center];
     }
+    /* Le panneau est réutilisé : préremplir à chaque ouverture avec la
+     * position courante, pas avec la dernière valeur saisie. */
+    {
+        int64_t current = 0;
+        input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+        if (p_input) {
+            current = var_GetInteger(p_input, "time") / CLOCK_FREQ;
+            vlc_object_release(p_input);
+        }
+        [jumpField setStringValue:[NSString stringWithFormat:@"%02lld:%02lld:%02lld",
+            (long long)(current / 3600),
+            (long long)((current / 60) % 60),
+            (long long)(current % 60)]];
+    }
     [jumpPanel makeKeyAndOrderFront:nil];
     [jumpField selectText:nil];
 }
@@ -2469,8 +2483,12 @@ static const struct {
     host->keyable = NO;               /* fenêtré : la principale reste clé */
     [host setBackgroundColor:[NSColor blackColor]];
     [host setReleasedWhenClosed:NO];
-    /* Même raison que pour la fenêtre principale : le recalcul d'ombre à
-     * chaque image transforme chaque flush en remap de surface. */
+    /* Sans ombre, quelle que soit l'option « ombres des fenêtres » : cette
+     * fenêtre enfant est POSÉE SUR la fenêtre principale et n'en dépasse
+     * pas, son ombre tomberait donc sur le contenu de celle-ci (la barre de
+     * contrôles). C'est la fenêtre principale qui porte l'ombre du groupe.
+     * S'y ajoute la raison de toujours : le recalcul d'ombre à chaque image
+     * transforme chaque flush en remap de surface. */
     [host setHasShadow:NO];
     [host setAcceptsMouseMovedEvents:YES];
     VLCLegacyDenyNativeFullscreen(host);
@@ -2619,12 +2637,19 @@ static const struct {
      * near the edges changes: with 25 GL frames a second that turns
      * every flush into a surface remap (io_connect_map_memory storm,
      * one windowed frame in three late). Classic Tiger video-player
-     * trick: drop the shadow while video plays.
+     * trick: drop the shadow while video plays -- now under the user's
+     * control through "legacy-macosx-window-shadows" (off by default on
+     * the slowest slices, where it is worth measurable frames).
      * ⚠ Not below 10.3: there, a shadowless window that shrinks leaves its
      * old pixels behind on the desktop -- the window server never repaints
      * what it uncovered. The measurement that justifies dropping the shadow
      * was made on 10.4 anyway. */
-    if (VLCLegacyOSVersionAtLeast(10, 3, 0))
+    /* Une surface ATI doit toujours être engagée sur une fenêtre sans ombre.
+     * Le choix utilisateur reste mémorisé et l'ombre revient à l'arrêt ; il ne
+     * peut pas modifier la forme de la fenêtre sous une surface déjà committée. */
+    BOOL hwArmed = VLCLegacyHwDecoderArmed(p_intf);
+    if ((!VLCLegacyWindowShadows() || hwArmed)
+     && VLCLegacyOSVersionAtLeast(10, 3, 0))
         [window setHasShadow:NO];
     [videoView setFrame:[splitView frame]];
     /* ⚠ Ne PAS reprendre le dessus si l'utilisateur regarde la liste de
@@ -2687,6 +2712,24 @@ static const struct {
     }
     VLCLegacySetViewHidden(splitView, NO);
     [window setHasShadow:YES];
+}
+
+/* Applique le réglage « ombres des fenêtres » à la fenêtre déjà à l'écran :
+ * la case des préférences agit tout de suite, sans attendre la lecture
+ * suivante. Hors lecture l'ombre est de toute façon présente.
+ * ⛔ JAMAIS remettre l'ombre pendant une session matérielle armée : la
+ * surface REMPLACEMENT est committée sur la forme sans ombre, et tout
+ * changement de forme en cours de session fige le WindowServer ou déforme
+ * la surface (mesures du 14/08/2026). L'ombre reviendra au prochain arrêt. */
+- (void)applyWindowShadowSetting
+{
+    BOOL hwArmed = VLCLegacyHwDecoderArmed(p_intf);
+    if (videoActive && hwArmed && VLCLegacyOSVersionAtLeast(10, 3, 0))
+        [window setHasShadow:NO];
+    else if (VLCLegacyWindowShadows())
+        [window setHasShadow:YES];
+    else if (videoActive && VLCLegacyOSVersionAtLeast(10, 3, 0))
+        [window setHasShadow:NO];
 }
 
 /*****************************************************************************

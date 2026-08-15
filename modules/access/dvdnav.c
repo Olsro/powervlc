@@ -39,6 +39,10 @@
 
 #include <assert.h>
 #include <ctype.h>      /* isalpha() */
+#ifdef _WIN32
+# include <windows.h>   /* GetUserDefaultUILanguage() */
+# include <wctype.h>    /* iswalpha() */
+#endif
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -1774,6 +1778,39 @@ static const char *DemuxGetUILanguage( char *psz_buffer, size_t i_size )
         psz_buffer[i_len] = '\0';
         return psz_buffer;
     }
+
+#ifdef _WIN32
+    /* ⚠ Rien dans l'environnement ne veut pas dire « pas de préférence ».
+     * `bin/winvlc.c` n'exporte LANG que si une langue a été CHOISIE (ligne de
+     * commande, ou clé de registre `Lang`) ; en « auto » — le cas par défaut —
+     * il ne pose rien, et c'est gettext qui va chercher la langue d'interface
+     * de Windows tout seul (`GETTEXT_MUI=1`, posé juste à côté). L'interface
+     * sortait donc en français avec un environnement vide, et le disque
+     * s'entendait dire « en » : menus DVD et Blu-ray en anglais sur une
+     * installation française (mesuré sur Windows XP, 14/08/2026).
+     * On pose la même question que gettext à l'OS. */
+    {
+        LANGID langid = GetUserDefaultUILanguage();
+        wchar_t wbuf[16];
+        int i_wlen = GetLocaleInfoW( MAKELCID( langid, SORT_DEFAULT ),
+                                     LOCALE_SISO639LANGNAME,
+                                     wbuf, ARRAY_SIZE(wbuf) );
+        /* le compte rendu inclut le NUL final */
+        size_t i_len = 0;
+        while( i_wlen > 0 && wbuf[i_len] != L'\0'
+            && iswalpha( wbuf[i_len] ) && i_len + 1 < i_size )
+        {
+            psz_buffer[i_len] = (char)wbuf[i_len];
+            i_len++;
+        }
+        if( i_len >= 2 )
+        {
+            psz_buffer[i_len] = '\0';
+            return psz_buffer;
+        }
+    }
+#endif
+
     return NULL;
 }
 

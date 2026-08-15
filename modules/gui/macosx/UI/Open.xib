@@ -16,16 +16,17 @@
                 <outlet property="discAudioCDVideoTSButton" destination="3081" id="MRT-9B-eSa"/>
                 <outlet property="discAudioCDView" destination="3080" id="x3q-0V-eqv"/>
                 <outlet property="discBDLabel" destination="3291" id="JLB-jY-BDh"/>
+                <outlet property="discBDMenusCheckbox" destination="Bdm-Cb-001" id="Bdm-Ol-004"/>
                 <outlet property="discBDVideoTSButton" destination="3293" id="8A9-id-i6v"/>
                 <outlet property="discBDView" destination="3289" id="9Ga-GL-AA9"/>
-                <outlet property="discDVDDisableMenusButton" destination="3183" id="xen-y0-De2"/>
+                <outlet property="discDVDMenusCheckbox" destination="3183" id="xen-y0-De2"/>
                 <outlet property="discDVDLabel" destination="3110" id="ER7-GJ-Su9"/>
                 <outlet property="discDVDVideoTSButton" destination="3108" id="XSM-up-Nk9"/>
                 <outlet property="discDVDView" destination="3106" id="bij-VT-fAD"/>
                 <outlet property="discDVDwomenusChapterLabel" destination="3148" id="c1g-Zt-Bkx"/>
                 <outlet property="discDVDwomenusChapterStepper" destination="3153" id="I28-yg-XlN"/>
                 <outlet property="discDVDwomenusChapterTextField" destination="3151" id="66f-Yv-jW0"/>
-                <outlet property="discDVDwomenusEnableMenusButton" destination="3192" id="Sow-Rz-dKM"/>
+                <outlet property="discDVDwomenusMenusCheckbox" destination="3192" id="Sow-Rz-dKM"/>
                 <outlet property="discDVDwomenusLabel" destination="3193" id="bQ4-MA-QPp"/>
                 <outlet property="discDVDwomenusTitleLabel" destination="3149" id="XdD-jF-Iho"/>
                 <outlet property="discDVDwomenusTitleStepper" destination="3152" id="V8i-WF-bKh"/>
@@ -1726,9 +1727,9 @@ To open a stream using a different protocol, just press Cancel to close this she
                     </connections>
                 </button>
                 <button verticalHuggingPriority="750" misplaced="YES" translatesAutoresizingMaskIntoConstraints="NO" id="3183">
-                    <rect key="frame" x="83" y="140" width="130" height="28"/>
-                    <buttonCell key="cell" type="push" title="Disable DVD menus" bezelStyle="rounded" alignment="center" controlSize="small" borderStyle="border" inset="2" id="3184">
-                        <behavior key="behavior" pushIn="YES" lightByBackground="YES" lightByGray="YES"/>
+                    <rect key="frame" x="83" y="140" width="130" height="18"/>
+                    <buttonCell key="cell" type="check" title="DVD menus" bezelStyle="regularSquare" imagePosition="left" alignment="left" controlSize="small" state="on" inset="2" id="3184">
+                        <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
                         <font key="font" metaFont="smallSystem"/>
                     </buttonCell>
                     <connections>
@@ -1837,9 +1838,9 @@ To open a stream using a different protocol, just press Cancel to close this she
                     </connections>
                 </button>
                 <button verticalHuggingPriority="750" misplaced="YES" translatesAutoresizingMaskIntoConstraints="NO" id="3192">
-                    <rect key="frame" x="85" y="140" width="126" height="28"/>
-                    <buttonCell key="cell" type="push" title="Enable DVD menus" bezelStyle="rounded" alignment="center" controlSize="small" borderStyle="border" inset="2" id="3195">
-                        <behavior key="behavior" pushIn="YES" lightByBackground="YES" lightByGray="YES"/>
+                    <rect key="frame" x="85" y="140" width="126" height="18"/>
+                    <buttonCell key="cell" type="check" title="DVD menus" bezelStyle="regularSquare" imagePosition="left" alignment="left" controlSize="small" inset="2" id="3195">
+                        <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
                         <font key="font" metaFont="smallSystem"/>
                     </buttonCell>
                     <connections>
@@ -2017,8 +2018,19 @@ To open a stream using a different protocol, just press Cancel to close this she
                         <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
                     </textFieldCell>
                 </textField>
+                <button mirrorLayoutDirectionWhenInternationalizing="always" translatesAutoresizingMaskIntoConstraints="NO" id="Bdm-Cb-001">
+                    <rect key="frame" x="31" y="47" width="233" height="18"/>
+                    <buttonCell key="cell" type="check" title="Blu-ray menus (may affect performance)" bezelStyle="regularSquare" imagePosition="left" alignment="left" controlSize="small" inset="2" id="Bdm-Cc-002">
+                        <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
+                        <font key="font" metaFont="smallSystem"/>
+                    </buttonCell>
+                </button>
             </subviews>
             <constraints>
+                <constraint firstItem="Bdm-Cb-001" firstAttribute="top" secondItem="3293" secondAttribute="bottom" constant="12" id="Bdm-Ct-003"/>
+                <constraint firstItem="Bdm-Cb-001" firstAttribute="centerX" secondItem="3289" secondAttribute="centerX" id="Bdm-Ct-005"/>
+                <constraint firstItem="Bdm-Cb-001" firstAttribute="leading" relation="greaterThanOrEqual" secondItem="3289" secondAttribute="leading" constant="4" id="Bdm-Ct-006"/>
+                <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="Bdm-Cb-001" secondAttribute="trailing" constant="4" id="Bdm-Ct-007"/>
                 <constraint firstItem="3293" firstAttribute="top" secondItem="3291" secondAttribute="bottom" constant="59" id="0hd-Eb-I0E"/>
                 <constraint firstItem="3291" firstAttribute="centerX" secondItem="3289" secondAttribute="centerX" id="1FP-eZ-TZa"/>
                 <constraint firstItem="3291" firstAttribute="leading" relation="greaterThanOrEqual" secondItem="3289" secondAttribute="leading" constant="4" id="4oN-0N-ZuK"/>

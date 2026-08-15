@@ -26,6 +26,8 @@
 #import "misc.h"
 #import "VLCLegacyCoreInteraction.h"
 #import "VLCLegacyControls.h"
+#import "VLCLegacyMainWindow.h"
+#import "VLCLegacyVoutWindow.h"
 
 #include <vlc_playlist.h>
 #include <vlc_configuration.h>
@@ -687,7 +689,18 @@ static BOOL haveConfig(const char *name)
                              titles:[NSArray arrayWithObjects:
                                      _NS("Bright"), _NS("Dark"), nil]
                                  at:y in:pane action:NULL];
-    y += 50;
+    y += 46;
+
+    {
+        NSButton *box = [self checkbox:_NS("Draw window shadows")
+                config:"legacy-macosx-window-shadows" at:y in:pane];
+        [box setToolTip:_NS("Keep the drop shadow under the video windows, "
+            "which is what visually detaches them from the desktop. The "
+            "window server recomputes that shadow on every video frame: on "
+            "the slowest Macs this costs enough displayed frames to be worth "
+            "turning off, which is why it is off by default there.")];
+        y += 30;
+    }
 
     y = [self header:_NS("Playback control") at:y in:pane];
     NSPopUpButton *continuePopup = [self popupForConfig:
@@ -1149,6 +1162,19 @@ static BOOL haveConfig(const char *name)
                        label:_NS("Skip the loop filter for H.264 decoding")
                           at:y in:pane])
         y += 34;
+
+    if (haveConfig("bluray-menu")) {
+        NSButton *bdMenuBox = [self checkbox:_NS("Blu-ray menus")
+                                      config:"bluray-menu" at:y in:pane];
+        [bdMenuBox setToolTip:_NS("Play Blu-ray discs with their own menus. "
+            "Some discs run their menus as a Java (BD-J) application that "
+            "keeps one processor core busy for as long as the disc is "
+            "playing; on an older Mac, turning this off starts the main "
+            "feature directly and gives that core back. This sets the initial "
+            "state of the box in the Open Disc window, which can still be "
+            "changed disc by disc.")];
+        y += 28;
+    }
 
     y = [self header:_NS("Caching") at:y in:pane];
     {
@@ -2253,6 +2279,20 @@ static BOOL haveConfig(const char *name)
     /* interface style */
     config_PutInt(p_intf, "legacy-macosx-dark",
                   [styleMatrix selectedRow] == 1);
+
+    /* window shadows: unlike the light/dark style, this one needs no
+     * restart — the video paths read the cached flag at each vout, and the
+     * windows already on screen are updated right here */
+    {
+        extern VLCLegacyMainWindow *VLCLegacyGetMainWindow(void);
+        BOOL shadows = config_GetInt(p_intf, "legacy-macosx-window-shadows");
+        VLCLegacySetWindowShadows(shadows);
+        [VLCLegacyGetMainWindow() applyWindowShadowSetting];
+        /* ⛔ pas de remise d'ombre sur une session matérielle armée (surface
+         * committée sur la forme sans ombre — cf. applyWindowShadowSetting) */
+        if (!(shadows && VLCLegacyHwDecoderArmed(p_intf)))
+            [VLCLegacyCurrentVoutWindow() setHasShadow:shadows];
+    }
 
     /* notifications */
     if ([notificationsCheckbox isEnabled])

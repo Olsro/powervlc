@@ -73,12 +73,12 @@
 
 @property (readwrite, weak) IBOutlet NSView *discDVDView;
 @property (readwrite, weak) IBOutlet NSTextField *discDVDLabel;
-@property (readwrite, weak) IBOutlet NSButton *discDVDDisableMenusButton;
+@property (readwrite, weak) IBOutlet NSButton *discDVDMenusCheckbox;
 @property (readwrite, weak) IBOutlet NSButton *discDVDVideoTSButton;
 
 @property (readwrite, weak) IBOutlet NSView *discDVDwomenusView;
 @property (readwrite, weak) IBOutlet NSTextField *discDVDwomenusLabel;
-@property (readwrite, weak) IBOutlet NSButton *discDVDwomenusEnableMenusButton;
+@property (readwrite, weak) IBOutlet NSButton *discDVDwomenusMenusCheckbox;
 @property (readwrite, weak) IBOutlet NSButton *discDVDwomenusVideoTSButton;
 @property (readwrite, weak) IBOutlet NSTextField *discDVDwomenusTitleTextField;
 @property (readwrite, weak) IBOutlet NSTextField *discDVDwomenusTitleLabel;
@@ -100,6 +100,7 @@
 @property (readwrite, weak) IBOutlet NSView *discBDView;
 @property (readwrite, weak) IBOutlet NSTextField *discBDLabel;
 @property (readwrite, weak) IBOutlet NSButton *discBDVideoTSButton;
+@property (readwrite, weak) IBOutlet NSButton *discBDMenusCheckbox;
 
 /* open network */
 @property (readwrite, weak) IBOutlet NSTextField *netHTTPURLLabel;

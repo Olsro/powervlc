@@ -76,6 +76,31 @@ BOOL VLCLegacyOSVersionAtLeast(int major, int minor, int micro)
     return s_version[2] >= micro;
 }
 
+/* "legacy-macosx-window-shadows", cached like the dark mode flag: the video
+ * paths consult it once per vout, not once per frame. */
+static BOOL s_window_shadows = YES;
+
+BOOL VLCLegacyWindowShadows(void)
+{
+    return s_window_shadows;
+}
+
+void VLCLegacySetWindowShadows(BOOL enabled)
+{
+    s_window_shadows = enabled;
+}
+
+BOOL VLCLegacyHwDecoderArmed(intf_thread_t *p_intf)
+{
+    if (p_intf == NULL)
+        return NO;
+
+    /* libmpeg2 creates this inherited bus as soon as it has elected the ATI
+     * path, before the vout supplies the window number needed by OpenDevice.
+     * Testing the address would therefore be too late for window creation. */
+    return var_Type(p_intf->obj.libvlc, "dvddriver-ctx") != 0;
+}
+
 void VLCLegacyEnableLayerBackingIfModern(NSView *view)
 {
     if (!VLCLegacyOSVersionAtLeast(10, 14, 0)
@@ -1115,7 +1140,14 @@ void VLCLegacySetCellLineBreakMode(NSCell *cell, NSLineBreakMode mode)
 {
     SEL sel = @selector(setLineBreakMode:);
 
-    if ([cell respondsToSelector:sel]) {
+    /* Tiger 10.4.11 annonce ce sélecteur, mais son implémentation NSCell peut
+     * déréférencer une adresse invalide sur un NSTextFieldCell nouvellement
+     * créé (crash mesuré dans le panneau plein écran, 2026-08-15). Le
+     * fallback -setWraps: est le chemin déjà validé sous 10.2/10.3 et suffit
+     * aux champs mono-ligne. N'utiliser l'API de troncature qu'à partir de
+     * Leopard, où cette implémentation est stable. */
+    if (VLCLegacyOSVersionAtLeast(10, 5, 0)
+        && [cell respondsToSelector:sel]) {
         /* -setLineBreakMode: is not in the 10.4 SDK this module also builds
          * against, so it cannot be called directly; and it takes a scalar, so
          * -performSelector:withObject: cannot carry the argument either. Go
@@ -1125,8 +1157,7 @@ void VLCLegacySetCellLineBreakMode(NSCell *cell, NSLineBreakMode mode)
          * unbounded recursion on every system new enough to answer the
          * respondsToSelector: -- the tail call turns it into a spin rather than
          * a stack overflow, so the interface simply hung at startup with one
-         * core pinned. It never showed on 10.4/10.5, where NSCell does not
-         * implement the selector and the fallback below runs instead. */
+         * core pinned. */
         typedef void (*VLCSetLineBreakModeIMP)(id, SEL, NSLineBreakMode);
         ((VLCSetLineBreakModeIMP)[cell methodForSelector:sel])(cell, sel, mode);
         return;

@@ -4,8 +4,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 !define PRODUCT_NAME "PowerVLC"
-; PowerVLC: the installer/product version is PowerVLC's own (1.3.0), not the
-; underlying VLC base version. The About dialog shows "Forked from VLC @VERSION@".
+; PowerVLC: the installer/product version is PowerVLC's own
+; (POWERVLC_VERSION in configure.ac), not the underlying VLC base version.
+; The About dialog shows "Forked from VLC @VERSION@".
 !define VERSION @POWERVLC_VERSION@
 !define PRODUCT_VERSION @POWERVLC_VERSION@
 !define PRODUCT_GROUP "PowerVLC"

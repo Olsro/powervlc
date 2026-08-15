@@ -45,6 +45,7 @@
 #import "VLCLegacyMainWindow.h"
 #import "VLCLegacyCoreInteraction.h"
 #import "VLCLegacyControls.h"
+#import "misc.h"
 
 /* The vout window provider (a submodule sharing this plugin) needs to reach
  * the interface controller; a plain global is enough, both live and die
@@ -81,6 +82,8 @@ int OpenIntf (vlc_object_t *p_this)
     p_intf->p_sys = NULL;
 
     VLCLegacySetDarkMode(var_InheritBool(p_intf, "legacy-macosx-dark"));
+    VLCLegacySetWindowShadows(
+        var_InheritBool(p_intf, "legacy-macosx-window-shadows"));
 
     /* Native macOS full screen (Lion's green-button fullscreen) is a
      * modern-interface feature and must never engage under the legacy UI,

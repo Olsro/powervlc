@@ -301,9 +301,21 @@ QImage SeekThumbnailer::renderThumbnail( const QString &uri, double seconds )
      * ("VDADecoderCreate failed: -12470" then "cannot continue streaming due
      * to errors with codec h264") -- measured in the legacy interface, same
      * pipeline. One frame is decoded here; playback keeps the hardware. */
+    /* ⚠⚠⚠ "no-spu" is NOT enough. An input that feeds a stream output has
+     * its tracks selected through the "sout-*" switches, not the playback
+     * ones: es_out reads "sout-spu" here and "spu" never gets a look in. A
+     * media whose demuxer flags a subtitle track as default -- an ordinary
+     * film -- therefore had that track muxed into the elementary stream
+     * ALONGSIDE the pictures, and since subtitles arrive first the file
+     * began with "- Good one, Dad." instead of the PNG signature.
+     * QImage::load refuses that outright, so no preview EVER appeared on
+     * Qt for such a media (the macOS image loaders scan for the signature
+     * and skipped over it, which is why this only showed on Windows and
+     * Linux). Measured on an MKV with three subtitle tracks: 221 kB
+     * written, load failed, 14/08/2026. */
     static const char *const ppsz_options[] = {
         "no-audio", "no-spu", "no-osd", "no-video-title-show",
-        "no-sout-audio", "sout-video",
+        "no-sout-audio", "no-sout-spu", "sout-video",
         "no-videotoolbox", "no-vda", "avcodec-hw=none",
     };
     for( size_t i = 0; i < ARRAY_SIZE(ppsz_options); i++ )
@@ -353,8 +365,33 @@ QImage SeekThumbnailer::renderThumbnail( const QString &uri, double seconds )
 
     /* The stream output may have written several concatenated png frames
      * before the stop took effect; a reader only decodes the first one. */
+    /* Read from the first PNG signature rather than from byte zero. The
+     * stream output writes whole frames back to back and a reader only
+     * needs the first, but anything the muxer put in front of it would
+     * make QImage refuse the whole file -- which is exactly what a
+     * subtitle track did until the switch above. Belt and braces: this
+     * costs one scan and makes the loader independent of what else may
+     * ever end up in that elementary stream. */
     QImage image;
-    image.load( pngPath, "PNG" );
+    QFile file( pngPath );
+    if( file.open( QIODevice::ReadOnly ) )
+    {
+        const QByteArray data = file.readAll();
+        file.close();
+
+        static const char pngSignature[8] =
+            { '\x89', 'P', 'N', 'G', '\r', '\n', '\x1a', '\n' };
+        const int start = data.indexOf( QByteArray( pngSignature,
+                                                    sizeof(pngSignature) ) );
+        if( start >= 0 )
+            image.loadFromData( QByteArray::fromRawData(
+                                    data.constData() + start,
+                                    data.size() - start ), "PNG" );
+        if( image.isNull() )
+            msg_Dbg( p_intf, "seek thumbnail: no usable picture in the "
+                     "%d bytes written (signature at %d)",
+                     (int)data.size(), start );
+    }
     QFile::remove( pngPath );
     return image;
 }

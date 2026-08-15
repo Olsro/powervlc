@@ -1180,7 +1180,9 @@ void InputManager::clipStepFromCore( qint64 value )
 {
     if( !b_clipMode )
         return;
-    if( value == 1 || value == -1 )
+    /* small value = a count of frames (it ramps up while the key is held),
+     * larger = microseconds; see the convention in hotkeys.c */
+    if( value != 0 && value >= -1000 && value <= 1000 )
         clipStepFrames( (int)value );
     else
         clipNudgeSelectedBoundBySeconds( (double)value / CLOCK_FREQ );

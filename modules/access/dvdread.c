@@ -144,6 +144,21 @@ struct demux_sys_t
     vlc_tick_t i_cell_cur_time;
     vlc_tick_t i_cell_duration;
 
+    /* Time axis. Everything the user sees or clicks -- the clock, the slider,
+     * the chapter marks and seeking -- is expressed in TIME and derived from
+     * this one table, so they cannot disagree. The old axis was the sector
+     * count, with time extrapolated from it as if the bitrate were constant;
+     * on a variable-bitrate title the two rulers drift apart and the cursor
+     * never lands on its own chapter marks.
+     * p_cell_start_time[c] is the title-relative start time of cell c along
+     * the played angle. Cells of an angle block all carry the same start
+     * time, and only the selected angle is counted once into the total --
+     * counting them all is what made i_title_blocks overstate the length of
+     * an angle title. */
+    int64_t   *p_cell_start_time;
+    int        i_cell_count;
+    vlc_tick_t i_title_time;
+
     /* Track */
     ps_track_t    tk[PS_TK_COUNT];
 
@@ -176,6 +191,10 @@ static int  DvdReadSetArea  ( demux_t *, int, int, int );
 static int  DvdReadSeek     ( demux_t *, int );
 static void DvdReadHandleDSI( demux_t *, uint8_t * );
 static void DvdReadFindCell ( demux_t * );
+
+/* time axis */
+static vlc_tick_t DvdReadCurrentTime( demux_sys_t * );
+static int        DvdReadTimeToBlock( demux_sys_t *, vlc_tick_t );
 
 #ifdef DVDREAD_HAS_DVDAUDIO
 /* ATS lengths are 90 kHz MPEG PTS ticks, not BCD dvd_time_t */
@@ -378,6 +397,7 @@ static void Close( vlc_object_t *p_this )
     if( p_sys->p_vmg_file ) ifoClose( p_sys->p_vmg_file );
     DVDClose( p_sys->p_dvdread );
 
+    free( p_sys->p_cell_start_time );
     free( p_sys );
 }
 
@@ -441,7 +461,22 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
         {
             pf = va_arg( args, double * );
 
-            if( p_sys->i_title_blocks > 0 )
+#ifdef DVDREAD_HAS_DVDAUDIO
+            if( p_sys->b_audio )
+            {
+                *pf = p_sys->i_title_blocks > 0
+                    ? (double)p_sys->i_title_offset / p_sys->i_title_blocks
+                    : 0.0;
+                return VLC_SUCCESS;
+            }
+#endif
+            /* Position is time, like the clock and the chapter marks. */
+            if( p_sys->i_title_time > 0 )
+            {
+                const vlc_tick_t i_now = DvdReadCurrentTime( p_sys );
+                *pf = (double)i_now / (double)p_sys->i_title_time;
+            }
+            else if( p_sys->i_title_blocks > 0 )
                 *pf = (double)p_sys->i_title_offset / p_sys->i_title_blocks;
             else
                 *pf = 0.0;
@@ -456,7 +491,24 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
             if( p_sys->b_audio )
                 return DvdReadSeekAudio( p_demux, f * p_sys->i_title_blocks );
 #endif
+            if( p_sys->i_title_time > 0 )
+                return DvdReadSeek( p_demux, DvdReadTimeToBlock( p_sys,
+                                    (vlc_tick_t)( f * p_sys->i_title_time ) ) );
             return DvdReadSeek( p_demux, f * p_sys->i_title_blocks );
+        }
+        case DEMUX_SET_TIME:
+        {
+            const int64_t i_target = va_arg( args, int64_t );
+
+#ifdef DVDREAD_HAS_DVDAUDIO
+            if( p_sys->b_audio )
+                return VLC_EGENERIC;    /* AUDIO_TS has no time axis: the
+                                         * core falls back on the position */
+#endif
+            if( p_sys->i_title_time <= 0 )
+                return VLC_EGENERIC;
+            return DvdReadSeek( p_demux,
+                                DvdReadTimeToBlock( p_sys, i_target ) );
         }
         case DEMUX_GET_TIME:
             pi64 = va_arg( args, int64_t * );
@@ -475,8 +527,7 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
                     return VLC_SUCCESS;
                 }
 #endif
-                *pi64 = (int64_t) dvdtime_to_time( &p_sys->p_cur_pgc->playback_time, 0 ) /
-                        p_sys->i_title_blocks * p_sys->i_title_offset;
+                *pi64 = DvdReadCurrentTime( p_sys );
                 return VLC_SUCCESS;
             }
             *pi64 = 0;
@@ -498,7 +549,13 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
                     return VLC_SUCCESS;
                 }
 #endif
-                *pi64 = (int64_t)dvdtime_to_time( &p_sys->p_cur_pgc->playback_time, 0 );
+                /* The sum over the played path, not the PGC's own figure:
+                 * they differ on an angle title, and the clock, the slider
+                 * and the chapter marks all count the played path. */
+                *pi64 = p_sys->i_title_time > 0
+                    ? p_sys->i_title_time
+                    : (int64_t)dvdtime_to_time(
+                          &p_sys->p_cur_pgc->playback_time, 0 );
                 return VLC_SUCCESS;
             }
             *pi64 = 0;
@@ -877,6 +934,151 @@ static void ESNew( demux_t *p_demux, int i_id, int i_lang, int i_code_ext )
  *****************************************************************************
  * Take care that i_title and i_chapter start from 0.
  *****************************************************************************/
+/*****************************************************************************
+ * Time axis
+ *****************************************************************************/
+
+/* Returns the cell actually played at i_cell -- the selected angle when
+ * i_cell opens an angle block -- and, through pi_next, the first cell after
+ * the whole block. Mirrors DvdReadFindCell so that the time table, the seek
+ * and the reader all walk the same path. */
+static int DvdReadPlayedCellIn( pgc_t *p_pgc, int i_angle, int i_cell,
+                                int *pi_next )
+{
+    int i_played = i_cell;
+
+    if( p_pgc->cell_playback[i_cell].block_type == BLOCK_TYPE_ANGLE_BLOCK )
+    {
+        int i = 0;
+        while( i_cell + i < p_pgc->nr_of_cells - 1 &&
+               p_pgc->cell_playback[i_cell + i].block_mode !=
+                   BLOCK_MODE_LAST_CELL )
+            i++;
+        *pi_next = i_cell + i + 1;
+
+        i_played = i_cell + i_angle - 1;
+        if( i_played > i_cell + i )
+            i_played = i_cell;      /* angle beyond the block: play the first */
+    }
+    else
+        *pi_next = i_cell + 1;
+
+    return i_played;
+}
+
+static int DvdReadPlayedCell( demux_sys_t *p_sys, int i_cell, int *pi_next )
+{
+    return DvdReadPlayedCellIn( p_sys->p_cur_pgc, p_sys->i_angle, i_cell,
+                                pi_next );
+}
+
+/* Number of blocks of the played path, and the start time of every cell. */
+static void DvdReadBuildTimeTable( demux_t *p_demux )
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+    pgc_t *p_pgc = p_sys->p_cur_pgc;
+
+    free( p_sys->p_cell_start_time );
+    p_sys->p_cell_start_time = NULL;
+    p_sys->i_cell_count = 0;
+    p_sys->i_title_time = 0;
+
+    if( p_pgc == NULL || p_pgc->cell_playback == NULL ||
+        p_pgc->nr_of_cells <= 0 )
+        return;
+
+    int64_t *p_time = calloc( p_pgc->nr_of_cells, sizeof(*p_time) );
+    if( unlikely( p_time == NULL ) )
+        return;
+
+    vlc_tick_t i_acc = 0;
+    int i_cell = p_sys->i_title_start_cell;
+    while( i_cell >= 0 && i_cell <= p_sys->i_title_end_cell )
+    {
+        int i_next;
+        const int i_played = DvdReadPlayedCell( p_sys, i_cell, &i_next );
+
+        /* every angle of the block starts at the same point of the title */
+        for( int i = i_cell; i < i_next && i <= p_sys->i_title_end_cell; i++ )
+            p_time[i] = i_acc;
+
+        i_acc += dvdtime_to_time(
+            &p_pgc->cell_playback[i_played].playback_time, 0 );
+
+        if( i_next <= i_cell )      /* never trust the disc to move forward */
+            break;
+        i_cell = i_next;
+    }
+
+    p_sys->p_cell_start_time = p_time;
+    p_sys->i_cell_count = p_pgc->nr_of_cells;
+    p_sys->i_title_time = i_acc;
+}
+
+/* Where the read head is, in title time. The start of the current cell plus
+ * the elapsed time the disc itself publishes in the navigation pack of the
+ * current VOBU (c_eltm) -- which the demuxer already decodes and, until now,
+ * threw away. Nothing is interpolated, so this cannot drift. */
+static vlc_tick_t DvdReadCurrentTime( demux_sys_t *p_sys )
+{
+    if( p_sys->p_cell_start_time == NULL || p_sys->i_cur_cell < 0 ||
+        p_sys->i_cur_cell >= p_sys->i_cell_count )
+        return 0;
+
+    vlc_tick_t i_time = p_sys->p_cell_start_time[p_sys->i_cur_cell] +
+                        p_sys->i_cell_cur_time;
+    if( i_time < 0 )
+        i_time = 0;
+    if( p_sys->i_title_time > 0 && i_time > p_sys->i_title_time )
+        i_time = p_sys->i_title_time;
+    return i_time;
+}
+
+/* Title time -> title-relative block offset, walking the played path so the
+ * result feeds DvdReadSeek unchanged. Inside the target cell the only ruler
+ * available is that cell's own duration; DvdReadSeek then snaps to a real
+ * VOBU and the next navigation pack re-syncs the clock exactly, so the
+ * approximation never accumulates. */
+static int DvdReadTimeToBlock( demux_sys_t *p_sys, vlc_tick_t i_time )
+{
+    pgc_t *p_pgc = p_sys->p_cur_pgc;
+    int i_block_offset = 0;
+    int i_cell = p_sys->i_title_start_cell;
+
+    if( p_sys->p_cell_start_time == NULL )
+        return 0;
+
+    while( i_cell >= 0 && i_cell <= p_sys->i_title_end_cell )
+    {
+        int i_next;
+        const int i_played = DvdReadPlayedCell( p_sys, i_cell, &i_next );
+        const vlc_tick_t i_start = p_sys->p_cell_start_time[i_cell];
+        const vlc_tick_t i_duration = dvdtime_to_time(
+            &p_pgc->cell_playback[i_played].playback_time, 0 );
+        const uint32_t i_blocks =
+            p_pgc->cell_playback[i_played].last_sector -
+            p_pgc->cell_playback[i_played].first_sector + 1;
+
+        if( i_time < i_start + i_duration ||
+            i_next > p_sys->i_title_end_cell || i_next <= i_cell )
+        {
+            if( i_duration > 0 && i_time > i_start )
+            {
+                double f = (double)( i_time - i_start ) / (double)i_duration;
+                if( f > 1.0 )
+                    f = 1.0;
+                i_block_offset += (int)( f * i_blocks );
+            }
+            return i_block_offset;
+        }
+
+        i_block_offset += i_blocks;
+        i_cell = i_next;
+    }
+
+    return i_block_offset;
+}
+
 static int DvdReadSetArea( demux_t *p_demux, int i_title, int i_chapter,
                            int i_angle )
 {
@@ -942,16 +1144,28 @@ static int DvdReadSetArea( demux_t *p_demux, int i_title, int i_chapter,
 
         p_sys->i_title_offset = 0;
 
+        /* Count the played path only. Summing every cell of an angle block
+         * counted the same seconds two or three times over, so the title came
+         * out longer than it is and the read head never reached the end of
+         * its own scale. */
         p_sys->i_title_blocks = 0;
-        for( int i = i_start_cell; i <= i_end_cell; i++ )
+        for( int i = i_start_cell; i >= 0 && i <= i_end_cell; )
         {
-            const uint32_t cell_blocks = p_pgc->cell_playback[i].last_sector -
-                                         p_pgc->cell_playback[i].first_sector + 1;
+            int i_next;
+            const int i_played = DvdReadPlayedCell( p_sys, i, &i_next );
+            const uint32_t cell_blocks =
+                p_pgc->cell_playback[i_played].last_sector -
+                p_pgc->cell_playback[i_played].first_sector + 1;
             if(unlikely( cell_blocks == 0 || cell_blocks > INT_MAX ||
                  INT_MAX - p_sys->i_title_blocks < (int)cell_blocks ))
                 return VLC_EGENERIC;
             p_sys->i_title_blocks += cell_blocks;
+            if( i_next <= i )
+                break;
+            i = i_next;
         }
+
+        DvdReadBuildTimeTable( p_demux );
 
         msg_Dbg( p_demux, "title %d vts_title %d pgc %d pgn %d "
                  "start %d end %d blocks: %d",
@@ -1235,23 +1449,39 @@ static int DvdReadSeek( demux_t *p_demux, int i_block_offset )
 #define p_pgc p_sys->p_cur_pgc
 #define p_vts p_sys->p_vts_file
 
-    /* Find cell */
+    /* Find cell, along the played path: an offset in blocks has to mean the
+     * same thing here as in the time table and in i_title_blocks, otherwise a
+     * click lands somewhere else than where it was aimed on an angle title.
+     * i_cell stays the cell that OPENS the block -- DvdReadFindCell below
+     * applies the angle to it -- while the arithmetic uses the played one. */
     i_block = i_block_offset;
+    int i_played_cell = -1;
     for( i_cell = p_sys->i_title_start_cell;
-         i_cell <= p_sys->i_title_end_cell; i_cell++ )
+         i_cell >= 0 && i_cell <= p_sys->i_title_end_cell; )
     {
-        if( i_block < (int)p_pgc->cell_playback[i_cell].last_sector -
-            (int)p_pgc->cell_playback[i_cell].first_sector + 1 ) break;
+        int i_next;
+        const int i_played = DvdReadPlayedCell( p_sys, i_cell, &i_next );
+        const int i_cell_blocks =
+            (int)p_pgc->cell_playback[i_played].last_sector -
+            (int)p_pgc->cell_playback[i_played].first_sector + 1;
 
-        i_block -= (p_pgc->cell_playback[i_cell].last_sector -
-            p_pgc->cell_playback[i_cell].first_sector + 1);
+        if( i_block < i_cell_blocks )
+        {
+            i_played_cell = i_played;
+            break;
+        }
+        i_block -= i_cell_blocks;
+
+        if( i_next <= i_cell )
+            break;
+        i_cell = i_next;
     }
-    if( i_cell > p_sys->i_title_end_cell )
+    if( i_played_cell < 0 )
     {
         msg_Err( p_demux, "couldn't find cell for block %i", i_block_offset );
         return VLC_EGENERIC;
     }
-    i_block += p_pgc->cell_playback[i_cell].first_sector;
+    i_block += p_pgc->cell_playback[i_played_cell].first_sector;
     p_sys->i_title_offset = i_block_offset;
 
     /* Find chapter */
@@ -1857,6 +2087,92 @@ static void DvdReadFindCell( demux_t *p_demux )
 /*****************************************************************************
  * DemuxTitles: get the titles/chapters structure
  *****************************************************************************/
+/* Start time of every chapter of a title, and the title length, read from the
+ * IFO. This is what the seek bar draws its chapter marks from: without it the
+ * marks were all at zero and the interface -- rightly -- refused to draw any.
+ * Publishing none is better than publishing wrong ones, so anything that does
+ * not fit the simple case gives up quietly and leaves the times at zero. */
+static void DvdReadTitleTimes( ifo_handle_t *p_vts, int i_vts_ttn,
+                               int i_angle, input_title_t *t )
+{
+    if( p_vts == NULL || p_vts->vts_ptt_srpt == NULL ||
+        p_vts->vts_ptt_srpt->title == NULL || p_vts->vts_pgcit == NULL ||
+        i_vts_ttn < 1 || i_vts_ttn > p_vts->vts_ptt_srpt->nr_of_srpts )
+        return;
+
+    const ttu_t *p_ttu = &p_vts->vts_ptt_srpt->title[i_vts_ttn - 1];
+    const int i_ptts = p_ttu->nr_of_ptts;
+    if( p_ttu->ptt == NULL || i_ptts < 1 || i_ptts > t->i_seekpoint )
+        return;
+
+    /* Chapters spread over several program chains have no single time line
+     * to be placed on. */
+    const int i_pgcn = p_ttu->ptt[0].pgcn;
+    if( i_pgcn < 1 || i_pgcn > p_vts->vts_pgcit->nr_of_pgci_srp )
+        return;
+    for( int i = 1; i < i_ptts; i++ )
+        if( p_ttu->ptt[i].pgcn != i_pgcn )
+            return;
+
+    pgc_t *p_pgc = p_vts->vts_pgcit->pgci_srp[i_pgcn - 1].pgc;
+    if( p_pgc == NULL || p_pgc->cell_playback == NULL ||
+        p_pgc->program_map == NULL || p_pgc->nr_of_cells < 1 )
+        return;
+
+    const int i_first_pgn = p_ttu->ptt[0].pgn;
+    if( i_first_pgn < 1 || i_first_pgn > p_pgc->nr_of_programs )
+        return;
+    const int i_start_cell = p_pgc->program_map[i_first_pgn - 1] - 1;
+    if( i_start_cell < 0 || i_start_cell >= p_pgc->nr_of_cells )
+        return;
+
+    int64_t *p_cell_time = calloc( p_pgc->nr_of_cells, sizeof(*p_cell_time) );
+    int64_t *p_ptt_time = calloc( i_ptts, sizeof(*p_ptt_time) );
+    if( unlikely( p_cell_time == NULL || p_ptt_time == NULL ) )
+        goto end;
+
+    /* one walk of the played path; every angle of a block starts together */
+    vlc_tick_t i_acc = 0;
+    for( int i_cell = i_start_cell;
+         i_cell >= 0 && i_cell < p_pgc->nr_of_cells; )
+    {
+        int i_next;
+        const int i_played =
+            DvdReadPlayedCellIn( p_pgc, i_angle, i_cell, &i_next );
+
+        for( int i = i_cell; i < i_next && i < p_pgc->nr_of_cells; i++ )
+            p_cell_time[i] = i_acc;
+
+        i_acc += dvdtime_to_time(
+            &p_pgc->cell_playback[i_played].playback_time, 0 );
+
+        if( i_next <= i_cell )
+            break;
+        i_cell = i_next;
+    }
+
+    /* Collect first, commit second: a title half-stamped with times would
+     * leave the last chapter at zero, which reads as "no times at all". */
+    for( int i = 0; i < i_ptts; i++ )
+    {
+        const int i_pgn = p_ttu->ptt[i].pgn;
+        if( i_pgn < 1 || i_pgn > p_pgc->nr_of_programs )
+            goto end;
+        const int i_cell = p_pgc->program_map[i_pgn - 1] - 1;
+        if( i_cell < 0 || i_cell >= p_pgc->nr_of_cells )
+            goto end;
+        p_ptt_time[i] = p_cell_time[i_cell];
+    }
+
+    for( int i = 0; i < i_ptts; i++ )
+        t->seekpoint[i]->i_time_offset = p_ptt_time[i];
+    t->i_length = i_acc;
+
+end:
+    free( p_cell_time );
+    free( p_ptt_time );
+}
+
 static void DemuxTitles( demux_t *p_demux, int *pi_angle )
 {
     VLC_UNUSED( pi_angle );
@@ -1864,6 +2180,8 @@ static void DemuxTitles( demux_t *p_demux, int *pi_angle )
     demux_sys_t *p_sys = p_demux->p_sys;
     input_title_t *t;
     seekpoint_t *s;
+    ifo_handle_t *p_vts = NULL;
+    int i_vts_open = -1;
 
     /* Find out number of titles/chapters */
 #define tt_srpt p_sys->p_vmg_file->tt_srpt
@@ -1887,8 +2205,26 @@ static void DemuxTitles( demux_t *p_demux, int *pi_angle )
             TAB_APPEND( t->i_seekpoint, t->seekpoint, s );
         }
 
+        /* Stamp the chapters with their start time. The IFO of a title set
+         * serves every title it holds, and tt_srpt groups them, so keep the
+         * last one open rather than reopening it for each title. */
+        const int i_vts = tt_srpt->title[i].title_set_nr;
+        if( i_vts != i_vts_open )
+        {
+            if( p_vts != NULL )
+                ifoClose( p_vts );
+            p_vts = ifoOpen( p_sys->p_dvdread, i_vts );
+            i_vts_open = p_vts != NULL ? i_vts : -1;
+        }
+        if( p_vts != NULL )
+            DvdReadTitleTimes( p_vts, tt_srpt->title[i].vts_ttn,
+                               p_sys->i_angle, t );
+
         TAB_APPEND( p_sys->i_titles, p_sys->titles, t );
     }
+
+    if( p_vts != NULL )
+        ifoClose( p_vts );
 
 #undef tt_srpt
 }

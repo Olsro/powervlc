@@ -38,6 +38,7 @@ typedef unsigned int NSUInteger;
     BOOL notchAdjusted;       /* image rognée sous l'encoche, plein écran */
     BOOL decorated;           /* barre de titre (option « video-deco ») */
     BOOL fullscreenActive;
+    NSRect fullscreenFrame;   /* cadre visé en plein écran, à défendre */
 
     /* La vue REMISE AU VOUT. Ce n'est pas le contentView : la fenêtre décorée
      * lui réserve la bande du bas pour sa barre de contrôles allégée, et la
@@ -56,6 +57,13 @@ typedef unsigned int NSUInteger;
     NSTextField *durationField;
     NSTimer *refreshTimer;
     int lastRunningState;     /* -1 au départ : évite de re-teinter à chaque tic */
+
+    /* Chapitres DVD : identité stable par URI et nouvelles tentatives tant que
+     * dvdnav n'a pas encore publié les décalages temporels. */
+    char *chaptersUri;
+    int chaptersTitle;
+    int64_t chaptersDuration;
+    int chaptersRetryTicks;
 
     /* « Masquer les contrôles durant la lecture » appliqué à CETTE fenêtre */
     BOOL controlsHiddenForPlayback;

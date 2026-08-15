@@ -85,6 +85,35 @@ vlc_module_begin ()
               N_("If this option is enabled, VLC will use the dark interface "
                  "style. Otherwise, the grey interface style is used."),
               false )
+    /* Dropping the drop shadow while video plays was measured to help on
+     * 10.4: one windowed frame in three was late with it, and the flushes
+     * showed up as a storm of window-surface remaps.
+     * ⚠ The explanation long written next to that measurement -- the window
+     * server recomputing the shadow on every frame -- does not survive
+     * inspection: that recomputation is a property of NON-OPAQUE windows,
+     * whose shadow is derived from the content alpha, and neither the main
+     * window nor the vout window is ever made non-opaque here (only the
+     * HUD/tooltip panels are). Nor is the machine it was measured on
+     * recorded anywhere. So: real symptom, unexplained cause.
+     * The shadow is what detaches a window from the desktop, and a video
+     * window without one looks pasted onto it, so only the PowerPC slice
+     * built without AltiVec -- the G3 one -- defaults to off; the checkbox
+     * in the interface preferences flips it either way. */
+#if (defined(__ppc__) || defined(__ppc64__) || defined(__POWERPC__)) \
+ && !defined(HAVE_ALTIVEC_H)
+# define LEGACY_SHADOWS_DEFAULT false
+#else
+# define LEGACY_SHADOWS_DEFAULT true
+#endif
+    add_bool( "legacy-macosx-window-shadows", LEGACY_SHADOWS_DEFAULT,
+              N_("Draw window shadows"),
+              N_("Keep the drop shadow under the video windows, which is "
+                 "what visually detaches them from the desktop. The window "
+                 "server recomputes that shadow on every video frame: on "
+                 "the slowest Macs this costs enough displayed frames to be "
+                 "worth turning off, which is why it is off by default "
+                 "there."),
+              false )
     /* View menu toggles, mirroring the modern interface options (their
      * own names: a config option may only be declared by one module) */
     add_bool( "legacy-macosx-show-playback-buttons", false,

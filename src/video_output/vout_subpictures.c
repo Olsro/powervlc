@@ -1560,18 +1560,24 @@ subpicture_t *spu_Render(spu_t *spu,
     filter_chain_SubSource(sys->source_chain, spu, render_osd_date);
     vlc_mutex_unlock(&sys->source_chain_lock);
 
+    /* These lists say which region chromas the CPU blender downstream can
+     * take as a SOURCE, so they must not name one it cannot. blend.cpp only
+     * ever registers YUVA, RGBA and YUVP as sources (ARGB and BGRA appear
+     * there as destinations only), and it is the sole "video blending"
+     * module. Advertising ARGB/BGRA here made the core skip the conversion
+     * in SpuRenderRegion() and hand the blender a region it then refused,
+     * once per frame, silently dropping the overlay -- which is what happens
+     * to Blu-ray menus (bluray.c renders them in BGRA) on any display that
+     * does not composite subpictures itself, and to every display while a
+     * snapshot is pending, since that forces the CPU path too. */
     static const vlc_fourcc_t chroma_list_default_yuv[] = {
         VLC_CODEC_YUVA,
         VLC_CODEC_RGBA,
-        VLC_CODEC_ARGB,
-        VLC_CODEC_BGRA,
         VLC_CODEC_YUVP,
         0,
     };
     static const vlc_fourcc_t chroma_list_default_rgb[] = {
         VLC_CODEC_RGBA,
-        VLC_CODEC_ARGB,
-        VLC_CODEC_BGRA,
         VLC_CODEC_YUVA,
         VLC_CODEC_YUVP,
         0,

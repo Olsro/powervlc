@@ -39,6 +39,7 @@
 #include <fcntl.h>             /* open() — témoin de bascule synchrone */
 #include <stdlib.h>            /* getenv() */
 #include <stdio.h>             /* snprintf() */
+#include <dlfcn.h>             /* forme CGS de la fenêtre OSD sous Jaguar */
 
 
 #import <Cocoa/Cocoa.h>
@@ -59,6 +60,10 @@ static picture_pool_t *Pool (vout_display_t *vd, unsigned requested_count);
 static void PictureRender (vout_display_t *vd, picture_t *pic, subpicture_t *subpicture);
 static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *subpicture);
 static int Control (vout_display_t *vd, int query, va_list ap);
+
+static const vlc_fourcc_t qt_subpicture_chromas[] = {
+    VLC_CODEC_RGBA, 0
+};
 
 /**
  * Module declaration
@@ -93,14 +98,24 @@ vlc_module_end ()
 - (void)removeVoutSubview:(NSView *)view;
 @end
 
+@class VLCQTSubsOverlayView;
+
 @interface VLCQTVideoView : NSQuickDrawView
 {
     vout_display_t *vd;
+    /* Fenêtre Quartz indépendante portant les OSD au-dessus de la fenêtre
+     * Carbon privée du DVDDriver Rage 128. Une sous-fenêtre de la fenêtre VLC
+     * resterait derrière ce plan matériel sous Jaguar. */
+    NSWindow *_subsOverlay;
+    NSRect    _subsOverlayRect;
 }
 - (void)setVoutDisplay:(vout_display_t *)vd;
 - (void)vlcQtPublishVisibility;
 - (void)vlcQtVisibilityChanged;
 - (void)vlcQtRecomputeSurfaces;
+- (void)refreshSubsOverlay;
+- (void)tearDownSubsOverlay;
+- (void)tearDownSubsOverlayAndRelease;
 @end
 
 /* Per-picture payload: packed 2vuy frames are handed to the ICM as a raw
@@ -218,7 +233,331 @@ struct vout_display_sys_t
     bool hw_surf_hidden;
     bool view_visible;
     unsigned vis_poll;    /* compteur d'images, cf. PictureDisplay */
+
+    /* OSD/sous-images : le chemin QuickTime ne reçoit aujourd'hui aucune
+     * région (subpicture_chromas=NULL), car le cœur les mélange aux plans CPU.
+     * Ces plans sont vides en mode DVDDriver remplacement. On demande donc du
+     * RGBA et on le publie dans une petite fenêtre transparente indépendante. */
+    uint8_t *ovl_data;
+    int ovl_bw, ovl_bh;
+    int ovl_x, ovl_y, ovl_w, ovl_h;
+    int view_w, view_h;
+    bool ovl_pending;
+    uint64_t ovl_sig;
 };
+
+/*****************************************************************************
+ * OSD/subpictures over the Rage 128 DVDDriver window
+ *****************************************************************************/
+static uint64_t QtSubpictureSignature (subpicture_t *subpic)
+{
+    if (subpic == NULL)
+        return 0;
+
+    uint64_t h = 1469598103934665603ull ^ (uint64_t) subpic->i_order;
+    for (subpicture_region_t *r = subpic->p_region; r != NULL; r = r->p_next)
+    {
+        const uint64_t v[] = {
+            (uint64_t) r->i_x, (uint64_t) r->i_y,
+            (uint64_t) r->fmt.i_visible_width,
+            (uint64_t) r->fmt.i_visible_height,
+        };
+        for (unsigned i = 0; i < sizeof (v) / sizeof (v[0]); i++)
+            h = (h ^ v[i]) * 1099511628211ull;
+
+        if (r->p_picture == NULL || r->fmt.i_chroma != VLC_CODEC_RGBA)
+            continue;
+        const plane_t *pl = &r->p_picture->p[0];
+        const uint8_t *src = pl->p_pixels
+            + r->fmt.i_y_offset * (unsigned) pl->i_pitch
+            + r->fmt.i_x_offset * (unsigned) pl->i_pixel_pitch;
+        const unsigned bytes = r->fmt.i_visible_width
+                             * (unsigned) pl->i_pixel_pitch;
+        for (unsigned y = 0; y < r->fmt.i_visible_height; y += 16)
+        {
+            const uint8_t *row = src + y * (unsigned) pl->i_pitch;
+            for (unsigned x = 0; x < bytes; x += 64)
+                h = (h ^ row[x]) * 1099511628211ull;
+        }
+    }
+    return h ? h : 1;
+}
+
+#define QT_MUL255(v, a) (((unsigned) (v) * (unsigned) (a) + 128u + \
+                         (((unsigned) (v) * (unsigned) (a) + 128u) >> 8)) >> 8)
+
+/* Thread VOUT : compose les régions RGBA en ARGB prémultiplié, à leur
+ * résolution source. Le thread principal ne fera que créer le CGImage et le
+ * poser dans la fenêtre indépendante. */
+static void QtBuildSubsOverlay (vout_display_t *vd, subpicture_t *subpic)
+{
+    vout_display_sys_t *sys = vd->sys;
+    vout_display_place_t place;
+    int vw, vh;
+    vlc_mutex_lock (&sys->place_lock);
+    place = sys->place;
+    vw = sys->view_w;
+    vh = sys->view_h;
+    vlc_mutex_unlock (&sys->place_lock);
+
+    uint8_t *data = NULL;
+    int ox = 0, oy = 0, ow = 0, oh = 0;
+    int bx = 0, by = 0, bw = 0, bh = 0;
+
+    unsigned original_w = subpic != NULL
+                        ? subpic->i_original_picture_width : 0;
+    unsigned original_h = subpic != NULL
+                        ? subpic->i_original_picture_height : 0;
+    if (original_w == 0) original_w = vd->source.i_visible_width;
+    if (original_h == 0) original_h = vd->source.i_visible_height;
+
+    if (subpic != NULL && place.width > 0 && place.height > 0
+     && original_w > 0 && original_h > 0 && vw > 0 && vh > 0)
+    {
+        const double sx = (double) place.width / original_w;
+        const double sy = (double) place.height / original_h;
+        int x0 = original_w, y0 = original_h, x1 = 0, y1 = 0;
+        for (subpicture_region_t *r = subpic->p_region; r != NULL; r = r->p_next)
+        {
+            if (r->fmt.i_chroma != VLC_CODEC_RGBA || r->p_picture == NULL)
+                continue;
+            if ((int) r->fmt.i_visible_width <= 0
+             || (int) r->fmt.i_visible_height <= 0)
+                continue;
+            if (r->i_x < x0) x0 = r->i_x;
+            if (r->i_y < y0) y0 = r->i_y;
+            if (r->i_x + (int) r->fmt.i_visible_width > x1)
+                x1 = r->i_x + r->fmt.i_visible_width;
+            if (r->i_y + (int) r->fmt.i_visible_height > y1)
+                y1 = r->i_y + r->fmt.i_visible_height;
+        }
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > (int) original_w) x1 = original_w;
+        if (y1 > (int) original_h) y1 = original_h;
+        if (x1 > x0 && y1 > y0)
+        {
+            bx = x0; by = y0; bw = x1 - x0; bh = y1 - y0;
+            data = calloc ((size_t) bw * bh, 4);
+            if (data != NULL)
+            {
+                ox = place.x + (int) (bx * sx);
+                oy = place.y + (int) (by * sy);
+                ow = (int) (bw * sx + 0.5);
+                oh = (int) (bh * sy + 0.5);
+            }
+        }
+    }
+
+    if (data != NULL)
+    {
+        for (subpicture_region_t *r = subpic->p_region; r != NULL; r = r->p_next)
+        {
+            if (r->fmt.i_chroma != VLC_CODEC_RGBA || r->p_picture == NULL)
+                continue;
+            int rx = r->i_x - bx, ry = r->i_y - by;
+            int rw = r->fmt.i_visible_width, rh = r->fmt.i_visible_height;
+            if (rw <= 0 || rh <= 0)
+                continue;
+            int y0 = ry < 0 ? -ry : 0;
+            int y1 = ry + rh > bh ? bh - ry : rh;
+            int x0 = rx < 0 ? -rx : 0;
+            int x1 = rx + rw > bw ? bw - rx : rw;
+            if (x1 <= x0 || y1 <= y0)
+                continue;
+
+            const plane_t *pl = &r->p_picture->p[0];
+            const uint8_t *src = pl->p_pixels
+                + r->fmt.i_y_offset * (unsigned) pl->i_pitch
+                + r->fmt.i_x_offset * (unsigned) pl->i_pixel_pitch;
+            const unsigned galpha = QT_MUL255 ((unsigned) subpic->i_alpha,
+                                                (unsigned) r->i_alpha);
+            for (int y = y0; y < y1; y++)
+            {
+                const uint8_t *s = src + (unsigned) y * (unsigned) pl->i_pitch
+                                     + (unsigned) x0 * 4;
+                uint8_t *d = data + ((size_t) (ry + y) * bw + rx + x0) * 4;
+                for (int x = x0; x < x1; x++, s += 4, d += 4)
+                {
+                    unsigned a = s[3];
+                    if (galpha != 255) a = QT_MUL255 (a, galpha);
+                    if (a == 0) continue;
+                    d[0] = (uint8_t) a;
+                    d[1] = (uint8_t) QT_MUL255 (s[0], a);
+                    d[2] = (uint8_t) QT_MUL255 (s[1], a);
+                    d[3] = (uint8_t) QT_MUL255 (s[2], a);
+                }
+            }
+        }
+    }
+
+    vlc_mutex_lock (&sys->place_lock);
+    free (sys->ovl_data);
+    sys->ovl_data = data;
+    sys->ovl_x = ox; sys->ovl_y = oy;
+    sys->ovl_w = ow; sys->ovl_h = oh;
+    sys->ovl_bw = bw; sys->ovl_bh = bh;
+    sys->ovl_pending = true;
+    vlc_mutex_unlock (&sys->place_lock);
+}
+
+@interface VLCQTSubsOverlayView : NSView
+{
+    CGImageRef _img;
+    uint8_t   *_data;
+    NSRect     _imageRect;
+}
+- (void)setImage:(CGImageRef)img data:(uint8_t *)data rect:(NSRect)rect;
+@end
+
+/* La Rage 128 de l'iBook n'a pas Quartz Extreme. Le WindowServer 10.2 exclut
+ * alors le RECTANGLE entier de toute fenêtre placée devant le plan vidéo
+ * matériel, même si ses pixels ont un alpha nul : le fond de la fenêtre
+ * vidéo apparaît noir. Donner à la fenêtre sa forme alpha réelle laisse le
+ * plan DVD exposé entre les glyphes. Ces API CGS sont celles du WindowServer
+ * de l'époque et sont résolues dynamiquement pour garder le module portable. */
+static bool QtSetSubsWindowShape (NSWindow *window, const uint8_t *data,
+                                  int bw, int bh, NSRect imageRect)
+{
+    if (window == nil || data == NULL || bw <= 0 || bh <= 0)
+        return false;
+
+    const int ww = (int) NSWidth ([window frame]);
+    const int wh = (int) NSHeight ([window frame]);
+    if (ww <= 0 || wh <= 0 || ww > 8191 || wh > 8191)
+        return false;
+
+    const int rowBytes = ((ww + 15) / 16) * 2;
+    uint8_t *bits = calloc ((size_t) rowBytes, (size_t) wh);
+    if (bits == NULL)
+        return false;
+
+    /* QuickDraw/CGS expriment la forme depuis le coin haut-gauche, Cocoa et
+     * imageRect depuis le bas-gauche. Le contenu du CGImage, lui, est échantillonné
+     * comme dans drawRect: ; seule la position de destination doit être retournée. */
+    const int dx0 = (int) floor (NSMinX (imageRect));
+    const int dx1 = (int) ceil  (NSMaxX (imageRect));
+    const int top = wh - (int) ceil (NSMaxY (imageRect));
+    const int dh = (int) ceil (NSHeight (imageRect));
+    const int dw = dx1 - dx0;
+    if (dw > 0 && dh > 0)
+    {
+        for (int dy = 0; dy < dh; dy++)
+        {
+            const int wy = top + dy;
+            if (wy < 0 || wy >= wh)
+                continue;
+            int sy = (int) ((int64_t) dy * bh / dh);
+            if (sy >= bh) sy = bh - 1;
+            for (int dx = 0; dx < dw; dx++)
+            {
+                const int wx = dx0 + dx;
+                if (wx < 0 || wx >= ww)
+                    continue;
+                int sx = (int) ((int64_t) dx * bw / dw);
+                if (sx >= bw) sx = bw - 1;
+                if (data[((size_t) sy * bw + sx) * 4] != 0)
+                    bits[(size_t) wy * rowBytes + (wx >> 3)] |=
+                        (uint8_t) (0x80u >> (wx & 7));
+            }
+        }
+    }
+
+    BitMap bitmap;
+    bitmap.baseAddr = (Ptr) bits;
+    bitmap.rowBytes = (short) rowBytes;
+    SetRect (&bitmap.bounds, 0, 0, (short) ww, (short) wh);
+    RgnHandle qdRegion = NewRgn ();
+    OSErr qdErr = qdRegion != NULL ? BitMapToRegion (qdRegion, &bitmap) : memFullErr;
+    free (bits);
+    if (qdErr != noErr || qdRegion == NULL)
+    {
+        if (qdRegion != NULL) DisposeRgn (qdRegion);
+        return false;
+    }
+
+    void *as = dlopen ("/System/Library/Frameworks/ApplicationServices.framework/"
+                       "ApplicationServices", RTLD_NOW | RTLD_GLOBAL);
+    int (*QDConn)(void) = as ? dlsym (as, "GetCGSConnectionID") : NULL;
+    int (*MainConn)(void) = as ? dlsym (as, "CGSMainConnectionID") : NULL;
+    int (*NewRegionQD)(RgnHandle, void **) =
+        as ? dlsym (as, "CGSNewRegionWithQDRgn") : NULL;
+    /* ABI PPC : les deux décalages sont des float (f1/f2), pas des int
+     * (r5/r6). Une mauvaise déclaration laisse f1/f2 indéfinis et déplace la
+     * forme de façon apparemment aléatoire à chaque nouvel OSD. */
+    int (*SetShape)(int, int, float, float, void *) =
+        as ? dlsym (as, "CGSSetWindowShape") : NULL;
+    int (*GetBounds)(int, int, CGRect *) =
+        as ? dlsym (as, "CGSGetWindowBounds") : NULL;
+    int (*ReleaseRegion)(void *) =
+        as ? dlsym (as, "CGSReleaseRegion") : NULL;
+    int cid = MainConn ? MainConn () : 0;
+    if (cid == 0 && QDConn != NULL)
+        cid = QDConn ();
+
+    void *cgsRegion = NULL;
+    CGRect globalBounds = CGRectZero;
+    const int wid = (int) [window windowNumber];
+    bool ok = cid != 0 && NewRegionQD != NULL && SetShape != NULL
+           && GetBounds != NULL && GetBounds (cid, wid, &globalBounds) == 0
+           && NewRegionQD (qdRegion, &cgsRegion) == 0 && cgsRegion != NULL
+           /* CGS conserve la forme en coordonnées ÉCRAN (origine en haut à
+            * gauche). La région QuickDraw ci-dessus est locale à la fenêtre :
+            * la translater par les bornes CGS exactes, sans reconvertir le
+            * repère Cocoa bas-gauche. */
+           && SetShape (cid, wid, globalBounds.origin.x,
+                        globalBounds.origin.y, cgsRegion) == 0;
+    if (cgsRegion != NULL && ReleaseRegion != NULL)
+        ReleaseRegion (cgsRegion);
+    DisposeRgn (qdRegion);
+    if (as != NULL)
+        dlclose (as);
+    return ok;
+}
+
+@implementation VLCQTSubsOverlayView
+- (void)setImage:(CGImageRef)img data:(uint8_t *)data rect:(NSRect)rect
+{
+    if (_img != NULL) CGImageRelease (_img);
+    free (_data);
+    _img = img;
+    _data = data;
+    _imageRect = rect;
+    [self setNeedsDisplay:YES];
+}
+- (void)dealloc
+{
+    if (_img != NULL) CGImageRelease (_img);
+    free (_data);
+    [super dealloc];
+}
+- (BOOL)isOpaque { return NO; }
+- (void)drawRect:(NSRect)rect
+{
+    VLC_UNUSED(rect);
+    CGContextRef cg = (CGContextRef) [[NSGraphicsContext currentContext]
+                                         graphicsPort];
+    if (cg == NULL)
+        return;
+
+    /* Une couleur d'alpha zéro dessinée en SourceOver ne modifie AUCUN pixel :
+     * sous Jaguar le backing store neuf restait donc noir, et l'OSD apparaissait
+     * sur un gros rectangle opaque. ClearRect remet réellement le tampon à
+     * transparent avant chaque image — y compris quand _img devient NULL. */
+    NSRect bounds = [self bounds];
+    CGContextClearRect (cg, CGRectMake (bounds.origin.x, bounds.origin.y,
+                                        bounds.size.width, bounds.size.height));
+    if (_img != NULL)
+    {
+        CGContextSetInterpolationQuality (cg, kCGInterpolationNone);
+        CGContextSetShouldAntialias (cg, false);
+        CGContextDrawImage (cg, CGRectMake (_imageRect.origin.x,
+                                            _imageRect.origin.y,
+                                            _imageRect.size.width,
+                                            _imageRect.size.height), _img);
+    }
+}
+@end
 
 /*****************************************************************************
  * Geometry: map the source rectangle onto the current placement
@@ -650,6 +989,10 @@ static int Open (vlc_object_t *this)
 
         /* Initial placement (refined by Control/reshape) */
         vout_display_PlacePicture (&sys->place, &vd->source, vd->cfg, false);
+        sys->view_w = vd->cfg->display.width;
+        sys->view_h = vd->cfg->display.height;
+        if (sys->view_w <= 0) sys->view_w = fmt.i_visible_width;
+        if (sys->view_h <= 0) sys->view_h = fmt.i_visible_height;
         sys->matrix_dirty = true;
 
         /* U1 — géométrie publiée sur le bus libvlc à l'intention du décodeur
@@ -667,7 +1010,10 @@ static int Open (vlc_object_t *this)
 
         vout_display_info_t info = vd->info;
         info.has_pictures_invalid = false;
-        info.subpicture_chromas = NULL; /* OSD/SPU blended by the core */
+        /* Le cœur doit remettre les régions au vout. Les mélanger aux plans
+         * CPU ne peut pas marcher en mode DVDDriver remplacement : ces plans
+         * ne sont volontairement jamais reconstruits. */
+        info.subpicture_chromas = qt_subpicture_chromas;
 
         vd->fmt = fmt;
         vd->info = info;
@@ -708,7 +1054,27 @@ void Close (vlc_object_t *this)
             sys->captured = false;
         }
 
-        [sys->qtView setVoutDisplay:nil];
+        /* Close() runs on the vout thread.  During application termination the
+         * main thread is already waiting for the interface thread, which in
+         * turn waits for this vout: a synchronous AppKit teardown deadlocks
+         * all three.  Detach vd first so any refresh already queued on the main
+         * run loop becomes a no-op, then enqueue the window teardown.  Keep an
+         * explicit reference until that selector has run; this does not rely
+         * on the retention semantics of Jaguar's old implementation of
+         * performSelectorOnMainThread:. */
+        if (sys->qtView != nil)
+        {
+            [sys->qtView setVoutDisplay:nil];
+            [sys->qtView retain];
+            [sys->qtView
+                performSelectorOnMainThread:@selector(tearDownSubsOverlayAndRelease)
+                                  withObject:nil waitUntilDone:NO];
+        }
+
+        vlc_mutex_lock (&sys->place_lock);
+        free (sys->ovl_data);
+        sys->ovl_data = NULL;
+        vlc_mutex_unlock (&sys->place_lock);
 
         /* U1 — retirer la géométrie du bus : wid=0 d'abord, pour qu'un décodeur
          * encore vivant cesse de viser une fenêtre qui va disparaître. */
@@ -871,14 +1237,33 @@ static picture_pool_t *Pool (vout_display_t *vd, unsigned requested_count)
 
 static void PictureRender (vout_display_t *vd, picture_t *pic, subpicture_t *subpicture)
 {
-    VLC_UNUSED(vd); VLC_UNUSED(pic); VLC_UNUSED(subpicture);
-    /* nothing: the ICM reads straight from the picture planes */
+    VLC_UNUSED(pic);
+    vout_display_sys_t *sys = vd->sys;
+    uint64_t sig = QtSubpictureSignature (subpicture);
+    if (sig != sys->ovl_sig)
+    {
+        sys->ovl_sig = sig;
+        QtBuildSubsOverlay (vd, subpicture);
+    }
+    /* L'ICM lit toujours directement les plans de la picture ; seule la petite
+     * incrustation RGBA est préparée ici. */
 }
 
 static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *subpicture)
 {
     vout_display_sys_t *sys = vd->sys;
-    VLC_UNUSED(subpicture);
+
+    /* La composition Quartz doit se faire sur le thread principal. La requête
+     * est événementielle : seulement quand l'OSD change ou disparaît. */
+    bool ovl_pending;
+    vlc_mutex_lock (&sys->place_lock);
+    ovl_pending = sys->ovl_pending;
+    vlc_mutex_unlock (&sys->place_lock);
+    if (ovl_pending)
+        [sys->qtView performSelectorOnMainThread:@selector(refreshSubsOverlay)
+                                      withObject:nil waitUntilDone:NO
+                                              modes:[NSArray arrayWithObject:
+                                                         NSDefaultRunLoopMode]];
 
     /* ==== U4 — present matériel piloté par le vout =========================
      * Si la picture porte un contexte HW et que le décodeur a publié son device
@@ -1015,6 +1400,8 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
                                       modes:[NSArray arrayWithObject:
                                                  NSDefaultRunLoopMode]];
         picture_Release (pic);
+        if (subpicture != NULL)
+            subpicture_Delete (subpicture);
         return;
     }
 
@@ -1050,6 +1437,8 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
         if (present (hw, pic->context, hwid, hx, hy, hw_, hh))
         {
             picture_Release (pic);
+            if (subpicture != NULL)
+                subpicture_Delete (subpicture);
             return;
         }
     }
@@ -1070,6 +1459,8 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
          * images, 8 %, passaient par ce blit**. Il coûte en plus une conversion
          * ICM logicielle (~30 %% d'un cœur de G3 pendant sa durée). */
         picture_Release (pic);
+        if (subpicture != NULL)
+            subpicture_Delete (subpicture);
         return;
     }
 
@@ -1084,6 +1475,8 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
          * image perdue pendant la bascule) ; dessiner serait fatal. */
         vlc_mutex_unlock (&sys->draw_lock);
         picture_Release (pic);
+        if (subpicture != NULL)
+            subpicture_Delete (subpicture);
         return;
     }
 
@@ -1133,6 +1526,8 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
     vlc_mutex_unlock (&sys->draw_lock);
 
     picture_Release (pic);
+    if (subpicture != NULL)
+        subpicture_Delete (subpicture);
 }
 
 static int Control (vout_display_t *vd, int query, va_list ap)
@@ -1166,6 +1561,9 @@ static int Control (vout_display_t *vd, int query, va_list ap)
             if (query == VOUT_DISPLAY_CHANGE_SOURCE_CROP)
                 UpdateCropLocked (vd);
             sys->place = place;
+            sys->view_w = cfg->display.width;
+            sys->view_h = cfg->display.height;
+            sys->ovl_sig = 0;
             sys->matrix_dirty = true;
             vlc_mutex_unlock (&sys->place_lock);
 
@@ -1189,6 +1587,147 @@ static int Control (vout_display_t *vd, int query, va_list ap)
 {
     id *ret = [value pointerValue];
     *ret = [[self alloc] init];
+}
+
+- (void)refreshSubsOverlay
+{
+    VLCAssertMainThread();
+    uint8_t *data = NULL;
+    int ox = 0, oy = 0, ow = 0, oh = 0, bw = 0, bh = 0;
+
+    @synchronized(self) {
+        if (vd == NULL)
+            return;
+        vout_display_sys_t *sys = vd->sys;
+        vlc_mutex_lock (&sys->place_lock);
+        if (!sys->ovl_pending)
+        {
+            vlc_mutex_unlock (&sys->place_lock);
+            return;
+        }
+        sys->ovl_pending = false;
+        data = sys->ovl_data;
+        sys->ovl_data = NULL;
+        ox = sys->ovl_x; oy = sys->ovl_y;
+        ow = sys->ovl_w; oh = sys->ovl_h;
+        bw = sys->ovl_bw; bh = sys->ovl_bh;
+        vlc_mutex_unlock (&sys->place_lock);
+    }
+
+    NSWindow *win = [self window];
+    if (win == nil)
+    {
+        free (data);
+        return;
+    }
+    if (data == NULL || ow <= 0 || oh <= 0 || bw <= 0 || bh <= 0)
+    {
+        free (data);
+        if (_subsOverlay != nil)
+        {
+            [(VLCQTSubsOverlayView *)[_subsOverlay contentView]
+                setImage:NULL data:NULL rect:NSZeroRect];
+            [_subsOverlay orderOut:nil];
+            _subsOverlayRect = NSZeroRect;
+        }
+        return;
+    }
+
+    /* NSQuickDrawView est retournée : ox/oy sont déjà exprimés depuis le coin
+     * haut-gauche, son propre repère. convertRect: effectue le flip vers la
+     * fenêtre puis convertBaseToScreen: donne le cadre écran de la fenêtre
+     * d'OSD indépendante. */
+    NSRect vrect = NSMakeRect (ox, oy, ow, oh);
+    NSRect wrect = [self convertRect:vrect toView:nil];
+    NSPoint org = [win convertBaseToScreen:wrect.origin];
+    NSRect dest = NSMakeRect (org.x, org.y, wrect.size.width, wrect.size.height);
+    /* La subpicture courante est la source de vérité. Conserver l'union avec
+     * la précédente faisait survivre son ancien repère quand "Volume 100 %"
+     * devenait "95 %" avant extinction, et masque/image ne coïncidaient plus. */
+    NSRect frame = dest;
+    NSRect imageRect = NSMakeRect (dest.origin.x - frame.origin.x,
+                                   dest.origin.y - frame.origin.y,
+                                   dest.size.width, dest.size.height);
+
+    CGDataProviderRef prov =
+        CGDataProviderCreateWithData (NULL, data, (size_t) bw * bh * 4, NULL);
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB ();
+    CGImageRef img = NULL;
+    if (prov != NULL && cs != NULL)
+        img = CGImageCreate ((size_t) bw, (size_t) bh, 8, 32,
+                             (size_t) bw * 4, cs,
+                             kCGImageAlphaPremultipliedFirst,
+                             prov, NULL, false, kCGRenderingIntentDefault);
+    if (cs != NULL) CGColorSpaceRelease (cs);
+    if (prov != NULL) CGDataProviderRelease (prov);
+    if (img == NULL)
+    {
+        free (data);
+        return;
+    }
+
+    BOOL wasVisible = [_subsOverlay isVisible];
+    if (_subsOverlay == nil)
+    {
+        _subsOverlay = [[NSWindow alloc] initWithContentRect:frame
+                                                   styleMask:NSBorderlessWindowMask
+                                                     backing:NSBackingStoreBuffered
+                                                       defer:NO];
+        [_subsOverlay setOpaque:NO];
+        [_subsOverlay setBackgroundColor:[NSColor clearColor]];
+        [_subsOverlay setHasShadow:NO];
+        [_subsOverlay setIgnoresMouseEvents:YES];
+        [_subsOverlay setReleasedWhenClosed:NO];
+        VLCQTSubsOverlayView *view = [[VLCQTSubsOverlayView alloc]
+            initWithFrame:NSMakeRect (0, 0, frame.size.width, frame.size.height)];
+        [view setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+        [view setImage:NULL data:NULL rect:NSZeroRect];
+        [_subsOverlay setContentView:view];
+        [view release];
+    }
+    if (!NSEqualRects (frame, [_subsOverlay frame]))
+        [_subsOverlay setFrame:frame display:NO];
+    _subsOverlayRect = frame;
+    [(VLCQTSubsOverlayView *)[_subsOverlay contentView]
+        setImage:img data:data rect:imageRect];
+
+    /* Façonner AVANT de remettre la fenêtre à l'écran : sinon le serveur
+     * expose brièvement son rectangle complet, ce qui produit précisément le
+     * flash noir que ce chemin cherche à supprimer. */
+    bool shaped = QtSetSubsWindowShape (_subsOverlay, data, bw, bh, imageRect);
+
+    /* Rage 128 affiche dans sa propre fenêtre Carbon. Elle n'apparaît pas dans
+     * la hiérarchie NSWindow de VLC : addChildWindow serait donc à la fois
+     * impossible et inefficace. Le niveau flottant place cette petite fenêtre
+     * au-dessus du plan DVD, sans modifier le niveau de la fenêtre vidéo. */
+    int level = [win level] + 1;
+    if (level < NSFloatingWindowLevel)
+        level = NSFloatingWindowLevel;
+    [_subsOverlay setLevel:level];
+    if (shaped)
+        [_subsOverlay display];
+    if (shaped && !wasVisible)
+        [_subsOverlay orderFront:nil];
+    else if (!shaped)
+        [_subsOverlay orderOut:nil];
+}
+
+- (void)tearDownSubsOverlay
+{
+    VLCAssertMainThread();
+    _subsOverlayRect = NSZeroRect;
+    if (_subsOverlay == nil)
+        return;
+    [_subsOverlay orderOut:nil];
+    [_subsOverlay close];
+    [_subsOverlay release];
+    _subsOverlay = nil;
+}
+
+- (void)tearDownSubsOverlayAndRelease
+{
+    [self tearDownSubsOverlay];
+    [self release];
 }
 
 /* Publie la visibilité de la vue à l'intention du thread du vout, qui n'a pas
@@ -1412,6 +1951,9 @@ static int Control (vout_display_t *vd, int query, va_list ap)
 
         vlc_mutex_lock (&sys->place_lock);
         sys->place = place;
+        sys->view_w = bounds.size.width;
+        sys->view_h = bounds.size.height;
+        sys->ovl_sig = 0;
         sys->want_capture = want_capture;
         sys->want_display = display;
         if (want_capture) {

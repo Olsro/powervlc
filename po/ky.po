@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: vlc 3.0.22-rc1\n"
 "Report-Msgid-Bugs-To: vlc-devel@videolan.org\n"
-"POT-Creation-Date: 2026-08-11 23:46+0200\n"
+"POT-Creation-Date: 2026-08-14 10:36+0200\n"
 "PO-Revision-Date: 2017-12-10 22:48+0000\n"
 "Last-Translator: Michał Trzebiatowski <michtrz@gmail.com>, 2017\n"
 "Language-Team: Kyrgyz (https://app.transifex.com/yaron/teams/16553/ky/)\n"
@@ -34,10 +34,10 @@ msgstr "VLC ырастоолору"
 msgid "Select \"Advanced Options\" to see all options."
 msgstr ""
 
-#: include/vlc_config_cat.h:38 modules/gui/legacy_macosx/VLCLegacyPrefs.m:1310
+#: include/vlc_config_cat.h:38 modules/gui/legacy_macosx/VLCLegacyPrefs.m:1336
 #: modules/gui/macosx/VLCSimplePrefsController.m:366
 #: modules/gui/qt/components/simple_preferences.cpp:249
-#: modules/gui/qt/menus.cpp:1205
+#: modules/gui/qt/menus.cpp:1256
 msgid "Interface"
 msgstr "Интерфейс"
 
@@ -70,16 +70,16 @@ msgstr ""
 msgid "Hotkeys settings"
 msgstr ""
 
-#: include/vlc_config_cat.h:53 src/input/es_out.c:4372 src/libvlc-module.c:1580
+#: include/vlc_config_cat.h:53 src/input/es_out.c:4363 src/libvlc-module.c:1580
 #: modules/access/imem.c:64
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:674
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:377
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:626
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1513
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:627
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1544
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:284
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1311
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1337
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:171
-#: modules/gui/macosx/VLCMainMenu.m:636 modules/gui/macosx/VLCOutput.m:92
+#: modules/gui/macosx/VLCMainMenu.m:637 modules/gui/macosx/VLCOutput.m:92
 #: modules/gui/macosx/VLCPlaylistInfo.m:91
 #: modules/gui/macosx/VLCSimplePrefsController.m:368
 #: modules/gui/qt/components/info_panels.cpp:572
@@ -113,8 +113,8 @@ msgid "Audio resampler"
 msgstr ""
 
 #: include/vlc_config_cat.h:63 src/audio_output/output.c:260
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:649
-#: modules/gui/macosx/VLCMainMenu.m:646 modules/gui/macosx/VLCMainMenu.m:647
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:650
+#: modules/gui/macosx/VLCMainMenu.m:647 modules/gui/macosx/VLCMainMenu.m:648
 msgid "Visualizations"
 msgstr "Визуалдаштыруу"
 
@@ -142,20 +142,20 @@ msgstr ""
 msgid "Miscellaneous audio settings and modules."
 msgstr ""
 
-#: include/vlc_config_cat.h:73 src/input/es_out.c:4444 src/libvlc-module.c:146
+#: include/vlc_config_cat.h:73 src/input/es_out.c:4435 src/libvlc-module.c:146
 #: src/libvlc-module.c:1675 modules/access/imem.c:64
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:625
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:361
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:661
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1505
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:662
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1536
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:257
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:902
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1312
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:915
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1338
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:160
-#: modules/gui/macosx/VLCMainMenu.m:649 modules/gui/macosx/VLCOutput.m:82
+#: modules/gui/macosx/VLCMainMenu.m:650 modules/gui/macosx/VLCOutput.m:82
 #: modules/gui/macosx/VLCPlaylistInfo.m:86
 #: modules/gui/macosx/VLCSimplePrefsController.m:370
-#: modules/gui/macosx/VLCSimplePrefsController.m:514
+#: modules/gui/macosx/VLCSimplePrefsController.m:515
 #: modules/gui/qt/components/info_panels.cpp:573
 #: modules/gui/qt/components/simple_preferences.cpp:253
 #: modules/gui/qt/qt.cpp:223 modules/services_discovery/mediadirs.c:70
@@ -182,7 +182,7 @@ msgstr ""
 msgid "Video filters are used to process the video stream."
 msgstr ""
 
-#: include/vlc_config_cat.h:84 modules/gui/legacy_macosx/VLCLegacyPrefs.m:1313
+#: include/vlc_config_cat.h:84 modules/gui/legacy_macosx/VLCLegacyPrefs.m:1339
 msgid "Subtitles / OSD"
 msgstr ""
 
@@ -199,7 +199,7 @@ msgstr ""
 msgid "Video splitters separate the stream into multiple videos."
 msgstr ""
 
-#: include/vlc_config_cat.h:97 modules/gui/legacy_macosx/VLCLegacyPrefs.m:1314
+#: include/vlc_config_cat.h:97 modules/gui/legacy_macosx/VLCLegacyPrefs.m:1340
 msgid "Input / Codecs"
 msgstr ""
 
@@ -341,15 +341,15 @@ msgstr ""
 #: include/vlc_config_cat.h:173 src/libvlc-module.c:2212
 #: src/playlist/engine.c:243 modules/demux/playlist/playlist.c:64
 #: modules/demux/playlist/playlist.c:65 modules/demux/playlist/wpl.c:99
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1550
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3718
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4934
-#: modules/gui/macosx/VLCMainWindow.m:1020
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1581
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3968
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:5260
+#: modules/gui/macosx/VLCMainWindow.m:1080
 #: modules/gui/macosx/VLCSidebarDataSource.m:68
 #: modules/gui/qt/components/controller.hpp:109
 #: modules/gui/qt/components/playlist/playlist.cpp:165
 #: modules/gui/qt/components/playlist/selector.cpp:250
-#: modules/gui/qt/dialogs/playlist.cpp:39 modules/gui/qt/menus.cpp:1232
+#: modules/gui/qt/dialogs/playlist.cpp:39 modules/gui/qt/menus.cpp:1283
 msgid "Playlist"
 msgstr "Плейлист"
 
@@ -448,17 +448,17 @@ msgid "Blu-ray Pop-Up Menu"
 msgstr ""
 
 #: include/vlc_intf_strings.h:69 modules/control/oldrc.c:70
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1310
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1608
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:521
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:940
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1923
-#: modules/gui/macosx/VLCControlsBarCommon.m:83
-#: modules/gui/macosx/VLCControlsBarCommon.m:570
-#: modules/gui/macosx/VLCFSPanelController.m:331
-#: modules/gui/macosx/VLCMainMenu.m:607 modules/gui/macosx/VLCMainMenu.m:719
-#: modules/gui/macosx/VLCMainMenu.m:726 modules/gui/macosx/VLCMainMenu.m:1746
-#: modules/gui/macosx/VLCMainMenu.m:1747 modules/gui/macosx/VLCMainMenu.m:1748
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1341
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1639
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:522
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:941
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:2038
+#: modules/gui/macosx/VLCControlsBarCommon.m:87
+#: modules/gui/macosx/VLCControlsBarCommon.m:623
+#: modules/gui/macosx/VLCFSPanelController.m:419
+#: modules/gui/macosx/VLCMainMenu.m:608 modules/gui/macosx/VLCMainMenu.m:720
+#: modules/gui/macosx/VLCMainMenu.m:727 modules/gui/macosx/VLCMainMenu.m:1751
+#: modules/gui/macosx/VLCMainMenu.m:1752 modules/gui/macosx/VLCMainMenu.m:1753
 #: modules/gui/macosx/VLCPlaylist.m:230
 #: modules/gui/qt/components/controller.hpp:107
 #: modules/gui/qt/dialogs/vlm.cpp:532 modules/gui/qt/ui/open.h:256
@@ -505,27 +505,27 @@ msgstr ""
 msgid "Save..."
 msgstr "Сактоо..."
 
-#: include/vlc_intf_strings.h:83 modules/gui/legacy_macosx/VLCLegacyMenu.m:599
-#: modules/gui/macosx/VLCCoreInteraction.m:1014
-#: modules/gui/macosx/VLCMainMenu.m:621
+#: include/vlc_intf_strings.h:83 modules/gui/legacy_macosx/VLCLegacyMenu.m:600
+#: modules/gui/macosx/VLCCoreInteraction.m:1120
+#: modules/gui/macosx/VLCMainMenu.m:622
 msgid "Repeat All"
 msgstr ""
 
-#: include/vlc_intf_strings.h:84 modules/gui/legacy_macosx/VLCLegacyMenu.m:597
-#: modules/gui/macosx/VLCCoreInteraction.m:1034
-#: modules/gui/macosx/VLCMainMenu.m:620
+#: include/vlc_intf_strings.h:84 modules/gui/legacy_macosx/VLCLegacyMenu.m:598
+#: modules/gui/macosx/VLCCoreInteraction.m:1140
+#: modules/gui/macosx/VLCMainMenu.m:621
 msgid "Repeat One"
 msgstr ""
 
 #: include/vlc_intf_strings.h:85 src/libvlc-module.c:1517
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:590
-#: modules/gui/macosx/VLCMainMenu.m:619
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:591
+#: modules/gui/macosx/VLCMainMenu.m:620
 #: modules/gui/qt/components/controller.hpp:111
 #: modules/gui/qt/components/controller.hpp:124
 msgid "Random"
 msgstr ""
 
-#: include/vlc_intf_strings.h:86 modules/gui/macosx/VLCCoreInteraction.m:992
+#: include/vlc_intf_strings.h:86 modules/gui/macosx/VLCCoreInteraction.m:1098
 msgid "Random Off"
 msgstr ""
 
@@ -534,7 +534,7 @@ msgid "Add to Playlist"
 msgstr ""
 
 #: include/vlc_intf_strings.h:89
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1645
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1676
 #: modules/gui/macosx/VLCPlaylist.m:237
 msgid "Add File..."
 msgstr "Файлды кошуу..."
@@ -551,7 +551,7 @@ msgstr "Папканы кошуу..."
 msgid "Save Playlist to &File..."
 msgstr ""
 
-#: include/vlc_intf_strings.h:95 modules/gui/macosx/VLCMainWindow.m:315
+#: include/vlc_intf_strings.h:95 modules/gui/macosx/VLCMainWindow.m:375
 #: modules/gui/qt/components/preferences_widgets.cpp:1133
 msgid "Search"
 msgstr "Издөө"
@@ -601,9 +601,9 @@ msgstr ""
 msgid "The maximum number of filters (%u) was reached."
 msgstr ""
 
-#: src/audio_output/output.c:263 src/config/core.c:380 src/input/es_out.c:1941
+#: src/audio_output/output.c:263 src/config/core.c:380 src/input/es_out.c:1932
 #: src/libvlc-module.c:625 modules/demux/adaptive/adaptive.cpp:128
-#: modules/gui/macosx/VLCMainMenu.m:465
+#: modules/gui/macosx/VLCMainMenu.m:466
 #: modules/gui/macosx/VLCSidebarDataSource.m:211
 #: modules/video_filter/postproc.c:235
 msgid "Disable"
@@ -633,8 +633,8 @@ msgstr "Аудио-фильтрлер"
 msgid "Replay gain"
 msgstr ""
 
-#: src/audio_output/output.c:345 modules/gui/legacy_macosx/VLCLegacyMenu.m:646
-#: modules/gui/macosx/VLCMainMenu.m:642 modules/gui/macosx/VLCMainMenu.m:643
+#: src/audio_output/output.c:345 modules/gui/legacy_macosx/VLCLegacyMenu.m:647
+#: modules/gui/macosx/VLCMainMenu.m:643 modules/gui/macosx/VLCMainMenu.m:644
 msgid "Stereo audio mode"
 msgstr ""
 
@@ -658,7 +658,7 @@ msgstr ""
 msgid "Stereo"
 msgstr "стерео"
 
-#: src/audio_output/output.c:453 src/input/es_out.c:4541
+#: src/audio_output/output.c:453 src/input/es_out.c:4532
 #: src/libvlc-module.c:220 src/libvlc-module.c:342 src/libvlc-module.c:415
 #: src/misc/actions.c:81 modules/audio_filter/channel_mixer/mono.c:89
 #: modules/audio_filter/channel_mixer/remap.c:61 modules/codec/dvbsub.c:102
@@ -703,13 +703,13 @@ msgstr ""
 msgid "Headphones"
 msgstr ""
 
-#: src/config/core.c:370 modules/access/dtv/access.c:98
-#: modules/access/dtv/access.c:113 modules/access/dtv/access.c:122
-#: modules/access/dtv/access.c:130 modules/access/dtv/access.c:139
-#: modules/access/dtv/access.c:147 modules/access/dtv/access.c:169
-#: modules/access/v4l2/v4l2.c:137
+#: src/config/core.c:370 src/video_output/vout_intf.c:102
+#: modules/access/dtv/access.c:98 modules/access/dtv/access.c:113
+#: modules/access/dtv/access.c:122 modules/access/dtv/access.c:130
+#: modules/access/dtv/access.c:139 modules/access/dtv/access.c:147
+#: modules/access/dtv/access.c:169 modules/access/v4l2/v4l2.c:137
 #: modules/demux/adaptive/PlaylistManager.cpp:196
-#: modules/gui/qt/components/open_panels.cpp:971
+#: modules/gui/qt/components/open_panels.cpp:979
 #: modules/gui/qt/components/simple_preferences.cpp:396
 msgid "Automatic"
 msgstr ""
@@ -893,62 +893,62 @@ msgstr ""
 msgid "VLC could not open the decoder module."
 msgstr ""
 
-#: src/input/es_out.c:1220 src/input/es_out.c:1411
+#: src/input/es_out.c:1211 src/input/es_out.c:1402
 #, c-format
 msgid "Buffering... %d%%"
 msgstr ""
 
-#: src/input/es_out.c:1961 src/input/es_out.c:1966 src/libvlc-module.c:286
-#: modules/gui/qt/components/open_panels.cpp:527
+#: src/input/es_out.c:1952 src/input/es_out.c:1957 src/libvlc-module.c:286
+#: modules/gui/qt/components/open_panels.cpp:535
 msgid "Track"
 msgstr "Жолчо"
 
-#: src/input/es_out.c:2184
+#: src/input/es_out.c:2175
 #, c-format
 msgid "%s [%s %d]"
 msgstr "%s [%s %d]"
 
-#: src/input/es_out.c:2185 src/input/es_out.c:2190 src/input/es_out.c:2205
+#: src/input/es_out.c:2176 src/input/es_out.c:2181 src/input/es_out.c:2196
 #: src/input/var.c:164 src/libvlc-module.c:649
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:616
-#: modules/gui/macosx/VLCMainMenu.m:629 modules/gui/macosx/VLCMainMenu.m:630
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:617
+#: modules/gui/macosx/VLCMainMenu.m:630 modules/gui/macosx/VLCMainMenu.m:631
 msgid "Program"
 msgstr "Программа"
 
-#: src/input/es_out.c:2215
+#: src/input/es_out.c:2206
 #, c-format
 msgid "Stream %d"
 msgstr ""
 
-#: src/input/es_out.c:2468 src/input/es_out.c:2470
+#: src/input/es_out.c:2459 src/input/es_out.c:2461
 msgid "Scrambled"
 msgstr ""
 
-#: src/input/es_out.c:2468 modules/access/bluray.c:3208
-#: modules/access/bluray.c:3216 modules/demux/keydb.c:295
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4259
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1413
-#: modules/gui/legacy_macosx/misc.m:665 modules/gui/legacy_macosx/misc.m:714
-#: modules/gui/macosx/VLCMain.m:272 modules/gui/macosx/VLCMainMenu.m:1537
+#: src/input/es_out.c:2459 modules/access/bluray.c:3212
+#: modules/access/bluray.c:3220 modules/demux/keydb.c:295
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4509
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1528
+#: modules/gui/legacy_macosx/misc.m:736 modules/gui/legacy_macosx/misc.m:785
+#: modules/gui/macosx/VLCMain.m:272 modules/gui/macosx/VLCMainMenu.m:1542
 #: modules/keystore/keychain.m:41 modules/lua/extension.c:1381
 msgid "Yes"
 msgstr "Ооба"
 
-#: src/input/es_out.c:3212
+#: src/input/es_out.c:3203
 #, c-format
 msgid "DTVCC Closed captions %u"
 msgstr ""
 
-#: src/input/es_out.c:3214
+#: src/input/es_out.c:3205
 #, c-format
 msgid "Closed captions %u"
 msgstr ""
 
-#: src/input/es_out.c:4347
+#: src/input/es_out.c:4338
 msgid "Original ID"
 msgstr ""
 
-#: src/input/es_out.c:4354 modules/access/imem.c:67
+#: src/input/es_out.c:4345 modules/access/imem.c:67
 #: modules/access/radiobrowser.c:367
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:632
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:681
@@ -959,28 +959,28 @@ msgstr ""
 msgid "Codec"
 msgstr "Кодек"
 
-#: src/input/es_out.c:4358 src/input/meta.c:66 modules/access/imem.c:71
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2116
+#: src/input/es_out.c:4349 src/input/meta.c:66 modules/access/imem.c:71
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2147
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:105
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:497
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:680
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:498
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:682
 #: modules/gui/macosx/VLCPlaylist.m:105
-#: modules/gui/macosx/VLCSimplePrefsController.m:450
+#: modules/gui/macosx/VLCSimplePrefsController.m:451
 #: modules/stream_out/setid.c:49 modules/gui/qt/ui/sprefs_interface.h:539
 msgid "Language"
 msgstr "Тил"
 
-#: src/input/es_out.c:4361 src/input/meta.c:61
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2114
+#: src/input/es_out.c:4352 src/input/meta.c:61
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2145
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:101
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:495
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:496
 #: modules/gui/macosx/VLCBookmarksWindowController.m:80
 #: modules/gui/macosx/VLCPlaylist.m:103 modules/gui/qt/dialogs/bookmarks.cpp:75
 #: modules/gui/qt/dialogs/epg.cpp:55
 msgid "Description"
 msgstr "Баяндама"
 
-#: src/input/es_out.c:4366 modules/access/radiobrowser.c:377
+#: src/input/es_out.c:4357 modules/access/radiobrowser.c:377
 #: modules/access_output/shout.c:92 modules/demux/playlist/shoutcast.c:327
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:641
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:690
@@ -990,12 +990,12 @@ msgstr "Баяндама"
 msgid "Bitrate"
 msgstr "Битрейт"
 
-#: src/input/es_out.c:4366 src/input/es_out.c:4422
+#: src/input/es_out.c:4357 src/input/es_out.c:4413
 #, c-format
 msgid "%u kb/s"
 msgstr "%u кб/сек"
 
-#: src/input/es_out.c:4372 src/input/es_out.c:4444 src/input/es_out.c:4634
+#: src/input/es_out.c:4363 src/input/es_out.c:4435 src/input/es_out.c:4625
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m:267
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:1015
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:202
@@ -1005,7 +1005,7 @@ msgstr "%u кб/сек"
 msgid "Type"
 msgstr "Түрү"
 
-#: src/input/es_out.c:4375
+#: src/input/es_out.c:4366
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:692
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:302
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:175
@@ -1013,63 +1013,63 @@ msgstr "Түрү"
 msgid "Channels"
 msgstr "Каналдар"
 
-#: src/input/es_out.c:4380 modules/access/alsa.c:39 modules/access/imem.c:75
+#: src/input/es_out.c:4371 modules/access/alsa.c:39 modules/access/imem.c:75
 #: modules/audio_output/amem.c:47 modules/codec/fluidsynth.c:64
 msgid "Sample rate"
 msgstr ""
 
-#: src/input/es_out.c:4380 src/input/es_out.c:4410
+#: src/input/es_out.c:4371 src/input/es_out.c:4401
 #, c-format
 msgid "%u Hz"
 msgstr "%u Гц"
 
-#: src/input/es_out.c:4390
+#: src/input/es_out.c:4381
 msgid "Bits per sample"
 msgstr ""
 
-#: src/input/es_out.c:4398 src/input/es_out.c:4473
+#: src/input/es_out.c:4389 src/input/es_out.c:4464
 msgid "Decoded format"
 msgstr ""
 
-#: src/input/es_out.c:4405
+#: src/input/es_out.c:4396
 msgid "Decoded channels"
 msgstr ""
 
-#: src/input/es_out.c:4410
+#: src/input/es_out.c:4401
 msgid "Decoded sample rate"
 msgstr ""
 
-#: src/input/es_out.c:4417
+#: src/input/es_out.c:4408
 msgid "Decoded bits per sample"
 msgstr ""
 
-#: src/input/es_out.c:4422
+#: src/input/es_out.c:4413
 #, fuzzy
 msgid "Decoded Bitrate"
 msgstr "Битрейт"
 
-#: src/input/es_out.c:4435
+#: src/input/es_out.c:4426
 msgid "Track replay gain"
 msgstr ""
 
-#: src/input/es_out.c:4437
+#: src/input/es_out.c:4428
 msgid "Album replay gain"
 msgstr ""
 
-#: src/input/es_out.c:4438
+#: src/input/es_out.c:4429
 #, c-format
 msgid "%.2f dB"
 msgstr "%.2f дБ"
 
-#: src/input/es_out.c:4448
+#: src/input/es_out.c:4439
 msgid "Video resolution"
 msgstr ""
 
-#: src/input/es_out.c:4453
+#: src/input/es_out.c:4444
 msgid "Buffer dimensions"
 msgstr ""
 
-#: src/input/es_out.c:4463 src/input/es_out.c:4466 modules/access/imem.c:93
+#: src/input/es_out.c:4454 src/input/es_out.c:4457 modules/access/imem.c:93
 #: modules/access/rdp.c:73 modules/access/screen/screen.c:43
 #: modules/access/screen/xcb.c:39 modules/access/shm.c:42
 #: modules/access/timecode.c:34 modules/access/v4l2/v4l2.c:70
@@ -1080,87 +1080,87 @@ msgstr ""
 msgid "Frame rate"
 msgstr "Кадр жыштыгы"
 
-#: src/input/es_out.c:4479
+#: src/input/es_out.c:4470
 msgid "Top left"
 msgstr ""
 
-#: src/input/es_out.c:4479
+#: src/input/es_out.c:4470
 msgid "Left top"
 msgstr ""
 
-#: src/input/es_out.c:4480
+#: src/input/es_out.c:4471
 msgid "Right bottom"
 msgstr ""
 
-#: src/input/es_out.c:4480
+#: src/input/es_out.c:4471
 msgid "Top right"
 msgstr ""
 
-#: src/input/es_out.c:4481
+#: src/input/es_out.c:4472
 msgid "Bottom left"
 msgstr ""
 
-#: src/input/es_out.c:4481
+#: src/input/es_out.c:4472
 msgid "Bottom right"
 msgstr ""
 
-#: src/input/es_out.c:4482
+#: src/input/es_out.c:4473
 msgid "Left bottom"
 msgstr ""
 
-#: src/input/es_out.c:4482
+#: src/input/es_out.c:4473
 msgid "Right top"
 msgstr ""
 
-#: src/input/es_out.c:4484
+#: src/input/es_out.c:4475
 msgid "Orientation"
 msgstr ""
 
-#: src/input/es_out.c:4490 src/input/es_out.c:4508 src/input/es_out.c:4526
-#: src/input/es_out.c:4540 src/playlist/tree.c:67
+#: src/input/es_out.c:4481 src/input/es_out.c:4499 src/input/es_out.c:4517
+#: src/input/es_out.c:4531 src/playlist/tree.c:67
 #: modules/access/dtv/access.c:82 modules/access/v4l2/v4l2.c:242
 msgid "Undefined"
 msgstr "Аныкталбаган"
 
-#: src/input/es_out.c:4492
+#: src/input/es_out.c:4483
 msgid "ITU-R BT.601 (525 lines, 60 Hz)"
 msgstr ""
 
-#: src/input/es_out.c:4494
+#: src/input/es_out.c:4485
 msgid "ITU-R BT.601 (625 lines, 50 Hz)"
 msgstr ""
 
-#: src/input/es_out.c:4502
+#: src/input/es_out.c:4493
 msgid "Color primaries"
 msgstr ""
 
-#: src/input/es_out.c:4509 src/libvlc-module.c:409
+#: src/input/es_out.c:4500 src/libvlc-module.c:409
 #: modules/video_filter/deinterlace/deinterlace.h:58
 msgid "Linear"
 msgstr ""
 
-#: src/input/es_out.c:4516
+#: src/input/es_out.c:4507
 msgid "Hybrid Log-Gamma"
 msgstr ""
 
-#: src/input/es_out.c:4520
+#: src/input/es_out.c:4511
 msgid "Color transfer function"
 msgstr ""
 
-#: src/input/es_out.c:4533 modules/access/bluray.c:3204
+#: src/input/es_out.c:4524 modules/access/bluray.c:3208
 msgid "Color space"
 msgstr ""
 
-#: src/input/es_out.c:4533
+#: src/input/es_out.c:4524
 #, c-format
 msgid "%s Range"
 msgstr ""
 
-#: src/input/es_out.c:4535
+#: src/input/es_out.c:4526
 msgid "Full"
 msgstr ""
 
-#: src/input/es_out.c:4542 src/libvlc-module.c:342 src/libvlc-module.c:415
+#: src/input/es_out.c:4533 src/libvlc-module.c:342 src/libvlc-module.c:415
 #: modules/audio_filter/channel_mixer/mono.c:91
 #: modules/audio_filter/channel_mixer/remap.c:61 modules/codec/dvbsub.c:102
 #: modules/codec/subsdec.c:167 modules/codec/zvbi.c:83
@@ -1172,93 +1172,93 @@ msgstr ""
 msgid "Center"
 msgstr ""
 
-#: src/input/es_out.c:4543
+#: src/input/es_out.c:4534
 msgid "Top Left"
 msgstr ""
 
-#: src/input/es_out.c:4544
+#: src/input/es_out.c:4535
 msgid "Top Center"
 msgstr ""
 
-#: src/input/es_out.c:4545
+#: src/input/es_out.c:4536
 msgid "Bottom Left"
 msgstr ""
 
-#: src/input/es_out.c:4546
+#: src/input/es_out.c:4537
 msgid "Bottom Center"
 msgstr ""
 
-#: src/input/es_out.c:4550
+#: src/input/es_out.c:4541
 msgid "Chroma location"
 msgstr ""
 
-#: src/input/es_out.c:4559
+#: src/input/es_out.c:4550
 msgid "Rectangular"
 msgstr ""
 
-#: src/input/es_out.c:4562
+#: src/input/es_out.c:4553
 msgid "Equirectangular"
 msgstr ""
 
-#: src/input/es_out.c:4565
+#: src/input/es_out.c:4556
 msgid "Cubemap"
 msgstr ""
 
-#: src/input/es_out.c:4571
+#: src/input/es_out.c:4562
 msgid "Projection"
 msgstr ""
 
-#: src/input/es_out.c:4573
+#: src/input/es_out.c:4564
 msgctxt "ViewPoint"
 msgid "Yaw"
 msgstr ""
 
-#: src/input/es_out.c:4575
+#: src/input/es_out.c:4566
 msgctxt "ViewPoint"
 msgid "Pitch"
 msgstr ""
 
-#: src/input/es_out.c:4577
+#: src/input/es_out.c:4568
 msgctxt "ViewPoint"
 msgid "Roll"
 msgstr ""
 
-#: src/input/es_out.c:4580
+#: src/input/es_out.c:4571
 msgctxt "ViewPoint"
 msgid "Field of view"
 msgstr ""
 
-#: src/input/es_out.c:4585
+#: src/input/es_out.c:4576
 msgid "Max. luminance"
 msgstr ""
 
-#: src/input/es_out.c:4590
+#: src/input/es_out.c:4581
 msgid "Min. luminance"
 msgstr ""
 
-#: src/input/es_out.c:4598
+#: src/input/es_out.c:4589
 msgid "Primary R"
 msgstr ""
 
-#: src/input/es_out.c:4605
+#: src/input/es_out.c:4596
 msgid "Primary G"
 msgstr ""
 
-#: src/input/es_out.c:4612
+#: src/input/es_out.c:4603
 msgid "Primary B"
 msgstr ""
 
-#: src/input/es_out.c:4619
+#: src/input/es_out.c:4610
 msgid "White point"
 msgstr ""
 
-#: src/input/es_out.c:4634 modules/access/imem.c:64
+#: src/input/es_out.c:4625 modules/access/imem.c:64
 msgid "Subtitle"
 msgstr "Субтитрлер"
 
 #: src/input/input.c:1903 modules/control/hotkeys.c:1575
-#: modules/gui/legacy_macosx/VLCLegacyCoreInteraction.m:201
-#: modules/gui/macosx/VLCCoreInteraction.m:245
+#: modules/gui/legacy_macosx/VLCLegacyCoreInteraction.m:211
+#: modules/gui/macosx/VLCCoreInteraction.m:258
 #, c-format
 msgid "Volume %ld%%"
 msgstr ""
@@ -1273,17 +1273,17 @@ msgid "VLC is unable to open the MRL '%s'. Check the log for details."
 msgstr ""
 
 #: src/input/meta.c:55 src/input/var.c:174
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2109
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2140
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:95
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:490
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:617
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:491
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:618
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:927
-#: modules/gui/macosx/VLCMainMenu.m:631 modules/gui/macosx/VLCMainMenu.m:632
-#: modules/gui/macosx/VLCOpenWindowController.m:178
-#: modules/gui/macosx/VLCOpenWindowController.m:180
+#: modules/gui/macosx/VLCMainMenu.m:632 modules/gui/macosx/VLCMainMenu.m:633
+#: modules/gui/macosx/VLCOpenWindowController.m:188
+#: modules/gui/macosx/VLCOpenWindowController.m:190
 #: modules/gui/macosx/VLCPlaylist.m:98 modules/gui/macosx/VLCPlaylistInfo.m:59
 #: modules/gui/qt/components/open_panels.cpp:487
-#: modules/gui/qt/components/open_panels.cpp:501
+#: modules/gui/qt/components/open_panels.cpp:502
 #: modules/gui/qt/dialogs/epg.cpp:70 modules/mux/asf.c:56
 #: modules/gui/qt/ui/open_disk.h:306
 msgid "Title"
@@ -1295,9 +1295,9 @@ msgid "Artist"
 msgstr "Аткаруучу"
 
 #: src/input/meta.c:57 modules/demux/mp4/meta.c:87
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2112
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2143
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:99
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:493
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:494
 #: modules/gui/macosx/VLCPlaylist.m:101 modules/mux/avi.c:51
 msgid "Genre"
 msgstr "Жанр"
@@ -1308,9 +1308,9 @@ msgid "Copyright"
 msgstr "Автордук укук"
 
 #: src/input/meta.c:59 src/libvlc-module.c:286
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2113
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2144
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:97
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:494
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:495
 #: modules/gui/macosx/VLCPlaylist.m:102
 msgid "Album"
 msgstr "Альбом"
@@ -1323,9 +1323,9 @@ msgstr ""
 msgid "Rating"
 msgstr "Рейтинг"
 
-#: src/input/meta.c:63 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2115
+#: src/input/meta.c:63 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2146
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:98
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:496
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:497
 #: modules/gui/macosx/VLCPlaylist.m:104 modules/mux/avi.c:50
 msgid "Date"
 msgstr "Дата"
@@ -1334,8 +1334,8 @@ msgstr "Дата"
 msgid "Setting"
 msgstr "Ырастоолор"
 
-#: src/input/meta.c:65 modules/gui/legacy_macosx/VLCLegacyOpen.m:1265
-#: modules/gui/macosx/VLCOpenWindowController.m:188
+#: src/input/meta.c:65 modules/gui/legacy_macosx/VLCLegacyOpen.m:1296
+#: modules/gui/macosx/VLCOpenWindowController.m:209
 #: modules/gui/qt/ui/podcast_configuration.h:100
 msgid "URL"
 msgstr "URL"
@@ -1403,24 +1403,24 @@ msgstr ""
 msgid "Programs"
 msgstr "Программалар"
 
-#: src/input/var.c:179 modules/gui/legacy_macosx/VLCLegacyMenu.m:618
+#: src/input/var.c:179 modules/gui/legacy_macosx/VLCLegacyMenu.m:619
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:936
-#: modules/gui/macosx/VLCMainMenu.m:633 modules/gui/macosx/VLCMainMenu.m:634
-#: modules/gui/macosx/VLCOpenWindowController.m:179
-#: modules/gui/macosx/VLCOpenWindowController.m:181
+#: modules/gui/macosx/VLCMainMenu.m:634 modules/gui/macosx/VLCMainMenu.m:635
+#: modules/gui/macosx/VLCOpenWindowController.m:189
+#: modules/gui/macosx/VLCOpenWindowController.m:191
 #: modules/gui/qt/ui/open_disk.h:307
 msgid "Chapter"
 msgstr ""
 
-#: src/input/var.c:192 modules/gui/legacy_macosx/VLCLegacyMenu.m:705
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:952
-#: modules/gui/macosx/VLCMainMenu.m:657 modules/gui/macosx/VLCMainMenu.m:658
+#: src/input/var.c:192 modules/gui/legacy_macosx/VLCLegacyMenu.m:706
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:953
+#: modules/gui/macosx/VLCMainMenu.m:658 modules/gui/macosx/VLCMainMenu.m:659
 msgid "Video Track"
 msgstr "Видео-жолчо"
 
-#: src/input/var.c:198 modules/gui/legacy_macosx/VLCLegacyMenu.m:644
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:950
-#: modules/gui/macosx/VLCMainMenu.m:640 modules/gui/macosx/VLCMainMenu.m:641
+#: src/input/var.c:198 modules/gui/legacy_macosx/VLCLegacyMenu.m:645
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:951
+#: modules/gui/macosx/VLCMainMenu.m:641 modules/gui/macosx/VLCMainMenu.m:642
 msgid "Audio Track"
 msgstr "Аудио-жолчо"
 
@@ -1450,6 +1450,10 @@ msgid "Title %i%s"
 msgstr ""
 
 #: src/input/var.c:348 src/input/var.c:405
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3741
+#: modules/gui/macosx/VLCControlsBarCommon.m:205
+#: modules/gui/macosx/VLCFSPanelController.m:249
+#: modules/gui/qt/adapters/seekpoints.hpp:54
 #, c-format
 msgid "Chapter %i"
 msgstr ""
@@ -1467,9 +1471,9 @@ msgstr ""
 msgid "Media: %s"
 msgstr ""
 
-#: src/interface/interface.c:82 modules/gui/legacy_macosx/VLCLegacyMenu.m:383
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:387
-#: modules/gui/macosx/VLCMainMenu.m:568 modules/gui/macosx/VLCMainMenu.m:569
+#: src/interface/interface.c:82 modules/gui/legacy_macosx/VLCLegacyMenu.m:384
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:388
+#: modules/gui/macosx/VLCMainMenu.m:569 modules/gui/macosx/VLCMainMenu.m:570
 msgid "Add Interface"
 msgstr "Интерфейсти кошуу"
 
@@ -1507,9 +1511,9 @@ msgid "C"
 msgstr "ky"
 
 #: src/libvlc.h:166 src/libvlc-module.c:1520 src/libvlc-module.c:1521
-#: src/video_output/vout_intf.c:176
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:820
-#: modules/gui/macosx/VLCMainMenu.m:697
+#: src/video_output/vout_intf.c:180
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:821
+#: modules/gui/macosx/VLCMainMenu.m:698
 msgid "Zoom"
 msgstr "Чоңойтуу"
 
@@ -1636,7 +1640,7 @@ msgstr ""
 msgid "Media (player) role for operating system policy."
 msgstr ""
 
-#: src/libvlc-module.c:136 modules/gui/legacy_macosx/VLCLegacyPrefs.m:770
+#: src/libvlc-module.c:136 modules/gui/legacy_macosx/VLCLegacyPrefs.m:783
 #: modules/gui/macosx/VLCSimplePrefsController.m:406
 #: modules/stream_out/display.c:40 modules/gui/qt/ui/sprefs_audio.h:408
 msgid "Enable audio"
@@ -1779,8 +1783,8 @@ msgstr ""
 #: modules/audio_output/kai.c:106 modules/codec/subsdec.c:167
 #: modules/codec/vda.c:60 modules/codec/x264.c:434
 #: modules/demux/adaptive/adaptive.cpp:126 modules/demux/mpeg/ts.c:132
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:68
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:679
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:70
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:681
 #: modules/gui/macosx/VLCSimplePrefsController.m:54
 #: modules/gui/qt/components/simple_preferences.cpp:70
 #: modules/gui/qt/components/sout/profile_selector.cpp:593
@@ -1913,13 +1917,13 @@ msgstr ""
 #: modules/codec/kate.c:199 modules/codec/x264.c:429 modules/codec/x264.c:434
 #: modules/demux/mp4/meta.c:430
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:1067
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1511
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1519
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1581
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1542
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1550
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1612
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:191
-#: modules/gui/macosx/VLCOpenWindowController.m:243
-#: modules/gui/macosx/VLCOpenWindowController.m:272
-#: modules/gui/macosx/VLCOpenWindowController.m:273
+#: modules/gui/macosx/VLCOpenWindowController.m:264
+#: modules/gui/macosx/VLCOpenWindowController.m:293
+#: modules/gui/macosx/VLCOpenWindowController.m:294
 #: modules/text_renderer/freetype/freetype.c:147
 #: modules/visualization/visual/window_presets.h:34
 #: share/lua/http/dialogs/create_stream.html:196
@@ -1945,8 +1949,8 @@ msgid ""
 "automatically select the best method available."
 msgstr ""
 
-#: src/libvlc-module.c:305 modules/gui/legacy_macosx/VLCLegacyPrefs.m:861
-#: modules/gui/macosx/VLCSimplePrefsController.m:493
+#: src/libvlc-module.c:305 modules/gui/legacy_macosx/VLCLegacyPrefs.m:874
+#: modules/gui/macosx/VLCSimplePrefsController.m:494
 #: modules/stream_out/display.c:42 modules/gui/qt/ui/sprefs_video.h:381
 msgid "Enable video"
 msgstr ""
@@ -2122,8 +2126,8 @@ msgstr ""
 msgid "Start video in fullscreen mode"
 msgstr ""
 
-#: src/libvlc-module.c:362 src/video_output/vout_intf.c:253
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:869
+#: src/libvlc-module.c:362 src/video_output/vout_intf.c:257
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:882
 msgid "Always on top"
 msgstr ""
 
@@ -2173,9 +2177,9 @@ msgid "Hide mouse cursor and fullscreen controller after n milliseconds."
 msgstr ""
 
 #: src/libvlc-module.c:389 src/libvlc-module.c:391
-#: src/video_output/interlacing.c:112 modules/gui/macosx/VLCMainMenu.m:665
-#: modules/gui/macosx/VLCMainMenu.m:666
-#: modules/gui/macosx/VLCSimplePrefsController.m:512
+#: src/video_output/interlacing.c:112 modules/gui/macosx/VLCMainMenu.m:666
+#: modules/gui/macosx/VLCMainMenu.m:667
+#: modules/gui/macosx/VLCSimplePrefsController.m:513
 #: modules/gui/qt/dialogs/convert.cpp:123 modules/hw/vdpau/chroma.c:896
 #: modules/video_filter/deinterlace/deinterlace.c:300
 #: share/lua/http/dialogs/create_stream.html:346
@@ -2183,9 +2187,9 @@ msgid "Deinterlace"
 msgstr ""
 
 #: src/libvlc-module.c:399 src/video_output/interlacing.c:128
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:934
-#: modules/gui/macosx/VLCMainMenu.m:667 modules/gui/macosx/VLCMainMenu.m:668
-#: modules/gui/macosx/VLCSimplePrefsController.m:513
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:947
+#: modules/gui/macosx/VLCMainMenu.m:668 modules/gui/macosx/VLCMainMenu.m:669
+#: modules/gui/macosx/VLCSimplePrefsController.m:514
 #: modules/video_filter/deinterlace/deinterlace.c:256
 msgid "Deinterlace mode"
 msgstr ""
@@ -2228,8 +2232,8 @@ msgstr ""
 msgid "Disable the screensaver during video playback."
 msgstr ""
 
-#: src/libvlc-module.c:421 modules/gui/legacy_macosx/VLCLegacyPrefs.m:871
-#: modules/gui/macosx/VLCSimplePrefsController.m:498
+#: src/libvlc-module.c:421 modules/gui/legacy_macosx/VLCLegacyPrefs.m:884
+#: modules/gui/macosx/VLCSimplePrefsController.m:499
 #: modules/gui/qt/ui/sprefs_video.h:384
 msgid "Window decorations"
 msgstr ""
@@ -2398,7 +2402,7 @@ msgid ""
 "order to keep proportions."
 msgstr ""
 
-#: src/libvlc-module.c:515 modules/gui/legacy_macosx/VLCLegacyPrefs.m:1138
+#: src/libvlc-module.c:515 modules/gui/legacy_macosx/VLCLegacyPrefs.m:1151
 #: modules/gui/macosx/VLCSimplePrefsController.m:440
 msgid "Skip frames"
 msgstr ""
@@ -2574,7 +2578,7 @@ msgid ""
 msgstr ""
 
 #: src/libvlc-module.c:625 src/video_output/vout_intf.c:98
-#: src/video_output/vout_intf.c:116 modules/access/dshow/dshow.cpp:92
+#: src/video_output/vout_intf.c:120 modules/access/dshow/dshow.cpp:92
 #: modules/access/dshow/dshow.cpp:99 modules/access/dshow/dshow.cpp:119
 #: modules/access/dshow/dshow.cpp:2081 modules/audio_output/alsa.c:767
 #: modules/audio_output/directsound.c:1095 modules/audio_output/mmdevice.c:1343
@@ -2582,13 +2586,13 @@ msgstr ""
 #: modules/codec/avcodec/avcodec.c:50 modules/demux/adaptive/adaptive.cpp:110
 #: modules/gui/legacy_macosx/VLCLegacyAudioEffects.m:151
 #: modules/gui/legacy_macosx/VLCLegacyAudioEffects.m:1037
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:884
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:897
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:112
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:1500
 #: modules/gui/macosx/VLCAudioEffectsWindowController.m:79
 #: modules/gui/macosx/VLCAudioEffectsWindowController.m:322
-#: modules/gui/macosx/VLCMainMenu.m:853
-#: modules/gui/macosx/VLCSimplePrefsController.m:796
+#: modules/gui/macosx/VLCMainMenu.m:858
+#: modules/gui/macosx/VLCSimplePrefsController.m:797
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:54
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:388
 #: modules/gui/macosx/prefs_widgets.m:1219
@@ -2932,7 +2936,7 @@ msgid "You can completely disable the sub-picture processing."
 msgstr ""
 
 #: src/libvlc-module.c:802 src/libvlc-module.c:1816 src/text/iso-639_def.h:146
-#: modules/gui/macosx/VLCSimplePrefsController.m:485
+#: modules/gui/macosx/VLCSimplePrefsController.m:486
 #: modules/gui/qt/ui/sprefs_subtitles.h:289
 msgid "On Screen Display"
 msgstr ""
@@ -3626,8 +3630,8 @@ msgstr ""
 msgid "Maximum time allowed to preparse an item, in milliseconds"
 msgstr ""
 
-#: src/libvlc-module.c:1211 modules/gui/legacy_macosx/VLCLegacyPrefs.m:742
-#: modules/gui/macosx/VLCSimplePrefsController.m:468
+#: src/libvlc-module.c:1211 modules/gui/legacy_macosx/VLCLegacyPrefs.m:755
+#: modules/gui/macosx/VLCSimplePrefsController.m:469
 #: modules/gui/qt/dialogs/firstrun.cpp:95
 #: modules/gui/qt/ui/sprefs_interface.h:576
 msgid "Allow metadata network access"
@@ -3817,13 +3821,14 @@ msgid ""
 "be ignored."
 msgstr ""
 
-#: src/libvlc-module.c:1311 src/video_output/vout_intf.c:268
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1432
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:682
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:962
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:875
-#: modules/gui/macosx/VLCControlsBarCommon.m:101
-#: modules/gui/macosx/VLCMainMenu.m:654 modules/gui/macosx/VLCMainMenu.m:733
+#: src/libvlc-module.c:1311 src/video_output/vout_intf.c:272
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1463
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:683
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:963
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:888
+#: modules/gui/legacy_macosx/VLCLegacyVoutWindow.m:270
+#: modules/gui/macosx/VLCControlsBarCommon.m:105
+#: modules/gui/macosx/VLCMainMenu.m:655 modules/gui/macosx/VLCMainMenu.m:734
 #: modules/gui/qt/components/controller.hpp:108
 #: modules/gui/qt/ui/sprefs_video.h:385
 msgid "Fullscreen"
@@ -3841,8 +3846,9 @@ msgstr ""
 msgid "Select the hotkey to use to exit fullscreen state."
 msgstr ""
 
-#: src/libvlc-module.c:1315 modules/gui/legacy_macosx/VLCLegacyFSPanel.m:276
-#: modules/gui/macosx/VLCFSPanelController.m:123
+#: src/libvlc-module.c:1315 modules/gui/legacy_macosx/VLCLegacyFSPanel.m:277
+#: modules/gui/legacy_macosx/VLCLegacyVoutWindow.m:228
+#: modules/gui/macosx/VLCFSPanelController.m:127
 msgid "Play/Pause"
 msgstr "Ойнотуу/Пауза"
 
@@ -3866,7 +3872,7 @@ msgstr "Ойнотуу гана"
 msgid "Select the hotkey to use to play."
 msgstr ""
 
-#: src/libvlc-module.c:1321 modules/gui/macosx/VLCMainMenu.m:615
+#: src/libvlc-module.c:1321 modules/gui/macosx/VLCMainMenu.m:616
 #: modules/gui/qt/components/controller.hpp:108
 #: modules/gui/qt/components/controller.hpp:118
 msgid "Faster"
@@ -3876,7 +3882,7 @@ msgstr "Тезирээк"
 msgid "Select the hotkey to use for fast forward playback."
 msgstr ""
 
-#: src/libvlc-module.c:1323 modules/gui/macosx/VLCMainMenu.m:613
+#: src/libvlc-module.c:1323 modules/gui/macosx/VLCMainMenu.m:614
 #: modules/gui/qt/components/controller.hpp:108
 #: modules/gui/qt/components/controller.hpp:118
 msgid "Slower"
@@ -3894,26 +3900,26 @@ msgstr "Кадимкидей ылдамдык"
 msgid "Select the hotkey to set the playback rate back to normal."
 msgstr ""
 
-#: src/libvlc-module.c:1327 modules/gui/qt/menus.cpp:995
+#: src/libvlc-module.c:1327 modules/gui/qt/menus.cpp:1046
 msgid "Faster (fine)"
 msgstr ""
 
-#: src/libvlc-module.c:1329 modules/gui/qt/menus.cpp:1003
+#: src/libvlc-module.c:1329 modules/gui/qt/menus.cpp:1054
 msgid "Slower (fine)"
 msgstr ""
 
 #: src/libvlc-module.c:1331 modules/control/hotkeys.c:427
-#: modules/gui/legacy_macosx/VLCLegacyCoreInteraction.m:301
-#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:282
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1321
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:585
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:946
-#: modules/gui/macosx/VLCControlsBarCommon.m:302
-#: modules/gui/macosx/VLCCoreInteraction.m:731
-#: modules/gui/macosx/VLCFSPanelController.m:126
+#: modules/gui/legacy_macosx/VLCLegacyCoreInteraction.m:311
+#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:283
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1352
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:586
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:947
+#: modules/gui/macosx/VLCControlsBarCommon.m:342
+#: modules/gui/macosx/VLCCoreInteraction.m:837
+#: modules/gui/macosx/VLCFSPanelController.m:130
 #: modules/gui/macosx/VLCHelpWindowController.m:48
-#: modules/gui/macosx/VLCMainMenu.m:618 modules/gui/macosx/VLCMainMenu.m:721
-#: modules/gui/macosx/VLCMainMenu.m:729
+#: modules/gui/macosx/VLCMainMenu.m:619 modules/gui/macosx/VLCMainMenu.m:722
+#: modules/gui/macosx/VLCMainMenu.m:730
 #: modules/gui/qt/components/controller.hpp:112
 #: modules/gui/qt/dialogs/sout.cpp:89 modules/notify/notify.c:335
 #: modules/gui/qt/ui/streampanel.h:179
@@ -3925,17 +3931,17 @@ msgid "Select the hotkey to use to skip to the next item in the playlist."
 msgstr ""
 
 #: src/libvlc-module.c:1333 modules/control/hotkeys.c:431
-#: modules/gui/legacy_macosx/VLCLegacyCoreInteraction.m:307
-#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:270
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1297
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:580
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:944
-#: modules/gui/macosx/VLCControlsBarCommon.m:299
-#: modules/gui/macosx/VLCCoreInteraction.m:725
-#: modules/gui/macosx/VLCFSPanelController.m:129
+#: modules/gui/legacy_macosx/VLCLegacyCoreInteraction.m:317
+#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:271
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1328
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:581
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:945
+#: modules/gui/macosx/VLCControlsBarCommon.m:339
+#: modules/gui/macosx/VLCCoreInteraction.m:831
+#: modules/gui/macosx/VLCFSPanelController.m:133
 #: modules/gui/macosx/VLCHelpWindowController.m:49
-#: modules/gui/macosx/VLCMainMenu.m:617 modules/gui/macosx/VLCMainMenu.m:722
-#: modules/gui/macosx/VLCMainMenu.m:728
+#: modules/gui/macosx/VLCMainMenu.m:618 modules/gui/macosx/VLCMainMenu.m:723
+#: modules/gui/macosx/VLCMainMenu.m:729
 #: modules/gui/qt/components/controller.hpp:112 modules/notify/notify.c:333
 msgid "Previous"
 msgstr "Мурунку"
@@ -3945,11 +3951,11 @@ msgid "Select the hotkey to use to skip to the previous item in the playlist."
 msgstr ""
 
 #: src/libvlc-module.c:1335
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1326
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:523
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:942
-#: modules/gui/macosx/VLCMainMenu.m:608 modules/gui/macosx/VLCMainMenu.m:720
-#: modules/gui/macosx/VLCMainMenu.m:727
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1357
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:524
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:943
+#: modules/gui/macosx/VLCMainMenu.m:609 modules/gui/macosx/VLCMainMenu.m:721
+#: modules/gui/macosx/VLCMainMenu.m:728
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:65
 #: modules/gui/qt/components/controller.hpp:107
 #: modules/gui/qt/dialogs/vlm.cpp:538 modules/gui/qt/ui/streampanel.h:178
@@ -3963,8 +3969,8 @@ msgstr ""
 #: src/libvlc-module.c:1337
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:550
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:565
-#: modules/gui/macosx/VLCControlsBarCommon.m:97
-#: modules/gui/macosx/VLCFSPanelController.m:145
+#: modules/gui/macosx/VLCControlsBarCommon.m:101
+#: modules/gui/macosx/VLCFSPanelController.m:149
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:287
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:309
 #: modules/spu/marq.c:151 modules/spu/rss.c:198
@@ -4084,8 +4090,8 @@ msgstr ""
 #: src/libvlc-module.c:1378 modules/control/hotkeys.c:378
 #: modules/gui/macosx/VLCStatusBarIcon.m:116
 #: modules/gui/qt/components/controller.hpp:111
-#: modules/gui/qt/components/controller.hpp:123 modules/gui/qt/menus.cpp:1066
-#: modules/gui/qt/menus.cpp:1252 modules/gui/skins2/commands/cmd_quit.cpp:45
+#: modules/gui/qt/components/controller.hpp:123 modules/gui/qt/menus.cpp:1117
+#: modules/gui/qt/menus.cpp:1303 modules/gui/skins2/commands/cmd_quit.cpp:45
 msgid "Quit"
 msgstr "Чыгуу"
 
@@ -4208,11 +4214,11 @@ msgid "Select the key to decrease audio volume."
 msgstr ""
 
 #: src/libvlc-module.c:1407 modules/access/v4l2/v4l2.c:181
-#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:240
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1387
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:637
-#: modules/gui/macosx/VLCMainMenu.m:639 modules/gui/macosx/VLCMainMenu.m:723
-#: modules/gui/macosx/VLCMainMenu.m:732
+#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:241
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1418
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:638
+#: modules/gui/macosx/VLCMainMenu.m:640 modules/gui/macosx/VLCMainMenu.m:724
+#: modules/gui/macosx/VLCMainMenu.m:733
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:82
 msgid "Mute"
 msgstr "Үнүн өчүрүү"
@@ -4582,10 +4588,10 @@ msgstr ""
 msgid "Takes a video snapshot and writes it to disk."
 msgstr ""
 
-#: src/libvlc-module.c:1511 modules/gui/legacy_macosx/VLCLegacyMenu.m:526
-#: modules/gui/macosx/VLCMainMenu.m:609
+#: src/libvlc-module.c:1511 modules/gui/legacy_macosx/VLCLegacyMenu.m:527
+#: modules/gui/macosx/VLCMainMenu.m:610
 #: modules/gui/qt/components/controller.hpp:110
-#: modules/gui/qt/components/controller.hpp:121 modules/gui/qt/menus.cpp:951
+#: modules/gui/qt/components/controller.hpp:121 modules/gui/qt/menus.cpp:1002
 #: modules/stream_out/record.c:61
 msgid "Record"
 msgstr "Жазуу"
@@ -4674,10 +4680,10 @@ msgstr ""
 msgid "Cycle through available audio devices"
 msgstr ""
 
-#: src/libvlc-module.c:1731 src/video_output/vout_intf.c:274
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:699
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:966
-#: modules/gui/macosx/VLCMainMenu.m:656 modules/gui/macosx/VLCMainMenu.m:734
+#: src/libvlc-module.c:1731 src/video_output/vout_intf.c:278
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:700
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:967
+#: modules/gui/macosx/VLCMainMenu.m:657 modules/gui/macosx/VLCMainMenu.m:735
 #: modules/gui/qt/components/controller.hpp:109
 msgid "Snapshot"
 msgstr "Сүрөт"
@@ -4695,10 +4701,10 @@ msgstr ""
 #: modules/demux/xiph_metadata.h:62
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:706
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:738
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:728
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:729
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:158
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:178
-#: modules/gui/macosx/VLCMainMenu.m:672
+#: modules/gui/macosx/VLCMainMenu.m:673
 #: share/lua/http/dialogs/create_stream.html:153
 #: modules/gui/qt/ui/profiles.h:716 modules/gui/qt/ui/profiles.h:760
 #: modules/gui/qt/ui/profiles.h:763
@@ -4713,8 +4719,8 @@ msgstr ""
 msgid "Track settings"
 msgstr ""
 
-#: src/libvlc-module.c:1895 modules/gui/legacy_macosx/VLCLegacyPrefs.m:692
-#: modules/gui/macosx/VLCSimplePrefsController.m:455
+#: src/libvlc-module.c:1895 modules/gui/legacy_macosx/VLCLegacyPrefs.m:705
+#: modules/gui/macosx/VLCSimplePrefsController.m:456
 msgid "Playback control"
 msgstr ""
 
@@ -4869,9 +4875,9 @@ msgstr ""
 msgid "Browser Stop"
 msgstr ""
 
-#: src/misc/actions.c:62 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1612
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:459
-#: modules/gui/macosx/VLCMainMenu.m:592 modules/gui/macosx/VLCPlaylist.m:231
+#: src/misc/actions.c:62 modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1643
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:460
+#: modules/gui/macosx/VLCMainMenu.m:593 modules/gui/macosx/VLCPlaylist.m:231
 #: modules/gui/qt/dialogs/bookmarks.cpp:50
 #: modules/gui/qt/ui/podcast_configuration.h:102
 #: modules/gui/qt/ui/streampanel.h:170
@@ -5051,13 +5057,13 @@ msgid "Page Up"
 msgstr ""
 
 #: src/misc/actions.c:107 modules/control/oldrc.c:71
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1923
-#: modules/gui/macosx/VLCControlsBarCommon.m:561
-#: modules/gui/macosx/VLCFSPanelController.m:337
-#: modules/gui/macosx/VLCMainMenu.m:1753 modules/gui/macosx/VLCMainMenu.m:1754
-#: modules/gui/macosx/VLCMainMenu.m:1755
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:2038
+#: modules/gui/macosx/VLCControlsBarCommon.m:614
+#: modules/gui/macosx/VLCFSPanelController.m:425
+#: modules/gui/macosx/VLCMainMenu.m:1758 modules/gui/macosx/VLCMainMenu.m:1759
+#: modules/gui/macosx/VLCMainMenu.m:1760
 #: modules/gui/qt/components/playlist/standardpanel.cpp:197
-#: modules/gui/qt/menus.cpp:925
+#: modules/gui/qt/menus.cpp:976
 msgid "Pause"
 msgstr ""
 
@@ -5077,7 +5083,7 @@ msgstr ""
 msgid "Up"
 msgstr ""
 
-#: src/misc/actions.c:114 modules/gui/macosx/VLCMainMenu.m:731
+#: src/misc/actions.c:114 modules/gui/macosx/VLCMainMenu.m:732
 msgid "Volume Down"
 msgstr ""
 
@@ -5085,7 +5091,7 @@ msgstr ""
 msgid "Volume Mute"
 msgstr ""
 
-#: src/misc/actions.c:116 modules/gui/macosx/VLCMainMenu.m:730
+#: src/misc/actions.c:116 modules/gui/macosx/VLCMainMenu.m:731
 msgid "Volume Up"
 msgstr ""
 
@@ -5160,13 +5166,13 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:759
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:986
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:1087
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2322
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3897
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1382
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1458
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1771
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1390
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2409
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2353
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4147
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1413
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1489
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1802
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1416
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2449
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:1600
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:1635
 #: modules/gui/macosx/VLCAudioEffectsWindowController.m:513
@@ -5181,19 +5187,19 @@ msgstr ""
 #: modules/gui/macosx/VLCCoreDialogProvider.m:193
 #: modules/gui/macosx/VLCCoreDialogProvider.m:197
 #: modules/gui/macosx/VLCCoreDialogProvider.m:307
-#: modules/gui/macosx/VLCMainWindow.m:364
-#: modules/gui/macosx/VLCMainWindow.m:370
+#: modules/gui/macosx/VLCMainWindow.m:424
+#: modules/gui/macosx/VLCMainWindow.m:430
 #: modules/gui/macosx/VLCOpenWindowController.m:134
-#: modules/gui/macosx/VLCOpenWindowController.m:192
+#: modules/gui/macosx/VLCOpenWindowController.m:213
 #: modules/gui/macosx/VLCSimplePrefsController.m:419
-#: modules/gui/macosx/VLCSimplePrefsController.m:446
-#: modules/gui/macosx/VLCSimplePrefsController.m:518
-#: modules/gui/macosx/VLCSimplePrefsController.m:969
+#: modules/gui/macosx/VLCSimplePrefsController.m:447
+#: modules/gui/macosx/VLCSimplePrefsController.m:519
+#: modules/gui/macosx/VLCSimplePrefsController.m:987
 #: modules/gui/macosx/VLCTimeSelectionPanelController.m:50
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:791
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:860
 #: modules/gui/macosx/prefs.m:189
-#: modules/gui/qt/components/open_panels.cpp:1361
+#: modules/gui/qt/components/open_panels.cpp:1369
 #: modules/gui/qt/components/preferences_widgets.cpp:1420
 #: modules/gui/qt/components/sout/profile_selector.cpp:455
 #: modules/gui/qt/dialogs/sout.cpp:88
@@ -5268,8 +5274,8 @@ msgid "Update VLC media player"
 msgstr ""
 
 #: src/playlist/engine.c:247 src/playlist/loadsave.c:159 lib/media_list.c:237
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3727
-#: modules/gui/macosx/VLCMainWindow.m:1022
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3977
+#: modules/gui/macosx/VLCMainWindow.m:1082
 #: modules/gui/macosx/VLCSidebarDataSource.m:70
 #: modules/gui/qt/components/playlist/selector.cpp:259
 msgid "Media Library"
@@ -5935,27 +5941,31 @@ msgstr "Чжуань"
 msgid "Zulu"
 msgstr "Зулус"
 
-#: src/video_output/vout_intf.c:169
+#: src/video_output/vout_intf.c:173
 msgid "Autoscale video"
 msgstr ""
 
-#: src/video_output/vout_intf.c:203
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:714
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:971
+#: src/video_output/vout_intf.c:207
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:715
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:972
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1304
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:588
-#: modules/gui/macosx/VLCMainMenu.m:661 modules/gui/macosx/VLCMainMenu.m:662
+#: modules/gui/macosx/VLCMainMenu.m:662 modules/gui/macosx/VLCMainMenu.m:663
+#: modules/gui/macosx/VLCMainMenu.m:1898
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:193
-#: modules/video_filter/croppadd.c:87 modules/gui/qt/ui/video_effects.h:1275
+#: modules/gui/qt/menus.cpp:1529 modules/video_filter/croppadd.c:87
+#: modules/gui/qt/ui/video_effects.h:1275
 msgid "Crop"
 msgstr ""
 
-#: src/video_output/vout_intf.c:230 modules/access/decklink.cpp:97
+#: src/video_output/vout_intf.c:234 modules/access/decklink.cpp:97
 #: modules/access/linsys/linsys_hdsdi.c:78
 #: modules/access/linsys/linsys_sdi.c:74 modules/demux/rawvid.c:58
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:713
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:970
-#: modules/gui/macosx/VLCMainMenu.m:659 modules/gui/macosx/VLCMainMenu.m:660
-#: modules/gui/macosx/VLCMainMenu.m:1865
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:714
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:971
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1297
+#: modules/gui/macosx/VLCMainMenu.m:660 modules/gui/macosx/VLCMainMenu.m:661
+#: modules/gui/macosx/VLCMainMenu.m:1891 modules/gui/macosx/VLCMainMenu.m:1979
 msgid "Aspect ratio"
 msgstr ""
 
@@ -6104,39 +6114,46 @@ msgstr ""
 msgid "libavformat AVIO access output"
 msgstr ""
 
-#: modules/access/bluray.c:76
+#: modules/access/bluray.c:76 modules/gui/legacy_macosx/VLCLegacyOpen.m:1024
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1167
+#: modules/gui/macosx/VLCOpenWindowController.m:194
+#: modules/gui/macosx/VLCSimplePrefsController.m:441
 msgid "Blu-ray menus"
 msgstr ""
 
 #: modules/access/bluray.c:77
-msgid "Use Blu-ray menus. If disabled, the movie will start directly"
+msgid ""
+"Use Blu-ray menus. If disabled, the movie will start directly. Some discs "
+"run their menus as a Java (BD-J) application that keeps one processor core "
+"busy for as long as the disc is playing, so disabling menus can matter on an "
+"older machine."
 msgstr ""
 
-#: modules/access/bluray.c:79
+#: modules/access/bluray.c:83
 msgid "Region code"
 msgstr ""
 
-#: modules/access/bluray.c:80
+#: modules/access/bluray.c:84
 msgid ""
 "Blu-Ray player region code. Some discs can be played only with a correct "
 "region code."
 msgstr ""
 
-#: modules/access/bluray.c:82
+#: modules/access/bluray.c:86
 msgid "Show forced subtitles"
 msgstr ""
 
-#: modules/access/bluray.c:83
+#: modules/access/bluray.c:87
 msgid ""
 "When the disc hides the subtitle stream, keep decoding it and display only "
 "its forced captions, as a standalone Blu-ray player does."
 msgstr ""
 
-#: modules/access/bluray.c:86
+#: modules/access/bluray.c:90
 msgid "Use the main playlist from the key database"
 msgstr ""
 
-#: modules/access/bluray.c:87
+#: modules/access/bluray.c:91
 msgid ""
 "Some discs hide the feature among hundreds of decoy playlists of the same "
 "length, so the longest one is not the right one. When playing without menus, "
@@ -6145,107 +6162,107 @@ msgid ""
 "still be picked."
 msgstr ""
 
-#: modules/access/bluray.c:118 modules/access/bluray.c:3164
+#: modules/access/bluray.c:122 modules/access/bluray.c:3168
 #: modules/services_discovery/udev.c:603 modules/gui/qt/ui/open_disk.h:296
 msgid "Blu-ray"
 msgstr ""
 
-#: modules/access/bluray.c:119
+#: modules/access/bluray.c:123
 msgid "Blu-ray Disc support (libbluray)"
 msgstr ""
 
-#: modules/access/bluray.c:1121
+#: modules/access/bluray.c:1125
 msgid "Path doesn't appear to be a Blu-ray"
 msgstr ""
 
-#: modules/access/bluray.c:1138
+#: modules/access/bluray.c:1142
 msgid ""
 "The AACS decoding library could not be loaded, so this Blu-ray Disc cannot "
 "be read."
 msgstr ""
 
-#: modules/access/bluray.c:1144
+#: modules/access/bluray.c:1148
 msgid "Blu-ray Disc is corrupted."
 msgstr ""
 
-#: modules/access/bluray.c:1146
+#: modules/access/bluray.c:1150
 msgid ""
 "No AACS key database was found. Open a keydb.cfg file with this player to "
 "install one."
 msgstr ""
 
-#: modules/access/bluray.c:1149
+#: modules/access/bluray.c:1153
 msgid "No valid processing key found in AACS config file."
 msgstr ""
 
-#: modules/access/bluray.c:1151
+#: modules/access/bluray.c:1155
 msgid "No valid host certificate found in AACS config file."
 msgstr ""
 
-#: modules/access/bluray.c:1153
+#: modules/access/bluray.c:1157
 msgid "AACS Host certificate revoked."
 msgstr ""
 
-#: modules/access/bluray.c:1155
+#: modules/access/bluray.c:1159
 msgid "AACS MMC failed."
 msgstr ""
 
-#: modules/access/bluray.c:1165
+#: modules/access/bluray.c:1169
 msgid ""
 "This Blu-ray Disc needs a library for BD+ decoding, and your system does not "
 "have it."
 msgstr ""
 
-#: modules/access/bluray.c:1168
+#: modules/access/bluray.c:1172
 msgid "Your system BD+ decoding library does not work. Missing configuration?"
 msgstr ""
 
-#: modules/access/bluray.c:1201
+#: modules/access/bluray.c:1205
 msgid "Java required"
 msgstr ""
 
-#: modules/access/bluray.c:1202
+#: modules/access/bluray.c:1206
 #, c-format
 msgid ""
 "This Blu-ray disc requires Java for menus support.%s\n"
 "The disc will be played without menus."
 msgstr ""
 
-#: modules/access/bluray.c:1203
+#: modules/access/bluray.c:1207
 msgid "Java was not found on your system."
 msgstr ""
 
-#: modules/access/bluray.c:1236
+#: modules/access/bluray.c:1240
 msgid "Failed to start bluray playback. Please try without menu support."
 msgstr ""
 
-#: modules/access/bluray.c:1283 modules/access/bluray.c:3420
-#: modules/access/bluray.c:3425
+#: modules/access/bluray.c:1287 modules/access/bluray.c:3424
+#: modules/access/bluray.c:3429
 msgid "Blu-ray error"
 msgstr ""
 
-#: modules/access/bluray.c:2540
+#: modules/access/bluray.c:2544
 #, c-format
 msgid "%05u.mpls (main playlist)"
 msgstr ""
 
-#: modules/access/bluray.c:2553
+#: modules/access/bluray.c:2557
 msgid "Top Menu"
 msgstr ""
 
-#: modules/access/bluray.c:2556
+#: modules/access/bluray.c:2560
 msgid "First Play"
 msgstr ""
 
-#: modules/access/bluray.c:3194
+#: modules/access/bluray.c:3198
 msgid "Dynamic range"
 msgstr ""
 
-#: modules/access/bluray.c:3212
+#: modules/access/bluray.c:3216
 msgid "Dolby Vision tracks"
 msgstr ""
 
-#: modules/access/bluray.c:3216
+#: modules/access/bluray.c:3220
 msgid "SDR conversion notice"
 msgstr ""
 
@@ -6468,8 +6485,8 @@ msgid "Alternate director's comments"
 msgstr ""
 
 #: modules/access/dvd_description.h:47
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:745
-#: modules/gui/macosx/VLCMainMenu.m:513
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:746
+#: modules/gui/macosx/VLCMainMenu.m:514
 #: modules/text_renderer/freetype/freetype.c:128
 msgid "Large"
 msgstr ""
@@ -6527,7 +6544,7 @@ msgid "DSS"
 msgstr "DSS"
 
 #: modules/access/dshow/dshow.cpp:130
-#: modules/gui/qt/components/open_panels.cpp:818
+#: modules/gui/qt/components/open_panels.cpp:826
 msgid "Video device name"
 msgstr ""
 
@@ -6538,8 +6555,8 @@ msgid ""
 msgstr ""
 
 #: modules/access/dshow/dshow.cpp:135
-#: modules/gui/qt/components/open_panels.cpp:826
-#: modules/gui/qt/components/open_panels.cpp:1047
+#: modules/gui/qt/components/open_panels.cpp:834
+#: modules/gui/qt/components/open_panels.cpp:1055
 msgid "Audio device name"
 msgstr ""
 
@@ -6550,7 +6567,7 @@ msgid ""
 msgstr ""
 
 #: modules/access/dshow/dshow.cpp:140
-#: modules/gui/qt/components/open_panels.cpp:793
+#: modules/gui/qt/components/open_panels.cpp:801
 msgid "Video size"
 msgstr "Видео өлчөмү"
 
@@ -6623,8 +6640,8 @@ msgid "This overrides the channel. Measured in Hz."
 msgstr ""
 
 #: modules/access/dshow/dshow.cpp:168
-#: modules/gui/qt/components/open_panels.cpp:846
-#: modules/gui/qt/components/open_panels.cpp:1067
+#: modules/gui/qt/components/open_panels.cpp:854
+#: modules/gui/qt/components/open_panels.cpp:1075
 msgid "Video standard"
 msgstr ""
 
@@ -6818,7 +6835,7 @@ msgid ""
 "frequency. This is required to tune the receiver."
 msgstr ""
 
-#: modules/access/dtv/access.c:68 modules/gui/qt/components/open_panels.cpp:967
+#: modules/access/dtv/access.c:68 modules/gui/qt/components/open_panels.cpp:975
 msgid "Modulation / Constellation"
 msgstr ""
 
@@ -7246,41 +7263,41 @@ msgstr ""
 msgid "Scanning DVB"
 msgstr ""
 
-#: modules/access/dvdnav.c:79 modules/access/dvdread.c:82
+#: modules/access/dvdnav.c:80 modules/access/dvdread.c:82
 msgid "DVD angle"
 msgstr ""
 
-#: modules/access/dvdnav.c:81 modules/access/dvdread.c:84
+#: modules/access/dvdnav.c:82 modules/access/dvdread.c:84
 msgid "Default DVD angle."
 msgstr ""
 
-#: modules/access/dvdnav.c:83
+#: modules/access/dvdnav.c:84
 msgid "Start directly in menu"
 msgstr ""
 
-#: modules/access/dvdnav.c:85
+#: modules/access/dvdnav.c:86
 msgid ""
 "Start the DVD directly in the main menu. This will try to skip all the "
 "useless warning introductions."
 msgstr ""
 
-#: modules/access/dvdnav.c:103
+#: modules/access/dvdnav.c:104
 msgid "DVD with menus"
 msgstr ""
 
-#: modules/access/dvdnav.c:104
+#: modules/access/dvdnav.c:105
 msgid "DVDnav Input"
 msgstr ""
 
-#: modules/access/dvdnav.c:116
+#: modules/access/dvdnav.c:117
 msgid "DVDnav demuxer"
 msgstr ""
 
-#: modules/access/dvdnav.c:271
+#: modules/access/dvdnav.c:287
 msgid "Disc no longer readable"
 msgstr ""
 
-#: modules/access/dvdnav.c:272
+#: modules/access/dvdnav.c:288
 msgid ""
 "The disc stopped responding, so playback cannot continue.\n"
 "\n"
@@ -7290,13 +7307,13 @@ msgid ""
 "insert the disc again."
 msgstr ""
 
-#: modules/access/dvdnav.c:412 modules/access/dvdread.c:268
+#: modules/access/dvdnav.c:430 modules/access/dvdread.c:268
 #: modules/access/dvdread.c:284 modules/access/dvdread.c:614
 #: modules/access/dvdread.c:679 modules/access/dvdread.c:1655
 msgid "Playback failure"
 msgstr ""
 
-#: modules/access/dvdnav.c:413
+#: modules/access/dvdnav.c:431
 msgid ""
 "VLC cannot set the DVD's title. It possibly cannot decrypt the entire disc."
 msgstr ""
@@ -7334,8 +7351,8 @@ msgstr ""
 
 #: modules/access/fs.c:35 modules/access_output/file.c:388
 #: modules/audio_output/file.c:113
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:416
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1723
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:417
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1754
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:180
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:407
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:517
@@ -7378,7 +7395,7 @@ msgstr ""
 #: modules/access/rdp.c:65 modules/access/sftp.c:55
 #: modules/access/smb_common.h:21 modules/access/vnc.c:47
 #: modules/access_output/http.c:52
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:833
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:846
 #: modules/gui/macosx/VLCCoreDialogProvider.m:191
 #: modules/gui/macosx/VLCSimplePrefsController.m:411
 #: modules/gui/qt/dialogs/external.cpp:205 modules/misc/audioscrobbler.c:114
@@ -7397,11 +7414,11 @@ msgstr ""
 #: modules/access/rdp.c:68 modules/access/sftp.c:58
 #: modules/access/smb_common.h:24 modules/access/vnc.c:48
 #: modules/access_output/http.c:55
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:752
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:838
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:765
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:851
 #: modules/gui/macosx/VLCCoreDialogProvider.m:192
 #: modules/gui/macosx/VLCSimplePrefsController.m:410
-#: modules/gui/macosx/VLCSimplePrefsController.m:474
+#: modules/gui/macosx/VLCSimplePrefsController.m:475
 #: modules/gui/qt/dialogs/external.cpp:210 modules/lua/vlc.c:54
 #: modules/lua/vlc.c:70 modules/misc/audioscrobbler.c:116
 #: modules/stream_out/rtp.c:176
@@ -7698,7 +7715,7 @@ msgstr ""
 msgid "Read the audio stream at VLC pace rather than Jack pace."
 msgstr ""
 
-#: modules/access/jack.c:62 modules/gui/qt/components/open_panels.cpp:898
+#: modules/access/jack.c:62 modules/gui/qt/components/open_panels.cpp:906
 msgid "Auto connection"
 msgstr "Автотуташуу"
 
@@ -8176,8 +8193,8 @@ msgstr ""
 
 #: modules/access/rist.h:85 modules/audio_output/mmdevice.c:1516
 #: modules/demux/adaptive/PlaylistManager.cpp:273
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:254
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:911
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:255
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:924
 #: modules/gui/legacy_macosx/macosx.c:70
 msgid "Disabled"
 msgstr ""
@@ -8391,7 +8408,7 @@ msgid "SAT>IP Receiver Plugin"
 msgstr ""
 
 #: modules/access/screen/screen.c:45
-#: modules/gui/qt/components/open_panels.cpp:1104
+#: modules/gui/qt/components/open_panels.cpp:1112
 msgid "Desired frame rate for the capture."
 msgstr ""
 
@@ -8430,8 +8447,8 @@ msgid "Capture region height"
 msgstr ""
 
 #: modules/access/screen/screen.c:67 modules/access/screen/xcb.c:59
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1572
-#: modules/gui/macosx/VLCOpenWindowController.m:214
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1603
+#: modules/gui/macosx/VLCOpenWindowController.m:235
 msgid "Follow the mouse"
 msgstr ""
 
@@ -8469,17 +8486,17 @@ msgid "Screen Input"
 msgstr ""
 
 #: modules/access/screen/screen.c:99 modules/access/screen/xcb.c:70
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1496
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1529
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1595
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1933
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:891
-#: modules/gui/macosx/VLCMainMenu.m:861
-#: modules/gui/macosx/VLCOpenWindowController.m:207
-#: modules/gui/macosx/VLCOpenWindowController.m:209
-#: modules/gui/macosx/VLCOpenWindowController.m:489
-#: modules/gui/macosx/VLCOpenWindowController.m:1118
-#: modules/gui/macosx/VLCSimplePrefsController.m:801
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1527
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1560
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1626
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1971
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:904
+#: modules/gui/macosx/VLCMainMenu.m:866
+#: modules/gui/macosx/VLCOpenWindowController.m:228
+#: modules/gui/macosx/VLCOpenWindowController.m:230
+#: modules/gui/macosx/VLCOpenWindowController.m:518
+#: modules/gui/macosx/VLCOpenWindowController.m:1157
+#: modules/gui/macosx/VLCSimplePrefsController.m:802
 msgid "Screen"
 msgstr "Экран"
 
@@ -8780,7 +8797,7 @@ msgstr ""
 msgid "Radio tuner device node."
 msgstr ""
 
-#: modules/access/v4l2/v4l2.c:75 modules/gui/qt/components/open_panels.cpp:1074
+#: modules/access/v4l2/v4l2.c:75 modules/gui/qt/components/open_panels.cpp:1082
 msgid "Frequency"
 msgstr ""
 
@@ -9923,7 +9940,7 @@ msgstr ""
 
 #: modules/audio_filter/chorus_flanger.c:75
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:757
-#: modules/gui/macosx/VLCOpenWindowController.m:355 modules/spu/mosaic.c:154
+#: modules/gui/macosx/VLCOpenWindowController.m:376 modules/spu/mosaic.c:154
 #: modules/stream_out/bridge.c:51 modules/stream_out/delay.c:54
 msgid "Delay"
 msgstr ""
@@ -11080,7 +11097,7 @@ msgid "Internal libavcodec codec name"
 msgstr ""
 
 #: modules/codec/avcodec/avcodec.h:109
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1149
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1162
 #: modules/gui/macosx/VLCSimplePrefsController.m:438
 msgid "Skip the loop filter for H.264 decoding"
 msgstr ""
@@ -11092,8 +11109,8 @@ msgid ""
 msgstr ""
 
 #: modules/codec/avcodec/avcodec.h:114
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1109
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1116
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1122
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1129
 #: modules/gui/macosx/VLCSimplePrefsController.m:436
 msgid "Hardware decoding"
 msgstr ""
@@ -11401,8 +11418,8 @@ msgid "BPG image decoder"
 msgstr ""
 
 #: modules/codec/cc.c:51 modules/codec/zvbi.c:65
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1059
-#: modules/gui/macosx/VLCSimplePrefsController.m:487 modules/spu/marq.c:108
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1072
+#: modules/gui/macosx/VLCSimplePrefsController.m:488 modules/spu/marq.c:108
 #: modules/spu/rss.c:144 modules/gui/qt/ui/video_effects.h:1312
 msgid "Opacity"
 msgstr ""
@@ -11424,7 +11441,7 @@ msgid "CDG video decoder"
 msgstr ""
 
 #: modules/codec/crystalhd.c:412
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1130
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1143
 msgid "Hardware decoding (Crystal HD)"
 msgstr ""
 
@@ -11844,8 +11861,8 @@ msgstr "ак"
 msgid "Maroon"
 msgstr "кочкул кызыл"
 
-#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:802
-#: modules/gui/macosx/VLCMainMenu.m:690 modules/gui/macosx/VLCMainMenu.m:1378
+#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:803
+#: modules/gui/macosx/VLCMainMenu.m:691 modules/gui/macosx/VLCMainMenu.m:1383
 #: modules/spu/marq.c:62 modules/spu/rss.c:70
 #: modules/text_renderer/freetype/freetype.c:140
 #: modules/video_filter/ball.c:119 modules/video_filter/colorthres.c:65
@@ -11858,8 +11875,8 @@ msgstr "кызыл"
 msgid "Fuchsia"
 msgstr "кызгылт"
 
-#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:803
-#: modules/gui/macosx/VLCMainMenu.m:692 modules/gui/macosx/VLCMainMenu.m:1382
+#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:804
+#: modules/gui/macosx/VLCMainMenu.m:693 modules/gui/macosx/VLCMainMenu.m:1387
 #: modules/spu/marq.c:63 modules/spu/rss.c:71
 #: modules/text_renderer/freetype/freetype.c:140
 #: modules/video_filter/colorthres.c:65
@@ -11871,8 +11888,8 @@ msgstr "сары"
 msgid "Olive"
 msgstr "саргыч жашыл"
 
-#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:803
-#: modules/gui/macosx/VLCMainMenu.m:691 modules/gui/macosx/VLCMainMenu.m:1380
+#: modules/codec/kate.c:208 modules/gui/legacy_macosx/VLCLegacyMenu.m:804
+#: modules/gui/macosx/VLCMainMenu.m:692 modules/gui/macosx/VLCMainMenu.m:1385
 #: modules/spu/marq.c:63 modules/spu/rss.c:71
 #: modules/text_renderer/freetype/freetype.c:140
 #: modules/video_filter/ball.c:119
@@ -11900,8 +11917,8 @@ msgstr "кара кочкул"
 msgid "Navy"
 msgstr ""
 
-#: modules/codec/kate.c:209 modules/gui/legacy_macosx/VLCLegacyMenu.m:804
-#: modules/gui/macosx/VLCMainMenu.m:693 modules/gui/macosx/VLCMainMenu.m:1384
+#: modules/codec/kate.c:209 modules/gui/legacy_macosx/VLCLegacyMenu.m:805
+#: modules/gui/macosx/VLCMainMenu.m:694 modules/gui/macosx/VLCMainMenu.m:1389
 #: modules/spu/marq.c:64 modules/spu/rss.c:72
 #: modules/text_renderer/freetype/freetype.c:141
 #: modules/video_filter/ball.c:120 modules/video_filter/colorthres.c:65
@@ -12456,9 +12473,9 @@ msgid "S/PDIF pass-through decoder"
 msgstr ""
 
 #: modules/codec/speex.c:59 modules/codec/speex.c:1009
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1317
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1348
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:457
-#: modules/gui/macosx/VLCOpenWindowController.m:195
+#: modules/gui/macosx/VLCOpenWindowController.m:216
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:259
 #: modules/gui/qt/ui/sprefs_video.h:395 modules/gui/qt/ui/video_effects.h:1282
 msgid "Mode"
@@ -12976,7 +12993,7 @@ msgstr ""
 msgid "Video Decode Acceleration (VDA)"
 msgstr ""
 
-#: modules/codec/vda.c:47 modules/gui/legacy_macosx/VLCLegacyPrefs.m:1111
+#: modules/codec/vda.c:47 modules/gui/legacy_macosx/VLCLegacyPrefs.m:1124
 msgid ""
 "Use the hardware H.264 decoder of Mac OS X 10.6.3 and later. If the graphics "
 "chipset does not support it, VLC automatically falls back to software "
@@ -13809,11 +13826,11 @@ msgstr "tesa"
 msgid "Fast"
 msgstr ""
 
-#: modules/codec/x264.c:429 modules/gui/legacy_macosx/VLCLegacyMenu.m:548
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:744
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1159
-#: modules/gui/macosx/VLCMainMenu.m:512 modules/gui/macosx/VLCMainMenu.m:614
-#: modules/gui/macosx/VLCSimplePrefsController.m:845
+#: modules/codec/x264.c:429 modules/gui/legacy_macosx/VLCLegacyMenu.m:549
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:745
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1185
+#: modules/gui/macosx/VLCMainMenu.m:513 modules/gui/macosx/VLCMainMenu.m:615
+#: modules/gui/macosx/VLCSimplePrefsController.m:863
 #: modules/gui/qt/components/simple_preferences.cpp:723
 #: modules/misc/gnutls.c:894 modules/text_renderer/freetype/freetype.c:128
 #: modules/text_renderer/freetype/freetype.c:147
@@ -13945,14 +13962,14 @@ msgstr ""
 
 #: modules/control/dbus/dbus_root.c:81 modules/gui/macosx/VLCMainWindow.m:140
 #: modules/gui/macosx/VLCStatusBarIcon.m:378 modules/gui/ncurses.c:1028
-#: modules/gui/qt/main_interface.cpp:1687
-#: modules/gui/qt/main_interface.cpp:1691
-#: modules/gui/qt/main_interface.cpp:1728
-#: modules/gui/qt/main_interface.cpp:1730
-#: modules/gui/qt/main_interface.cpp:1867
-#: modules/gui/qt/main_interface.cpp:1884
-#: modules/gui/qt/main_interface.cpp:1892
-#: modules/gui/qt/main_interface.cpp:1915 modules/lua/libs/httpd.c:80
+#: modules/gui/qt/main_interface.cpp:1943
+#: modules/gui/qt/main_interface.cpp:1947
+#: modules/gui/qt/main_interface.cpp:1984
+#: modules/gui/qt/main_interface.cpp:1986
+#: modules/gui/qt/main_interface.cpp:2123
+#: modules/gui/qt/main_interface.cpp:2140
+#: modules/gui/qt/main_interface.cpp:2148
+#: modules/gui/qt/main_interface.cpp:2171 modules/lua/libs/httpd.c:80
 #: modules/notify/osx_notifications.m:317
 #: modules/video_output/wayland/shell.c:348
 #: modules/video_output/wayland/xdg-shell.c:291
@@ -14015,7 +14032,7 @@ msgid "Global Hotkeys interface"
 msgstr ""
 
 #: modules/control/hotkeys.c:117
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1315
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1341
 #: modules/gui/macosx/VLCSimplePrefsController.m:376
 #: modules/gui/qt/components/preferences_widgets.cpp:1140
 #: modules/gui/qt/components/simple_preferences.cpp:259
@@ -14294,9 +14311,9 @@ msgstr ""
 msgid "Opening"
 msgstr ""
 
-#: modules/control/oldrc.c:73 modules/gui/legacy_macosx/VLCLegacyMenu.m:1793
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1815
-#: modules/gui/macosx/VLCMainMenu.m:1665 modules/gui/macosx/VLCMainMenu.m:1687
+#: modules/control/oldrc.c:73 modules/gui/legacy_macosx/VLCLegacyMenu.m:1908
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1930
+#: modules/gui/macosx/VLCMainMenu.m:1670 modules/gui/macosx/VLCMainMenu.m:1692
 #: modules/gui/qt/util/powervlc_disclibs.cpp:67 modules/logger/file.c:229
 msgid "Error"
 msgstr ""
@@ -14706,8 +14723,8 @@ msgstr ""
 
 #: modules/demux/adaptive/adaptive.cpp:84
 #: modules/demux/adaptive/PlaylistManager.cpp:190
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:710
-#: modules/gui/macosx/VLCMainMenu.m:225 modules/gui/macosx/VLCMainMenu.m:229
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:711
+#: modules/gui/macosx/VLCMainMenu.m:226 modules/gui/macosx/VLCMainMenu.m:230
 msgid "Quality"
 msgstr ""
 
@@ -14775,8 +14792,8 @@ msgid "Highest"
 msgstr ""
 
 #: modules/demux/adaptive/PlaylistManager.cpp:269
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:712
-#: modules/gui/macosx/VLCMainMenu.m:239 modules/gui/macosx/VLCMainMenu.m:243
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:713
+#: modules/gui/macosx/VLCMainMenu.m:240 modules/gui/macosx/VLCMainMenu.m:244
 msgid "Auto quality by resolution"
 msgstr ""
 
@@ -15038,12 +15055,12 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:1176
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:1322
 #: modules/gui/legacy_macosx/VLCLegacyMain.m:277
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2313
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1793
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1815
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2344
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1908
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1930
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:829
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:345
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2417
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2457
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:1610
 #: modules/gui/macosx/VLCBookmarksWindowController.m:85
 #: modules/gui/macosx/VLCBookmarksWindowController.m:209
@@ -15054,12 +15071,12 @@ msgstr ""
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:559
 #: modules/gui/macosx/VLCCoreDialogProvider.m:194
 #: modules/gui/macosx/VLCCoreDialogProvider.m:236
-#: modules/gui/macosx/VLCMainMenu.m:1667 modules/gui/macosx/VLCMainMenu.m:1692
-#: modules/gui/macosx/VLCOpenWindowController.m:365
+#: modules/gui/macosx/VLCMainMenu.m:1672 modules/gui/macosx/VLCMainMenu.m:1697
+#: modules/gui/macosx/VLCOpenWindowController.m:386
 #: modules/gui/macosx/VLCOutput.m:60 modules/gui/macosx/VLCPlaylistInfo.m:337
 #: modules/gui/macosx/VLCSimplePrefsController.m:420
 #: modules/gui/macosx/VLCTimeSelectionPanelController.m:51
-#: modules/gui/qt/components/open_panels.cpp:1360
+#: modules/gui/qt/components/open_panels.cpp:1368
 #: modules/stream_out/chromecast/cast.cpp:1212
 msgid "OK"
 msgstr ""
@@ -15075,10 +15092,10 @@ msgid "A key database is already installed and will be replaced."
 msgstr ""
 
 #: modules/demux/keydb.c:295
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4259
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1413
-#: modules/gui/legacy_macosx/misc.m:665 modules/gui/legacy_macosx/misc.m:715
-#: modules/gui/macosx/VLCMain.m:273 modules/gui/macosx/VLCMainMenu.m:1538
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4509
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1528
+#: modules/gui/legacy_macosx/misc.m:736 modules/gui/legacy_macosx/misc.m:786
+#: modules/gui/macosx/VLCMain.m:273 modules/gui/macosx/VLCMainMenu.m:1543
 #: modules/keystore/keychain.m:41
 msgid "No"
 msgstr ""
@@ -15116,8 +15133,8 @@ msgstr ""
 #: modules/demux/mjpeg.c:46 modules/demux/mpeg/es.c:53
 #: modules/demux/mpeg/h26x.c:46 modules/demux/rawvid.c:43
 #: modules/demux/subtitle.c:78 modules/demux/vc1.c:43
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1533
-#: modules/gui/macosx/VLCOpenWindowController.m:208
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1564
+#: modules/gui/macosx/VLCOpenWindowController.m:229
 msgid "Frames per Second"
 msgstr ""
 
@@ -15599,9 +15616,9 @@ msgid "Spoken subtitles for the visually impaired"
 msgstr ""
 
 #: modules/demux/mpeg/ts_psi.c:610
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:792
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:796
-#: modules/gui/macosx/VLCMainMenu.m:687 modules/gui/qt/dialogs/toolbar.cpp:541
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:793
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:797
+#: modules/gui/macosx/VLCMainMenu.m:688 modules/gui/qt/dialogs/toolbar.cpp:541
 msgid "Teletext"
 msgstr ""
 
@@ -16148,7 +16165,7 @@ msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyAbout.m:257
 #: modules/gui/macosx/VLCAboutWindowController.m:123
-#: modules/gui/macosx/VLCMainMenu.m:712 modules/gui/qt/dialogs/help.cpp:145
+#: modules/gui/macosx/VLCMainMenu.m:713 modules/gui/qt/dialogs/help.cpp:145
 msgid "License"
 msgstr ""
 
@@ -16160,9 +16177,9 @@ msgid "Authors"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m:140
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:379
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:380
 #: modules/gui/macosx/VLCAddonsWindowController.m:128
-#: modules/gui/macosx/VLCMainMenu.m:567 modules/gui/qt/dialogs/plugins.cpp:85
+#: modules/gui/macosx/VLCMainMenu.m:568 modules/gui/qt/dialogs/plugins.cpp:85
 msgid "Addons Manager"
 msgstr ""
 
@@ -16202,11 +16219,11 @@ msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m:157
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m:380
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:372
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:376
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:373
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:377
 #: modules/gui/macosx/VLCAddonsWindowController.m:113
 #: modules/gui/macosx/VLCAddonsWindowController.m:361
-#: modules/gui/macosx/VLCMainMenu.m:565 modules/gui/macosx/VLCMainMenu.m:566
+#: modules/gui/macosx/VLCMainMenu.m:566 modules/gui/macosx/VLCMainMenu.m:567
 #: modules/gui/qt/dialogs/plugins.cpp:401
 #: modules/gui/qt/managers/addons_manager.cpp:96
 msgid "Extensions"
@@ -16239,8 +16256,8 @@ msgid "Name"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyAddons.m:266
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2110
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:491
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2141
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:492
 #: modules/gui/macosx/VLCAddonsWindowController.m:132
 #: modules/gui/macosx/VLCPlaylist.m:99 modules/gui/qt/dialogs/plugins.cpp:1404
 #: modules/gui/qt/dialogs/plugins.cpp:1509 modules/mux/asf.c:58
@@ -16357,7 +16374,7 @@ msgid "Headphone virtualization"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyAudioEffects.m:435
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1424
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1455
 #: modules/gui/macosx/VLCAudioEffectsWindowController.m:276
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:88
 #: modules/gui/macosx/VLCSimplePrefsController.m:405
@@ -16401,17 +16418,17 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyAudioEffects.m:1136
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:392
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:986
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1682
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1797
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:629
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1380
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1406
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:1600
 #: modules/gui/macosx/VLCAudioEffectsWindowController.m:514
 #: modules/gui/macosx/VLCAudioEffectsWindowController.m:855
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:377
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:489
-#: modules/gui/macosx/VLCMainMenu.m:1439 modules/gui/macosx/VLCOutput.m:414
-#: modules/gui/macosx/VLCSimplePrefsController.m:445
-#: modules/gui/macosx/VLCSimplePrefsController.m:520
+#: modules/gui/macosx/VLCMainMenu.m:1444 modules/gui/macosx/VLCOutput.m:414
+#: modules/gui/macosx/VLCSimplePrefsController.m:446
+#: modules/gui/macosx/VLCSimplePrefsController.m:521
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:792
 #: modules/gui/macosx/prefs.m:188
 #: modules/gui/qt/components/sout/profile_selector.cpp:452
@@ -16508,8 +16525,8 @@ msgstr ""
 msgid "Time"
 msgstr "Убакыт"
 
-#: modules/gui/legacy_macosx/VLCLegacyControls.m:1108
-#: modules/gui/macosx/VLCSlider.m:376
+#: modules/gui/legacy_macosx/VLCLegacyControls.m:1158
+#: modules/gui/macosx/VLCSlider.m:397 modules/gui/qt/util/input_slider.cpp:606
 msgid "Clip:"
 msgstr ""
 
@@ -16519,16 +16536,16 @@ msgid "Convert & Stream"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:301
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1731
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1762
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:138
-#: modules/gui/macosx/VLCMainWindow.m:320
+#: modules/gui/macosx/VLCMainWindow.m:380
 msgid "Drop media here"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:303
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1736
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1767
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:139
-#: modules/gui/macosx/VLCMainWindow.m:336
+#: modules/gui/macosx/VLCMainWindow.m:396
 msgid "Open media..."
 msgstr ""
 
@@ -16575,15 +16592,15 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:546
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:751
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:190
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:980
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1102
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:993
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1115
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:145
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:197
 #: modules/gui/macosx/VLCOpenWindowController.m:147
-#: modules/gui/macosx/VLCOpenWindowController.m:352
+#: modules/gui/macosx/VLCOpenWindowController.m:373
 #: modules/gui/macosx/VLCOutput.m:67
 #: modules/gui/macosx/VLCSimplePrefsController.m:428
-#: modules/gui/macosx/VLCSimplePrefsController.m:507
+#: modules/gui/macosx/VLCSimplePrefsController.m:508
 #: modules/gui/macosx/prefs_widgets.m:1126
 #: modules/gui/qt/components/preferences_widgets.cpp:264
 #: modules/gui/qt/components/simple_preferences.cpp:481
@@ -16607,24 +16624,27 @@ msgid "Setup Streaming..."
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:501
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1687
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1802
 #: modules/gui/macosx/VLCBookmarksWindowController.m:128
-#: modules/gui/macosx/VLCMainMenu.m:1429
+#: modules/gui/macosx/VLCMainMenu.m:1434
 msgid "Untitled"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:528
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:270
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:272
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:915
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1156
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2021
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:271
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:273
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1210
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:928
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1182
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2047
 #: modules/gui/legacy_macosx/macosx.c:71
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:1060
-#: modules/gui/macosx/VLCSimplePrefsController.m:839
-#: modules/gui/macosx/VLCSimplePrefsController.m:867
-#: modules/gui/macosx/VLCSimplePrefsController.m:1418
+#: modules/gui/macosx/VLCMainMenu.m:1806
+#: modules/gui/macosx/VLCSimplePrefsController.m:857
+#: modules/gui/macosx/VLCSimplePrefsController.m:885
+#: modules/gui/macosx/VLCSimplePrefsController.m:1438
 #: modules/gui/qt/components/simple_preferences.cpp:720
+#: modules/gui/qt/menus.cpp:1552
 msgid "Custom"
 msgstr ""
 
@@ -16723,7 +16743,7 @@ msgstr ""
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:1024
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:203
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:186
-#: modules/gui/macosx/VLCOpenWindowController.m:197
+#: modules/gui/macosx/VLCOpenWindowController.m:218
 #: modules/gui/macosx/VLCOutput.m:68
 #: modules/gui/qt/components/sout/sout_widgets.cpp:294
 #: modules/gui/qt/components/sout/sout_widgets.cpp:381
@@ -16733,12 +16753,12 @@ msgid "Address"
 msgstr "Дарек"
 
 #: modules/gui/legacy_macosx/VLCLegacyConvertAndSave.m:1027
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1334
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1357
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1365
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1388
 #: modules/gui/legacy_macosx/VLCLegacyOutput.m:204
 #: modules/gui/macosx/VLCConvertAndSaveWindowController.m:189
-#: modules/gui/macosx/VLCOpenWindowController.m:185
-#: modules/gui/macosx/VLCOpenWindowController.m:187
+#: modules/gui/macosx/VLCOpenWindowController.m:206
+#: modules/gui/macosx/VLCOpenWindowController.m:208
 #: modules/gui/macosx/VLCOutput.m:69
 #: modules/gui/qt/components/sout/sout_widgets.cpp:240
 #: modules/gui/qt/components/sout/sout_widgets.cpp:295
@@ -16854,58 +16874,84 @@ msgid ""
 "technical reasons."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:249
-#: modules/gui/macosx/VLCFSPanelController.m:141
+#: modules/gui/legacy_macosx/VLCLegacyCoreInteraction.m:650
+#: modules/gui/macosx/VLCCoreInteraction.m:443
+#: modules/gui/qt/input_manager.cpp:1241
+msgid "Exporting clip…"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyCoreInteraction.m:663
+#: modules/gui/macosx/VLCCoreInteraction.m:468
+#: modules/gui/qt/input_manager.cpp:1255
+msgid "Clip export cancelled"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyCoreInteraction.m:667
+#: modules/gui/macosx/VLCCoreInteraction.m:472
+#: modules/gui/qt/input_manager.cpp:1257
+msgid "Clip saved:"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyCoreInteraction.m:669
+#: modules/gui/macosx/VLCCoreInteraction.m:474
+#: modules/gui/qt/input_manager.cpp:1260
+msgid "Clip export failed"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:250
+#: modules/gui/macosx/VLCFSPanelController.m:145
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:80
 #: modules/gui/qt/dialogs/toolbar.cpp:477 modules/gui/qt/ui/sprefs_audio.h:409
 msgid "Volume"
 msgstr "Катуулук"
 
-#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:258
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1414
+#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:259
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1445
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:85
 msgid "Full Volume"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:273
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1304
-#: modules/gui/macosx/VLCControlsBarCommon.m:86
-#: modules/gui/macosx/VLCControlsBarCommon.m:288
-#: modules/gui/macosx/VLCFSPanelController.m:135
+#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:274
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1335
+#: modules/gui/legacy_macosx/VLCLegacyVoutWindow.m:222
+#: modules/gui/macosx/VLCControlsBarCommon.m:90
+#: modules/gui/macosx/VLCControlsBarCommon.m:328
+#: modules/gui/macosx/VLCFSPanelController.m:139
 msgid "Backward"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:279
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1315
-#: modules/gui/macosx/VLCControlsBarCommon.m:90
-#: modules/gui/macosx/VLCControlsBarCommon.m:291
-#: modules/gui/macosx/VLCFSPanelController.m:132
+#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:280
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1346
+#: modules/gui/legacy_macosx/VLCLegacyVoutWindow.m:235
+#: modules/gui/macosx/VLCControlsBarCommon.m:94
+#: modules/gui/macosx/VLCControlsBarCommon.m:331
+#: modules/gui/macosx/VLCFSPanelController.m:136
 msgid "Forward"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:287
-#: modules/gui/macosx/VLCFSPanelController.m:138
-#: modules/gui/macosx/VLCFSPanelController.m:139
+#: modules/gui/legacy_macosx/VLCLegacyFSPanel.m:288
+#: modules/gui/macosx/VLCFSPanelController.m:142
+#: modules/gui/macosx/VLCFSPanelController.m:143
 msgid "Leave fullscreen"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyMain.m:368
-#: modules/gui/macosx/VLCMainWindow.m:394
+#: modules/gui/macosx/VLCMainWindow.m:454
 msgid "Check for album art and metadata?"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyMain.m:370
-#: modules/gui/macosx/VLCMainWindow.m:394
+#: modules/gui/macosx/VLCMainWindow.m:454
 msgid "Enable Metadata Retrieval"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyMain.m:371
-#: modules/gui/macosx/VLCMainWindow.m:394
+#: modules/gui/macosx/VLCMainWindow.m:454
 msgid "No, Thanks"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyMain.m:373
-#: modules/gui/macosx/VLCMainWindow.m:394
+#: modules/gui/macosx/VLCMainWindow.m:454
 msgid ""
 "VLC can check online for album art and metadata to enrich your playback "
 "experience, e.g. by providing track information when playing Audio CDs. To "
@@ -16913,210 +16959,210 @@ msgid ""
 "trusted services in an anonymized form."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1333
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1364
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:68
 msgid "Show/Hide Playlist"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1343
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1374
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:71
 #: modules/gui/qt/dialogs/vlm.cpp:542 share/lua/http/index.html:259
 msgid "Repeat"
 msgstr "Кайталоо"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1348
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1379
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:75
 #: share/lua/http/index.html:257
 msgid "Shuffle"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1395
-#: modules/gui/macosx/VLCFSPanelController.m:411
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1426
+#: modules/gui/macosx/VLCFSPanelController.m:522
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:78
 #: modules/gui/macosx/VLCMainWindowControlsBar.m:503
 #, c-format
 msgid "Volume: %i %%"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1617
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:464
-#: modules/gui/macosx/VLCMainMenu.m:593 modules/gui/macosx/VLCPlaylist.m:234
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1648
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:465
+#: modules/gui/macosx/VLCMainMenu.m:594 modules/gui/macosx/VLCPlaylist.m:234
 msgid "Select All"
 msgstr "Баарын белгилөө"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1624
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2209
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1655
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2240
 #: modules/gui/macosx/VLCPlaylist.m:232
 msgid "Expand All"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1628
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1659
 #: modules/gui/macosx/VLCPlaylist.m:233
 msgid "Collapse All"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1632
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:831
-#: modules/gui/macosx/VLCMainMenu.m:704 modules/gui/macosx/VLCPlaylist.m:235
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1663
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:832
+#: modules/gui/macosx/VLCMainMenu.m:705 modules/gui/macosx/VLCPlaylist.m:235
 msgid "Media Information..."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1636
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:440
-#: modules/gui/macosx/VLCMainMenu.m:586 modules/gui/macosx/VLCPlaylist.m:236
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1667
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:441
+#: modules/gui/macosx/VLCMainMenu.m:587 modules/gui/macosx/VLCPlaylist.m:236
 msgid "Reveal in Finder"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1641
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1672
 #: modules/gui/macosx/VLCPlaylist.m:238
 #: modules/gui/qt/components/playlist/standardpanel.cpp:274
 msgid "Shuffle playlist"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1679
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3897
-#: modules/gui/macosx/VLCMainWindow.m:354
-#: modules/gui/macosx/VLCMainWindow.m:363
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1710
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4147
+#: modules/gui/macosx/VLCMainWindow.m:414
+#: modules/gui/macosx/VLCMainWindow.m:423
 #: modules/gui/qt/components/playlist/selector.cpp:673
 msgid "Subscribe"
 msgstr "Жазылуу"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1687
-#: modules/gui/macosx/VLCMainWindow.m:357
-#: modules/gui/macosx/VLCMainWindow.m:369
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:1718
+#: modules/gui/macosx/VLCMainWindow.m:417
+#: modules/gui/macosx/VLCMainWindow.m:429
 #: modules/gui/qt/components/playlist/selector.cpp:690
 msgid "Unsubscribe"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2108
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2139
 #: modules/gui/legacy_macosx/VLCLegacyMediaInfo.m:100
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:489
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:490
 #: modules/gui/macosx/VLCPlaylist.m:97
 msgid "Track Number"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2111
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:492
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2142
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:493
 #: modules/gui/macosx/VLCPlaylist.m:100
 #: modules/gui/qt/components/playlist/sorting.h:61
 msgid "Duration"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2117
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:498
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2148
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:499
 #: modules/gui/macosx/VLCPlaylist.m:106
 #: modules/gui/qt/components/playlist/sorting.h:67
 msgid "URI"
 msgstr "URI"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2118
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:499
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2149
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:500
 #: modules/gui/macosx/VLCPlaylist.m:107
 msgid "File Size"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2237
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3573
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2268
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3823
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:472
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:644
-#: modules/gui/macosx/VLCOpenWindowController.m:583
-#: modules/gui/macosx/VLCOpenWindowController.m:669
-#: modules/gui/macosx/VLCOpenWindowController.m:1285
+#: modules/gui/macosx/VLCOpenWindowController.m:612
+#: modules/gui/macosx/VLCOpenWindowController.m:698
+#: modules/gui/macosx/VLCOpenWindowController.m:1324
 #: modules/gui/qt/ui/open_file.h:141
 msgid "Open File"
 msgstr "Файлды ачуу"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2238
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3574
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2269
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3824
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:473
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:645
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1182
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1386
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1767
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1209
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1417
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1798
 #: modules/gui/macosx/VLCOpenWindowController.m:133
-#: modules/gui/macosx/VLCOpenWindowController.m:193
-#: modules/gui/macosx/VLCOpenWindowController.m:584
-#: modules/gui/macosx/VLCOpenWindowController.m:670
-#: modules/gui/macosx/VLCOpenWindowController.m:902
-#: modules/gui/macosx/VLCOpenWindowController.m:1286
+#: modules/gui/macosx/VLCOpenWindowController.m:214
+#: modules/gui/macosx/VLCOpenWindowController.m:613
+#: modules/gui/macosx/VLCOpenWindowController.m:699
+#: modules/gui/macosx/VLCOpenWindowController.m:935
+#: modules/gui/macosx/VLCOpenWindowController.m:1325
 #: modules/gui/qt/components/controller.hpp:107
 msgid "Open"
 msgstr "Ачуу"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2290
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2300
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:577
-#: modules/gui/macosx/VLCMainMenu.m:626
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2321
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:2331
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:578
+#: modules/gui/macosx/VLCMainMenu.m:627
 #: modules/gui/macosx/VLCTimeSelectionPanelController.m:53
 msgid "Jump to Time"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3715
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3965
 #: modules/gui/macosx/VLCSidebarDataSource.m:67
 msgid "LIBRARY"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3736
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3986
 #: modules/gui/macosx/VLCSidebarDataSource.m:72
 msgid "MY COMPUTER"
 msgstr "Менин компьютерим"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3737
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3987
 #: modules/gui/macosx/VLCSidebarDataSource.m:73
 msgid "DEVICES"
 msgstr "Түзмөктөр"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3738
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3988
 #: modules/gui/macosx/VLCSidebarDataSource.m:74
 msgid "LOCAL NETWORK"
 msgstr "Жердик тармак"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3739
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3989
 #: modules/gui/macosx/VLCSidebarDataSource.m:75
 msgid "INTERNET"
 msgstr "Интернет"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3895
-#: modules/gui/macosx/VLCMainWindow.m:361
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4145
+#: modules/gui/macosx/VLCMainWindow.m:421
 #: modules/gui/qt/components/playlist/selector.cpp:302
 msgid "Subscribe to a podcast"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:3896
-#: modules/gui/macosx/VLCMainWindow.m:362
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4146
+#: modules/gui/macosx/VLCMainWindow.m:422
 #: modules/gui/qt/components/playlist/selector.cpp:674
 msgid "Enter URL of the podcast to subscribe to:"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4257
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4507
 msgid "Enable this service?"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4260
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4510
 msgid ""
 "This service uses a Lua script. Loading it can be slow and may affect the "
 "performance of this machine. Do you want to continue?"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:5435
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:5770
 #: modules/gui/macosx/VLCResumeDialogController.m:48 modules/gui/qt/qt.cpp:198
 #: modules/gui/qt/ui/sprefs_interface.h:564
 msgid "Continue playback?"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:5437
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:5772
 #: modules/gui/macosx/VLCResumeDialogController.m:69
 msgid "Playback of \"%@\" will continue at %@"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:5439
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:5774
 #: modules/gui/macosx/VLCResumeDialogController.m:49
-#: modules/gui/macosx/VLCSimplePrefsController.m:970
+#: modules/gui/macosx/VLCSimplePrefsController.m:988
 #: modules/gui/qt/dialogs/firstrun.cpp:106
 msgid "Continue"
 msgstr "Улантуу"
 
-#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:5439
+#: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:5774
 #: modules/gui/macosx/VLCResumeDialogController.m:62
 #: modules/gui/macosx/VLCResumeDialogController.m:94
 msgid "Restart playback"
@@ -17204,525 +17250,527 @@ msgstr "Кодек маалыматы"
 msgid "Save Metadata"
 msgstr "Мета-маалыматтарын сактоо"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:244
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:249
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:924
-#: modules/gui/legacy_macosx/macosx.c:221 modules/gui/qt/ui/sprefs_video.h:394
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:245
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:250
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:937
+#: modules/gui/legacy_macosx/macosx.c:250 modules/gui/qt/ui/sprefs_video.h:394
 msgid "Deinterlacing"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:255
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:912
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:256
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:925
 #: modules/gui/legacy_macosx/macosx.c:70
 msgid "Good quality"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:256
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:913
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:257
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:926
 #: modules/gui/legacy_macosx/macosx.c:71
 msgid "Optimal quality"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:257
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:914
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:258
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:927
 #: modules/gui/legacy_macosx/macosx.c:71
 msgid "Best quality"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:357
-#: modules/gui/macosx/VLCMainMenu.m:561
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:358
+#: modules/gui/macosx/VLCMainMenu.m:562
 msgid "About PowerVLC media player"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:360
-#: modules/gui/macosx/VLCMainMenu.m:564
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:361
+#: modules/gui/macosx/VLCMainMenu.m:565
 msgid "Preferences..."
 msgstr "Ырастоолор..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:366
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:367
 msgid "Switch to the modern interface"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:391
-#: modules/gui/macosx/VLCMainMenu.m:570
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:392
+#: modules/gui/macosx/VLCMainMenu.m:571
 msgid "Services"
 msgstr "Кызматтар"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:398
-#: modules/gui/macosx/VLCMainMenu.m:571
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:399
+#: modules/gui/macosx/VLCMainMenu.m:572
 msgid "Hide PowerVLC"
 msgstr "PowerVLC'ни жашыруу"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:400
-#: modules/gui/macosx/VLCMainMenu.m:572
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:401
+#: modules/gui/macosx/VLCMainMenu.m:573
 msgid "Hide Others"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:404
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1370
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1937
-#: modules/gui/macosx/VLCMainMenu.m:573
-#: modules/gui/macosx/VLCSimplePrefsController.m:517
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:405
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1396
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1963
+#: modules/gui/macosx/VLCMainMenu.m:574
+#: modules/gui/macosx/VLCSimplePrefsController.m:518
 msgid "Show All"
 msgstr "Баарын көрсөтүү"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:411
-#: modules/gui/macosx/VLCMainMenu.m:574
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:412
+#: modules/gui/macosx/VLCMainMenu.m:575
 msgid "Quit PowerVLC"
 msgstr "PowerVLC'ден чыгуу"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:417
-#: modules/gui/macosx/VLCMainMenu.m:578
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:418
+#: modules/gui/macosx/VLCMainMenu.m:579
 msgid "Open File..."
 msgstr "Файлды ачуу..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:419
-#: modules/gui/macosx/VLCMainMenu.m:577
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:420
+#: modules/gui/macosx/VLCMainMenu.m:578
 msgid "Advanced Open File..."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:422
-#: modules/gui/macosx/VLCMainMenu.m:579
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:423
+#: modules/gui/macosx/VLCMainMenu.m:580
 msgid "Open Disc..."
 msgstr "Дискти ачуу..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:424
-#: modules/gui/macosx/VLCMainMenu.m:580
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:425
+#: modules/gui/macosx/VLCMainMenu.m:581
 msgid "Open Network..."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:426
-#: modules/gui/macosx/VLCMainMenu.m:581
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:427
+#: modules/gui/macosx/VLCMainMenu.m:582
 msgid "Open Capture Device..."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:431
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:435
-#: modules/gui/macosx/VLCMainMenu.m:582
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:432
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:436
+#: modules/gui/macosx/VLCMainMenu.m:583
 msgid "Open Recent"
 msgstr "Жакындагыны ачуу"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:438
-#: modules/gui/macosx/VLCMainMenu.m:583
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:439
+#: modules/gui/macosx/VLCMainMenu.m:584
 msgid "Close Window"
 msgstr "Терезени жабуу"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:444
-#: modules/gui/macosx/VLCMainMenu.m:584
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:445
+#: modules/gui/macosx/VLCMainMenu.m:585
 msgid "Convert / Stream..."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:448
-#: modules/gui/macosx/VLCMainMenu.m:585
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:449
+#: modules/gui/macosx/VLCMainMenu.m:586
 msgid "Save Playlist..."
 msgstr "Плейлистти сактоо..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:452
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:453
 #: modules/gui/macosx/VLCBookmarksWindowController.m:77
-#: modules/gui/macosx/VLCMainMenu.m:588
+#: modules/gui/macosx/VLCMainMenu.m:589
 msgid "Edit"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:453
-#: modules/gui/macosx/VLCMainMenu.m:589
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:454
+#: modules/gui/macosx/VLCMainMenu.m:590
 msgid "Cut"
 msgstr "Кесүү"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:455
-#: modules/gui/macosx/VLCMainMenu.m:590
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:456
+#: modules/gui/macosx/VLCMainMenu.m:591
 msgid "Copy"
 msgstr "Көчүрүү"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:457
-#: modules/gui/macosx/VLCMainMenu.m:591
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:458
+#: modules/gui/macosx/VLCMainMenu.m:592
 msgid "Paste"
 msgstr "Коюу"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:467
-#: modules/gui/macosx/VLCMainMenu.m:594
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:468
+#: modules/gui/macosx/VLCMainMenu.m:595
 msgid "Find"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:472
-#: modules/gui/macosx/VLCMainMenu.m:596
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:473
+#: modules/gui/macosx/VLCMainMenu.m:597
 msgid "View"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:473
-#: modules/gui/legacy_macosx/macosx.c:91 modules/gui/macosx/VLCMainMenu.m:597
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:474
+#: modules/gui/legacy_macosx/macosx.c:120 modules/gui/macosx/VLCMainMenu.m:598
 #: modules/gui/macosx/macosx.m:116
 msgid "Show Previous & Next Buttons"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:475
-#: modules/gui/legacy_macosx/macosx.c:95 modules/gui/macosx/VLCMainMenu.m:599
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:476
+#: modules/gui/legacy_macosx/macosx.c:124 modules/gui/macosx/VLCMainMenu.m:600
 #: modules/gui/macosx/macosx.m:119
 msgid "Show Shuffle & Repeat Buttons"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:477
-#: modules/gui/legacy_macosx/macosx.c:99 modules/gui/macosx/VLCMainMenu.m:601
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:478
+#: modules/gui/legacy_macosx/macosx.c:128 modules/gui/macosx/VLCMainMenu.m:602
 #: modules/gui/macosx/macosx.m:122
 msgid "Show Audio Effects Button"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:479
-#: modules/gui/macosx/VLCMainMenu.m:603
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:480
+#: modules/gui/macosx/VLCMainMenu.m:604
 msgid "Show Sidebar"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:483
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:486
-#: modules/gui/macosx/VLCMainMenu.m:604
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:484
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:487
+#: modules/gui/macosx/VLCMainMenu.m:605
 msgid "Playlist Table Columns"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:514
-#: modules/gui/macosx/VLCMainMenu.m:606
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:515
+#: modules/gui/macosx/VLCMainMenu.m:607
 msgid "Playback"
 msgstr "Ойнотуу"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:533
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1947
-#: modules/gui/macosx/VLCMainMenu.m:180 modules/gui/macosx/VLCMainMenu.m:1079
-#: modules/gui/qt/menus.cpp:963 modules/gui/qt/menus.cpp:971
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:534
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:2062
+#: modules/gui/macosx/VLCMainMenu.m:181 modules/gui/macosx/VLCMainMenu.m:1084
+#: modules/gui/qt/menus.cpp:827 modules/gui/qt/menus.cpp:836
+#: modules/gui/qt/menus.cpp:1014 modules/gui/qt/menus.cpp:1022
 msgid "Enter Clip Creation Mode"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:540
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:545
-#: modules/gui/macosx/VLCMainMenu.m:612
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:541
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:546
+#: modules/gui/macosx/VLCMainMenu.m:613
 msgid "Playback Speed"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:565
-#: modules/gui/macosx/VLCMainMenu.m:624
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:566
+#: modules/gui/macosx/VLCMainMenu.m:625
 msgid "Step Forward"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:571
-#: modules/gui/macosx/VLCMainMenu.m:625
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:572
+#: modules/gui/macosx/VLCMainMenu.m:626
 msgid "Step Backward"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:601
-#: modules/gui/macosx/VLCMainMenu.m:622
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:602
+#: modules/gui/macosx/VLCMainMenu.m:623
 #: modules/gui/qt/components/controller.hpp:110
 msgid "A→B Loop"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:605
-#: modules/gui/macosx/VLCMainMenu.m:623
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:606
+#: modules/gui/macosx/VLCMainMenu.m:624
 msgid "Quit after Playback"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:609
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:613
-#: modules/gui/macosx/VLCMainMenu.m:627
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:610
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:614
+#: modules/gui/macosx/VLCMainMenu.m:628
 msgid "Renderer"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:627
-#: modules/gui/macosx/VLCMainMenu.m:637
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:628
+#: modules/gui/macosx/VLCMainMenu.m:638
 msgid "Increase Volume"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:632
-#: modules/gui/macosx/VLCMainMenu.m:638
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:633
+#: modules/gui/macosx/VLCMainMenu.m:639
 msgid "Decrease Volume"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:652
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:656
-#: modules/gui/macosx/VLCMainMenu.m:644 modules/gui/macosx/VLCMainMenu.m:645
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:653
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:657
+#: modules/gui/macosx/VLCMainMenu.m:645 modules/gui/macosx/VLCMainMenu.m:646
 msgid "Audio Device"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:664
-#: modules/gui/macosx/VLCMainMenu.m:650
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:665
+#: modules/gui/macosx/VLCMainMenu.m:651
 msgid "Half Size"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:668
-#: modules/gui/macosx/VLCMainMenu.m:651
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:669
+#: modules/gui/macosx/VLCMainMenu.m:652
 msgid "Normal Size"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:672
-#: modules/gui/macosx/VLCMainMenu.m:652
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:673
+#: modules/gui/macosx/VLCMainMenu.m:653
 msgid "Double Size"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:679
-#: modules/gui/macosx/VLCMainMenu.m:653
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:680
+#: modules/gui/macosx/VLCMainMenu.m:654
 msgid "Fit to Screen"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:687
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:964
-#: modules/gui/macosx/VLCMainMenu.m:655
-#: modules/gui/macosx/VLCSimplePrefsController.m:497
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:688
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:965
+#: modules/gui/macosx/VLCMainMenu.m:656
+#: modules/gui/macosx/VLCSimplePrefsController.m:498
 msgid "Float on Top"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:694
-#: modules/gui/macosx/VLCMainMenu.m:197 modules/gui/qt/menus.cpp:708
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:695
+#: modules/gui/macosx/VLCMainMenu.m:198 modules/gui/qt/menus.cpp:737
 msgid "Hide Controls During Playback"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:729
-#: modules/gui/macosx/VLCMainMenu.m:673
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:730
+#: modules/gui/macosx/VLCMainMenu.m:674
 msgid "Add Subtitle File..."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:732
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:954
-#: modules/gui/macosx/VLCMainMenu.m:674 modules/gui/macosx/VLCMainMenu.m:675
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:733
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:955
+#: modules/gui/macosx/VLCMainMenu.m:675 modules/gui/macosx/VLCMainMenu.m:676
 msgid "Subtitles Track"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:737
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:741
-#: modules/gui/macosx/VLCMainMenu.m:676
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:738
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:742
+#: modules/gui/macosx/VLCMainMenu.m:677
 msgid "Text Size"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:744
-#: modules/gui/macosx/VLCMainMenu.m:510
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:745
+#: modules/gui/macosx/VLCMainMenu.m:511
 #: modules/text_renderer/freetype/freetype.c:128
 msgid "Smaller"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:744
-#: modules/gui/macosx/VLCMainMenu.m:511
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:745
+#: modules/gui/macosx/VLCMainMenu.m:512
 #: modules/text_renderer/freetype/freetype.c:128
 msgid "Small"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:745
-#: modules/gui/macosx/VLCMainMenu.m:514
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:746
+#: modules/gui/macosx/VLCMainMenu.m:515
 #: modules/text_renderer/freetype/freetype.c:128
 msgid "Larger"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:756
-#: modules/gui/macosx/VLCMainMenu.m:677
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:757
+#: modules/gui/macosx/VLCMainMenu.m:678
 msgid "Text Color"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:759
-#: modules/gui/macosx/VLCMainMenu.m:678
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:760
+#: modules/gui/macosx/VLCMainMenu.m:679
 msgid "Outline Thickness"
 msgstr "Контур калыңдыгы"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:768
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:773
-#: modules/gui/macosx/VLCMainMenu.m:684 modules/gui/macosx/VLCMainMenu.m:685
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:769
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:774
+#: modules/gui/macosx/VLCMainMenu.m:685 modules/gui/macosx/VLCMainMenu.m:686
 msgid "Background Opacity"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:786
-#: modules/gui/macosx/VLCMainMenu.m:686
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:787
+#: modules/gui/macosx/VLCMainMenu.m:687
 msgid "Background Color"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:798
-#: modules/gui/macosx/VLCMainMenu.m:688
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:799
+#: modules/gui/macosx/VLCMainMenu.m:689
 msgid "Transparent"
 msgstr "Тунук"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:802
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:803
 #: modules/gui/macosx/VLCHelpWindowController.m:50
-#: modules/gui/macosx/VLCMainMenu.m:689 modules/gui/macosx/VLCMainMenu.m:1376
+#: modules/gui/macosx/VLCMainMenu.m:690 modules/gui/macosx/VLCMainMenu.m:1381
 msgid "Index"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:816
-#: modules/gui/macosx/VLCMainMenu.m:695
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:817
+#: modules/gui/macosx/VLCMainMenu.m:696
 msgid "Window"
 msgstr "Терезе"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:817
-#: modules/gui/macosx/VLCMainMenu.m:696
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:818
+#: modules/gui/macosx/VLCMainMenu.m:697
 msgid "Minimize"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:825
-#: modules/gui/macosx/VLCMainMenu.m:699
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:826
+#: modules/gui/macosx/VLCMainMenu.m:700
 msgid "Main Window..."
 msgstr "Негизги терезе..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:828
-#: modules/gui/macosx/VLCMainMenu.m:703
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:829
+#: modules/gui/macosx/VLCMainMenu.m:704
 msgid "Playlist..."
 msgstr "Плейлист..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:834
-#: modules/gui/macosx/VLCMainMenu.m:701
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:835
+#: modules/gui/macosx/VLCMainMenu.m:702
 msgid "Video Effects..."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:836
-#: modules/gui/macosx/VLCMainMenu.m:700
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:837
+#: modules/gui/macosx/VLCMainMenu.m:701
 msgid "Audio Effects..."
 msgstr "Аудио-эффекттер..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:839
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:840
 #: modules/gui/legacy_macosx/VLCLegacyTrackSync.m:90
-#: modules/gui/macosx/VLCMainMenu.m:616
+#: modules/gui/macosx/VLCMainMenu.m:617
 #: modules/gui/macosx/VLCTrackSynchronizationWindowController.m:48
 msgid "Track Synchronization"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:841
-#: modules/gui/macosx/VLCMainMenu.m:702
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:842
+#: modules/gui/macosx/VLCMainMenu.m:703
 msgid "Bookmarks..."
 msgstr "Чөп каттар..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:844
-#: modules/gui/macosx/VLCMainMenu.m:706
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:845
+#: modules/gui/macosx/VLCMainMenu.m:707
 msgid "Errors and Warnings..."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:847
-#: modules/gui/macosx/VLCMainMenu.m:705
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:848
+#: modules/gui/macosx/VLCMainMenu.m:706
 msgid "Messages..."
 msgstr "Билдирүүлөр..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:851
-#: modules/gui/macosx/VLCMainMenu.m:708
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:852
+#: modules/gui/macosx/VLCMainMenu.m:709
 msgid "Bring All to Front"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:856
-#: modules/gui/macosx/VLCMainMenu.m:710 modules/gui/qt/dialogs/help.cpp:54
-#: modules/gui/qt/menus.cpp:1062 modules/gui/qt/menus.cpp:1249
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:857
+#: modules/gui/macosx/VLCMainMenu.m:711 modules/gui/qt/dialogs/help.cpp:54
+#: modules/gui/qt/menus.cpp:1113 modules/gui/qt/menus.cpp:1300
 msgid "Help"
 msgstr "Жардам"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:857
-#: modules/gui/macosx/VLCMainMenu.m:711
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:858
+#: modules/gui/macosx/VLCMainMenu.m:712
 msgid "PowerVLC media player Help..."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:860
-#: modules/gui/macosx/VLCMainMenu.m:714
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:861
+#: modules/gui/macosx/VLCMainMenu.m:715
 msgid "VideoLAN Website..."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:862
-#: modules/gui/macosx/VLCMainMenu.m:715
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:863
+#: modules/gui/macosx/VLCMainMenu.m:716
 msgid "Make a donation..."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:864
-#: modules/gui/macosx/VLCMainMenu.m:716
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:865
+#: modules/gui/macosx/VLCMainMenu.m:717
 msgid "Online Forum..."
 msgstr "Онлайн-форум..."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:881
-#: modules/gui/macosx/VLCMainMenu.m:279 modules/gui/qt/menus.cpp:876
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:882
+#: modules/gui/macosx/VLCMainMenu.m:280 modules/gui/qt/menus.cpp:927
 msgid "Open the libaacs folder (Blu-ray)"
 msgstr "libaacs папкасын ачуу (Blu-ray)"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:883
-#: modules/gui/macosx/VLCMainMenu.m:286 modules/gui/qt/menus.cpp:881
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:884
+#: modules/gui/macosx/VLCMainMenu.m:287 modules/gui/qt/menus.cpp:932
 msgid "Open the libbdplus folder (Blu-ray)"
 msgstr "libbdplus папкасын ачуу (Blu-ray)"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:895
-#: modules/gui/macosx/VLCMainMenu.m:302 modules/gui/qt/menus.cpp:861
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:896
+#: modules/gui/macosx/VLCMainMenu.m:303 modules/gui/qt/menus.cpp:912
 msgid "Install the PowerVLC add-on in your browser..."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:908
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1850
-#: modules/gui/macosx/VLCMainMenu.m:320 modules/gui/macosx/VLCMainMenu.m:1725
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:909
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1965
+#: modules/gui/macosx/VLCMainMenu.m:321 modules/gui/macosx/VLCMainMenu.m:1730
 msgid "Install the Crystal HD driver..."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:916
-#: modules/gui/macosx/VLCMainMenu.m:331
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:917
+#: modules/gui/macosx/VLCMainMenu.m:332
 msgid "Reload the Crystal HD driver..."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:919
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1834
-#: modules/gui/macosx/VLCMainMenu.m:321 modules/gui/macosx/VLCMainMenu.m:1709
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:920
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1949
+#: modules/gui/macosx/VLCMainMenu.m:322 modules/gui/macosx/VLCMainMenu.m:1714
 msgid "Remove the Crystal HD driver..."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1092
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1245
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1093
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1271
 #: modules/gui/macosx/VLCBookmarksWindowController.m:76
 #: modules/gui/macosx/VLCSimplePrefsController.m:421
 #: modules/gui/qt/dialogs/bookmarks.cpp:53 modules/gui/qt/ui/vlm.h:297
 msgid "Clear"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1256
-#: modules/gui/macosx/VLCMainMenu.m:628
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1371
+#: modules/gui/macosx/VLCMainMenu.m:629
 msgid "No renderer"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1335
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1450
 #: modules/gui/qt/extensions_manager.cpp:197
 msgid "Deactivate"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1411
-#: modules/gui/macosx/VLCMainMenu.m:1534
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1526
+#: modules/gui/macosx/VLCMainMenu.m:1539
 msgid "Change the interface?"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1414
-#: modules/gui/macosx/VLCMainMenu.m:1535
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1529
+#: modules/gui/macosx/VLCMainMenu.m:1540
 msgid "VLC needs to restart to switch interfaces. Do you want to continue?"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1671
-#: modules/gui/macosx/VLCMainMenu.m:1433
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1786
+#: modules/gui/macosx/VLCMainMenu.m:1438
 msgid "File Format:"
 msgstr "Файл форматы:"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1675
-#: modules/gui/macosx/VLCMainMenu.m:1434
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1790
+#: modules/gui/macosx/VLCMainMenu.m:1439
 msgid "Extended M3U"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1677
-#: modules/gui/macosx/VLCMainMenu.m:1435
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1792
+#: modules/gui/macosx/VLCMainMenu.m:1440
 msgid "XML Shareable Playlist Format (XSPF)"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1678
-#: modules/gui/macosx/VLCMainMenu.m:1436
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1793
+#: modules/gui/macosx/VLCMainMenu.m:1441
 #: modules/gui/qt/dialogs_provider.cpp:659
 msgid "HTML playlist"
 msgstr "HTML плейлисти"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1681
-#: modules/gui/macosx/VLCMainMenu.m:1438
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1796
+#: modules/gui/macosx/VLCMainMenu.m:1443
 msgid "Save Playlist"
 msgstr "Плейлистти сактоо"
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1787
-#: modules/gui/macosx/VLCMainMenu.m:1658
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1902
+#: modules/gui/macosx/VLCMainMenu.m:1663
 #: modules/gui/qt/util/powervlc_disclibs.cpp:68
 #, c-format
 msgid "The folder %s could not be opened."
 msgstr "%s папкасын ачуу мүмкүн болгон жок."
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1816
-#: modules/gui/macosx/VLCMainMenu.m:1688
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1931
+#: modules/gui/macosx/VLCMainMenu.m:1693
 msgid ""
 "PowerVLC could not open the add-on with your browser. Drag share/"
 "powervlc.xpi from the application onto a browser window to install it."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyMenu.m:1946
-#: modules/gui/macosx/VLCMainMenu.m:1077 modules/gui/qt/menus.cpp:962
-#: modules/gui/qt/menus.cpp:970
+#: modules/gui/legacy_macosx/VLCLegacyMenu.m:2061
+#: modules/gui/macosx/VLCMainMenu.m:1082 modules/gui/qt/menus.cpp:826
+#: modules/gui/qt/menus.cpp:835 modules/gui/qt/menus.cpp:1013
+#: modules/gui/qt/menus.cpp:1021
 msgid "Exit Clip Creation Mode"
 msgstr ""
 
@@ -17762,7 +17810,7 @@ msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:540
 #: modules/gui/macosx/VLCOpenWindowController.m:145
-#: modules/gui/macosx/VLCOpenWindowController.m:346
+#: modules/gui/macosx/VLCOpenWindowController.m:367
 msgid "Choose a file"
 msgstr "Файлды тандаңыз"
 
@@ -17778,16 +17826,16 @@ msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:562
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:576
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1047
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1060
 #: modules/gui/macosx/VLCOpenWindowController.m:152
-#: modules/gui/macosx/VLCOpenWindowController.m:349
-#: modules/gui/macosx/VLCSimplePrefsController.m:479
+#: modules/gui/macosx/VLCOpenWindowController.m:370
+#: modules/gui/macosx/VLCSimplePrefsController.m:480
 #: modules/gui/qt/ui/sprefs_interface.h:558
 msgid "Choose..."
 msgstr "Тандоо..."
 
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:568
-#: modules/gui/macosx/VLCOpenWindowController.m:345
+#: modules/gui/macosx/VLCOpenWindowController.m:366
 msgid "Add Subtitle File:"
 msgstr ""
 
@@ -17797,40 +17845,40 @@ msgid "Custom playback"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:742
-#: modules/gui/macosx/VLCOpenWindowController.m:368
+#: modules/gui/macosx/VLCOpenWindowController.m:389
 msgid "Subtitle File"
 msgstr "Субтитр файлы"
 
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:753
-#: modules/gui/macosx/VLCOpenWindowController.m:354
+#: modules/gui/macosx/VLCOpenWindowController.m:375
 msgid "Override parameters"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:766
-#: modules/gui/macosx/VLCOpenWindowController.m:357
+#: modules/gui/macosx/VLCOpenWindowController.m:378
 msgid "FPS"
 msgstr "к/сек"
 
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:779
-#: modules/gui/macosx/VLCOpenWindowController.m:367
+#: modules/gui/macosx/VLCOpenWindowController.m:388
 msgid "Font Properties"
 msgstr "Арип касиеттери"
 
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:786
-#: modules/gui/macosx/VLCOpenWindowController.m:359
+#: modules/gui/macosx/VLCOpenWindowController.m:380
 msgid "Subtitle encoding"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:808
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1052
-#: modules/gui/macosx/VLCOpenWindowController.m:361
-#: modules/gui/macosx/VLCSimplePrefsController.m:481
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1065
+#: modules/gui/macosx/VLCOpenWindowController.m:382
+#: modules/gui/macosx/VLCSimplePrefsController.m:482
 #: modules/gui/qt/ui/sprefs_subtitles.h:299
 msgid "Font size"
 msgstr "Арип өлчөмү"
 
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:814
-#: modules/gui/macosx/VLCOpenWindowController.m:363
+#: modules/gui/macosx/VLCOpenWindowController.m:384
 msgid "Subtitle alignment"
 msgstr ""
 
@@ -17845,65 +17893,79 @@ msgid "Insert Disc"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:981
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1215
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:994
 #: modules/gui/macosx/VLCOpenWindowController.m:173
-msgid "Disable DVD menus"
-msgstr ""
-
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:989
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1207
 #: modules/gui/macosx/VLCOpenWindowController.m:176
-msgid "Enable DVD menus"
+#: modules/gui/qt/dialogs/toolbar.cpp:519
+msgid "DVD menus"
+msgstr "DVD менюлары"
+
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:987
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1000
+#: modules/gui/macosx/VLCOpenWindowController.m:183
+msgid ""
+"Play the disc with its own menus. Unticking this plays a title directly and "
+"lets you pick the title and chapter numbers."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1127
-#: modules/gui/macosx/VLCOpenWindowController.m:768
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1032
+#: modules/gui/macosx/VLCOpenWindowController.m:196
+msgid ""
+"Play the disc with its own menus. Some discs run their menus as a Java (BD-"
+"J) application that keeps one processor core busy for as long as the disc is "
+"playing, which older Macs may not have to spare. Unticking this starts the "
+"main feature directly. The initial state of this box comes from the "
+"preferences."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1150
+#: modules/gui/macosx/VLCOpenWindowController.m:797
 #, c-format
 msgid "%i tracks"
 msgstr "%i жолчо"
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1273
-#: modules/gui/macosx/VLCOpenWindowController.m:189
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1304
+#: modules/gui/macosx/VLCOpenWindowController.m:210
 msgid ""
 "To Open a usual network stream (HTTP, RTSP, RTMP, MMS, FTP, etc.), just "
 "enter the URL in the field above. If you want to open a RTP or UDP stream, "
 "press the button below."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1280
-#: modules/gui/macosx/VLCOpenWindowController.m:194
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1311
+#: modules/gui/macosx/VLCOpenWindowController.m:215
 msgid "Open RTP/UDP Stream"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1300
-#: modules/gui/macosx/VLCOpenWindowController.m:196
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1331
+#: modules/gui/macosx/VLCOpenWindowController.m:217
 #: share/lua/http/dialogs/stream_config_window.html:24
 #: share/lua/http/dialogs/stream_window.html:83
 msgid "Protocol"
 msgstr "Протокол"
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1325
-#: modules/gui/macosx/VLCOpenWindowController.m:199
-#: modules/gui/macosx/VLCOpenWindowController.m:1017
-#: modules/gui/macosx/VLCOpenWindowController.m:1077
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1356
+#: modules/gui/macosx/VLCOpenWindowController.m:220
+#: modules/gui/macosx/VLCOpenWindowController.m:1056
+#: modules/gui/macosx/VLCOpenWindowController.m:1116
 msgid "Unicast"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1327
-#: modules/gui/macosx/VLCOpenWindowController.m:200
-#: modules/gui/macosx/VLCOpenWindowController.m:1030
-#: modules/gui/macosx/VLCOpenWindowController.m:1090
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1358
+#: modules/gui/macosx/VLCOpenWindowController.m:221
+#: modules/gui/macosx/VLCOpenWindowController.m:1069
+#: modules/gui/macosx/VLCOpenWindowController.m:1129
 msgid "Multicast"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1349
-#: modules/gui/macosx/VLCOpenWindowController.m:186
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1380
+#: modules/gui/macosx/VLCOpenWindowController.m:207
 #: modules/stream_out/chromecast/cast.cpp:226
 msgid "IP Address"
 msgstr "IP-дарек"
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1372
-#: modules/gui/macosx/VLCOpenWindowController.m:190
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1403
+#: modules/gui/macosx/VLCOpenWindowController.m:211
 msgid ""
 "If you want to open a multicast stream, enter the respective IP address "
 "given by the stream provider. In unicast mode, VLC will use your machine's "
@@ -17913,71 +17975,71 @@ msgid ""
 "sheet."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1495
-#: modules/gui/macosx/VLCOpenWindowController.m:206
-#: modules/gui/macosx/VLCOpenWindowController.m:507
-#: modules/gui/macosx/VLCOpenWindowController.m:1168
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1526
+#: modules/gui/macosx/VLCOpenWindowController.m:227
+#: modules/gui/macosx/VLCOpenWindowController.m:536
+#: modules/gui/macosx/VLCOpenWindowController.m:1207
 msgid "Input Devices"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1544
-#: modules/gui/macosx/VLCOpenWindowController.m:210
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1575
+#: modules/gui/macosx/VLCOpenWindowController.m:231
 msgid "Subscreen left"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1551
-#: modules/gui/macosx/VLCOpenWindowController.m:211
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1582
+#: modules/gui/macosx/VLCOpenWindowController.m:232
 msgid "Subscreen top"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1558
-#: modules/gui/macosx/VLCOpenWindowController.m:212
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1589
+#: modules/gui/macosx/VLCOpenWindowController.m:233
 msgid "Subscreen Width"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1565
-#: modules/gui/macosx/VLCOpenWindowController.m:213
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1596
+#: modules/gui/macosx/VLCOpenWindowController.m:234
 msgid "Subscreen Height"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1575
-#: modules/gui/macosx/VLCOpenWindowController.m:215
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1606
+#: modules/gui/macosx/VLCOpenWindowController.m:236
 msgid "Capture Audio"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1716
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1747
 #: modules/gui/macosx/VLCOpenWindowController.m:130
 msgid "Open Source"
 msgstr "Булакты ачуу"
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1724
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1755
 #: modules/gui/macosx/VLCOpenWindowController.m:141
 msgid "Disc"
 msgstr "Диск"
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1725
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1756
 #: modules/gui/macosx/VLCOpenWindowController.m:142
 #: modules/gui/macosx/VLCSimplePrefsController.m:435
 #: modules/gui/qt/ui/sprefs_input.h:368
 msgid "Network"
 msgstr "Тармак"
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1726
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1757
 #: modules/gui/macosx/VLCOpenWindowController.m:143
 msgid "Capture"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1748
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1779
 #: modules/gui/macosx/VLCOpenWindowController.m:131
 msgid "Media Resource Locator (MRL)"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1757
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1788
 #: modules/gui/macosx/VLCOpenWindowController.m:136
 msgid "Stream output:"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1761
+#: modules/gui/legacy_macosx/VLCLegacyOpen.m:1792
 #: modules/gui/macosx/VLCOpenWindowController.m:137
 msgid "Settings..."
 msgstr "Ырастоолор..."
@@ -18024,226 +18086,240 @@ msgstr ""
 msgid "Save File"
 msgstr "Файлды сактоо"
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:352
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:354
 #: modules/gui/macosx/VLCStringUtility.m:242
 msgid "Not Set"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:686
-#: modules/gui/macosx/VLCSimplePrefsController.m:451
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:688
+#: modules/gui/macosx/VLCSimplePrefsController.m:452
 msgid "Interface style"
 msgstr "Интерфейс стили"
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:688
-#: modules/gui/macosx/VLCSimplePrefsController.m:453
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:690
+#: modules/gui/macosx/VLCSimplePrefsController.m:454
 msgid "Bright"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:688
-#: modules/gui/macosx/VLCSimplePrefsController.m:452
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:690
+#: modules/gui/macosx/VLCSimplePrefsController.m:453
 msgid "Dark"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyPrefs.m:695
-#: modules/gui/macosx/VLCSimplePrefsController.m:456
+#: modules/gui/legacy_macosx/macosx.c:109
+msgid "Draw window shadows"
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:697
+#: modules/gui/legacy_macosx/macosx.c:110
+msgid ""
+"Keep the drop shadow under the video windows, which is what visually "
+"detaches them from the desktop. The window server recomputes that shadow on "
+"every video frame: on the slowest Macs this costs enough displayed frames to "
+"be worth turning off, which is why it is off by default there."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:708
+#: modules/gui/macosx/VLCSimplePrefsController.m:457
 msgid "Continue playback"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:700
-#: modules/gui/legacy_macosx/macosx.c:137
-#: modules/gui/macosx/VLCSimplePrefsController.m:457
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:713
+#: modules/gui/legacy_macosx/macosx.c:166
+#: modules/gui/macosx/VLCSimplePrefsController.m:458
 #: modules/gui/macosx/macosx.m:142 modules/gui/qt/qt.cpp:203
 #: modules/gui/qt/ui/sprefs_interface.h:565
 msgid "Show a preview image when hovering the seek bar"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:704
-#: modules/gui/legacy_macosx/macosx.c:185
-#: modules/gui/macosx/VLCSimplePrefsController.m:458
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:717
+#: modules/gui/legacy_macosx/macosx.c:214
+#: modules/gui/macosx/VLCSimplePrefsController.m:459
 #: modules/gui/macosx/macosx.m:76
 msgid "Control playback with the Apple Remote"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:707
-#: modules/gui/legacy_macosx/macosx.c:190
-#: modules/gui/macosx/VLCSimplePrefsController.m:460
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:720
+#: modules/gui/legacy_macosx/macosx.c:219
+#: modules/gui/macosx/VLCSimplePrefsController.m:461
 #: modules/gui/macosx/macosx.m:79
 msgid "Control system volume with the Apple Remote"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:710
-#: modules/gui/legacy_macosx/macosx.c:196
-#: modules/gui/macosx/VLCSimplePrefsController.m:459
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:723
+#: modules/gui/legacy_macosx/macosx.c:225
+#: modules/gui/macosx/VLCSimplePrefsController.m:460
 #: modules/gui/macosx/macosx.m:88
 msgid "Control playback with media keys"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:717
-#: modules/gui/macosx/VLCSimplePrefsController.m:461
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:730
+#: modules/gui/macosx/VLCSimplePrefsController.m:462
 #: modules/gui/macosx/macosx.m:82
 msgid "Display VLC status menu icon"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:719
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:732
 msgid "This setting requires the modern interface."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:724
-#: modules/gui/macosx/VLCSimplePrefsController.m:463
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:737
+#: modules/gui/macosx/VLCSimplePrefsController.m:464
 msgid "Playback behaviour"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:726
-#: modules/gui/macosx/VLCSimplePrefsController.m:464
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:739
+#: modules/gui/macosx/VLCSimplePrefsController.m:465
 msgid "Enable notifications on playlist item change"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:737
-#: modules/gui/legacy_macosx/macosx.c:201
-#: modules/gui/macosx/VLCSimplePrefsController.m:465
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:750
+#: modules/gui/legacy_macosx/macosx.c:230
+#: modules/gui/macosx/VLCSimplePrefsController.m:466
 #: modules/gui/macosx/macosx.m:125
 msgid "Control external music players"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:741
-#: modules/gui/macosx/VLCSimplePrefsController.m:467
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:754
+#: modules/gui/macosx/VLCSimplePrefsController.m:468
 #: modules/gui/qt/ui/sprefs_interface.h:567
 msgid "Privacy / Network Interaction"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:746
-#: modules/gui/macosx/VLCSimplePrefsController.m:472
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:759
+#: modules/gui/macosx/VLCSimplePrefsController.m:473
 msgid "HTTP web interface"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:747
-#: modules/gui/macosx/VLCSimplePrefsController.m:473
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:760
+#: modules/gui/macosx/VLCSimplePrefsController.m:474
 msgid "Enable HTTP web interface"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:775
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:788
 #: modules/gui/macosx/VLCSimplePrefsController.m:413
 msgid "Keep audio level between sessions"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:776
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:789
 #: modules/gui/macosx/VLCSimplePrefsController.m:414
 #: modules/gui/qt/ui/sprefs_audio.h:411
 msgid "Always reset audio start level to:"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:799
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:812
 #: modules/gui/macosx/VLCSimplePrefsController.m:408
 msgid "Preferred Audio language"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:803
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:816
 msgid "Resampling"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:809
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:822
 msgid "Efficient resampling (Speex)"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:811
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:824
 msgid ""
 "Use the lightweight Speex resampler for audio/video clock-drift correction "
 "instead of the heavier SINC. Recommended on older Macs. Fixed sample-rate "
 "conversion for music (e.g. 44.1 to 48 kHz) is left untouched."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:821
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:834
 #: modules/gui/macosx/VLCSimplePrefsController.m:412
 msgid "Visualization"
 msgstr "Визуалдаштыруу"
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:828
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:841
 #: modules/gui/qt/ui/sprefs_audio.h:427
 msgid "Submit played tracks stats to Last.fm"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:864
-#: modules/gui/macosx/VLCSimplePrefsController.m:494
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:877
+#: modules/gui/macosx/VLCSimplePrefsController.m:495
 #: modules/stream_out/display.c:53 modules/gui/qt/ui/sprefs_video.h:382
 msgid "Display"
 msgstr "Көрсөтүү"
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:865
-#: modules/gui/macosx/VLCSimplePrefsController.m:495
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:878
+#: modules/gui/macosx/VLCSimplePrefsController.m:496
 msgid "Show video within the main window"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:867
-#: modules/gui/legacy_macosx/macosx.c:114
-#: modules/gui/macosx/VLCSimplePrefsController.m:496
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:880
+#: modules/gui/legacy_macosx/macosx.c:143
+#: modules/gui/macosx/VLCSimplePrefsController.m:497
 #: modules/gui/macosx/macosx.m:104 modules/gui/qt/qt.cpp:182
 msgid "Pause the video playback when minimized"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:874
-#: modules/gui/macosx/VLCSimplePrefsController.m:500
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:887
+#: modules/gui/macosx/VLCSimplePrefsController.m:501
 msgid "Fullscreen settings"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:877
-#: modules/gui/legacy_macosx/macosx.c:177 modules/gui/macosx/macosx.m:60
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:890
+#: modules/gui/legacy_macosx/macosx.c:206 modules/gui/macosx/macosx.m:60
 msgid "Black screens in fullscreen"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:896
-#: modules/gui/macosx/VLCMainMenu.m:663 modules/gui/macosx/VLCMainMenu.m:664
-#: modules/gui/macosx/VLCSimplePrefsController.m:504
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:909
+#: modules/gui/macosx/VLCMainMenu.m:664 modules/gui/macosx/VLCMainMenu.m:665
+#: modules/gui/macosx/VLCSimplePrefsController.m:505
 #: modules/gui/qt/ui/sprefs_video.h:386
 msgid "Fullscreen Video Device"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:972
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:985
 msgid "GPU planar YUV rendering"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:977
-#: modules/gui/macosx/VLCSimplePrefsController.m:506
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:990
+#: modules/gui/macosx/VLCSimplePrefsController.m:507
 #: modules/gui/qt/ui/sprefs_video.h:397
 msgid "Video snapshots"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:978
-#: modules/gui/macosx/VLCSimplePrefsController.m:508
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:991
+#: modules/gui/macosx/VLCSimplePrefsController.m:509
 #: modules/meta_engine/folder.c:70
 msgid "Folder"
 msgstr "Папка"
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:984
-#: modules/gui/macosx/VLCSimplePrefsController.m:510
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:997
+#: modules/gui/macosx/VLCSimplePrefsController.m:511
 #: modules/gui/qt/ui/sprefs_video.h:400
 msgid "Prefix"
 msgstr "Префикс"
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:987
-#: modules/gui/macosx/VLCSimplePrefsController.m:511
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1000
+#: modules/gui/macosx/VLCSimplePrefsController.m:512
 #: modules/gui/qt/ui/sprefs_video.h:402
 msgid "Sequential numbering"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:990
-#: modules/gui/macosx/VLCSimplePrefsController.m:509
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1003
+#: modules/gui/macosx/VLCSimplePrefsController.m:510
 #: modules/gui/qt/ui/sprefs_video.h:403
 msgid "Format"
 msgstr "Формат"
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:994
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1007
 #: modules/gui/macosx/VLCSimplePrefsController.m:237
 #: modules/gui/qt/ui/sprefs_video.h:404
 msgid "Look-ahead decode cache"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:995
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1008
 #: modules/gui/macosx/VLCSimplePrefsController.m:241
 #: modules/gui/qt/ui/sprefs_video.h:405
 msgid "Cache size (MB, 0 = off)"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:998
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1011
 #: modules/gui/macosx/VLCSimplePrefsController.m:242
 msgid ""
 "Maximum memory VLC may use to decode video pictures ahead of the display "
@@ -18251,26 +18327,26 @@ msgid ""
 "feature."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1003
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1016
 #: modules/gui/macosx/VLCSimplePrefsController.m:247
 #: modules/gui/qt/ui/sprefs_video.h:406
 msgid "Fill threshold before playback (%)"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1006
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1019
 #: modules/gui/macosx/VLCSimplePrefsController.m:248
 msgid ""
 "Playback (and any seek) waits until the cache reaches this percentage full, "
 "or end of stream. The Play/Pause key skips the wait at any time."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1011
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1024
 #: modules/gui/macosx/VLCSimplePrefsController.m:253
 #: modules/gui/qt/ui/sprefs_video.h:407
 msgid "Cache limit (seconds, 0 = none)"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1014
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1027
 #: modules/gui/macosx/VLCSimplePrefsController.m:254
 msgid ""
 "Caps the cache to this many seconds of video regardless of the memory budget "
@@ -18278,69 +18354,69 @@ msgid ""
 "in wait."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1032
-#: modules/gui/macosx/VLCSimplePrefsController.m:486
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1045
+#: modules/gui/macosx/VLCSimplePrefsController.m:487
 msgid "Enable OSD"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1035
-#: modules/gui/macosx/VLCSimplePrefsController.m:484
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1048
+#: modules/gui/macosx/VLCSimplePrefsController.m:485
 #: modules/gui/qt/ui/sprefs_subtitles.h:295
 msgid "Preferred subtitle language"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1039
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1052
 #: modules/gui/qt/ui/sprefs_subtitles.h:296
 msgid "Default encoding"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1043
-#: modules/gui/macosx/VLCSimplePrefsController.m:478
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1056
+#: modules/gui/macosx/VLCSimplePrefsController.m:479
 msgid "Display Settings"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1045
-#: modules/gui/macosx/VLCSimplePrefsController.m:482 modules/spu/marq.c:157
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1058
+#: modules/gui/macosx/VLCSimplePrefsController.m:483 modules/spu/marq.c:157
 #: modules/spu/rss.c:204 modules/text_renderer/freetype/freetype.c:84
 #: modules/gui/qt/ui/sprefs_subtitles.h:298
 msgid "Font"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1055
-#: modules/gui/macosx/VLCSimplePrefsController.m:480
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1068
+#: modules/gui/macosx/VLCSimplePrefsController.m:481
 #: modules/gui/qt/ui/sprefs_subtitles.h:300
 msgid "Font color"
 msgstr "Арип түсү"
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1076
-#: modules/gui/macosx/VLCSimplePrefsController.m:488
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1089
+#: modules/gui/macosx/VLCSimplePrefsController.m:489
 #: modules/text_renderer/freetype/freetype.c:108
 msgid "Force bold"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1099
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1112
 #: modules/gui/macosx/VLCSimplePrefsController.m:427
 #: modules/gui/qt/ui/sprefs_input.h:364
 msgid "Record directory or filename"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1107
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1120
 #: modules/gui/macosx/VLCSimplePrefsController.m:434
 msgid "Codecs / Muxers"
 msgstr "Кодектер / мультиплексордор"
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1121
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1134
 msgid "Hardware MPEG-2 decoding (ATI)"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1123
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1136
 msgid ""
 "Decode DVDs and MPEG-2 streams on the GPU of compatible ATI Macs (iBook/"
 "PowerBook G3-G4). Automatically falls back to software decoding when the "
 "hardware is absent or the stream is interlaced."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1132
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1145
 msgid ""
 "Decode H.264, VC-1 and MPEG-2 video on the Broadcom Crystal HD card "
 "installed in this Mac. Untick to decode with the processor instead; playback "
@@ -18348,108 +18424,118 @@ msgid ""
 "a stream."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1141
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1154
 #: modules/gui/macosx/VLCSimplePrefsController.m:437
 msgid "Post-Processing Quality"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1145
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1158
 #: modules/gui/macosx/VLCSimplePrefsController.m:430
 msgid "Repair AVI Files"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1153
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1169
+#: modules/gui/macosx/VLCSimplePrefsController.m:843
+msgid ""
+"Play Blu-ray discs with their own menus. Some discs run their menus as a "
+"Java (BD-J) application that keeps one processor core busy for as long as "
+"the disc is playing; on an older Mac, turning this off starts the main "
+"feature directly and gives that core back. This sets the initial state of "
+"the box in the Open Disc window, which can still be changed disc by disc."
+msgstr ""
+
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1179
 #: modules/gui/macosx/VLCSimplePrefsController.m:432
 #: modules/gui/qt/ui/open.h:261
 msgid "Caching"
 msgstr "Кэштөө"
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1157
-#: modules/gui/macosx/VLCSimplePrefsController.m:841
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1183
+#: modules/gui/macosx/VLCSimplePrefsController.m:859
 msgid "Lowest Latency"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1158
-#: modules/gui/macosx/VLCSimplePrefsController.m:843
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1184
+#: modules/gui/macosx/VLCSimplePrefsController.m:861
 msgid "Low Latency"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1160
-#: modules/gui/macosx/VLCSimplePrefsController.m:847
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1186
+#: modules/gui/macosx/VLCSimplePrefsController.m:865
 msgid "Higher Latency"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1161
-#: modules/gui/macosx/VLCSimplePrefsController.m:849
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1187
+#: modules/gui/macosx/VLCSimplePrefsController.m:867
 msgid "Highest Latency"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1167
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1193
 #: modules/gui/macosx/VLCSimplePrefsController.m:431
 msgid "Default Caching Level"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1184
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1210
 #: modules/gui/macosx/VLCSimplePrefsController.m:433
 msgid ""
 "Use the complete preferences to configure custom caching values for each "
 "access module."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1212
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1238
 #: modules/gui/macosx/VLCSimplePrefsController.m:422
 msgid "Select an action to change the associated hotkey:"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1225
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1251
 #: modules/gui/macosx/VLCSimplePrefsController.m:423
 #: modules/gui/qt/components/preferences_widgets.cpp:1145
 msgid "Action"
 msgstr "Аракет"
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1231
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1257
 #: modules/gui/macosx/VLCSimplePrefsController.m:424
 msgid "Shortcut"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1242
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2373
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1268
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2413
 #: modules/gui/macosx/VLCSimplePrefsController.m:418
 msgid "Change Hotkey"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1303
-#: modules/gui/macosx/VLCSimplePrefsController.m:521
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1329
+#: modules/gui/macosx/VLCSimplePrefsController.m:522
 #: modules/gui/macosx/prefs.m:187 modules/gui/qt/dialogs/preferences.cpp:56
 msgid "Preferences"
 msgstr "Ырастоолор"
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1923
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:1949
 #: modules/gui/legacy_macosx/VLCLegacyVideoEffects.m:588
 #: modules/gui/macosx/VLCVideoEffectsWindowController.m:192
 msgid "Basic"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2437
-#: modules/gui/macosx/VLCSimplePrefsController.m:1541
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2477
+#: modules/gui/macosx/VLCSimplePrefsController.m:1561
 msgid ""
 "Press new keys for\n"
 "\"%@\""
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2467
-#: modules/gui/macosx/VLCSimplePrefsController.m:1614
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2507
+#: modules/gui/macosx/VLCSimplePrefsController.m:1634
 msgid "Invalid combination"
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2469
-#: modules/gui/macosx/VLCSimplePrefsController.m:1615
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2509
+#: modules/gui/macosx/VLCSimplePrefsController.m:1635
 msgid "Regrettably, these keys cannot be assigned as hotkey shortcuts."
 msgstr ""
 
-#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2478
-#: modules/gui/macosx/VLCSimplePrefsController.m:1625
-#: modules/gui/macosx/VLCSimplePrefsController.m:1629
+#: modules/gui/legacy_macosx/VLCLegacyPrefs.m:2518
+#: modules/gui/macosx/VLCSimplePrefsController.m:1645
+#: modules/gui/macosx/VLCSimplePrefsController.m:1649
 msgid "This combination is already taken by \"%@\"."
 msgstr ""
 
@@ -18467,7 +18553,7 @@ msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyTrackSync.m:104
 #: modules/gui/legacy_macosx/VLCLegacyTrackSync.m:114
-#: modules/gui/macosx/VLCOpenWindowController.m:370
+#: modules/gui/macosx/VLCOpenWindowController.m:391
 #: modules/gui/macosx/VLCTrackSynchronizationWindowController.m:52
 #: modules/gui/macosx/VLCTrackSynchronizationWindowController.m:56
 msgid "s"
@@ -18502,7 +18588,7 @@ msgid "Subtitle speed:"
 msgstr ""
 
 #: modules/gui/legacy_macosx/VLCLegacyTrackSync.m:122
-#: modules/gui/macosx/VLCOpenWindowController.m:371
+#: modules/gui/macosx/VLCOpenWindowController.m:392
 #: modules/gui/macosx/VLCTrackSynchronizationWindowController.m:59
 msgid "fps"
 msgstr "к/с"
@@ -18889,41 +18975,41 @@ msgid ""
 "the grey interface style is used."
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:92 modules/gui/macosx/macosx.m:117
+#: modules/gui/legacy_macosx/macosx.c:121 modules/gui/macosx/macosx.m:117
 msgid "Shows the previous and next buttons in the main window."
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:96 modules/gui/macosx/macosx.m:120
+#: modules/gui/legacy_macosx/macosx.c:125 modules/gui/macosx/macosx.m:120
 msgid "Shows the shuffle and repeat buttons in the main window."
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:100 modules/gui/macosx/macosx.m:123
+#: modules/gui/legacy_macosx/macosx.c:129 modules/gui/macosx/macosx.m:123
 msgid "Shows the audio effects button in the main window."
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:106 modules/gui/macosx/macosx.m:136
+#: modules/gui/legacy_macosx/macosx.c:135 modules/gui/macosx/macosx.m:136
 msgid "Continue playback where you left off"
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:107 modules/gui/macosx/macosx.m:137
+#: modules/gui/legacy_macosx/macosx.c:136 modules/gui/macosx/macosx.m:137
 msgid ""
 "VLC will store playback positions of the last 30 items you played. If you re-"
 "open one of those, playback will continue."
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:115 modules/gui/macosx/macosx.m:105
+#: modules/gui/legacy_macosx/macosx.c:144 modules/gui/macosx/macosx.m:105
 #: modules/gui/qt/qt.cpp:184
 msgid ""
 "With this option enabled, the playback will be automatically paused when "
 "minimizing the window."
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:119 modules/gui/macosx/macosx.m:139
+#: modules/gui/legacy_macosx/macosx.c:148 modules/gui/macosx/macosx.m:139
 #: modules/gui/qt/qt.cpp:200
 msgid "Hide controls during playback"
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:120 modules/gui/macosx/macosx.m:140
+#: modules/gui/legacy_macosx/macosx.c:149 modules/gui/macosx/macosx.m:140
 #: modules/gui/qt/qt.cpp:201
 msgid ""
 "In windowed playback, hide the controls bar and the window title bar after a "
@@ -18932,7 +19018,7 @@ msgid ""
 "and show the fullscreen-style OSD meanwhile."
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:138 modules/gui/macosx/macosx.m:143
+#: modules/gui/legacy_macosx/macosx.c:167 modules/gui/macosx/macosx.m:143
 #: modules/gui/qt/qt.cpp:204
 msgid ""
 "Render a small preview of the hovered position in the seek bar tooltip. The "
@@ -18941,22 +19027,22 @@ msgid ""
 "there."
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:145 modules/gui/macosx/macosx.m:51
+#: modules/gui/legacy_macosx/macosx.c:174 modules/gui/macosx/macosx.m:51
 msgid "Video device"
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:146 modules/gui/macosx/macosx.m:52
+#: modules/gui/legacy_macosx/macosx.c:175 modules/gui/macosx/macosx.m:52
 msgid ""
 "Number of the screen to use by default to display videos in 'fullscreen'. "
 "The screen number correspondance can be found in the video device selection "
 "menu."
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:157
+#: modules/gui/legacy_macosx/macosx.c:186
 msgid "Embedded video in a child window"
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:158
+#: modules/gui/legacy_macosx/macosx.c:187
 msgid ""
 "Host the embedded video in a borderless child window: switching to "
 "fullscreen is instant and does not interrupt accelerated decoding. Turning "
@@ -18964,42 +19050,42 @@ msgid ""
 "effect under Mac OS X 10.4, where a child window displays nothing."
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:169
+#: modules/gui/legacy_macosx/macosx.c:198
 msgid "Open a window at startup (debugging)"
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:170
+#: modules/gui/legacy_macosx/macosx.c:199
 msgid ""
 "Name of the window to open at startup, like the VLC_LEGACY_SHOW environment "
 "variable: prefs, prefsadv, mediainfo, errors, about, bookmarks, messages, "
 "tracksync, effects, videoeffects, convert, fspanel, open0..3."
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:178 modules/gui/macosx/macosx.m:61
+#: modules/gui/legacy_macosx/macosx.c:207 modules/gui/macosx/macosx.m:61
 msgid "In fullscreen mode, keep screen where there is no video displayed black"
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:186 modules/gui/macosx/macosx.m:77
+#: modules/gui/legacy_macosx/macosx.c:215 modules/gui/macosx/macosx.m:77
 msgid "By default, VLC can be remotely controlled with the Apple Remote."
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:191 modules/gui/macosx/macosx.m:80
+#: modules/gui/legacy_macosx/macosx.c:220 modules/gui/macosx/macosx.m:80
 msgid ""
 "By default, VLC will control its own volume with the Apple Remote. However, "
 "you can choose to control the global system volume instead."
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:197 modules/gui/macosx/macosx.m:89
+#: modules/gui/legacy_macosx/macosx.c:226 modules/gui/macosx/macosx.m:89
 msgid ""
 "By default, VLC can be controlled using the media keys on modern Apple "
 "keyboards."
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:202 modules/gui/macosx/macosx.m:126
+#: modules/gui/legacy_macosx/macosx.c:231 modules/gui/macosx/macosx.m:126
 msgid "VLC will pause and resume supported music players on playback."
 msgstr ""
 
-#: modules/gui/legacy_macosx/macosx.c:222
+#: modules/gui/legacy_macosx/macosx.c:251
 msgid ""
 "Removes the interlacing combing from interlaced video such as most PAL DVDs. "
 "Higher settings look better but use more CPU. \"Best quality\" is offered "
@@ -19007,7 +19093,7 @@ msgid ""
 "Apple's DVD Player greys it out on slower models."
 msgstr ""
 
-#: modules/gui/legacy_macosx/misc.m:654 modules/gui/macosx/VLCMain.m:239
+#: modules/gui/legacy_macosx/misc.m:725 modules/gui/macosx/VLCMain.m:239
 msgid ""
 "You are currently using PowerVLC, an open source fork with no ads and no "
 "tracking, created independently by Olsro for the community and distributed "
@@ -19027,7 +19113,7 @@ msgid ""
 msgstr ""
 
 # PowerVLC strings (fork attribution + VideoLAN redirect confirmation)
-#: modules/gui/legacy_macosx/misc.m:664 modules/gui/legacy_macosx/misc.m:672
+#: modules/gui/legacy_macosx/misc.m:735 modules/gui/legacy_macosx/misc.m:743
 #: modules/gui/macosx/VLCMain.m:270
 msgid "Warning!"
 msgstr ""
@@ -19063,33 +19149,33 @@ msgid ""
 "\"Pause\" while editing bookmarks to ensure to keep the same input."
 msgstr ""
 
-#: modules/gui/macosx/VLCControlsBarCommon.m:87
-#: modules/gui/macosx/VLCControlsBarCommon.m:289
-#: modules/gui/macosx/VLCFSPanelController.m:136
+#: modules/gui/macosx/VLCControlsBarCommon.m:91
+#: modules/gui/macosx/VLCControlsBarCommon.m:329
+#: modules/gui/macosx/VLCFSPanelController.m:140
 msgid "Seek backward"
 msgstr ""
 
-#: modules/gui/macosx/VLCControlsBarCommon.m:91
-#: modules/gui/macosx/VLCControlsBarCommon.m:292
-#: modules/gui/macosx/VLCFSPanelController.m:133
+#: modules/gui/macosx/VLCControlsBarCommon.m:95
+#: modules/gui/macosx/VLCControlsBarCommon.m:332
+#: modules/gui/macosx/VLCFSPanelController.m:137
 msgid "Seek forward"
 msgstr ""
 
-#: modules/gui/macosx/VLCControlsBarCommon.m:96
+#: modules/gui/macosx/VLCControlsBarCommon.m:100
 msgid "Playback position"
 msgstr ""
 
-#: modules/gui/macosx/VLCControlsBarCommon.m:116
+#: modules/gui/macosx/VLCControlsBarCommon.m:120
 msgid "Playback time"
 msgstr ""
 
-#: modules/gui/macosx/VLCControlsBarCommon.m:300
+#: modules/gui/macosx/VLCControlsBarCommon.m:340
 #: modules/gui/macosx/VLCStatusBarIcon.m:100
 msgid "Go to previous item"
 msgstr ""
 
-#: modules/gui/macosx/VLCControlsBarCommon.m:303
-#: modules/gui/macosx/VLCFSPanelController.m:127
+#: modules/gui/macosx/VLCControlsBarCommon.m:343
+#: modules/gui/macosx/VLCFSPanelController.m:131
 #: modules/gui/macosx/VLCStatusBarIcon.m:106
 msgid "Go to next item"
 msgstr ""
@@ -19098,27 +19184,27 @@ msgstr ""
 msgid "Remember"
 msgstr ""
 
-#: modules/gui/macosx/VLCCoreInteraction.m:984
+#: modules/gui/macosx/VLCCoreInteraction.m:1090
 msgid "Random On"
 msgstr ""
 
-#: modules/gui/macosx/VLCCoreInteraction.m:1054
+#: modules/gui/macosx/VLCCoreInteraction.m:1160
 msgid "Repeat Off"
 msgstr ""
 
-#: modules/gui/macosx/VLCFSPanelController.m:124
+#: modules/gui/macosx/VLCFSPanelController.m:128
 msgid "Play/Pause the current media"
 msgstr ""
 
-#: modules/gui/macosx/VLCFSPanelController.m:130
+#: modules/gui/macosx/VLCFSPanelController.m:134
 msgid "Go to the previous item"
 msgstr ""
 
-#: modules/gui/macosx/VLCFSPanelController.m:142
+#: modules/gui/macosx/VLCFSPanelController.m:146
 msgid "Adjust the volume"
 msgstr ""
 
-#: modules/gui/macosx/VLCFSPanelController.m:148
+#: modules/gui/macosx/VLCFSPanelController.m:152
 msgid "Adjust the current playback position"
 msgstr ""
 
@@ -19167,57 +19253,57 @@ msgstr ""
 msgid "Move To Trash and Relaunch VLC"
 msgstr ""
 
-#: modules/gui/macosx/VLCMainMenu.m:256
+#: modules/gui/macosx/VLCMainMenu.m:257
 msgid "Switch to the legacy interface"
 msgstr ""
 
-#: modules/gui/macosx/VLCMainMenu.m:471
+#: modules/gui/macosx/VLCMainMenu.m:472
 #, c-format
 msgid "Level %i"
 msgstr ""
 
-#: modules/gui/macosx/VLCMainMenu.m:563
+#: modules/gui/macosx/VLCMainMenu.m:564
 msgid "Check for Update..."
 msgstr ""
 
-#: modules/gui/macosx/VLCMainMenu.m:576
+#: modules/gui/macosx/VLCMainMenu.m:577
 msgid "1:File"
 msgstr "1:Файл"
 
-#: modules/gui/macosx/VLCMainMenu.m:669 modules/gui/macosx/VLCMainMenu.m:670
+#: modules/gui/macosx/VLCMainMenu.m:670 modules/gui/macosx/VLCMainMenu.m:671
 #: modules/video_filter/postproc.c:201
 msgid "Post processing"
 msgstr ""
 
-#: modules/gui/macosx/VLCMainMenu.m:698
+#: modules/gui/macosx/VLCMainMenu.m:699
 msgid "Player..."
 msgstr "Ойноткуч..."
 
-#: modules/gui/macosx/VLCMainMenu.m:713
+#: modules/gui/macosx/VLCMainMenu.m:714
 msgid "Online Documentation..."
 msgstr "Онлайн-документация..."
 
-#: modules/gui/macosx/VLCMainMenu.m:1867 modules/gui/macosx/macosx.m:111
+#: modules/gui/macosx/VLCMainMenu.m:1981 modules/gui/macosx/macosx.m:111
 msgid "Lock Aspect Ratio"
 msgstr ""
 
-#: modules/gui/macosx/VLCMainWindow.m:314
+#: modules/gui/macosx/VLCMainWindow.m:374
 msgid "Search in Playlist"
 msgstr ""
 
-#: modules/gui/macosx/VLCMainWindow.m:316
+#: modules/gui/macosx/VLCMainWindow.m:376
 msgid "Search the playlist. Results will be selected in the table."
 msgstr ""
 
-#: modules/gui/macosx/VLCMainWindow.m:337
+#: modules/gui/macosx/VLCMainWindow.m:397
 msgid "Open a dialog to select the media to play"
 msgstr ""
 
-#: modules/gui/macosx/VLCMainWindow.m:367
+#: modules/gui/macosx/VLCMainWindow.m:427
 msgid "Unsubscribe from a podcast"
 msgstr ""
 
-#: modules/gui/macosx/VLCMainWindow.m:368
+#: modules/gui/macosx/VLCMainWindow.m:428
 msgid "Select the podcast you would like to unsubscribe from:"
 msgstr ""
 
@@ -19234,7 +19320,7 @@ msgid "Choose media input type"
 msgstr ""
 
 #: modules/gui/macosx/VLCOpenWindowController.m:148
-#: modules/gui/macosx/VLCOpenWindowController.m:351
+#: modules/gui/macosx/VLCOpenWindowController.m:372
 msgid "Select a file for playback"
 msgstr ""
 
@@ -19242,21 +19328,21 @@ msgstr ""
 msgid "Select another file to play in sync with the previously selected file"
 msgstr ""
 
-#: modules/gui/macosx/VLCOpenWindowController.m:191
+#: modules/gui/macosx/VLCOpenWindowController.m:212
 msgid ""
 "Enter a stream URL here. To open RTP or UDP streams, use the respective "
 "button below."
 msgstr ""
 
-#: modules/gui/macosx/VLCOpenWindowController.m:350
+#: modules/gui/macosx/VLCOpenWindowController.m:371
 msgid "Setup subtitle playback details"
 msgstr ""
 
-#: modules/gui/macosx/VLCOpenWindowController.m:353
+#: modules/gui/macosx/VLCOpenWindowController.m:374
 msgid "Select a subtitle file"
 msgstr ""
 
-#: modules/gui/macosx/VLCOpenWindowController.m:366
+#: modules/gui/macosx/VLCOpenWindowController.m:387
 msgid "Dismiss the subtitle setup dialog"
 msgstr ""
 
@@ -19322,79 +19408,79 @@ msgstr ""
 msgid "Edit default application settings for network protocols"
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:443
+#: modules/gui/macosx/VLCSimplePrefsController.m:444
 msgid "Open network streams using the following protocols"
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:444
+#: modules/gui/macosx/VLCSimplePrefsController.m:445
 msgid "Note that these are system-wide settings."
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:449
+#: modules/gui/macosx/VLCSimplePrefsController.m:450
 msgid "General settings"
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:469
+#: modules/gui/macosx/VLCSimplePrefsController.m:470
 msgid "Automatically check for updates"
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:477
+#: modules/gui/macosx/VLCSimplePrefsController.m:478
 msgid "Default Encoding"
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:483
+#: modules/gui/macosx/VLCSimplePrefsController.m:484
 msgid "Subtitle languages"
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:489
+#: modules/gui/macosx/VLCSimplePrefsController.m:490
 #: modules/text_renderer/freetype/freetype.c:114
 #: modules/gui/qt/ui/sprefs_subtitles.h:302
 msgid "Outline color"
 msgstr "Контур түсү"
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:490
+#: modules/gui/macosx/VLCSimplePrefsController.m:491
 #: modules/text_renderer/freetype/freetype.c:115
 #: modules/gui/qt/ui/sprefs_subtitles.h:301
 msgid "Outline thickness"
 msgstr "Контур калыңдыгы"
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:501
+#: modules/gui/macosx/VLCSimplePrefsController.m:502
 msgid "Start in fullscreen"
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:502
+#: modules/gui/macosx/VLCSimplePrefsController.m:503
 msgid "Black screens in Fullscreen mode"
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:503
+#: modules/gui/macosx/VLCSimplePrefsController.m:504
 #: modules/gui/macosx/macosx.m:95
 msgid "Use the native fullscreen mode"
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:519
+#: modules/gui/macosx/VLCSimplePrefsController.m:520
 #: modules/gui/macosx/prefs.m:190
 msgid "Reset All"
 msgstr "Баарын түшүрүү"
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:694
+#: modules/gui/macosx/VLCSimplePrefsController.m:695
 msgid ""
 "Media files cannot be resumed because keeping recent media items is disabled."
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:715
+#: modules/gui/macosx/VLCSimplePrefsController.m:716
 msgid "Last check on: %@"
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:717
+#: modules/gui/macosx/VLCSimplePrefsController.m:718
 msgid "No check was performed yet."
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:969
+#: modules/gui/macosx/VLCSimplePrefsController.m:987
 #: modules/gui/qt/dialogs/preferences.cpp:336
 msgid "Reset Preferences"
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:972
+#: modules/gui/macosx/VLCSimplePrefsController.m:990
 msgid ""
 "This will reset PowerVLC media player's preferences.\n"
 "\n"
@@ -19407,21 +19493,21 @@ msgid ""
 "Are you sure you want to continue?"
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:1260
+#: modules/gui/macosx/VLCSimplePrefsController.m:1280
 msgid ""
 "This setting cannot be changed because the native fullscreen mode is enabled."
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:1329
+#: modules/gui/macosx/VLCSimplePrefsController.m:1349
 msgid "Choose the folder to save your video snapshots to."
 msgstr ""
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:1331
-#: modules/gui/macosx/VLCSimplePrefsController.m:1430
+#: modules/gui/macosx/VLCSimplePrefsController.m:1351
+#: modules/gui/macosx/VLCSimplePrefsController.m:1450
 msgid "Choose"
 msgstr "Тандоо"
 
-#: modules/gui/macosx/VLCSimplePrefsController.m:1428
+#: modules/gui/macosx/VLCSimplePrefsController.m:1448
 msgid "Choose the directory or filename where the records will be stored."
 msgstr ""
 
@@ -20070,7 +20156,7 @@ msgid "Stop the A to B loop"
 msgstr ""
 
 #: modules/gui/qt/components/controller_widget.cpp:275
-#: modules/video_output/decklink.cpp:80
+#: modules/gui/qt/menus.cpp:1530 modules/video_output/decklink.cpp:80
 msgid "Aspect Ratio"
 msgstr "Тараптар ара катышы"
 
@@ -20321,51 +20407,51 @@ msgstr ""
 msgid "Overall"
 msgstr ""
 
-#: modules/gui/qt/components/interface_widgets.cpp:684
+#: modules/gui/qt/components/interface_widgets.cpp:687
 msgid ""
 "Current playback speed: %1\n"
 "Click to adjust"
 msgstr ""
 
-#: modules/gui/qt/components/interface_widgets.cpp:756
+#: modules/gui/qt/components/interface_widgets.cpp:759
 msgid "Revert to normal play speed"
 msgstr ""
 
-#: modules/gui/qt/components/interface_widgets.cpp:853
+#: modules/gui/qt/components/interface_widgets.cpp:856
 msgid "Download cover art"
 msgstr ""
 
-#: modules/gui/qt/components/interface_widgets.cpp:857
+#: modules/gui/qt/components/interface_widgets.cpp:860
 msgid "Add cover art from file"
 msgstr ""
 
-#: modules/gui/qt/components/interface_widgets.cpp:923
+#: modules/gui/qt/components/interface_widgets.cpp:926
 msgid "Choose Cover Art"
 msgstr ""
 
-#: modules/gui/qt/components/interface_widgets.cpp:924
+#: modules/gui/qt/components/interface_widgets.cpp:927
 msgid "Image Files (*.gif *.jpg *.jpeg *.png)"
 msgstr ""
 
-#: modules/gui/qt/components/interface_widgets.cpp:951
+#: modules/gui/qt/components/interface_widgets.cpp:954
 #: modules/gui/qt/dialogs/toolbar.cpp:573
 msgid "Elapsed time"
 msgstr ""
 
-#: modules/gui/qt/components/interface_widgets.cpp:955
+#: modules/gui/qt/components/interface_widgets.cpp:958
 #: modules/gui/qt/dialogs/toolbar.cpp:577
 msgid "Total/Remaining time"
 msgstr ""
 
-#: modules/gui/qt/components/interface_widgets.cpp:957
+#: modules/gui/qt/components/interface_widgets.cpp:960
 msgid "Click to toggle between total and remaining time"
 msgstr ""
 
-#: modules/gui/qt/components/interface_widgets.cpp:963
+#: modules/gui/qt/components/interface_widgets.cpp:966
 msgid "Click to toggle between elapsed and remaining time"
 msgstr ""
 
-#: modules/gui/qt/components/interface_widgets.cpp:965
+#: modules/gui/qt/components/interface_widgets.cpp:968
 msgid "Double click to jump to a chosen time position"
 msgstr ""
 
@@ -20395,68 +20481,80 @@ msgstr "Фильтр:"
 msgid "Eject the disc"
 msgstr ""
 
-#: modules/gui/qt/components/open_panels.cpp:514
+#: modules/gui/qt/components/open_panels.cpp:492
+#: modules/gui/qt/ui/open_disk.h:300
+msgid "Disable Disc Menus"
+msgstr ""
+
+#: modules/gui/qt/components/open_panels.cpp:510
+msgid ""
+"Start the main feature directly. Some discs run their menus as a Java (BD-J) "
+"application that keeps one processor core busy for as long as the disc is "
+"playing; skipping the menus gives that core back."
+msgstr ""
+
+#: modules/gui/qt/components/open_panels.cpp:522
 msgid "Entry"
 msgstr ""
 
-#: modules/gui/qt/components/open_panels.cpp:873
+#: modules/gui/qt/components/open_panels.cpp:881
 msgid "Channels:"
 msgstr "Каналдар:"
 
-#: modules/gui/qt/components/open_panels.cpp:884
+#: modules/gui/qt/components/open_panels.cpp:892
 msgid "Selected ports:"
 msgstr "Тандалган порттор:"
 
-#: modules/gui/qt/components/open_panels.cpp:887
+#: modules/gui/qt/components/open_panels.cpp:895
 msgid ".*"
 msgstr ".*"
 
-#: modules/gui/qt/components/open_panels.cpp:894
+#: modules/gui/qt/components/open_panels.cpp:902
 msgid "Use VLC pace"
 msgstr ""
 
-#: modules/gui/qt/components/open_panels.cpp:914
+#: modules/gui/qt/components/open_panels.cpp:922
 msgid "TV - digital"
 msgstr ""
 
-#: modules/gui/qt/components/open_panels.cpp:917
+#: modules/gui/qt/components/open_panels.cpp:925
 msgid "Tuner card"
 msgstr ""
 
-#: modules/gui/qt/components/open_panels.cpp:918
+#: modules/gui/qt/components/open_panels.cpp:926
 msgid "Delivery system"
 msgstr ""
 
-#: modules/gui/qt/components/open_panels.cpp:948
+#: modules/gui/qt/components/open_panels.cpp:956
 msgid "Transponder/multiplex frequency"
 msgstr ""
 
-#: modules/gui/qt/components/open_panels.cpp:958
+#: modules/gui/qt/components/open_panels.cpp:966
 msgid "Transponder symbol rate"
 msgstr ""
 
-#: modules/gui/qt/components/open_panels.cpp:991
+#: modules/gui/qt/components/open_panels.cpp:999
 msgid "Bandwidth"
 msgstr ""
 
-#: modules/gui/qt/components/open_panels.cpp:1035
+#: modules/gui/qt/components/open_panels.cpp:1043
 msgid "TV - analog"
 msgstr ""
 
-#: modules/gui/qt/components/open_panels.cpp:1038
+#: modules/gui/qt/components/open_panels.cpp:1046
 msgid "Device name"
 msgstr ""
 
-#: modules/gui/qt/components/open_panels.cpp:1098
+#: modules/gui/qt/components/open_panels.cpp:1106
 msgid "Your display will be opened and played in order to stream or save it."
 msgstr ""
 
 #. xgettext: frames per second
-#: modules/gui/qt/components/open_panels.cpp:1112
+#: modules/gui/qt/components/open_panels.cpp:1120
 msgid " f/s"
 msgstr " к/с"
 
-#: modules/gui/qt/components/open_panels.cpp:1327
+#: modules/gui/qt/components/open_panels.cpp:1335
 msgid "Advanced Options"
 msgstr ""
 
@@ -20963,7 +21061,7 @@ msgstr ""
 msgid "Containers"
 msgstr ""
 
-#: modules/gui/qt/dialogs/epg.cpp:49 modules/gui/qt/menus.cpp:438
+#: modules/gui/qt/dialogs/epg.cpp:49 modules/gui/qt/menus.cpp:444
 msgid "Program Guide"
 msgstr ""
 
@@ -21161,8 +21259,8 @@ msgstr ""
 msgid "Clear the messages"
 msgstr ""
 
-#: modules/gui/qt/dialogs/open.cpp:79 modules/gui/qt/menus.cpp:1046
-#: modules/gui/qt/menus.cpp:1243
+#: modules/gui/qt/dialogs/open.cpp:79 modules/gui/qt/menus.cpp:1097
+#: modules/gui/qt/menus.cpp:1294
 msgid "Open Media"
 msgstr "Ачуу"
 
@@ -21192,7 +21290,7 @@ msgid "&Enqueue"
 msgstr ""
 
 #: modules/gui/qt/dialogs/open.cpp:118 modules/gui/qt/dialogs/open.cpp:215
-#: modules/gui/qt/dialogs/openurl.cpp:53 modules/gui/qt/menus.cpp:917
+#: modules/gui/qt/dialogs/openurl.cpp:53 modules/gui/qt/menus.cpp:968
 msgid "&Play"
 msgstr "&Ойнотуу"
 
@@ -21512,10 +21610,6 @@ msgstr ""
 msgid "Small Volume"
 msgstr ""
 
-#: modules/gui/qt/dialogs/toolbar.cpp:519
-msgid "DVD menus"
-msgstr "DVD менюлары"
-
 #: modules/gui/qt/dialogs/toolbar.cpp:533
 msgid "Teletext transparency"
 msgstr ""
@@ -21650,355 +21744,355 @@ msgstr "бардык файлдар"
 msgid "Empty"
 msgstr ""
 
-#: modules/gui/qt/main_interface.cpp:404
+#: modules/gui/qt/main_interface.cpp:431
 msgid "Do you want to restart the playback where left off?"
 msgstr ""
 
-#: modules/gui/qt/main_interface.cpp:410
+#: modules/gui/qt/main_interface.cpp:437
 msgid "&Continue"
 msgstr ""
 
-#: modules/gui/qt/main_interface.cpp:1868
+#: modules/gui/qt/main_interface.cpp:2124
 msgid "Control menu for the player"
 msgstr ""
 
-#: modules/gui/qt/main_interface.cpp:1912
+#: modules/gui/qt/main_interface.cpp:2168
 msgid "Paused"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:338
+#: modules/gui/qt/menus.cpp:344
 msgid "&Media"
 msgstr "&Медиа"
 
-#: modules/gui/qt/menus.cpp:341
+#: modules/gui/qt/menus.cpp:347
 msgid "P&layback"
 msgstr "&Ойнотуу"
 
-#: modules/gui/qt/menus.cpp:342 modules/gui/qt/menus.cpp:1161
+#: modules/gui/qt/menus.cpp:348 modules/gui/qt/menus.cpp:1212
 msgid "&Audio"
 msgstr "&Аудио"
 
-#: modules/gui/qt/menus.cpp:343 modules/gui/qt/menus.cpp:1168
+#: modules/gui/qt/menus.cpp:349 modules/gui/qt/menus.cpp:1219
 msgid "&Video"
 msgstr "&Видео"
 
-#: modules/gui/qt/menus.cpp:344 modules/gui/qt/menus.cpp:1175
+#: modules/gui/qt/menus.cpp:350 modules/gui/qt/menus.cpp:1226
 msgid "Subti&tle"
 msgstr "Субти&трлер"
 
-#: modules/gui/qt/menus.cpp:346 modules/gui/qt/menus.cpp:1191
+#: modules/gui/qt/menus.cpp:352 modules/gui/qt/menus.cpp:1242
 msgid "Tool&s"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:349 modules/gui/qt/menus.cpp:1198
+#: modules/gui/qt/menus.cpp:355 modules/gui/qt/menus.cpp:1249
 msgid "V&iew"
 msgstr "&Көрүнүш"
 
-#: modules/gui/qt/menus.cpp:351 modules/gui/qt/menus.cpp:842
+#: modules/gui/qt/menus.cpp:357 modules/gui/qt/menus.cpp:893
 msgid "&Help"
 msgstr "&Жардам"
 
-#: modules/gui/qt/menus.cpp:364
+#: modules/gui/qt/menus.cpp:370
 msgid "Open &File..."
 msgstr "&Файлды ачуу..."
 
-#: modules/gui/qt/menus.cpp:366
+#: modules/gui/qt/menus.cpp:372
 msgid "&Open Multiple Files..."
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:370 modules/gui/qt/menus.cpp:1051
+#: modules/gui/qt/menus.cpp:376 modules/gui/qt/menus.cpp:1102
 msgid "Open &Disc..."
 msgstr "&Дискти ачуу..."
 
-#: modules/gui/qt/menus.cpp:372
+#: modules/gui/qt/menus.cpp:378
 msgid "Open &Network Stream..."
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:374 modules/gui/qt/menus.cpp:1055
+#: modules/gui/qt/menus.cpp:380 modules/gui/qt/menus.cpp:1106
 msgid "Open &Capture Device..."
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:377
+#: modules/gui/qt/menus.cpp:383
 msgid "Open &Location from clipboard"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:381
+#: modules/gui/qt/menus.cpp:387
 msgid "Open &Recent Media"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:394
+#: modules/gui/qt/menus.cpp:400
 msgid "Conve&rt / Save..."
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:396
+#: modules/gui/qt/menus.cpp:402
 msgid "&Stream..."
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:401
+#: modules/gui/qt/menus.cpp:407
 msgid "Quit at the end of playlist"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:408
+#: modules/gui/qt/menus.cpp:414
 msgid "Close to systray"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:412 modules/gui/qt/menus.cpp:1305
+#: modules/gui/qt/menus.cpp:418 modules/gui/qt/menus.cpp:1356
 msgid "&Quit"
 msgstr "&Чыгуу"
 
-#: modules/gui/qt/menus.cpp:422
+#: modules/gui/qt/menus.cpp:428
 msgid "&Effects and Filters"
 msgstr "&Эффекттер жана фильтрлер"
 
-#: modules/gui/qt/menus.cpp:425
+#: modules/gui/qt/menus.cpp:431
 msgid "&Track Synchronization"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:444
+#: modules/gui/qt/menus.cpp:450
 msgid "Plu&gins and extensions"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:449
+#: modules/gui/qt/menus.cpp:455
 msgid "Customi&ze Interface..."
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:452
+#: modules/gui/qt/menus.cpp:458
 msgid "&Preferences"
 msgstr "&Ырастоолор"
 
-#: modules/gui/qt/menus.cpp:473
+#: modules/gui/qt/menus.cpp:479
 msgid "&View"
 msgstr "&Көрүнүш"
 
-#: modules/gui/qt/menus.cpp:494
+#: modules/gui/qt/menus.cpp:500
 msgid "Play&list"
 msgstr "Плей&лист"
 
-#: modules/gui/qt/menus.cpp:495
+#: modules/gui/qt/menus.cpp:501
 msgid "Ctrl+L"
 msgstr "Ctrl+L"
 
-#: modules/gui/qt/menus.cpp:498
+#: modules/gui/qt/menus.cpp:504
 msgid "Docked Playlist"
 msgstr "Кадалган плейлист"
 
-#: modules/gui/qt/menus.cpp:508
+#: modules/gui/qt/menus.cpp:514 modules/gui/qt/menus.cpp:727
 msgid "Always on &top"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:516
+#: modules/gui/qt/menus.cpp:524
 msgid "Mi&nimal Interface"
 msgstr "Ки&чи-интерфейс"
 
-#: modules/gui/qt/menus.cpp:517
+#: modules/gui/qt/menus.cpp:525
 msgid "Ctrl+H"
 msgstr "Ctrl+H"
 
-#: modules/gui/qt/menus.cpp:526
+#: modules/gui/qt/menus.cpp:534
 msgid "&Fullscreen Interface"
 msgstr "&Толук экран интерфейси"
 
-#: modules/gui/qt/menus.cpp:534
+#: modules/gui/qt/menus.cpp:542
 msgid "&Advanced Controls"
 msgstr "&Кең. башкаруу элементтери"
 
-#: modules/gui/qt/menus.cpp:542
+#: modules/gui/qt/menus.cpp:550
 msgid "Status Bar"
 msgstr "Абал сабы"
 
-#: modules/gui/qt/menus.cpp:548
+#: modules/gui/qt/menus.cpp:556
 msgid "Visualizations selector"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:606
+#: modules/gui/qt/menus.cpp:614
 msgid "&Increase Volume"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:609
+#: modules/gui/qt/menus.cpp:617
 msgid "D&ecrease Volume"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:612
+#: modules/gui/qt/menus.cpp:620
 msgid "&Mute"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:628
+#: modules/gui/qt/menus.cpp:636
 msgid "Audio &Device"
 msgstr "Аудио-&түзмөк"
 
-#: modules/gui/qt/menus.cpp:632
+#: modules/gui/qt/menus.cpp:640
 msgid "Audio &Track"
 msgstr "Аудио-&жолчо"
 
-#: modules/gui/qt/menus.cpp:634
+#: modules/gui/qt/menus.cpp:642
 msgid "&Stereo Mode"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:637
+#: modules/gui/qt/menus.cpp:645
 msgid "&Visualizations"
 msgstr "&Визуалдаштыруу"
 
-#: modules/gui/qt/menus.cpp:663
+#: modules/gui/qt/menus.cpp:671
 msgid "Add &Subtitle File..."
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:665
+#: modules/gui/qt/menus.cpp:673
 msgid "Sub &Track"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:687
+#: modules/gui/qt/menus.cpp:696
 msgid "Video &Track"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:690 modules/gui/qt/ui/profiles.h:733
+#: modules/gui/qt/menus.cpp:699 modules/gui/qt/ui/profiles.h:733
 msgid "&Quality"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:692
+#: modules/gui/qt/menus.cpp:701
 msgid "Auto quality by &resolution"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:696
+#: modules/gui/qt/menus.cpp:705
 msgid "&Fullscreen"
 msgstr "&Толук экран"
 
-#: modules/gui/qt/menus.cpp:697
+#: modules/gui/qt/menus.cpp:706
 msgid "Always Fit &Window"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:698
+#: modules/gui/qt/menus.cpp:707
 msgid "Set as Wall&paper"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:709
+#: modules/gui/qt/menus.cpp:738
 #, fuzzy
 #| msgid "Ctrl+H"
 msgid "Ctrl+Shift+H"
 msgstr "Ctrl+H"
 
-#: modules/gui/qt/menus.cpp:721
+#: modules/gui/qt/menus.cpp:750
 msgid "&Zoom"
 msgstr "&Масштаб"
 
-#: modules/gui/qt/menus.cpp:722
+#: modules/gui/qt/menus.cpp:751
 msgid "&Aspect Ratio"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:723
+#: modules/gui/qt/menus.cpp:752
 msgid "&Crop"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:727
+#: modules/gui/qt/menus.cpp:756
 msgid "&Deinterlace"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:728
+#: modules/gui/qt/menus.cpp:757
 msgid "&Deinterlace mode"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:732
+#: modules/gui/qt/menus.cpp:761
 msgid "Take &Snapshot"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:751
+#: modules/gui/qt/menus.cpp:780
 msgid "T&itle"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:752
+#: modules/gui/qt/menus.cpp:781
 msgid "&Chapter"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:754
+#: modules/gui/qt/menus.cpp:783
 msgid "&Program"
 msgstr "&Программа"
 
-#: modules/gui/qt/menus.cpp:772
+#: modules/gui/qt/menus.cpp:801
 msgid "&Manage"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:845
+#: modules/gui/qt/menus.cpp:896
 msgid "Check for &Updates..."
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:931
+#: modules/gui/qt/menus.cpp:982
 msgid "&Stop"
 msgstr "&Токтотуу"
 
-#: modules/gui/qt/menus.cpp:939
+#: modules/gui/qt/menus.cpp:990
 msgid "Pre&vious"
 msgstr "Му&рунку"
 
-#: modules/gui/qt/menus.cpp:945
+#: modules/gui/qt/menus.cpp:996
 msgid "Ne&xt"
 msgstr "Кий&инки"
 
-#: modules/gui/qt/menus.cpp:981
+#: modules/gui/qt/menus.cpp:1032
 msgid "Sp&eed"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:987
+#: modules/gui/qt/menus.cpp:1038
 msgid "&Faster"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:999
+#: modules/gui/qt/menus.cpp:1050
 msgid "N&ormal Speed"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:1009
+#: modules/gui/qt/menus.cpp:1060
 msgid "Slo&wer"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:1024
+#: modules/gui/qt/menus.cpp:1075
 msgid "&Jump Forward"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:1031
+#: modules/gui/qt/menus.cpp:1082
 msgid "Jump Bac&kward"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:1038
+#: modules/gui/qt/menus.cpp:1089
 msgid "Ctrl+T"
 msgstr "Ctrl+T"
 
-#: modules/gui/qt/menus.cpp:1053
+#: modules/gui/qt/menus.cpp:1104
 msgid "Open &Network..."
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:1147
+#: modules/gui/qt/menus.cpp:1198
 msgid "Leave Fullscreen"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:1181
+#: modules/gui/qt/menus.cpp:1232
 msgid "&Playback"
 msgstr "&Ойнотуу"
 
-#: modules/gui/qt/menus.cpp:1286
+#: modules/gui/qt/menus.cpp:1337
 #, fuzzy
 msgid "&Hide PowerVLC media player in taskbar"
 msgstr "PowerVLC media player"
 
-#: modules/gui/qt/menus.cpp:1292
+#: modules/gui/qt/menus.cpp:1343
 #, fuzzy
 msgid "Sho&w PowerVLC media player"
 msgstr "PowerVLC media player"
 
-#: modules/gui/qt/menus.cpp:1303
+#: modules/gui/qt/menus.cpp:1354
 msgid "&Open Media"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:1733
+#: modules/gui/qt/menus.cpp:1947
 msgid "&Clear"
 msgstr "&Тазалоо"
 
-#: modules/gui/qt/menus.cpp:1741
+#: modules/gui/qt/menus.cpp:1955
 msgid "&Renderer"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:1745
+#: modules/gui/qt/menus.cpp:1959
 msgid "<Local>"
 msgstr ""
 
-#: modules/gui/qt/menus.cpp:1758
+#: modules/gui/qt/menus.cpp:1972
 msgid "Scanning..."
 msgstr ""
 
@@ -23552,7 +23646,7 @@ msgid ""
 msgstr ""
 
 #: modules/misc/gnutls.c:503 modules/misc/gnutls.c:524
-#: modules/misc/securetransport.c:346
+#: modules/misc/securetransport.c:367
 msgid "Abort"
 msgstr ""
 
@@ -23561,7 +23655,7 @@ msgid "View certificate"
 msgstr ""
 
 #: modules/misc/gnutls.c:504 modules/misc/gnutls.c:525
-#: modules/misc/securetransport.c:348
+#: modules/misc/securetransport.c:369
 msgid "Insecure site"
 msgstr ""
 
@@ -23757,11 +23851,11 @@ msgstr ""
 msgid "TLS support for OS X and iOS"
 msgstr ""
 
-#: modules/misc/securetransport.c:68
+#: modules/misc/securetransport.c:88
 msgid "TLS server support for OS X"
 msgstr ""
 
-#: modules/misc/securetransport.c:338
+#: modules/misc/securetransport.c:359
 #, c-format
 msgid ""
 "You attempted to reach %s. However the security certificate presented by the "
@@ -23772,7 +23866,7 @@ msgid ""
 "If in doubt, abort now.\n"
 msgstr ""
 
-#: modules/misc/securetransport.c:347
+#: modules/misc/securetransport.c:368
 msgid "Accept certificate temporarily"
 msgstr ""
 
@@ -29219,10 +29313,6 @@ msgstr ""
 #: modules/gui/qt/ui/open_disk.h:298
 msgid "SVCD/VCD"
 msgstr "SVCD/VCD"
-
-#: modules/gui/qt/ui/open_disk.h:300
-msgid "Disable Disc Menus"
-msgstr ""
 
 #: modules/gui/qt/ui/open_disk.h:302
 msgid "No disc menus"

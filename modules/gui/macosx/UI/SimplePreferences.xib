@@ -55,6 +55,7 @@
                 <outlet property="input_recordBox" destination="3623" id="eSr-8K-LtQ"/>
                 <outlet property="input_recordButton" destination="3616" id="Saw-OZ-ydg"/>
                 <outlet property="input_recordTextField" destination="3614" id="Ecp-9y-KOl"/>
+                <outlet property="input_blurayMenusCheckbox" destination="Bdm-Sp-001" id="Bdm-So-006"/>
                 <outlet property="input_skipFramesCheckbox" destination="lem-yf-jZB" id="r05-tX-CCa"/>
                 <outlet property="input_skipLoopLabel" destination="3434" id="N1W-pG-ln6"/>
                 <outlet property="input_skipLoopPopup" destination="3435" id="ia2-kQ-VwV"/>
@@ -1475,6 +1476,16 @@ Gw
                                     <action selector="inputSettingChanged:" target="-2" id="tI4-5J-NJ2"/>
                                 </connections>
                             </button>
+                            <button mirrorLayoutDirectionWhenInternationalizing="always" translatesAutoresizingMaskIntoConstraints="NO" id="Bdm-Sp-001">
+                                <rect key="frame" x="132" y="16" width="130" height="19"/>
+                                <buttonCell key="cell" type="check" title="Blu-ray menus" bezelStyle="regularSquare" imagePosition="left" alignment="left" inset="2" id="Bdm-Sp-002">
+                                    <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
+                                    <font key="font" metaFont="system"/>
+                                </buttonCell>
+                                <connections>
+                                    <action selector="inputSettingChanged:" target="-2" id="Bdm-Sa-007"/>
+                                </connections>
+                            </button>
                             <textField verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="2587">
                                 <rect key="frame" x="269" y="110" width="225" height="21"/>
                                 <textFieldCell key="cell" scrollable="YES" lineBreakMode="clipping" selectable="YES" editable="YES" continuous="YES" sendsActionOnEndEditing="YES" state="on" borderStyle="bezel" alignment="right" title="1234" drawsBackground="YES" id="3516">
@@ -1556,6 +1567,9 @@ Gw
                             <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="lem-yf-jZB" secondAttribute="trailing" constant="16" id="HZA-Ho-JPS"/>
                             <constraint firstAttribute="trailing" secondItem="2589" secondAttribute="trailing" constant="17" id="HmN-hM-nt0"/>
                             <constraint firstItem="lem-yf-jZB" firstAttribute="leading" secondItem="3434" secondAttribute="leading" id="IpM-8a-E67"/>
+                            <constraint firstItem="Bdm-Sp-001" firstAttribute="leading" secondItem="lem-yf-jZB" secondAttribute="trailing" constant="24" id="Bdm-Sc-003"/>
+                            <constraint firstItem="Bdm-Sp-001" firstAttribute="centerY" secondItem="lem-yf-jZB" secondAttribute="centerY" id="Bdm-Sc-004"/>
+                            <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="Bdm-Sp-001" secondAttribute="trailing" constant="16" id="Bdm-Sc-005"/>
                             <constraint firstItem="2593" firstAttribute="top" secondItem="2592" secondAttribute="bottom" constant="16" id="JOz-5x-WGX"/>
                             <constraint firstItem="lem-yf-jZB" firstAttribute="top" secondItem="3434" secondAttribute="bottom" constant="16" id="RYW-Uf-buV"/>
                             <constraint firstItem="3434" firstAttribute="top" secondItem="2593" secondAttribute="bottom" constant="16" id="Tam-yC-51c"/>

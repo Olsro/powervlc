@@ -36,6 +36,13 @@ local SEARCH_FIELDS = "type,title,videoId,author,authorId,published,publishedTex
 -- the pages everything else here fetches, hence a megabyte a tick.
 local DL_TICK_MS = 15
 local DL_CHUNKS_PER_TICK = 8
+-- Combining runs in the player's own threads and needs nothing from this
+-- one but a look at where it has got to, so the poll is slow on purpose.
+local COMBINE_POLL_MS = 500
+-- How long a job may show nothing at all -- no instance, no file -- before
+-- it is called a failure. Opening a stream can take a moment; twenty
+-- polls is ten seconds of it.
+local COMBINE_GIVEUP_POLLS = 20
 -- How long a tick may keep the thread before handing it back, whatever
 -- it managed to fetch. It used to stop on a byte count instead, and that
 -- is only the same thing at one speed: 4 MiB is five seconds of video
@@ -245,6 +252,7 @@ local dl = {
   -- The connections fetching the current file, one per part of it:
   -- { stream, off = where its next byte goes, last = where it stops }.
   slices = {},
+  cursor = 1,        -- which connection the next tick reads first
   queue = {},        -- the pieces not yet handed to a connection
   retries = 0,       -- pieces put back after a connection dropped
   fh = nil,
@@ -256,6 +264,22 @@ local dl = {
   dir = nil,         -- where they land
   cancelled = false,
 }
+
+-- The picture and the sound being put back together, inside the player
+-- itself. Like a download, this outlives the view it was started from,
+-- so it lives beside `dl` rather than in `app`.
+local cb = {
+  active = false,
+  vlm = nil,         -- ⚠ HELD here on purpose: its __gc tears the job down
+  out = nil,         -- the file being written
+  quiet = 0,         -- polls in a row that found no instance running
+  size = 0,          -- what the output weighed at the last poll
+  total = 0,         -- what the two files going in weigh together
+  percent = 0,
+}
+-- Declared here rather than where it is written: deactivate() is defined
+-- long before the combining block and still has to be able to stop a job.
+local combine_stop
 
 local dlg = nil
 local ui = {}
@@ -365,6 +389,15 @@ function deactivate()
     dl.fh = nil
   end
   dl.slices = {}
+  -- A combining job dies with the extension too -- and unlike a download,
+  -- what it leaves behind is not a shorter file but a Matroska whose
+  -- index was never written. The two files it came from are still on
+  -- disk, so the honest thing is to take the half-made one away.
+  if cb.active then
+    local partial = cb.out
+    combine_stop()
+    os.remove(partial)
+  end
   if app.handoff then
     app.handoff:close()
     app.handoff = nil
@@ -1959,6 +1992,8 @@ local function arm_tick()
   end
   if dl.active then
     vlc.timer(DL_TICK_MS, "invidious_tick")
+  elseif cb.active then
+    vlc.timer(COMBINE_POLL_MS, "invidious_tick")
   elseif app.awaiting_challenge then
     vlc.timer(CHALLENGE_POLL_MS, "invidious_tick")
   end
@@ -3041,154 +3076,216 @@ end
 
             --[[ Putting the two files back together ]]--
 
--- Above 720p, YouTube has no combined stream and nothing in this player
--- can mux one: the mp4 muxer takes H.264 and AAC and there is no
--- matroska muxer in the bundle at all, so a VP9+Opus pair would have
--- nowhere to go. Rather than half a feature, this hands the job to
--- ffmpeg -- which the user installs, or does not.
+-- Above 720p, YouTube has no combined stream: the picture comes down on
+-- its own and the sound beside it, and the two have to be put back into
+-- one file. PowerVLC now does that ITSELF -- no ffmpeg, no terminal, no
+-- script written next to the files.
 --
--- Nothing is run behind anyone's back: a script is written next to the
--- files, and a terminal window is opened on it. The user sees the
--- command, sees ffmpeg's own output, and sees the error if ffmpeg is not
--- there. os.execute is the standard library's (extension.c calls
--- luaL_openlibs), and vlc.browser.open is deliberately not used: it
--- refuses anything that is not http(s), and that guard is worth keeping.
+-- What made that possible is the Matroska muxer, which PowerVLC 1.3.1
+-- added to its stream output: it takes every pair YouTube serves --
+-- H.264+AAC as readily as VP9+Opus -- where the mp4 muxer takes only the
+-- first. The job itself is an ordinary VLM broadcast: the picture as the
+-- input, the sound as a slave input beside it, and a plain file output
+-- with no re-encoding at all, so it runs at disk speed and loses
+-- nothing. It runs in the player's own threads, which is why it does not
+-- interrupt whatever is playing.
+--
+-- ⚠ The VLM object is HELD in `cb`: its __gc stops the broadcast, so a
+-- local one would have the job die at the next collection. It goes with
+-- the extension all the same -- closing the window ends the combining,
+-- exactly as it ends a download.
 
--- ⚠⚠⚠ A FUNCTION, not a top-level value. The scanner reads descriptor()
--- in a bare Lua state -- no libraries at all, `require` a stub (see the
--- note at the top of this file) -- and `package` is nil there. One
--- top-level `package.config` was enough to make the whole extension
--- disappear from the menu: the file raises while being loaded, so it is
--- never listed, and nothing anywhere says why.
-local function is_windows()
-  return package ~= nil and package.config ~= nil
-     and string.sub(package.config, 1, 1) == "\\"
+-- Two levels of quoting stand between a file name and the muxer, and
+-- neither forgives the other's characters.
+
+-- A value inside a sout chain: `'` ends it, and `\` is how a `'`, a `"`
+-- or a `\` gets to stay in it (src/config/chain.c).
+local function chain_quote(s)
+  return "'" .. string.gsub(tostring(s or ""), "[\\'\"]", "\\%0") .. "'"
 end
 
-local function is_macos()
-  local f = io.open("/usr/bin/open", "r")
-  if f then
-    f:close()
+-- A word of a VLM command: the shell-like reader splits on spaces unless
+-- they are quoted, and `\` escapes inside "..." (src/input/vlmshell.c).
+local function vlm_quote(s)
+  return '"' .. string.gsub(tostring(s or ""), '[\\"]', '\\%0') .. '"'
+end
+
+-- The tree `show` answers with is nested and its shape is VLM's, not
+-- ours: walk it rather than reach into it by position. Only one thing is
+-- read from it -- whether an input is still running.
+--
+-- ⚠ Deliberately NOT the "position" it also carries: an input only
+-- refreshes that every so often, and combining is a plain copy that runs
+-- at disk speed, so a job can begin and end with position still reading
+-- zero -- measured, 0 % from start to finish on a 72 MB pair. The bytes
+-- already written are the honest measure.
+local function vlm_has_instance(node)
+  if type(node) ~= "table" then
+    return false
+  end
+  if node.name == "instance" then
     return true
+  end
+  for _, child in ipairs(node.children or {}) do
+    if vlm_has_instance(child) then
+      return true
+    end
   end
   return false
 end
 
--- Everything that reaches a shell goes through one of these. A video
--- title is whatever its author felt like -- quotes, dollars, backticks --
--- and it ends up in a file name.
-local function sh_quote(s)
-  return "'" .. string.gsub(tostring(s or ""), "'", "'\\''") .. "'"
-end
+local COMBINE_NAME = "powervlc_combine"
 
-local function bat_quote(s)
-  -- cmd.exe expands %VAR% even inside quotes; doubling is how a percent
-  -- survives being a percent
-  return '"' .. string.gsub(tostring(s or ""), "%%", "%%%%") .. '"'
-end
-
--- The command itself, for the script and for the clipboard fall-back.
-local function ffmpeg_command(c, quote)
-  return "ffmpeg -y -i " .. quote(c.video) .. " -i " .. quote(c.audio)
-      .. " -c copy " .. quote(c.out)
-end
-
-local function write_combine_script(c)
-  local path, body
-  if is_windows() then
-    path = c.dir .. "\\powervlc-combine.bat"
-    body = table.concat({
-      "@echo off",
-      "cd /d " .. bat_quote(c.dir),
-      "echo PowerVLC: " .. lang.combine_banner,
-      "where ffmpeg >nul 2>nul || (echo " .. lang.combine_no_ffmpeg
-        .. " & pause & exit /b 1)",
-      ffmpeg_command(c, bat_quote),
-      "echo.",
-      "echo " .. lang.combine_done .. " " .. bat_quote(c.out),
-      "pause",
-      "",
-    }, "\r\n")
-  else
-    -- .command rather than .sh: on macOS that is the extension the
-    -- Finder and /usr/bin/open hand to Terminal. Elsewhere the name
-    -- does not matter, the terminal is told to run it.
-    path = c.dir .. "/powervlc-combine.command"
-    body = table.concat({
-      "#!/bin/sh",
-      "# Written by PowerVLC. Safe to delete.",
-      "cd " .. sh_quote(c.dir) .. " || exit 1",
-      'printf "%s\\n" ' .. sh_quote(lang.combine_banner),
-      'if ! command -v ffmpeg >/dev/null 2>&1; then',
-      '  printf "%s\\n" ' .. sh_quote(lang.combine_no_ffmpeg),
-      '  exit 1',
-      'fi',
-      ffmpeg_command(c, sh_quote),
-      'status=$?',
-      '[ "$status" -eq 0 ] && printf "%s\\n" '
-        .. sh_quote(lang.combine_done .. " " .. c.out),
-      'exit "$status"',
-      "",
-    }, "\n")
-  end
-  local f = io.open(path, "wb")
+local function file_size(path)
+  local f = path and io.open(path, "rb")
   if not f then
-    return nil
+    return 0
   end
-  f:write(body)
+  local size = f:seek("end") or 0
   f:close()
-  return path
+  return size
 end
 
--- Open a terminal window running that script. Returns true when
--- something was launched -- not that ffmpeg succeeded, which is the
--- window's business to show.
-local function launch_terminal(script)
-  local cmd
-  if is_windows() then
-    cmd = 'start "" ' .. bat_quote(script)
-  elseif is_macos() then
-    -- chmod first: /usr/bin/open hands a .command to Terminal only if it
-    -- is executable, and silently opens a text editor otherwise.
-    cmd = "/bin/chmod +x " .. sh_quote(script)
-       .. " && /usr/bin/open " .. sh_quote(script)
-  else
-    -- No agreed way to say "open a terminal" on Linux: try the ones that
-    -- exist, in the order a desktop is likely to have them.
-    local q = sh_quote(script)
-    cmd = "/bin/chmod +x " .. q .. " ; "
-       .. "for t in x-terminal-emulator gnome-terminal konsole xfce4-terminal"
-       .. " mate-terminal xterm ; do "
-       .. "command -v \"$t\" >/dev/null 2>&1 && { \"$t\" -e " .. q
-       .. " & exit 0 ; } ; done ; exit 1"
+function combine_stop()
+  if cb.vlm then
+    pcall(cb.vlm.execute_command, cb.vlm, "control " .. COMBINE_NAME .. " stop")
+    pcall(cb.vlm.execute_command, cb.vlm, "del " .. COMBINE_NAME)
   end
-  local ok = os.execute(cmd)
-  -- os.execute answers true/false in 5.2+, an exit status in 5.1
-  return ok == true or ok == 0
+  cb.vlm = nil
+  cb.active = false
+end
+
+-- Start the job. Answers true when VLM took every command; the writing
+-- itself is the poll's business.
+local function combine_start(c)
+  if not vlc.vlm then
+    return false
+  end
+  local ok, vlm = pcall(vlc.vlm)
+  if not ok or not vlm then
+    return false
+  end
+  local video = vlc.strings.make_uri(c.video)
+  local audio = vlc.strings.make_uri(c.audio)
+  if not (video and audio) then
+    return false
+  end
+  -- The file output refuses to write over a file that is already there,
+  -- and says so only in the log: a second try after a failed one would
+  -- look like it did nothing at all.
+  os.remove(c.out)
+  -- ⚠ A URI, not a path, for both: VLM's reader treats an unquoted `#`
+  -- as the start of a sout chain and hands it the rest of the line, and
+  -- a video title is quite entitled to contain one. Percent-encoding
+  -- takes the character out of its way for good.
+  local commands = {
+    "del " .. COMBINE_NAME,   -- a job left behind by an earlier run
+    "new " .. COMBINE_NAME .. " broadcast enabled",
+    "setup " .. COMBINE_NAME .. " input " .. vlm_quote(video),
+    "setup " .. COMBINE_NAME .. " option " .. vlm_quote("input-slave=" .. audio),
+    -- every track of both files, and no window opened on any of them
+    "setup " .. COMBINE_NAME .. " option sout-all",
+    "setup " .. COMBINE_NAME .. " option no-sout-display",
+    -- ⚠⚠⚠ BOTH quotings, nested. VLM's reader honours `\` inside "..."
+    -- and NOT inside '...' (vlmshell.c), so the chain's own `\'` around a
+    -- file name like "Ma vidéo d'essai" closes VLM's quote instead of
+    -- surviving it: the word ends mid-path, the command is refused, and
+    -- the button does nothing. Double quotes outside, chain quotes in.
+    "setup " .. COMBINE_NAME .. " output " .. vlm_quote(
+      "#std{access=file,mux=avformat{mux=matroska},dst="
+      .. chain_quote(c.out) .. "}"),
+    "control " .. COMBINE_NAME .. " play",
+  }
+  for i, command in ipairs(commands) do
+    local called, _, code = pcall(vlm.execute_command, vlm, command)
+    -- the first is a clean-up and is expected to fail on a fresh player
+    if i > 1 and (not called or code ~= 0) then
+      vlc.msg.err("[Invidious] VLM refused: " .. command)
+      pcall(vlm.execute_command, vlm, "del " .. COMBINE_NAME)
+      return false
+    end
+  end
+  cb.vlm = vlm
+  cb.active = true
+  cb.out = c.out
+  cb.quiet = 0
+  cb.size = 0
+  cb.percent = 0
+  cb.total = file_size(c.video) + file_size(c.audio)
+  return true
+end
+
+-- Called from the tick while a job runs.
+--
+-- ⚠ "No instance running" is NOT on its own the end of the job: it is
+-- equally what the first polls see while the input is still being
+-- opened, and a short pair is combined between two of them and never
+-- seen running at all. So the file itself is the witness -- a size that
+-- has stopped moving, with no instance left, is a finished job -- and
+-- only a file that never appeared at all, after long enough, is a
+-- failure.
+local function combine_poll()
+  if not cb.vlm then
+    cb.active = false
+    return
+  end
+  local ok, message = pcall(cb.vlm.execute_command, cb.vlm,
+                            "show " .. COMBINE_NAME)
+  local size = file_size(cb.out)
+  if ok and vlm_has_instance(message) then
+    cb.quiet = 0
+    cb.size = size
+    -- The two files go in and one comes out, so what it weighs against
+    -- what they weigh is where it has got to. Held at 99 until the job
+    -- really ends: a container is not exactly the sum of its parts, and
+    -- 100 % beside a bar that is still moving reads as a stall.
+    if cb.total > 0 then
+      local done = math.floor(size * 100 / cb.total)
+      cb.percent = math.min(99, math.max(cb.percent, done))
+    end
+    set_message(string.format(lang.msg_combine_running, cb.percent))
+    return
+  end
+  if size > 0 and size == cb.size then
+    combine_stop()
+    set_message(string.format(lang.msg_combine_ok, cb.out))
+    return
+  end
+  cb.size = size
+  cb.quiet = cb.quiet + 1
+  if cb.quiet < COMBINE_GIVEUP_POLLS then
+    return
+  end
+  local out = cb.out
+  combine_stop()
+  os.remove(out)
+  set_message(lang.msg_combine_failed)
 end
 
 function click_combine()
   local c = app.combine
+  if cb.active then
+    set_message(string.format(lang.msg_combine_running, cb.percent))
+    return
+  end
   if not (c and file_exists(c.video) and file_exists(c.audio)) then
     set_message(lang.msg_combine_gone)
     return
   end
-  local script = write_combine_script(c)
-  if script and launch_terminal(script) then
-    set_message(lang.msg_combine_launched)
+  if not vlc.timer then
+    -- Nothing would ever look at the job again, and it would finish with
+    -- the window still saying it had started.
+    set_message(lang.msg_combine_unsupported)
     return
   end
-  -- No terminal to be had: the command is still the answer, so hand it
-  -- over in the one place the user can paste from.
-  local line = ffmpeg_command(c, is_windows() and bat_quote or sh_quote)
-  if ui.link then
-    ui.link:set_text(line)
+  if combine_start(c) then
+    set_message(string.format(lang.msg_combine_running, 0))
+    arm_tick()
+    return
   end
-  if copy_to_clipboard(line) then
-    set_message(lang.msg_combine_copied)
-  else
-    set_message(lang.msg_combine_fallback)
-  end
+  -- The VideoLAN manager is what drives the job, and a build made without
+  -- it (--disable-vlm) has no way to run one.
+  set_message(lang.msg_combine_unsupported)
 end
 
             --[[ Downloading ]]--
@@ -3501,14 +3598,28 @@ local function dl_step()
   -- while their prefetch threads keep all of them pulling at once.
   local deadline = now_us() and (now_us() + DL_TICK_BUDGET_US) or nil
   local finished = false
+  local out_of_time = false
   for _ = 1, DL_CHUNKS_PER_TICK do
-    -- Between chunks rather than between ticks: a megabyte over a slow
-    -- link is well past the ten seconds after which the core offers to
-    -- kill the extension, and a download is not a hung script.
-    still_alive()
-
-    for _, sl in ipairs(dl.slices) do
+    -- ⚠⚠⚠ Every read below BLOCKS, and the count of connections does not
+    -- make any one of them faster: googlevideo hands each the stream at
+    -- the speed it would be played at, so one 64 KiB read off an AUDIO
+    -- track at 28 KiB/s takes well over two seconds. A whole round of
+    -- eight is nearly twenty -- past the ten seconds after which the core
+    -- offers to kill the extension, which is exactly what a user saw at
+    -- "file 2/2, 219 KiB/s" (14/08/2026). So the thread says it is alive
+    -- before EVERY read, not once per round, and it hands the thread back
+    -- as soon as its budget is gone rather than at the end of a round.
+    local n = #dl.slices
+    -- ⚠ Held in a local: dl.cursor moves inside the loop, and indexing
+    -- off the moving value would skip a connection on every turn.
+    local start = dl.cursor
+    for k = 0, n - 1 do
+      -- Round robin from where the last tick stopped: breaking on the
+      -- clock always at slice 1 would starve the ones after it.
+      local i = ((start - 1 + k) % n) + 1
+      local sl = dl.slices[i]
       if sl.stream then
+        still_alive()
         local left = sl.last and (sl.last - sl.off) or nil
         if left and left <= 0 then
           dl_take_chunk(sl, url)          -- this piece is done, next one
@@ -3545,6 +3656,12 @@ local function dl_step()
             dl.got = dl.got + #data
           end
         end
+        -- Where the next tick picks the round up again.
+        dl.cursor = (i % n) + 1
+        if deadline and now_us() > deadline then
+          out_of_time = true
+          break
+        end
       end
     end
 
@@ -3558,7 +3675,7 @@ local function dl_step()
       finished = true
       break
     end
-    if deadline and now_us() > deadline then
+    if out_of_time then
       break
     end
   end
@@ -3586,6 +3703,9 @@ end
 function invidious_tick()
   if dl.active then
     dl_step()
+  end
+  if cb.active then
+    combine_poll()
   end
   challenge_poll()
   arm_tick()
@@ -3616,6 +3736,7 @@ local function begin_download(entries, tag)
   dl.files = {}
   dl.written = {}
   dl.slices = {}
+  dl.cursor = 1
   dl.queue = {}
   dl.idx, dl.got, dl.total, dl.failed = 0, 0, 0, 0
   dl.error = nil
@@ -3704,8 +3825,8 @@ function click_download_audio()
   local sound = audio_only_stream()
   if not sound then
     -- Every stream this video offers carries picture and sound together;
-    -- pulling the sound out of one would be a re-encode, which is the
-    -- ffmpeg button's business, not this one's.
+    -- pulling the sound out of one would be a re-encode, and nothing here
+    -- re-encodes anything.
     set_message(lang.msg_no_audio_stream)
     return
   end

@@ -489,6 +489,7 @@ void DiscOpenPanel::updateButtons()
         ui.chapterSpin->show();
         ui.diskOptionBox_2->show();
         ui.dvdsimple->setEnabled( true );
+        ui.dvdsimple->setToolTip( qtr("Disable Disc Menus") );
     }
     else if ( ui.bdRadioButton->isChecked() )
     {
@@ -503,6 +504,13 @@ void DiscOpenPanel::updateButtons()
         ui.chapterSpin->hide();
         ui.diskOptionBox_2->hide();
         ui.dvdsimple->setEnabled( true );
+        /* Blu-ray menus are not just a convenience: some discs run them as a
+         * Java (BD-J) application that busy-waits on a whole core for as long
+         * as the disc plays, which is worth warning about on older machines. */
+        ui.dvdsimple->setToolTip( qtr("Start the main feature directly. Some "
+            "discs run their menus as a Java (BD-J) application that keeps one "
+            "processor core busy for as long as the disc is playing; skipping "
+            "the menus gives that core back.") );
     }
     else if ( ui.vcdRadioButton->isChecked() )
     {

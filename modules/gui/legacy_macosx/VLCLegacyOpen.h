@@ -103,6 +103,11 @@ enum {
     NSTextField *discAudioCDLabel;
     NSTextField *discAudioCDTrackCountLabel;
     NSTextField *discDVDLabel;
+    /* Same setting shown twice: the menu-driven pane and the title/chapter
+     * pane are separate views, so each carries its own box, permanently
+     * ticked and unticked respectively. */
+    NSButton *discDVDMenusCheckbox;
+    NSButton *discDVDwomenusMenusCheckbox;
     NSTextField *discDVDwomenusLabel;
     NSTextField *discDVDwomenusTitleField;
     NSStepper *discDVDwomenusTitleStepper;
@@ -114,6 +119,7 @@ enum {
     NSTextField *discVCDChapterField;
     NSStepper *discVCDChapterStepper;
     NSTextField *discBDLabel;
+    NSButton *discBDMenusCheckbox;
     NSMutableArray *allMediaDevices;     /* dicts: path/devicePath/type/image */
     NSMutableArray *specialMediaFolders;
     BOOL b_nodvdmenus;

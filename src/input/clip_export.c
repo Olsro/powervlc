@@ -152,6 +152,27 @@ input_clip_export_t *input_ClipExportNew( vlc_object_t *p_parent,
     if( !p_export->p_item )
         goto error;
 
+    /* input_item_Copy carries the options and the meta, but NOT the slaves,
+     * and the copy runs with subtitle auto-detection off (below): an
+     * external subtitle file -- the ordinary case for a movie shipped with
+     * its .srt -- would simply not exist for the second input, and the
+     * track selection below would then match nothing. Reproduce them. */
+    vlc_mutex_lock( &p_source_item->lock );
+    for( int i = 0; i < p_source_item->i_slaves; i++ )
+    {
+        const input_item_slave_t *p_src = p_source_item->pp_slaves[i];
+        input_item_slave_t *p_slave =
+            input_item_slave_New( p_src->psz_uri, p_src->i_type,
+                                  p_src->i_priority );
+        if( p_slave )
+        {
+            p_slave->b_forced = p_src->b_forced;
+            if( input_item_AddSlave( p_export->p_item, p_slave ) != VLC_SUCCESS )
+                input_item_slave_Delete( p_slave );
+        }
+    }
+    vlc_mutex_unlock( &p_source_item->lock );
+
     /* the very same directory a live recording would use */
     char *psz_dir = input_RecordDirectory( p_source );
     if( !psz_dir )
@@ -166,14 +187,37 @@ input_clip_export_t *input_ClipExportNew( vlc_object_t *p_parent,
     if( !psz_prefix_esc )
         goto error;
 
+    /* Which track is playing is INPUT state, so the copied item carries
+     * none of it: name the tracks explicitly. The identifiers are the ones
+     * the interfaces already use ("audio-es" & co) and es_out matches them
+     * against the very same demuxer-assigned ids, which a second input on
+     * the same file hands out identically. */
+    const int i_video_es = var_GetInteger( p_source, "video-es" );
+    const int i_audio_es = var_GetInteger( p_source, "audio-es" );
+    const int i_spu_es   = var_GetInteger( p_source, "spu-es" );
+
     /* The recording chain is the regular one, so the produced file is named
      * and muxed exactly like a live recording. No start-time bound is given
      * to #record: here the seek does the trimming (the extraction starts at
      * the key frame at or before the bound, like a live recording does), and
      * the block timestamps of a sout run are not on the media time base
-     * anyway. */
-    ClipExportAddOption( p_export->p_item, "sout=#record{dst-prefix='%s'}",
-                         psz_prefix_esc );
+     * anyway.
+     *
+     * expect-streams is what stops a subtitle from being left out of the
+     * clip: the chain settles on a container as soon as its probe buffer
+     * fills, and on a high bitrate remux that happens seconds before the
+     * first subtitle cue arrives (see record.c). We know exactly how many
+     * tracks we selected, so we can say so. */
+    const int i_expect = (i_video_es >= 0 ? 1 : 0)
+                       + (i_audio_es >= 0 ? 1 : 0)
+                       + (i_spu_es   >= 0 ? 1 : 0);
+    /* The output contains precisely the selected subtitle track. Preserve
+     * that choice in containers which can signal a default track, so a
+     * later playback does not silently start without subtitles. */
+    ClipExportAddOption( p_export->p_item,
+                         "sout=#record{dst-prefix='%s',expect-streams=%d%s}",
+                         psz_prefix_esc, i_expect,
+                         i_spu_es >= 0 ? ",default-spu=1" : "" );
     free( psz_prefix_esc );
 
     ClipExportAddOption( p_export->p_item, "start-time=%.3f",
@@ -186,10 +230,43 @@ input_clip_export_t *input_ClipExportNew( vlc_object_t *p_parent,
         "no-input-fast-seek",
         /* headless: nothing of this second input reaches the user */
         "no-osd", "no-video-title-show", "no-sub-autodetect-file",
+        /* ⚠ An input with a sout runs with "sout-all" ON by default, i.e.
+         * it muxes EVERY elementary stream of the file. The exported clip
+         * then carried all three audio tracks of a remux and players
+         * opened the DEFAULT one -- never the track being watched -- and
+         * the pile of streams pushed the muxer choice below onto its
+         * brute-force fallback, which settled on ASF: a container with
+         * millisecond timestamps and no separate DTS, so the H.264 came
+         * out with duplicated and out-of-order timestamps. The clip must
+         * hold what the user is watching, and nothing else. */
+        "no-sout-all",
     };
     for( size_t i = 0; i < ARRAY_SIZE(ppsz_options); i++ )
         input_item_AddOption( p_export->p_item, ppsz_options[i],
                               VLC_INPUT_OPTION_TRUSTED );
+
+    if( i_audio_es >= 0 )
+        ClipExportAddOption( p_export->p_item, "audio-track-id=%d", i_audio_es );
+    else
+        input_item_AddOption( p_export->p_item, "no-sout-audio",
+                              VLC_INPUT_OPTION_TRUSTED );
+
+    if( i_spu_es >= 0 )
+        ClipExportAddOption( p_export->p_item, "sub-track-id=%d", i_spu_es );
+    else
+    {
+        /* a subtitle track flagged "default" by the demuxer would be
+         * picked up on its own otherwise, even though nothing is shown */
+        input_item_AddOption( p_export->p_item, "no-sout-spu",
+                              VLC_INPUT_OPTION_TRUSTED );
+        /* the video switch also gates subtitles, hence only here */
+        if( i_video_es < 0 )
+            input_item_AddOption( p_export->p_item, "no-sout-video",
+                                  VLC_INPUT_OPTION_TRUSTED );
+    }
+
+    msg_Dbg( p_parent, "clip export: video es %d, audio es %d, spu es %d",
+             i_video_es, i_audio_es, i_spu_es );
 
     /* #record announces the file it settled on through this variable */
     var_SetString( p_parent->obj.libvlc, "record-file", "" );

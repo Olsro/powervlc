@@ -441,9 +441,10 @@ vlc_module_begin ()
               MPEG2_ASYNC_LONGTEXT, true )
         change_private()
     /* SP4/SP10 — sous-titres DVD incrustés par le plan subpicture MATÉRIEL.
-     * Défaut ON depuis la validation sur iBook G3 : incrustation fiable
-     * (0 échec sur plusieurs dizaines), calage à 0–12 ms de la date visée,
-     * seek et changement de piste tenus, aucun plantage.
+     * Défaut ON : validé sur le RV200/Tiger avec le protocole 1.1 à un seul
+     * STA_DSP par apparition. Les SET_COLOR/SET_CONTR supplémentaires restent
+     * réservés au Rage 128 ; sur le RV200 ils causaient une grosse saccade à
+     * chaque sous-titre alors que SetSPBuffer avait déjà chargé ces valeurs.
      * ⚠ Quand ce module prend la piste, il REMPLACE `spudec` : si le décodage
      * matériel n'est finalement pas actif, les sous-titres sont perdus plutôt
      * que rendus en logiciel (un avertissement est émis une fois). Mettre
@@ -550,8 +551,11 @@ static int OpenDecoder( vlc_object_t *p_this )
     var_Create( p_dec->obj.libvlc, DVDDRIVER_VAR_CTX,     VLC_VAR_ADDRESS );
     var_Create( p_dec->obj.libvlc, DVDDRIVER_VAR_PRESENT, VLC_VAR_ADDRESS );
     var_Create( p_dec->obj.libvlc, DVDDRIVER_VAR_HIDE,    VLC_VAR_ADDRESS );
+    var_Create( p_dec->obj.libvlc, DVDDRIVER_VAR_SP_HIDE, VLC_VAR_ADDRESS );
     var_SetAddress( p_dec->obj.libvlc, DVDDRIVER_VAR_HIDE,
                     (void *) dvddriver_set_surface_hidden );
+    var_SetAddress( p_dec->obj.libvlc, DVDDRIVER_VAR_SP_HIDE,
+                    (void *) dvddriver_sp_hide );
     /* Chantier S — valeur RÉELLE posée par HwOpenContext (elle dépend aussi du
      * chemin d'affichage retenu) ; le vout ne la lit qu'au premier present
      * matériel, donc toujours après. Ici, seulement l'existence + un défaut sûr. */
@@ -662,57 +666,22 @@ extern int16_t mpeg2_hw_rl[68][2];
 extern int     mpeg2_hw_rl_n;
 extern int     mpeg2_hw_rl_on;
 extern void    mpeg2_set_hw_rl( int on );
-
-/* ★★★ BALAYAGE ALTERNÉ — LA CAUSE DES MENUS CASSÉS (2026-08-05).
- *
- * MPEG-2 définit DEUX ordres de parcours des coefficients : le zigzag classique
- * et le « balayage alterné », choisi image par image par le drapeau
- * `alternate_scan`. Mesuré hors machine sur le VOB de menu de ce disque
- * (`scratchpad/psinfo.py`) : **100 % de ses images sont en balayage ALTERNÉ**,
- * alors que le film — qui s'affiche parfaitement — est en zigzag classique.
- *
- * Or le format de coefficients du pilote ATI n'exprime PAS l'ordre employé : il
- * ne transporte que des couples (saut, valeur), donc le pilote applique
- * forcément un ordre FIXE — le zigzag classique. Nous, nous parcourions le bloc
- * avec la table de l'image (`decoder->scan`). Sur une image en balayage alterné,
- * chaque coefficient atterrissait donc dans la mauvaise fréquence.
- *
- * Signature exacte du défaut, et elle colle : l'image reste géométriquement
- * juste (le coefficient continu est à la position 0 dans les DEUX tables, donc
- * la luminosité moyenne de chaque bloc est bonne) mais perd tout son détail, en
- * gros pavés — ce n'est PAS de la compensation de mouvement fausse. C'est ce qui
- * a fait accuser à tort la prédiction par champ, puis la DCT par champ :
- * neutraliser l'une et l'autre ne changeait rien, parce que le vrai coupable
- * était ailleurs.
- *
- * ⇒ On parcourt TOUJOURS le bloc en zigzag classique. Le bloc est rangé en
- * ordre RASTER (libmpeg2 y écrit `DCTblock[scan[i]] = valeur`), donc le relire
- * avec la table classique donne exactement l'ordre attendu par le pilote,
- * quelle que soit la table de l'image. */
-/* ⚠⚠⚠ NE JAMAIS ÉCRIRE UNE TABLE ZIGZAG EN DUR ICI. libmpeg2 PERMUTE ses deux
- * tables de balayage à l'initialisation de son IDCT (`idct.c` : `scan[i] =
- * ((j & 0x36) >> 1) | ((j & 0x09) << 2)`, et une permutation DIFFÉRENTE dans la
- * version AltiVec), pour coller à la disposition interne de son transformée.
- * `DCTblock` n'est donc PAS en ordre raster : il est en ordre PERMUTÉ, et seule
- * la table de libmpeg2 sait le relire. Une table écrite à la main lit des cases
- * sans rapport — essayé, l'image en sort différemment cassée.
- * `mpeg2_scan_norm` est la table du zigzag CLASSIQUE, permutée comme il faut. */
 extern uint8_t mpeg2_scan_norm[64];
+
 static void HwBlock( void *priv, const int16_t *dctblock, const uint8_t *scan )
 {
-    /* Le chemin rapide ne transporte que des INDICES DE BALAYAGE, sans le bloc :
-     * il n'est donc utilisable que si l'image emploie déjà le zigzag classique.
-     * ⚠ Reconnaître la table par son CONTENU est un piège : après la permutation
-     * de libmpeg2, `scan[1]` ne vaut plus 1 (zigzag) ni 8 (alterné) mais 4 et 32.
-     * Un test sur la valeur coupait donc le chemin rapide POUR TOUT LE MONDE, y
-     * compris le film — d'où un ralentissement général. On compare les POINTEURS,
-     * ce qui est exact quel que soit l'état des tables.
-     * Sinon on repasse par le bloc, intact à cet instant (la capture a lieu avant
-     * l'effacement fait par l'IDCT). */
-    if( mpeg2_hw_rl_on && scan == mpeg2_scan_norm )
+    /* Les deux familles ATI n'ont pas le même contrat sur alternate_scan.
+     * Le Rage 128, validé ainsi en 1.2.0, interprète toujours les positions
+     * comme du zigzag classique : le chemin run/level capturé dans l'ordre du
+     * flux n'est donc sûr que si le flux est déjà en zigzag, sinon il faut
+     * relire DCTblock avec la table classique permutée par libmpeg2. Le RV200
+     * accepte l'ordre réel du flux et conserve son chemin validé. */
+    const bool b_fixed = dvddriver_uses_fixed_zigzag( priv );
+    if( mpeg2_hw_rl_on && ( !b_fixed || scan == mpeg2_scan_norm ) )
         dvddriver_picture_mb_block_rl( priv, mpeg2_hw_rl, mpeg2_hw_rl_n );
     else
-        dvddriver_picture_mb_block( priv, dctblock, mpeg2_scan_norm );
+        dvddriver_picture_mb_block( priv, dctblock,
+                                    b_fixed ? mpeg2_scan_norm : scan );
 }
 static void HwMbEnd( void *priv )
 {
@@ -2169,9 +2138,11 @@ static void CloseDecoder( vlc_object_t *p_this )
                       dn, dh[0], dh[1], dh[2], dh[3], dh[4], dh[5], dh[6], dh[7] );
         dvddriver_close( p_sys->p_hw );
     }
+    var_SetAddress( p_dec->obj.libvlc, DVDDRIVER_VAR_SP_HIDE, NULL );
     var_Destroy( p_dec->obj.libvlc, DVDDRIVER_VAR_CTX );
     var_Destroy( p_dec->obj.libvlc, DVDDRIVER_VAR_PRESENT );
     var_Destroy( p_dec->obj.libvlc, DVDDRIVER_VAR_HIDE );
+    var_Destroy( p_dec->obj.libvlc, DVDDRIVER_VAR_SP_HIDE );
     var_Destroy( p_dec->obj.libvlc, DVDDRIVER_VAR_SUBS );
     /* Le flag REMPLACEMENT est un global libmpeg2 (partagé entre instances de
      * décodeur). Le remettre à 0 pour qu'une instance suivante en CPU pur (flux
@@ -2206,6 +2177,9 @@ static void Reset( decoder_t *p_dec )
      * l'affichage jusqu'à la prochaine I (b_hw_stale), qui ne référence rien. */
     if( p_sys->p_hw != NULL )
     {
+        /* Reset vidéo est garanti au seek, contrairement au flush du décodeur
+         * SPU qui peut arriver après coup : retirer le dernier calque ici. */
+        dvddriver_sp_hide( p_sys->p_hw );
         msg_Dbg( p_dec, "flush : références matérielles périmées, "
                  "gel jusqu'à la prochaine I (décodeur conservé)" );
         p_sys->b_hw_picture = false;
@@ -2492,5 +2466,3 @@ static int DpbDisplayPicture( decoder_t *p_dec, picture_t *p_picture )
     p->b_displayed = true;
     return VLC_SUCCESS;
 }
-
-

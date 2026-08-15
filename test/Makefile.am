@@ -30,6 +30,7 @@ check_PROGRAMS = \
 	test_src_misc_bits \
 	test_src_misc_epg \
 	test_src_misc_keystore \
+	test_src_video_output_spu_chroma \
 	test_modules_packetizer_hxxx \
 	test_modules_demux_timestamps \
 	test_modules_demux_ts_pes \
@@ -122,6 +123,8 @@ test_src_misc_bits_SOURCES = src/misc/bits.c
 test_src_misc_bits_LDADD = $(LIBVLC)
 test_src_misc_epg_SOURCES = src/misc/epg.c
 test_src_misc_epg_LDADD = $(LIBVLCCORE) $(LIBVLC)
+test_src_video_output_spu_chroma_SOURCES = src/video_output/spu_chroma.c src/input/common.c
+test_src_video_output_spu_chroma_LDADD = $(LIBVLCCORE) $(LIBVLC)
 test_src_misc_keystore_SOURCES = src/misc/keystore.c
 test_src_misc_keystore_LDADD = $(LIBVLCCORE) $(LIBVLC)
 test_src_interface_dialog_SOURCES = src/interface/dialog.c

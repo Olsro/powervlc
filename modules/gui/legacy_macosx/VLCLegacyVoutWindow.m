@@ -34,12 +34,15 @@
 #import "misc.h"
 #import "VLCLegacyCoreInteraction.h"
 #import "VLCLegacyControls.h"
+#import "VLCLegacyMainWindow.h"
+#import "VLCLegacySeekThumbnailer.h"
 
 #include <vlc_playlist.h>
 #include <vlc_input.h>
 
 /* provided by intf.m */
 extern VLCLegacyCoreInteraction *VLCLegacyGetCore(void);
+extern VLCLegacyMainWindow *VLCLegacyGetMainWindow(void);
 
 #import <Cocoa/Cocoa.h>
 /* SetSystemUIMode(): menu bar/Dock hiding available since Mac OS X 10.2,
@@ -89,6 +92,22 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
     return s_currentVoutWindow;
 }
 
+/* Même contrat que VLCLegacyTimeField dans la fenêtre principale : le réglage
+ * écoulé/restant est commun aux deux fenêtres, tout comme le dialogue de saut. */
+@interface VLCLegacyVoutTimeField : NSTextField
+@end
+
+@implementation VLCLegacyVoutTimeField
+- (void)mouseDown:(NSEvent *)event
+{
+    VLCLegacyMainWindow *main = VLCLegacyGetMainWindow();
+    if ([event clickCount] >= 2)
+        [main showJumpToTimePanel];
+    else
+        [main toggleTimeDisplay];
+}
+@end
+
 @implementation VLCLegacyVoutWindow
 - (id)initWithContentRect:(NSRect)contentRect decorated:(BOOL)b_decorated
 {
@@ -129,12 +148,29 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
          * Fenêtre. Cast en `id` : le protocole NSWindowDelegate n'existe pas
          * dans le SDK 10.4 avec lequel les tranches PowerPC sont bâties. */
         [self setDelegate:(id)self];
-        /* No shadow: the window server recomputes it whenever content
-         * near the edges changes, i.e. on every video frame — each GL
-         * flush then remaps the window surface (profiled: one frame in
-         * three late). Video players of the era all disabled it. */
-        [self setHasShadow:NO];
+        /* Shadow per the user option (G3 default: off — measured ~16% more
+         * late pictures with it there) — but NEVER when an MPEG-2 hardware
+         * decoder is armed: a shadowed window at surface-commit time
+         * freezes the WindowServer (iBook G3/Tiger, 2026-08-14), and any
+         * later cut leaves the committed surface mis-shaped. This window is
+         * created while the vout opens, i.e. after the decoder: the armed
+         * flag is already readable, and the commit is still ahead. */
+        {
+            VLCLegacyCoreInteraction *core = VLCLegacyGetCore();
+            intf_thread_t *p_vi = core ? [core intf] : NULL;
+            bool hw_armed = p_vi != NULL && VLCLegacyHwDecoderArmed(p_vi);
+            [self setHasShadow:(VLCLegacyWindowShadows() && !hw_armed)];
+        }
         [self setMovableByWindowBackground:YES];
+        /* ⚠ AppKit accorde le plein écran natif (bouton vert, menu Fenêtre,
+         * ⌃⌘F) à TOUTE fenêtre redimensionnable, et cette fenêtre-ci l'est.
+         * Le legacy a son propre plein écran, borderless, piloté par le
+         * cœur (`fullscreen`) : les deux se marchaient dessus — la fenêtre
+         * partait sur son propre bureau, la barre allégée et le panneau
+         * plein écran ne suivaient pas, et en sortir laissait un cadre
+         * faux. Les cinq autres fenêtres redimensionnables du legacy le
+         * refusent déjà ; celle-ci avait été oubliée. */
+        VLCLegacyDenyNativeFullscreen(self);
         /* DVD/BD menus need the vout's mouse-moved events */
         [self setAcceptsMouseMovedEvents:YES];
         /* modern macOS: clip the old-style GL surface (see misc.h).
@@ -227,11 +263,18 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
     [forwardButton setToolTip:_NS("Forward")];
     x += 29 + 13;
 
-    seekSlider = [[[NSSlider alloc]
+    /* ⚠ VLCLegacySeekSlider, PAS un NSSlider nu : c'est lui qui porte les
+     * séparateurs de chapitres, la tooltip vivante (temps, chapitre,
+     * vignette) et les deux poignées du mode clip. La fenêtre vidéo
+     * séparée s'en était tenue à un slider ordinaire, si bien que la même
+     * barre montrait ses chapitres dans la fenêtre principale et rien du
+     * tout ici (remonté le 14/08/2026). Parité avec VLCLegacyFSPanel. */
+    seekSlider = [[[VLCLegacySeekSlider alloc]
         initWithFrame:NSMakeRect(x, 8, W - x - 108, 21)] autorelease];
     VLCLegacyProgressSliderCell *seekCell =
         [[[VLCLegacyProgressSliderCell alloc] init] autorelease];
     [seekSlider setCell:seekCell];
+    [(VLCLegacySeekSlider *)seekSlider setHoverDelegate:self];
     [seekSlider setMinValue:0.0];
     [seekSlider setMaxValue:1.0];
     [seekSlider setFloatValue:0.f];
@@ -241,7 +284,7 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
     [seekSlider setAutoresizingMask:NSViewWidthSizable];
     [bar addSubview:seekSlider];
 
-    durationField = [[[NSTextField alloc]
+    durationField = [[[VLCLegacyVoutTimeField alloc]
         initWithFrame:NSMakeRect(W - 100, 10, 56, 15)] autorelease];
     [durationField setEditable:NO];
     [durationField setSelectable:NO];
@@ -275,7 +318,128 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
 - (void)fullscreenClicked:(id)sender { [VLCLegacyGetCore() toggleFullscreen]; }
 - (void)seeked:(id)sender
 {
-    [VLCLegacyGetCore() setPositionFraction:[sender floatValue]];
+    VLCLegacyCoreInteraction *core = VLCLegacyGetCore();
+
+    if ([core clipCreationMode]) {
+        /* même routage que la barre principale et le panneau plein écran :
+         * les deux poignées portent les bornes du clip et bouger l'une
+         * saute là, pour prévisualiser ce que le clip contiendra ; cliquer
+         * ENTRE elles ne fait que scruter */
+        VLCLegacyProgressSliderCell *seekCell =
+            (VLCLegacyProgressSliderCell *)[seekSlider cell];
+        float fraction;
+        int knob = [seekCell activeClipKnob];
+        if (knob == 2) {
+            fraction = (float)[seekCell clipEndValue];
+            [core setClipEndPosition:fraction];
+            [core setClipSelectedKnob:2];
+        } else if (knob == 3) {
+            fraction = (float)[seekCell playbackMarkerValue];
+        } else {
+            fraction = [sender floatValue];
+            [core setClipStartPosition:fraction];
+            [core setClipSelectedKnob:1];
+        }
+        [core setPositionFraction:fraction];
+        return;
+    }
+
+    [core setPositionFraction:[sender floatValue]];
+}
+
+/* fournisseur de vignette du survol (le débounce vit dans le slider) */
+- (void)seekSlider:(VLCLegacySeekSlider *)slider
+        hoverThumbnailWantedAtFraction:(double)fraction
+{
+    VLCLegacyCoreInteraction *core = VLCLegacyGetCore();
+    intf_thread_t *p_intf = core ? [core intf] : NULL;
+    if (p_intf == NULL)
+        return;
+    [[VLCLegacySeekThumbnailer sharedInstance]
+        requestThumbnailWithIntf:p_intf fraction:fraction forSlider:slider];
+}
+
+/* flèches nues quand le slider est premier répondeur (mode clip) */
+- (void)seekSlider:(VLCLegacySeekSlider *)slider
+        clipStepFrames:(int)direction
+{
+    [VLCLegacyGetCore() clipStepFrames:direction];
+}
+
+/* Séparateurs de chapitres : mêmes règles et même cache que la fenêtre
+ * principale (seulement si le dernier point de reprise a un décalage > 0,
+ * sinon le média n'a pas de vrais chapitres). */
+- (void)updateChaptersForInput:(input_thread_t *)p_input
+                      duration:(int64_t)i_length
+{
+    VLCLegacyProgressSliderCell *cell =
+        (VLCLegacyProgressSliderCell *)[seekSlider cell];
+
+    int title = p_input ? (int)var_GetInteger(p_input, "title") : -1;
+    char *psz_uri = NULL;
+    if (p_input != NULL) {
+        input_item_t *p_item = input_GetItem(p_input);
+        if (p_item != NULL)
+            psz_uri = input_item_GetURI(p_item);
+    }
+    BOOL sameMedia = ((psz_uri == NULL && chaptersUri == NULL)
+                      || (psz_uri != NULL && chaptersUri != NULL
+                          && strcmp(psz_uri, chaptersUri) == 0))
+                     && title == chaptersTitle;
+    BOOL sameSource = sameMedia && i_length == chaptersDuration;
+    if (!sameMedia) {
+        free(chaptersUri);
+        chaptersUri = psz_uri;
+        psz_uri = NULL;
+    }
+    free(psz_uri);
+    if (sameSource && [cell chapterFractions] != nil)
+        return;
+    if (sameSource && ++chaptersRetryTicks < 8)
+        return;
+    chaptersRetryTicks = 0;
+    chaptersTitle = title;
+    chaptersDuration = i_length;
+
+    NSArray *fractions = nil;
+    NSArray *names = nil;
+    if (p_input && i_length > 0) {
+        input_title_t *p_title = NULL;
+        int i_title_id = -1;
+        if (input_Control(p_input, INPUT_GET_TITLE_INFO, &p_title,
+                          &i_title_id) == VLC_SUCCESS && p_title) {
+            if (p_title->i_seekpoint > 1
+                && p_title->seekpoint[p_title->i_seekpoint - 1]->i_time_offset
+                   > 0) {
+                NSMutableArray *mutableFractions = [NSMutableArray
+                    arrayWithCapacity:p_title->i_seekpoint];
+                NSMutableArray *mutableNames = [NSMutableArray
+                    arrayWithCapacity:p_title->i_seekpoint];
+                int i;
+                for (i = 0; i < p_title->i_seekpoint; i++) {
+                    seekpoint_t *point = p_title->seekpoint[i];
+                    NSString *name =
+                        (point->psz_name != NULL && *point->psz_name != '\0')
+                        ? [NSString stringWithUTF8String:point->psz_name]
+                        : [NSString stringWithFormat:_NS("Chapter %i"), i + 1];
+                    [mutableFractions addObject:
+                        [NSNumber numberWithDouble:
+                            (double)point->i_time_offset / (double)i_length]];
+                    [mutableNames addObject:name ? name : @""];
+                }
+                fractions = mutableFractions;
+                names = mutableNames;
+            }
+            vlc_input_title_Delete(p_title);
+        }
+    }
+
+    if (!fractions && ![cell chapterFractions])
+        return;
+    if (!fractions && sameMedia)
+        return;
+    [cell setChapterFractions:fractions names:names];
+    [seekSlider setNeedsDisplay:YES];
 }
 
 /*****************************************************************************
@@ -324,6 +488,9 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
         return;
 
     controlsHiddenForPlayback = YES;
+    /* ⚠ La tooltip de survol est une FENÊTRE à part : détacher la barre ne
+     * l'emporte pas, elle resterait posée au-dessus de l'image. */
+    [(VLCLegacySeekSlider *)seekSlider hideHoverTooltip];
     VLCLegacySetViewHidden(controlsBar, YES);
 
     /* Viser le CONTENU voulu, la barre de titre partant peut-être au passage :
@@ -487,15 +654,59 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
      * passe par un RPC au serveur de polices — c'est ce qui faisait scintiller
      * les autres barres (cf. VLCLegacyFSPanel -refreshControls). */
     input_thread_t *p_input = playlist_CurrentInput(p_playlist);
+    VLCLegacyProgressSliderCell *clipCell =
+        (VLCLegacyProgressSliderCell *)[seekSlider cell];
     if (p_input) {
-        int total = (int)(var_GetInteger(p_input, "length") / CLOCK_FREQ);
-        NSString *newTotal = voutTimeToString(total);
-        if (![[durationField stringValue] isEqualToString:newTotal])
-            [durationField setStringValue:newTotal];
+        int64_t length = var_GetInteger(p_input, "length");
+        int64_t time = var_GetInteger(p_input, "time");
+        BOOL remaining = [[NSUserDefaults standardUserDefaults]
+            boolForKey:@"DisplayTimeAsTimeRemaining"];
+        NSString *newTime;
+        if (remaining && length > 0) {
+            int64_t left = length - time;
+            if (left < 0)
+                left = 0;
+            newTime = [NSString stringWithFormat:@"-%@",
+                voutTimeToString((int)(left / CLOCK_FREQ))];
+        } else
+            newTime = voutTimeToString((int)(time / CLOCK_FREQ));
+        if (![[durationField stringValue] isEqualToString:newTime])
+            [durationField setStringValue:newTime];
         float pos = var_GetFloat(p_input, "position");
-        if ([seekSlider floatValue] != pos)
-            [seekSlider setFloatValue:pos];
+        if ([VLCLegacyGetCore() clipCreationMode]) {
+            /* les poignées portent les bornes, seul le marqueur fin suit la
+             * lecture (parité avec la barre principale) */
+            if (![clipCell clipKnobsActive])
+                [clipCell setClipKnobsActive:YES];
+            [seekSlider setDoubleValue:[VLCLegacyGetCore() clipStartPosition]];
+            [clipCell setClipEndValue:[VLCLegacyGetCore() clipEndPosition]];
+            [clipCell setPlaybackMarkerValue:pos];
+            [seekSlider setNeedsDisplay:YES];
+        } else {
+            if ([clipCell clipKnobsActive]) {
+                [clipCell setClipKnobsActive:NO];
+                [seekSlider setNeedsDisplay:YES];
+            }
+            if ([seekSlider floatValue] != pos)
+                [seekSlider setFloatValue:pos];
+        }
+        /* ⚠ sans mediaDuration la tooltip de survol sort aussitôt : c'est
+         * elle qui porte le temps et le nom du chapitre survolés */
+        [(VLCLegacySeekSlider *)seekSlider
+            setMediaDuration:(double)length / CLOCK_FREQ];
+        [self updateChaptersForInput:p_input duration:length];
         vlc_object_release(p_input);
+    } else {
+        if (![[durationField stringValue] isEqualToString:@"00:00"])
+            [durationField setStringValue:@"00:00"];
+        [(VLCLegacySeekSlider *)seekSlider setMediaDuration:0.0];
+        [self updateChaptersForInput:NULL duration:0];
+        /* Stop ne laisse AUCUNE entrée : c'est la seule branche qui range
+         * les poignées de clip (même correctif que la barre principale) */
+        if ([clipCell clipKnobsActive]) {
+            [clipCell setClipKnobsActive:NO];
+            [seekSlider setNeedsDisplay:YES];
+        }
     }
 }
 
@@ -504,6 +715,7 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
     if (s_currentVoutWindow == self)
         s_currentVoutWindow = nil;
     [self stopControlsRefresh];
+    free(chaptersUri);
     [titleBeforeHidingControls release];
     [super dealloc];
 }
@@ -518,6 +730,8 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
     /* ⚠ Le timer RETIENT sa cible : sans cet arrêt la fenêtre ne serait
      * jamais désallouée et continuerait d'interroger la liste de lecture. */
     [self stopControlsRefresh];
+    /* fenêtre à part, elle survivrait à la nôtre */
+    [(VLCLegacySeekSlider *)seekSlider hideHoverTooltip];
     /* ⚠ Le drapeau « contrôles masqués » est GLOBAL (var libvlc lue par l'OSD
      * et les raccourcis) : le laisser levé en fermant la fenêtre le rendait
      * indéboulonnable jusqu'au prochain masquage. */
@@ -588,8 +802,19 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
  * repousse la barre au-dessus du bord haut (cf. -enterFullscreen). */
 - (NSRect)constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen *)screen
 {
+    /* ⚠⚠⚠ Rendre `frameRect` tel quel ne suffit PAS : ce n'est pas seulement
+     * AppKit qui RÉDUIT un cadre ici, c'est aussi lui qui en PROPOSE un de
+     * son cru, et le renvoyer intact revient à l'accepter. Masquer la barre
+     * des menus (SetSystemUIMode, juste après le -setFrame:) change les
+     * paramètres d'écran, et AppKit repositionne alors la fenêtre pour que
+     * sa barre de titre reste dans la zone visible : tracé au banc, il
+     * propose {{0,-28},…} puis {{0,25},…}, et c'est ce dernier qui restait —
+     * la fenêtre remontait de 25 points (la hauteur de la barre des menus)
+     * et le bas de l'écran laissait voir le BUREAU sous la vidéo (remonté le
+     * 14/08/2026 sur un écran externe). Le plein écran doit donc DÉFENDRE
+     * son cadre, pas se contenter de ne pas être rogné. */
     if (fullscreenActive)
-        return frameRect;
+        return fullscreenFrame;
     return [super constrainFrameRect:frameRect toScreen:screen];
 }
 
@@ -764,6 +989,7 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
         target = [NSWindow frameRectForContentRect:target
                                          styleMask:[self styleMask]];
     fullscreenActive = YES;
+    fullscreenFrame = target;
     [self setFrame:target display:YES animate:NO];
     [videoView setFrame:[self videoAreaRect]];
 
@@ -791,9 +1017,16 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
     fullscreenActive = NO;
     if (controlsBar != nil)
         VLCLegacySetViewHidden(controlsBar, NO);
-    [self setFrame:initialFrame display:YES animate:NO];
     notchAdjusted = NO;
-    [self resizeVideoSubviewsTo:[self videoAreaRect]];
+    /* La vue vidéo est redimensionnable. Si l'on restaure directement le
+     * cadre, AppKit l'étale d'abord sur TOUT le contentView avant que nous la
+     * recadrions au-dessus de la barre. La surface ATI recouvre alors la
+     * barre pendant une composition et le WindowServer 10.3 ne repeint plus
+     * ce qu'elle a découvert (barre blanche, seekbar seule). Le helper gèle
+     * précisément l'autoresize pendant la transition puis redimensionne les
+     * sous-vues du vout : leur -reshape republie également la géométrie du
+     * plan subpicture matériel après la sortie du plein écran. */
+    [self setWindowFrameKeepingVideoArea:initialFrame];
 }
 
 /* La vue confiée au vout est `videoView` (cf. -buildContentViews) : on la

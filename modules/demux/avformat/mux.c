@@ -44,7 +44,7 @@
 //#define AVFORMAT_DEBUG 1
 
 static const char *const ppsz_mux_options[] = {
-    "mux", "options", "reset-ts", NULL
+    "mux", "options", "reset-ts", "default-spu", NULL
 };
 
 /*****************************************************************************
@@ -61,10 +61,31 @@ struct sout_mux_sys_t
     bool     b_write_header;
     bool     b_write_keyframe;
     bool     b_error;
+    /* The record module asks for this only for a clip's selected subtitle. */
+    bool     b_default_spu;
+    bool     b_default_spu_written;
 #if LIBAV_FORMAT_VERSION_CHECK( 57, 7, 0, 40, 100 )
     bool     b_header_done;
 #endif
 };
+
+/* The reordering window used to rebuild a decode clock, see MuxBlock. It only
+ * has to be at least as deep as the stream's real reordering; being deeper
+ * merely lags the dts, which costs nothing here. */
+#define AVFORMAT_REORDER_DEPTH 8
+
+/* Per-input state. ⚠ It used to be a bare `int` holding the stream index;
+ * a decode clock now lives beside it, because libavformat REFUSES a packet
+ * whose dts does not advance and the block then vanishes from the file
+ * without the caller being told (see MuxBlock). */
+typedef struct
+{
+    int     i_stream;
+    int64_t i_last_dts;   /* in the stream time base, AV_NOPTS_VALUE = none */
+    /* the last AVFORMAT_REORDER_DEPTH+1 presentation stamps, kept sorted */
+    int64_t pts_window[AVFORMAT_REORDER_DEPTH + 1];
+    bool    b_reorder;    /* rebuild the dts from pts_window (video only) */
+} avformat_input_sys_t;
 
 /*****************************************************************************
  * Local prototypes
@@ -165,6 +186,8 @@ int avformat_OpenMux( vlc_object_t *p_this )
     p_sys->b_write_header = true;
     p_sys->b_write_keyframe = false;
     p_sys->b_error = false;
+    p_sys->b_default_spu = var_GetBool( p_mux, "sout-avformat-default-spu" );
+    p_sys->b_default_spu_written = false;
 #if LIBAV_FORMAT_VERSION_CHECK( 57, 7, 0, 40, 100 )
     p_sys->io->write_data_type = IOWriteTyped;
     p_sys->b_header_done = false;
@@ -238,26 +261,60 @@ static int AddStream( sout_mux_t *p_mux, sout_input_t *p_input )
     {
         i_codec_id = AV_CODEC_ID_MP3;
     }
+    else if( fmt->i_codec == VLC_CODEC_SSA )
+    {
+        /* ⚠ ffmpeg carries two ids for the same subtitles. AV_CODEC_ID_SSA
+         * is the historical one, whose payload is whole "Dialogue:" lines;
+         * AV_CODEC_ID_ASS is the Matroska-native one, whose payload starts
+         * at the ReadOrder field -- and only the latter is in the muxer's
+         * tag table ("Subtitle codec 94212 is not supported", measured
+         * 14/08/2026). VLC's fourcc table maps both to SSA, while its
+         * Matroska demuxer hands the blocks over untouched, i.e. already in
+         * the native form. So the id is what has to be corrected, not the
+         * data. */
+        i_codec_id = AV_CODEC_ID_ASS;
+    }
 
-    if( fmt->i_cat != VIDEO_ES && fmt->i_cat != AUDIO_ES)
+    /* SPU_ES joins the party for Matroska: it is the only container the
+     * player can write that carries ASS/SSA styling and Blu-ray PGS
+     * bitmaps, and refusing the category here is what silently dropped
+     * those tracks from every recording and exported clip. */
+    if( fmt->i_cat != VIDEO_ES && fmt->i_cat != AUDIO_ES
+     && fmt->i_cat != SPU_ES )
     {
         msg_Warn( p_mux, "Unhandled ES category" );
         return VLC_EGENERIC;
     }
 
     /* */
-    p_input->p_sys = malloc( sizeof( int ) );
-    if( unlikely(p_input->p_sys == NULL) )
+    avformat_input_sys_t *p_input_sys = malloc( sizeof(*p_input_sys) );
+    if( unlikely(p_input_sys == NULL) )
         return VLC_ENOMEM;
-
-    *((int *)p_input->p_sys) = p_sys->oc->nb_streams;
+    p_input_sys->i_stream = p_sys->oc->nb_streams;
+    p_input_sys->i_last_dts = AV_NOPTS_VALUE;
+    p_input_sys->b_reorder = fmt->i_cat == VIDEO_ES;
+    for( int i = 0; i <= AVFORMAT_REORDER_DEPTH; i++ )
+        p_input_sys->pts_window[i] = AV_NOPTS_VALUE;
+    p_input->p_sys = p_input_sys;
 
     /* */
     AVStream *stream = avformat_new_stream( p_sys->oc, NULL);
     if( !stream )
     {
         free( p_input->p_sys );
+        p_input->p_sys = NULL;
         return VLC_EGENERIC;
+    }
+
+    /* Matroska's Default track flag maps directly to FFmpeg's stream
+     * disposition. There can be only one default subtitle: clip export
+     * deliberately writes one selected subtitle track, but keep this safe
+     * if another caller reuses the option. */
+    if( fmt->i_cat == SPU_ES && p_sys->b_default_spu
+     && !p_sys->b_default_spu_written )
+    {
+        stream->disposition |= AV_DISPOSITION_DEFAULT;
+        p_sys->b_default_spu_written = true;
     }
 
 #if (LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(57, 5, 0))
@@ -317,6 +374,21 @@ static int AddStream( sout_mux_t *p_mux, sout_input_t *p_input )
             msg_Dbg( p_mux, "Muxing video bitrate will be %d", fmt->i_bitrate );
         break;
 
+    case SPU_ES:
+        codecpar->codec_type = AVMEDIA_TYPE_SUBTITLE;
+        /* Matroska keeps subtitle timings in milliseconds; finer buys
+         * nothing and coarser loses cues. */
+        stream->time_base = (AVRational){ 1, 1000 };
+        /* Bitmap subtitles -- PGS, VOBSUB, DVB -- are authored against a
+         * particular video size, and a player has nothing to scale them
+         * by without it. Text formats leave these at zero, which is
+         * exactly right for them. */
+        codecpar->width  = fmt->subs.spu.i_original_frame_width;
+        codecpar->height = fmt->subs.spu.i_original_frame_height;
+        /* a subtitle track has no meaningful rate: do not invent one */
+        i_bitrate = 0;
+        break;
+
     default:
         vlc_assert_unreachable();
     }
@@ -358,11 +430,45 @@ static void DelStream( sout_mux_t *p_mux, sout_input_t *p_input )
     free( p_input->p_sys );
 }
 
+/* Rebuild a decode clock out of the presentation stamps.
+ *
+ * Packets reach a muxer in DECODE order, so the dts of the n-th one is by
+ * definition the (n+1)-th smallest pts of the stream: keeping the last
+ * AVFORMAT_REORDER_DEPTH+1 stamps sorted and handing out the smallest each
+ * time yields exactly that, one window behind. It is strictly increasing as
+ * long as the stamps are distinct, and never above the packet's own pts --
+ * the two things libavformat insists on. This is the very algorithm
+ * libavformat applies when an application hands it no dts at all. */
+static int64_t ReorderDts( avformat_input_sys_t *p_sys, int64_t i_pts )
+{
+    int64_t *pts = p_sys->pts_window;
+
+    pts[0] = i_pts;
+    /* Prime the empty slots below the first stamp, so that the clock starts
+     * one window early instead of colliding with itself.
+     *
+     * ⚠ ONE TICK apart, not one frame: a whole frame each would put the
+     * first dts a window's worth of time before zero, and libavformat then
+     * shifts the WHOLE output forward to keep it positive -- measured as a
+     * clip that starts on 328 ms of nothing. A tick is all the strictly
+     * increasing order needs. */
+    for( int i = 1; i <= AVFORMAT_REORDER_DEPTH && pts[i] == AV_NOPTS_VALUE; i++ )
+        pts[i] = i_pts + (int64_t)( i - AVFORMAT_REORDER_DEPTH - 1 );
+    for( int i = 0; i < AVFORMAT_REORDER_DEPTH && pts[i] > pts[i + 1]; i++ )
+    {
+        int64_t i_tmp = pts[i];
+        pts[i] = pts[i + 1];
+        pts[i + 1] = i_tmp;
+    }
+    return pts[0];
+}
+
 static int MuxBlock( sout_mux_t *p_mux, sout_input_t *p_input )
 {
     sout_mux_sys_t *p_sys = p_mux->p_sys;
     block_t *p_data = block_FifoGet( p_input->p_fifo );
-    int i_stream = *((int *)p_input->p_sys);
+    avformat_input_sys_t *p_input_sys = p_input->p_sys;
+    int i_stream = p_input_sys->i_stream;
     AVStream *p_stream = p_sys->oc->streams[i_stream];
     AVPacket *pkt = av_packet_alloc();
     if( !pkt )
@@ -394,10 +500,58 @@ static int MuxBlock( sout_mux_t *p_mux, sout_input_t *p_input )
         pkt->dts = p_data->i_dts * p_stream->time_base.den /
             CLOCK_FREQ / p_stream->time_base.num;
 
+    /* A subtitle is the one thing whose LENGTH is the content: without a
+     * duration Matroska leaves the cue on screen until the next one, and a
+     * PGS or VOBSUB image would sit there for minutes. Subtitle blocks are
+     * also always independent, so they are always key frames -- demuxers do
+     * not bother flagging them. */
+    if( p_input->p_fmt->i_cat == SPU_ES )
+    {
+        if( p_data->i_length > 0 )
+            pkt->duration = p_data->i_length * p_stream->time_base.den /
+                CLOCK_FREQ / p_stream->time_base.num;
+        pkt->flags |= AV_PKT_FLAG_KEY;
+    }
+
+    /* ⚠⚠⚠ libavformat drops a packet whose dts does not STRICTLY advance on
+     * its stream ("could not write frame"), and the picture is then simply
+     * missing from the file -- no gap, no warning to the user, just a jolt
+     * where frames used to be. The dts VLC carries for a plain stream copy is
+     * NOT reliably monotonic: the Matroska demuxer, for one, stamps every key
+     * and every discardable picture with dts = pts (mkv.cpp), which in an
+     * open GOP throws the dts several frames into the future and makes the
+     * pictures that follow it in decode order look like they go backwards.
+     * Measured on an H.264 BluRay remux: 108 frames of 1339 refused, three at
+     * every key frame (14/08/2026).
+     *
+     * ⚠ Do NOT try to repair that by pushing the offending dts forward: the
+     * pts has to be pushed with it (a picture cannot be shown before it is
+     * decoded) and the pictures then pile up on one another -- measured as
+     * three frames crammed into 3 ms once per second, a visible hiccup. The
+     * pts is the one thing a stream copy must reproduce exactly, so it is the
+     * decode clock that gets rebuilt, from the pts themselves. */
+    if( p_input_sys->b_reorder && pkt->pts != AV_NOPTS_VALUE )
+        pkt->dts = ReorderDts( p_input_sys, pkt->pts );
+
+    /* last resort, for the streams left with their own dts */
+    if( pkt->dts != AV_NOPTS_VALUE
+     && p_input_sys->i_last_dts != AV_NOPTS_VALUE
+     && pkt->dts <= p_input_sys->i_last_dts )
+        pkt->dts = p_input_sys->i_last_dts + 1;
+    if( pkt->dts != AV_NOPTS_VALUE )
+        p_input_sys->i_last_dts = pkt->dts;
+    if( pkt->pts != AV_NOPTS_VALUE && pkt->dts != AV_NOPTS_VALUE
+     && pkt->pts < pkt->dts )
+        pkt->pts = pkt->dts;
+
 #if LIBAVFORMAT_VERSION_MICRO >= 100 && !(LIBAVFORMAT_VERSION_CHECK(59, 2, 103))
-    /* this is another hack to prevent libavformat from triggering the "non monotone timestamps" check in avformat/utils.c */
-    p_stream->cur_dts = ( p_data->i_dts * p_stream->time_base.den /
-            CLOCK_FREQ / p_stream->time_base.num ) - 1;
+    /* the historic hack against the same check in avformat/utils.c: it
+     * rewrites the muxer's own idea of the last dts rather than the packet,
+     * which the Matroska muxer -- which checks for itself -- ignores. Kept
+     * for the muxers it does help; the clamp above is what actually works. */
+    p_stream->cur_dts = pkt->dts != AV_NOPTS_VALUE ? pkt->dts - 1
+                      : ( p_data->i_dts * p_stream->time_base.den /
+                          CLOCK_FREQ / p_stream->time_base.num ) - 1;
 #endif
 
     if( av_write_frame( p_sys->oc, pkt ) < 0 )

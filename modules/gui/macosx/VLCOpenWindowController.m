@@ -170,17 +170,38 @@ static NSString *kCaptureTabViewId  = @"capture";
     [_discAudioCDTrackCountLabel setStringValue: @""];
     [_discAudioCDVideoTSButton setTitle: oVideoTS];
     [_discDVDLabel setStringValue: @""];
-    [_discDVDDisableMenusButton setTitle: _NS("Disable DVD menus")];
+    [_discDVDMenusCheckbox setTitle: _NS("DVD menus")];
     [_discDVDVideoTSButton setTitle: oVideoTS];
     [_discDVDwomenusLabel setStringValue: @""];
-    [_discDVDwomenusEnableMenusButton setTitle: _NS("Enable DVD menus")];
+    [_discDVDwomenusMenusCheckbox setTitle: _NS("DVD menus")];
     [_discDVDwomenusVideoTSButton setTitle: oVideoTS];
+    /* Same setting shown twice: the menu-driven pane and the title/chapter
+     * pane are separate views, so each box stays at the state its own view
+     * stands for. */
+    for (NSButton *box in @[_discDVDMenusCheckbox, _discDVDwomenusMenusCheckbox])
+        [box setToolTip:
+            _NS("Play the disc with its own menus. Unticking this plays a "
+                "title directly and lets you pick the title and chapter "
+                "numbers.")];
+    [_discDVDMenusCheckbox setState: NSOnState];
+    [_discDVDwomenusMenusCheckbox setState: NSOffState];
     [_discDVDwomenusTitleLabel setStringValue: _NS("Title")];
     [_discDVDwomenusChapterLabel setStringValue: _NS("Chapter")];
     [_discVCDTitleLabel setStringValue: _NS("Title")];
     [_discVCDChapterLabel setStringValue: _NS("Chapter")];
     [_discVCDVideoTSButton setTitle: oVideoTS];
     [_discBDVideoTSButton setTitle: oVideoTS];
+    [_discBDMenusCheckbox setTitle: _NS("Blu-ray menus")];
+    [_discBDMenusCheckbox setToolTip:
+        _NS("Play the disc with its own menus. Some discs run their menus as "
+            "a Java (BD-J) application that keeps one processor core busy for "
+            "as long as the disc is playing, which older Macs may not have to "
+            "spare. Unticking this starts the main feature directly. The "
+            "initial state of this box comes from the preferences.")];
+    /* Seed it here as well as when the pane is shown: the pane may never be
+     * shown before the user hits Open on a bluray:// address typed by hand. */
+    [_discBDMenusCheckbox setState:
+        var_InheritBool(getIntf(), "bluray-menu") ? NSOnState : NSOffState];
 
     [_netUDPPortLabel setStringValue: _NS("Port")];
     [_netUDPMAddressLabel setStringValue: _NS("IP Address")];
@@ -433,6 +454,14 @@ static NSString *kCaptureTabViewId  = @"capture";
     NSMutableArray *options = [NSMutableArray array];
 
     itemOptionsDictionary = [NSMutableDictionary dictionaryWithObject: [self MRL] forKey: @"ITEM_URL"];
+
+    /* Blu-ray menus. Keyed on the MRL rather than on the selected pane so a
+     * bluray:// address typed by hand gets the box's value too, and always
+     * passed explicitly so this item overrides the preference. */
+    if ([[self MRL] hasPrefix: @"bluray://"])
+        [options addObject: ([_discBDMenusCheckbox state] == NSOnState)
+            ? @"bluray-menu" : @"no-bluray-menu"];
+
     if ([_fileSubCheckbox state] == NSOnState) {
         module_config_t * p_item;
 
@@ -778,6 +807,10 @@ static NSString *kCaptureTabViewId  = @"capture";
         [self setMRL: [NSString stringWithFormat: @"vcd://%@@%i:%i", devicePath, [_discVCDTitleTextField intValue], [_discVCDChapterTextField intValue]]];
     } else if ([diskType isEqualToString: kVLCMediaBD] || [diskType isEqualToString: kVLCMediaBDMVFolder]) {
         [_discBDLabel setStringValue: [[NSFileManager defaultManager] displayNameAtPath: opticalDevicePath]];
+        /* Preselect from the preferences every time the pane is shown, so the
+         * box always mirrors the setting the user last chose there. */
+        [_discBDMenusCheckbox setState:
+            var_InheritBool(getIntf(), "bluray-menu") ? NSOnState : NSOffState];
         [self showOpticalMediaView: _discBDView withIcon: image];
         [self setMRL: [NSString stringWithFormat: @"bluray://%@", opticalDevicePath]];
     } else {
@@ -918,14 +951,20 @@ static NSString *kCaptureTabViewId  = @"capture";
 {
     NSString *devicePath = [[_allMediaDevices objectAtIndex:[_discSelectorPopup indexOfSelectedItem]] objectForKey:@"devicePath"];
 
-    if (sender == _discDVDwomenusEnableMenusButton) {
+    /* Each box goes back to the state its own view stands for, since the
+     * click that brought us here toggled it. */
+    if (sender == _discDVDwomenusMenusCheckbox) {
         b_nodvdmenus = NO;
+        [_discDVDMenusCheckbox setState: NSOnState];
+        [_discDVDwomenusMenusCheckbox setState: NSOffState];
         [self setMRL: [NSString stringWithFormat: @"dvdnav://%@", devicePath]];
         [self showOpticalMediaView:_discDVDView withIcon:[_currentOpticalMediaIconView image]];
         return;
     }
-    if (sender == _discDVDDisableMenusButton) {
+    if (sender == _discDVDMenusCheckbox) {
         b_nodvdmenus = YES;
+        [_discDVDMenusCheckbox setState: NSOnState];
+        [_discDVDwomenusMenusCheckbox setState: NSOffState];
         [self showOpticalMediaView:_discDVDwomenusView withIcon:[_currentOpticalMediaIconView image]];
     }
 
