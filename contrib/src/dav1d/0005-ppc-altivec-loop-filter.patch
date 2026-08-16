@@ -1,7 +1,7 @@
-From 661de0d712ccea9e43c99c1224824045ea70e3dc Mon Sep 17 00:00:00 2001
+From ac68a846146a1acf6a1cab94f516c5634807926b Mon Sep 17 00:00:00 2001
 From: Sergey Fedorov <barracuda@macos-powerpc.org>
 Date: Fri, 17 Jul 2026 16:16:13 +0000
-Subject: [PATCH 4/4] PPC: Enable the loop-filter kernels on plain AltiVec
+Subject: [PATCH 4/6] PPC: Enable the loop-filter kernels on plain AltiVec
  (G4/G5)
 
 The loop-filter kernels in src/ppc/loopfilter_tmpl.c were built only for the
@@ -48,17 +48,40 @@ AltiVec loop filter in place of the C fallback.
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 ---
+ src/loopfilter_tmpl.c     |  4 ++--
  src/meson.build           |  1 +
  src/ppc/dav1d_types.h     | 12 ++++++++++--
  src/ppc/loopfilter.h      | 14 ++++++++------
  src/ppc/loopfilter_tmpl.c | 39 +++++++++++++++++++++++++++------------
- 4 files changed, 46 insertions(+), 20 deletions(-)
+ 5 files changed, 48 insertions(+), 22 deletions(-)
 
+diff --git a/src/loopfilter_tmpl.c b/src/loopfilter_tmpl.c
+index 0a2baf1e..e3265adf 100644
+--- a/src/loopfilter_tmpl.c
++++ b/src/loopfilter_tmpl.c
+@@ -249,7 +249,7 @@ static void loop_filter_v_sb128uv_c(pixel *dst, const ptrdiff_t stride,
+ #include "src/arm/loopfilter.h"
+ #elif ARCH_LOONGARCH64
+ #include "src/loongarch/loopfilter.h"
+-#elif ARCH_PPC64LE
++#elif ARCH_PPC
+ #include "src/ppc/loopfilter.h"
+ #elif ARCH_X86
+ #include "src/x86/loopfilter.h"
+@@ -267,7 +267,7 @@ COLD void bitfn(dav1d_loop_filter_dsp_init)(Dav1dLoopFilterDSPContext *const c)
+     loop_filter_dsp_init_arm(c);
+ #elif ARCH_LOONGARCH64
+     loop_filter_dsp_init_loongarch(c);
+-#elif ARCH_PPC64LE
++#elif ARCH_PPC
+     loop_filter_dsp_init_ppc(c);
+ #elif ARCH_X86
+     loop_filter_dsp_init_x86(c);
 diff --git a/src/meson.build b/src/meson.build
-index 1d14968a..2b092c43 100644
+index 9b3b69e9..b04cf415 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -294,6 +294,7 @@ if is_asm_enabled
+@@ -284,6 +284,7 @@ if is_asm_enabled
              libdav1d_arch_tmpl_sources += {'altivec': files(
                  'ppc/cdef_tmpl.c',
                  'ppc/itx_tmpl.c',

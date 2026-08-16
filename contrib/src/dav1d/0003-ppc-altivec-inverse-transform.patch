@@ -1,7 +1,7 @@
-From 59f497b00e11e8f4788af120ab577ebde8cfd090 Mon Sep 17 00:00:00 2001
+From 272e1c0d3db469cbfac3871bd597e37c06d98f43 Mon Sep 17 00:00:00 2001
 From: Sergey Fedorov <barracuda@macos-powerpc.org>
 Date: Fri, 17 Jul 2026 15:31:16 +0000
-Subject: [PATCH 2/4] PPC: Enable the inverse-transform kernels on plain
+Subject: [PATCH 2/6] PPC: Enable the inverse-transform kernels on plain
  AltiVec (G4/G5)
 
 The itx (inverse transform) kernels in src/ppc/itx_tmpl.c were built only
@@ -46,18 +46,41 @@ fallback and cannot affect the already-working cdef/looprestoration paths.
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 ---
+ src/itx_tmpl.c        |  4 +--
  src/meson.build       |  1 +
  src/ppc/dav1d_types.h | 28 ++++++++++++++++++
  src/ppc/itx.h         | 18 +++++++-----
  src/ppc/itx_tmpl.c    | 68 +++++++++++++++++++++----------------------
- 4 files changed, 73 insertions(+), 42 deletions(-)
+ 5 files changed, 75 insertions(+), 44 deletions(-)
 
+diff --git a/src/itx_tmpl.c b/src/itx_tmpl.c
+index bafe0a86..4132a586 100644
+--- a/src/itx_tmpl.c
++++ b/src/itx_tmpl.c
+@@ -208,7 +208,7 @@ static void inv_txfm_add_wht_wht_4x4_c(pixel *dst, const ptrdiff_t stride,
+ #include "src/arm/itx.h"
+ #elif ARCH_LOONGARCH64
+ #include "src/loongarch/itx.h"
+-#elif ARCH_PPC64LE
++#elif ARCH_PPC
+ #include "src/ppc/itx.h"
+ #elif ARCH_RISCV
+ #include "src/riscv/itx.h"
+@@ -295,7 +295,7 @@ COLD void bitfn(dav1d_itx_dsp_init)(Dav1dInvTxfmDSPContext *const c, int bpc) {
+ #if ARCH_LOONGARCH64
+     itx_dsp_init_loongarch(c, bpc);
+ #endif
+-#if ARCH_PPC64LE
++#if ARCH_PPC
+     itx_dsp_init_ppc(c, bpc);
+ #endif
+ #if ARCH_RISCV
 diff --git a/src/meson.build b/src/meson.build
-index a7e826e5..f3a91dd2 100644
+index 8b4283c5..bbd3e516 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -293,6 +293,7 @@ if is_asm_enabled
-             arch_flags += {'altivec': altivec_flags}
+@@ -283,6 +283,7 @@ if is_asm_enabled
+             arch_flags += {'altivec': ['-maltivec', '-DDAV1D_ALTIVEC']}
              libdav1d_arch_tmpl_sources += {'altivec': files(
                  'ppc/cdef_tmpl.c',
 +                'ppc/itx_tmpl.c',
