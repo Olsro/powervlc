@@ -92,7 +92,7 @@ Building it yourself is documented in [BUILD-POWERVLC.md](BUILD-POWERVLC.md).
 | [ACCELERATED-MPEG2-COMPATIBILITY.md](ACCELERATED-MPEG2-COMPATIBILITY.md) | Which GPUs get accelerated DVD playback, and why |
 | [MACOS_INCOMPATIBILITIES.md](MACOS_INCOMPATIBILITIES.md) | What each old macOS version can and cannot do |
 
-## Support
+## Get help
 
 PowerVLC is a hobby project. Don't expect professional support & quick reviews to your PR or questions, or to assist you personally if you have a problem. Patreon members are prioritized on individual support, with no guarantees too. I share all of my work because I believe in its quality and because it is at least useful to me and I am sure at least someone else will enjoy all the effort, but I don't want too much pressure and I want to keep your expectations reasonable. I am a solo dev, not affiliated with the whole VideoLAN organization (which is also a non-profit by the way).
 
