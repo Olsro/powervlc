@@ -4,10 +4,6 @@
 
 # PowerVLC
 
-Same powerful app experience, no matter if you use a 1999 PowerPC G3 running Mac OS X 10.2 "Jaguar" or a bleeding edge Apple Silicon Mac: PowerVLC pairs well with the hardware you already own.
-
-PowerVLC is an open source project by **Olsro** for the community, forked from VLC 3. Providing many refinements, improvements & features benefitting for legacy to modern machines alike.
-
 [![Latest release](https://img.shields.io/github/v/release/Olsro/powervlc?display_name=release&label=latest&color=e63312)](https://github.com/Olsro/powervlc/releases/latest)
 [![macOS 10.2 and up](https://img.shields.io/badge/macOS-10.2%20%E2%86%92%2026-e63312)](#supported-systems)
 [![Windows XP SP3 and up](https://img.shields.io/badge/Windows-XP%20SP3%20%E2%86%92%2011-e63312)](#supported-systems)
@@ -20,11 +16,7 @@ PowerVLC is an open source project by **Olsro** for the community, forked from V
 
 ---
 
-Windows XP SP3 (2007) continued to receive official VLC updates, whereas the Mac OS X minimal version bumped several times, requiring 10.7.5 (2011). Starting with VLC 4, things will get worse: Mac OS X 10.10+ (2014) / Windows 7 (2009) will be required.
-
-PowerVLC supports almost every feature & nitpick the real VLC3 does, back to Jaguar 10.2. User experience is the same between all OS, though 10.7+ users can freely switch to the "Modern" interface as they do not need the Legacy UI rewrite.
-
-PowerVLC also supports modern SSL, with bundled certs, making it possible to stream HTTPS web radios smoothly even using a G3.
+PowerVLC is an open source fork of VLC 3 by **Olsro** for the community with extra features, bug fixes, improvements, and more compatible with older hardware and OS versions. On Mac OS X, PowerVLC can run on anything that can at least run Mac OS X Jaguar 10.2 (2002): welcome to the retro future !
 
 ## Download
 
