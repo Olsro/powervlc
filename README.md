@@ -20,7 +20,7 @@ PowerVLC is an open source project by **Olsro** for the community, forked from V
 
 ---
 
-Windows XP SP3 (2007) continued to receive official VLC updates, whereas the Mac OS X minimal version bumped several times, requiring 10.7.5 (2011). Starting with VLC4, things will get worse: Mac OS X 10.10+ (2014) / Windows 7 (2009) will be required.
+Windows XP SP3 (2007) continued to receive official VLC updates, whereas the Mac OS X minimal version bumped several times, requiring 10.7.5 (2011). Starting with VLC 4, things will get worse: Mac OS X 10.10+ (2014) / Windows 7 (2009) will be required.
 
 PowerVLC supports almost every feature & nitpick the real VLC3 does, back to Jaguar 10.2. User experience is the same between all OS, though 10.7+ users can freely switch to the "Modern" interface as they do not need the Legacy UI rewrite.
 
@@ -48,32 +48,25 @@ The universal bundle runs on **every** supported Mac and architecture out of a s
 
 Building it yourself is documented in [BUILD-POWERVLC.md](BUILD-POWERVLC.md).
 
-## Extra features on PowerVLC that even the modern VLC don't have/never had
-
-- **Look-ahead cache.** An optional cache based on decoded frames. If you accept some slowdown & a lot of (configurable) extra RAM usage, you can get smooth playback on content your machine can't exactly decode real time reliably (for example h.264 720p on a Mac Mini G4). The playback will need to stop from time to time in order to do the buffering, but will be 100% smooth all the rest of the time.
-- **Gapless playback for music.** This is crucial to listen correctly to many live albums recorded that way, and iTunes supports that since iTunes 7.
-- **Cover art in the bottom left of the main window on Mac OS** (the Windows version of VLC has been able to do that for a long time).
-- **Hardware GPU MPEG-2 acceleration on old Mac ATI cards.** The first 3rd party program ever doing it, calling private APIs from the system that were never reverse engineered before. This allows comfortable MPEG-2 streams to be played on G3s from the early 2000s. DVD subtitles and animated menu highlights are composited by the GPU too. See [ACCELERATED-MPEG2-COMPATIBILITY.md](ACCELERATED-MPEG2-COMPATIBILITY.md) for the exact list of validated GPUs.
-- **Crystal HD (BCM70015) hardware decoding on macOS**, with the kext bundled and installed, reloaded or removed from the Help menu.
-- **AltiVec everywhere it counts** on G4/G5: HEVC (+60% measured on 480p 10-bit), H.264, VP9, AV1, FFT, Opus/AAC — every kernel bit-identical to the C reference, and installed only on the CPUs where it measured faster.
-- **Simple, more user friendly and straightforward commercial Blu-Ray playback:**
-	- Targets the lowest Java at compile, so only Java 5 is required to play BD-J menus on PowerVLC.
-	- Can load the Java 6 bundled into Snow Leopard automatically (same about the Java 5 shipped on Tiger/Leopard).
-	- libaacs and libbdplus are already included, and a convenient importation workflow has been integrated: just drag & drop/open your `keydb.cfg` and PowerVLC will ask you to automatically import it into the right place, then insert your Blu-ray disc and it will play (with menus also if Java 6+ is available on your system).
-	- Menu items in the "Help" menu to quickly open folders related to content decryption using libaacs/libbdplus.
-	- Forced subtitle detection on PGS tracks, which even VLC master lacks.
-- **Searches that ignore accents, ligatures and typographic punctuation**: typing `au coeur de l'histoire` finds *Au Cœur de l'Histoire*, everywhere in the app.
-
-## Streaming, without a modern browser
-
-- **Four extensions are shipped with the player**, and they render identically on the modern macOS interface, the legacy Mac OS X one and Qt on Windows/Linux:
-	- **Invidious** — browse instances, search videos, channels and playlists, pick your quality. The media is fetched straight from Google's servers rather than relayed, which is one hop less on a machine that has none to spare.
-	- **Jellyfin** — browse a server (movies, series, seasons, episodes, live TV) and play the original file or an HLS stream transcoded at the quality you choose.
-	- **Subsonic / Navidrome / Airsonic** — browse a music server the way a music player does, with search, favourites, gapless playback, server-side transcoding and downloads.
-	- **Podcast discovery (iTunes)** — search Apple's public directory, open a show with its artwork and description, and subscribe in one click.
-- **Radio-Browser.info directory** in the Internet section of the sidebar: browse the community webradio database by continent and country, or jump to a random station worldwide.
-- **Invidious instances guarded by an anti-bot challenge are handed to your browser.** PowerVLC does not try to solve JavaScript proof-of-work or captchas: it opens the page in the browser you already have — even a Mac OS X 10.4 machine can run a current one (PowerFox) — and takes back the session the browser legitimately earned. Only the *page* is ever handed over: the media itself is always fetched by the player.
-- **A PowerVLC browser add-on** for legacy Firefox, that can be installed in one click from the Help menu. It offers the ability to quickly send links to PowerVLC directly with a right click from a video content/link, and helps to pass the JavaScript challenges on protected Invidious instances. This new add-on was designed to work well especially with *neo-retro* browsers like PowerFox or Basilisk.
+## Features (more than all the goodnesses already available in VLC 3 upstream)
+- Look-ahead cache & general optimisations to improve smoothness & compatibility on older hardware
+- SSL/TLS using gnuTLS with bundled certs on all platforms. Benefits particularily on outdated OS that has antique TLS and root certs.
+- Gapless playback
+- Hardware GPU MPEG-2 acceleration with some Mac G3 ATI cards
+- Crystal HD (BCM70015) hardware decoding on macOS
+- Easy to play commercial Blu-Rays: just drag & drop the keydb.cfg into the window and it's enough to play a commercial blu-ray on all platforms supported by PowerVLC (excepted Mac OS X 10.2/10.3). If you don't intend to use Blu-Ray menus, PowerVLC can now select automatically the right obfuscated playlist defined in the keydb.cfg file. In general, a lot of efforts has been done in PowerVLC to make the playback of commercial discs as reliable & smooth as possible.
+- Heavily tuned, refined subtly, & bugs fixed
+- Technical backports & contrib updates from upstream VLC 4
+- Revamped extensions system where you can find complete content browsers to find content in a very optimised & lite way. Includes out of the box in-app optimised browsers for Invidious (YouTube), Jellyfin, Subsonic / Navidrome / Airsonic, and Podcast discovery.
+- Radios Browser: find stations all over the world, save your favourites in your library and play randomly a station to discover new ones
+- Web Browser add-on companion compatible with PowerFox, Basilisk (all kind of Legacy Firefox based on the XUL platform)
+- Picture-In-Picture mode (all window controls hidden) available on all OS (on Mac OS X 10.2 to 10.5, the title bar from the window can't be removed though)
+- Hover the seekbar to see a thumbnail of the targetted time
+- Clip creation mode: optimised & ergonic way to export a customised part of a content
+- Automatic cropping of the black bars (auto crop) depending on the content you're watching. No more manual adjustment and need to know the ratio of your files/IPTV streams by yourself.
+- Mac OS X: can now show the album cover art on the main window + see chapters marks on the seekbar
+- AppImage on Linux, which contains all dependencies on its own so is very easy to use & very compatible with a large amount of different Linux distros
+- IPTV/adaptative streams handling improvements: define exactly the quality you want and select automatically the lowest/highest one as a favourite for the next streams you're going to watch
 
 ## Philosophy of this project
 
