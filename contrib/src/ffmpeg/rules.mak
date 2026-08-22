@@ -381,7 +381,7 @@ ifdef USE_FFMPEG
 	# Second tuning pass, from a full checkasm --bench of all 507 registered
 	# AltiVec kernels on the 7447A: HEVC MC gains a width>=8 floor, HEVC SAO
 	# 8-bit drops width 8, and three upstream kernels that lose there are
-	# unregistered. See doc/ffmpeg-altivec-macos-powerpc.md.
+	# unregistered. See doc/powerpc-contrib-simd.md.
 	$(APPLY) $(SRC)/ffmpeg/0009-ppc-bench-driven-registration-tuning-on-a-7447A.patch
 endif
 ifdef USE_LIBAV

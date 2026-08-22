@@ -29,9 +29,12 @@ X264CONF = \
 ifndef HAVE_WIN32
 X264CONF += --enable-pic
 ifeq ($(ARCH),ppc)
-# G3 target: no AltiVec, and x264's Mac ppc path hardcodes Apple-gcc-only
-# flags (-faltivec -fastf -mcpu=G4) that FSF GCC rejects
+# The G3 target has no vector unit. G4/G5 builds export VLC_PPC_ALTIVEC and
+# use the restored big-endian AltiVec backend below.
+X264CONF += --disable-vsx
+ifndef VLC_PPC_ALTIVEC
 X264CONF += --disable-asm
+endif
 endif
 ifeq ($(ARCH),i386)
 ifdef HAVE_MACOSX
@@ -89,6 +92,15 @@ x264 x26410b: %: x264-$(X264_VERSION).tar.xz .sum-%
 	$(APPLY) $(SRC)/x264/x264-winstore.patch
 	$(APPLY) $(SRC)/x264/0001-osdep-use-direct-path-to-internal-x264.h.patch
 	$(APPLY) $(SRC)/x264/0001-configure-set-_FILE_OFFSET_BITS-to-detect-fseeko.patch
+	# Restore/fix the big-endian AltiVec backend from powerpc-ports commit
+	# d693f73b (2026-06-26). The first patch supplies VSX-less helpers, the
+	# second fixes chroma MC endianness and uninitialized lanes. 0002 makes
+	# x264's Darwin probe accept our FSF GCC; 0003 keeps the four tiny kernels
+	# that lose on a 7447A in C.
+	$(APPLY) $(SRC)/x264/altivec-x264.patch
+	$(APPLY) $(SRC)/x264/altivec-x264-2.patch
+	$(APPLY) $(SRC)/x264/0002-ppc-darwin-use-fsf-gcc-altivec-flags.patch
+	$(APPLY) $(SRC)/x264/0003-ppc-g4-keep-four-slower-tiny-kernels-in-c.patch
 	$(MOVE)
 
 .x264: x264

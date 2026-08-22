@@ -4,6 +4,19 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
 
 ## 1.3.2 (2026-08-22)
 
+### PowerPC performance
+
+- **dav1d now exposes its complete big-endian AltiVec decoder on G4/G5.**
+  Refreshed `powerpc-ports` patches fix the 32-bit dispatcher, stack alignment
+  and Wiener byte shuffle. All 658 AltiVec checks pass on a 1.42 GHz Mac mini
+  G4; an AV1 848x480 decode uses 11.1% less CPU time and rises from 69.8 to
+  78.4 fps.
+- **x264 encoding is AltiVec-accelerated on G4/G5 instead of being forced to
+  C.** Its restored big-endian backend passes all 8- and 10-bit checkasm
+  families. On the same G4, a mono-threaded medium-preset encode rises from
+  10.27 to 20.08 fps (1.96x) while producing a bit-identical H.264 stream.
+  G3 builds retain the scalar path.
+
 ### Capture on Mac OS X 10.2 to 10.6 and fixed on the Legacy UI
 
 - **Capture devices are available again throughout the supported macOS
@@ -76,6 +89,14 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   buffer.** Opaque CoreVideo pictures have no CPU planes by design; avoiding
   that allocation fixes the allocator corruption seen when a full hardware
   picture pool is created on older macOS.
+
+### Fixes — Windows
+
+- **Portable builds no longer become extremely slow to open after repeated
+  launches.** Their self-healing plug-in cache was saved with no entries, so
+  PowerVLC scanned and loaded every plug-in DLL again on every startup; on
+  some Windows 11 systems this delayed the main window by up to a minute. The
+  complete cache is now written after the first scan and reused thereafter.
 
 ### Fixes — macOS integration and compatibility
 
