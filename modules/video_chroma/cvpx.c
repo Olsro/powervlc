@@ -41,7 +41,7 @@
 static int Open(vlc_object_t *);
 static void Close(vlc_object_t *);
 
-#if !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1080
 static int Open_CVPX_to_CVPX(vlc_object_t *);
 static void Close_CVPX_to_CVPX(vlc_object_t *);
 #endif
@@ -56,7 +56,7 @@ struct filter_sys_t
             video_format_t fmt;
             copy_cache_t cache;
         } sw;
-#if !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1080
         VTPixelTransferSessionRef vttransfer;
 #endif
     };
@@ -66,7 +66,7 @@ vlc_module_begin ()
     set_description("Conversions from/to CoreVideo buffers")
     set_capability("video converter", 10)
     set_callbacks(Open, Close)
-#if !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1080
     add_submodule()
     set_description("Conversions between CoreVideo buffers")
     set_callbacks(Open_CVPX_to_CVPX, Close_CVPX_to_CVPX)
@@ -333,7 +333,7 @@ static int Open(vlc_object_t *obj)
  * CVPX to CVPX conversion *
  ***************************/
 
-#if !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1080
 
 static picture_t *
 Filter(filter_t *filter, picture_t *src)

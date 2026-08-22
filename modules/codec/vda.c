@@ -60,6 +60,17 @@ static const char *const chroma_names[] = {
     N_("Auto"), "UYVY (4:2:2)", "NV12 (4:2:0)", "I420 (4:2:0)"
 };
 
+/* This plugin embeds helper translation units which log through the
+ * vlc_module_name defined by vlc_module_end(). Keep it visible while Apple's
+ * current linker combines those objects with ld -r; the final plugin export
+ * list still publishes only vlc_entry. Older linkers did this implicitly. */
+#if defined(__PLUGIN__) && defined(__GNUC__)
+# undef VLC_MODULE_NAME_HIDDEN_SYMBOL
+# define VLC_MODULE_NAME_HIDDEN_SYMBOL \
+    __attribute__((visibility("default"))) \
+    const char vlc_module_name[] = MODULE_STRING;
+#endif
+
 vlc_module_begin()
     set_category(CAT_INPUT)
     set_subcategory(SUBCAT_INPUT_VCODEC)
@@ -85,11 +96,14 @@ vlc_module_end()
  * decoder_sys_t
  *****************************************************************************/
 
-/* held output frame, ordered by pts (the VDA callback delivers frames in
- * decode order, not display order) */
+/* Held VDA output, ordered by pts (the callback delivers frames in decode
+ * order, not display order).  Keep this queue CoreVideo-only: VDA invokes its
+ * callback on a private driver thread, while decoder_NewPicture() and
+ * decoder_QueueVideo() must stay on VLC's decoder thread. */
 struct vda_pic
 {
-    picture_t *p_pic;
+    CVImageBufferRef image;
+    vlc_tick_t date;
     struct vda_pic *p_next;
 };
 
@@ -109,52 +123,65 @@ struct decoder_sys_t
 };
 
 static const CFStringRef kVLCVDAPts = CFSTR("org.videolan.vda.pts");
+static const CFStringRef kVLCVDACompressedData =
+    CFSTR("org.videolan.vda.compressed-data");
 
 /*****************************************************************************
  * output queue helpers (lock held)
  *****************************************************************************/
 
-static void QueueInsert(decoder_sys_t *p_sys, picture_t *p_pic)
+static void QueueInsert(decoder_sys_t *p_sys, CVImageBufferRef image,
+                        vlc_tick_t date)
 {
     struct vda_pic *p_entry = malloc(sizeof (*p_entry));
-    if (unlikely(p_entry == NULL)) {
-        picture_Release(p_pic);
+    if (unlikely(p_entry == NULL))
         return;
-    }
-    p_entry->p_pic = p_pic;
+    p_entry->image = CVPixelBufferRetain(image);
+    p_entry->date = date;
 
     struct vda_pic **pp = &p_sys->p_queue;
-    while (*pp != NULL && (*pp)->p_pic->date <= p_pic->date)
+    while (*pp != NULL && (*pp)->date <= date)
         pp = &(*pp)->p_next;
     p_entry->p_next = *pp;
     *pp = p_entry;
     p_sys->i_queued++;
 }
 
-static picture_t *QueuePop(decoder_sys_t *p_sys)
+static struct vda_pic *QueuePop(decoder_sys_t *p_sys)
 {
     struct vda_pic *p_entry = p_sys->p_queue;
     if (p_entry == NULL)
         return NULL;
     p_sys->p_queue = p_entry->p_next;
     p_sys->i_queued--;
-    picture_t *p_pic = p_entry->p_pic;
-    free(p_entry);
-    return p_pic;
+    p_entry->p_next = NULL;
+    return p_entry;
 }
 
-static void QueueEmpty(decoder_t *p_dec, bool b_emit)
+static void QueueOutput(decoder_t *p_dec, bool b_all, bool b_emit)
 {
     decoder_sys_t *p_sys = p_dec->p_sys;
-    picture_t *p_pic;
-    vlc_mutex_lock(&p_sys->lock);
-    while ((p_pic = QueuePop(p_sys)) != NULL) {
-        if (b_emit)
-            decoder_QueueVideo(p_dec, p_pic);
-        else
-            picture_Release(p_pic);
+    for (;;) {
+        vlc_mutex_lock(&p_sys->lock);
+        struct vda_pic *p_entry = (b_all || p_sys->i_queued > p_sys->i_depth)
+            ? QueuePop(p_sys) : NULL;
+        vlc_mutex_unlock(&p_sys->lock);
+        if (p_entry == NULL)
+            break;
+
+        if (b_emit) {
+            picture_t *p_pic = decoder_NewPicture(p_dec);
+            if (p_pic != NULL) {
+                p_pic->date = p_entry->date;
+                p_pic->b_progressive = true;
+                /* cvpxpic_attach() retains the CVPixelBuffer for the picture. */
+                if (cvpxpic_attach(p_pic, p_entry->image) == VLC_SUCCESS)
+                    decoder_QueueVideo(p_dec, p_pic);
+            }
+        }
+        CVPixelBufferRelease(p_entry->image);
+        free(p_entry);
     }
-    vlc_mutex_unlock(&p_sys->lock);
 }
 
 /*****************************************************************************
@@ -171,57 +198,26 @@ static void DecoderCallback(void *refcon, CFDictionaryRef frameInfo,
 
     if (status != kVDADecoderNoErr || imageBuffer == NULL)
         return;
-    if (CVPixelBufferGetPixelFormatType(imageBuffer) != p_sys->cv_format)
-        return;
-
-    vlc_mutex_lock(&p_sys->lock);
-    bool b_ok = p_sys->b_format_valid;
-    vlc_mutex_unlock(&p_sys->lock);
-    if (!b_ok)
-        return;
-
-    picture_t *p_pic = decoder_NewPicture(p_dec);
-    if (p_pic == NULL)
-        return;
 
     /* timestamp travels through the frameInfo dictionary */
-    p_pic->date = VLC_TS_INVALID;
+    vlc_tick_t date = VLC_TS_INVALID;
     if (frameInfo != NULL) {
         CFNumberRef ptsRef = CFDictionaryGetValue(frameInfo, kVLCVDAPts);
         int64_t i_pts;
         if (ptsRef != NULL
          && CFNumberGetValue(ptsRef, kCFNumberSInt64Type, &i_pts))
-            p_pic->date = i_pts;
+            date = i_pts;
     }
 
-    /* VDA is fed progressive H.264 only; it never emits fields. */
-    p_pic->b_progressive = true;
-
-    /* Zero copy. The decoded frame already lives in GPU memory, backed by an
-     * IOSurface, so hand that buffer straight down the chain instead of
-     * reading it back: the glconv_cvpx converter binds it as a texture with
-     * CGLTexImageIOSurface2D and it never leaves the GPU.
-     *
-     * Do NOT reintroduce a CVPixelBufferLockBaseAddress()+memcpy() here. That
-     * lock forces a readback across the bus, the vout then uploads the very
-     * same frame back as a texture, and the round trip costs more than
-     * decoding the stream on the CPU in the first place — measured on a
-     * GeForce 320M, 1080p: 25.0 s of CPU per 30 s of video with the copy
-     * versus 18.5 s for pure software decoding.
-     *
-     * On failure cvpxpic_attach() has already released the picture. */
-    if (cvpxpic_attach(p_pic, imageBuffer) != VLC_SUCCESS)
-        return;
-
-    /* reorder: hold i_depth frames, emit by increasing pts */
+    /* VDA is asynchronous. Only retain and order its IOSurface here; VLC
+     * picture allocation and delivery happen later in DecodeBlock().  This
+     * follows Apple's documented callback/consumer queue model and avoids
+     * entering vout pool creation concurrently from the NVIDIA VDA thread. */
     vlc_mutex_lock(&p_sys->lock);
-    QueueInsert(p_sys, p_pic);
-    picture_t *p_out = p_sys->i_queued > p_sys->i_depth
-        ? QueuePop(p_sys) : NULL;
+    if (p_sys->b_format_valid
+     && CVPixelBufferGetPixelFormatType(imageBuffer) == p_sys->cv_format)
+        QueueInsert(p_sys, imageBuffer, date);
     vlc_mutex_unlock(&p_sys->lock);
-
-    if (p_out != NULL)
-        decoder_QueueVideo(p_dec, p_out);
 }
 
 /*****************************************************************************
@@ -233,10 +229,16 @@ static void DestroySession(decoder_t *p_dec)
     decoder_sys_t *p_sys = p_dec->p_sys;
     if (p_sys->session == NULL)
         return;
+    /* Reject callbacks which race with the flush itself. VDADecoderFlush
+     * guarantees that none remain after it returns; this closes the window
+     * while it is running, before the session and its decoder state go away. */
+    vlc_mutex_lock(&p_sys->lock);
+    p_sys->b_format_valid = false;
+    vlc_mutex_unlock(&p_sys->lock);
     VDADecoderFlush(p_sys->session, 0);
     VDADecoderDestroy(p_sys->session);
     p_sys->session = NULL;
-    QueueEmpty(p_dec, false);
+    QueueOutput(p_dec, true, false);
 }
 
 static int CreateSession(decoder_t *p_dec)
@@ -407,7 +409,7 @@ static void Flush(decoder_t *p_dec)
     decoder_sys_t *p_sys = p_dec->p_sys;
     if (p_sys->session != NULL)
         VDADecoderFlush(p_sys->session, 0);
-    QueueEmpty(p_dec, false);
+    QueueOutput(p_dec, true, false);
 }
 
 static int DecodeBlock(decoder_t *p_dec, block_t *p_block)
@@ -428,7 +430,7 @@ static int DecodeBlock(decoder_t *p_dec, block_t *p_block)
         /* drain */
         if (p_sys->session != NULL)
             VDADecoderFlush(p_sys->session, kVDADecoderFlush_EmitFrames);
-        QueueEmpty(p_dec, true);
+        QueueOutput(p_dec, true, true);
         return VLCDEC_SUCCESS;
     }
 
@@ -449,7 +451,7 @@ static int DecodeBlock(decoder_t *p_dec, block_t *p_block)
 
     if (b_config_changed && p_sys->session != NULL) {
         VDADecoderFlush(p_sys->session, kVDADecoderFlush_EmitFrames);
-        QueueEmpty(p_dec, true);
+        QueueOutput(p_dec, true, true);
         DestroySession(p_dec);
     }
 
@@ -479,8 +481,14 @@ static int DecodeBlock(decoder_t *p_dec, block_t *p_block)
     CFNumberRef ptsRef = CFNumberCreate(NULL, kCFNumberSInt64Type, &i_pts);
     CFDictionaryRef frameInfo = NULL;
     if (ptsRef != NULL) {
-        frameInfo = CFDictionaryCreate(kCFAllocatorDefault,
-            (const void **)&kVLCVDAPts, (const void **)&ptsRef, 1,
+        /* VDA decodes asynchronously. Keep the compressed CFData alive until
+         * the output callback by putting it in frameInfo, which VDA retains
+         * for the lifetime of this decode operation. Releasing frameData just
+         * after VDADecoderDecode used to leave the Snow Leopard NVIDIA driver
+         * reading freed heap memory. */
+        const void *keys[] = { kVLCVDAPts, kVLCVDACompressedData };
+        const void *values[] = { ptsRef, frameData };
+        frameInfo = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 2,
             &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
         CFRelease(ptsRef);
     }
@@ -499,6 +507,11 @@ static int DecodeBlock(decoder_t *p_dec, block_t *p_block)
     CFRelease(frameInfo);
     if (status != kVDADecoderNoErr)
         msg_Warn(p_dec, "VDADecoderDecode failed: %d", (int)status);
+
+    /* Deliver completed callbacks from the VLC decoder thread.  Keep the DPB
+     * depth queued so B-frames remain ordered; a later block or drain emits
+     * the rest. */
+    QueueOutput(p_dec, false, true);
 
     return VLCDEC_SUCCESS;
 }

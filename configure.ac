@@ -32,7 +32,7 @@ AC_SUBST(PKGDIR)
 CONFIGURE_LINE="`echo "$0 $ac_configure_args" | sed -e 's/\\\/\\\\\\\/g'`"
 CODENAME="Vetinari"
 dnl PowerVLC product version, distinct from the VLC core version above
-POWERVLC_VERSION="1.3.1"
+POWERVLC_VERSION="1.3.2"
 AC_SUBST(POWERVLC_VERSION)
 dnl Split for the Win32 VERSIONINFO resources, which want a numeric 4-tuple.
 dnl Without these the file properties, the Add/Remove Programs entry and the
@@ -2511,6 +2511,55 @@ AC_ARG_ENABLE(realrtsp,
 if test "${enable_realrtsp}" = "yes"; then
   VLC_ADD_PLUGIN([access_realrtsp])
 fi
+
+dnl QTKit capture (10.4 through 10.14).  This is the capture path for
+dnl releases predating AVFoundation; newer SDKs no longer ship the headers,
+dnl so keep it strictly conditional on the SDK actually in use.
+have_qtkit="no"
+AC_ARG_ENABLE(macosx-qtkit,
+  [AS_HELP_STRING([--enable-macosx-qtkit],
+    [Mac OS X QTKit video/audio capture modules (default auto)])])
+if test "x${enable_macosx_qtkit}" != "xno" &&
+  (test "${SYS}" = "darwin" || test "${enable_macosx_qtkit}" = "yes")
+then
+  AC_LANG_PUSH([Objective C])
+  AC_CHECK_HEADER([QTKit/QTKit.h], [have_qtkit="yes"])
+  AC_LANG_POP([Objective C])
+fi
+AM_CONDITIONAL(HAVE_QTKIT, [test "${have_qtkit}" = "yes"])
+
+dnl QuickTime Sequence Grabber (10.0 through 10.6, 32-bit only).  QTKit's
+dnl capture classes start at 10.5; this Carbon API is the capture path for
+dnl Jaguar/Panther/Tiger.  QuickTime.framework has no usable 64-bit API.
+have_sequence_grabber="no"
+SEQUENCE_GRABBER_LIBS=""
+AC_ARG_ENABLE(macosx-sequence-grabber,
+  [AS_HELP_STRING([--enable-macosx-sequence-grabber],
+    [QuickTime Sequence Grabber capture for 32-bit legacy macOS (default auto)])])
+if test "x${enable_macosx_sequence_grabber}" != "xno" &&
+  (test "${SYS}" = "darwin" || test "${enable_macosx_sequence_grabber}" = "yes")
+then
+  SAVED_LIBS="${LIBS}"
+  LIBS="-framework QuickTime -framework Carbon ${LIBS}"
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+#include <Carbon/Carbon.h>
+#include <QuickTime/QuickTime.h>
+#if defined(__LP64__)
+# error Sequence Grabber is a 32-bit API
+#endif
+]], [[
+    SeqGrabComponent sg = OpenDefaultComponent(SeqGrabComponentType, 0);
+    if (sg != NULL) CloseComponent(sg);
+]])], [have_sequence_grabber="yes"], [have_sequence_grabber="no"])
+  LIBS="${SAVED_LIBS}"
+fi
+if test "${have_sequence_grabber}" = "yes"; then
+  SEQUENCE_GRABBER_LIBS="-Wl,-framework,QuickTime -Wl,-framework,Carbon"
+  AC_DEFINE([HAVE_SEQUENCE_GRABBER], [1],
+    [Define to 1 when the 32-bit QuickTime Sequence Grabber API is available.])
+fi
+AC_SUBST([SEQUENCE_GRABBER_LIBS])
+AM_CONDITIONAL(HAVE_SEQUENCE_GRABBER, [test "${have_sequence_grabber}" = "yes"])
 
 dnl AVFoundation
 AC_SUBST(have_avfoundation, ["no"])

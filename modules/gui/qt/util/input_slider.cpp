@@ -84,10 +84,6 @@ SeekSlider::SeekSlider( intf_thread_t *p_intf, Qt::Orientation q, QWidget *_pare
     b_clipMode = false;
     activeClipKnob = 0;
     f_clipMarker = 0.f;
-    b_clipPreviewPending = false;
-    f_clipPreviewFraction = 0.f;
-    clipPreviewTimer = new QTimer( this );
-    clipPreviewTimer->setSingleShot( true );
     hoverFraction = -1.;
 
     // prepare some static colors
@@ -193,7 +189,6 @@ SeekSlider::SeekSlider( intf_thread_t *p_intf, Qt::Orientation q, QWidget *_pare
     connect( hideHandleTimer, &QTimer::timeout, this, &SeekSlider::hideHandle );
     connect( startAnimLoadingTimer, &QTimer::timeout, this, &SeekSlider::startAnimLoading );
     connect( thumbnailTimer, &QTimer::timeout, this, &SeekSlider::requestHoverThumbnail );
-    connect( clipPreviewTimer, &QTimer::timeout, this, &SeekSlider::clipPreviewTimeout );
     connect( thumbnailer, &SeekThumbnailer::thumbnailReady,
              this, &SeekSlider::hoverThumbnailReady );
     mTimeTooltip->installEventFilter( this );
@@ -339,16 +334,10 @@ void SeekSlider::processReleasedButton()
     isSliding = false;
     if ( b_clipMode )
     {
-        /* every knob step already seeked; make sure the last one, which
-         * the pacing may still be holding, lands on screen */
+        /* The drag is display-paced; force its exact trailing position now. */
+        THEMIM->getIM()->flushClipPreview();
         activeClipKnob = 0;
         seekLimitTimer->stop();
-        clipPreviewTimer->stop();
-        if( b_clipPreviewPending )
-        {
-            b_clipPreviewPending = false;
-            emit sliderDragged( f_clipPreviewFraction );
-        }
         return;
     }
     bool b_seekPending = seekLimitTimer->isActive();
@@ -448,33 +437,13 @@ void SeekSlider::clipKnobInteract( int xPos )
     update();
 }
 
-/* The knob follows the mouse at full rate, the preview seek behind it is
- * PACED -- but never dropped. A seek is not free (an accurate one decodes
- * from the preceding key frame), so firing one per mouse event just queues
- * positions that are already stale when they are served, and the picture
- * trails the handle. One every 100 ms then, with a TRAILING one: a single
- * pixel nudge, which frame-accurate trimming is made of, still gets
- * previewed even though no further event follows it. */
+/* Clip trimming is a visual operation: mirror the macOS interfaces and send
+ * every movement to the input.  Pacing these seeks made short movements and
+ * intermediate positions update only the handle while the displayed frame
+ * stayed behind it, which made precise trimming effectively blind. */
 void SeekSlider::clipSeekPreview( float fraction )
 {
-    f_clipPreviewFraction = fraction;
-    if( clipPreviewTimer->isActive() )
-    {
-        b_clipPreviewPending = true;
-        return;
-    }
-    b_clipPreviewPending = false;
     emit sliderDragged( fraction );
-    clipPreviewTimer->start( 100 );
-}
-
-void SeekSlider::clipPreviewTimeout()
-{
-    if( !b_clipPreviewPending )
-        return;
-    b_clipPreviewPending = false;
-    emit sliderDragged( f_clipPreviewFraction );
-    clipPreviewTimer->start( 100 );
 }
 
 void SeekSlider::mousePressEvent( QMouseEvent* event )

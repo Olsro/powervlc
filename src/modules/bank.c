@@ -322,7 +322,7 @@ static int AllocatePluginFile (module_bank_t *bank, const char *abspath,
 
     vlc_plugin_store(plugin);
 
-#ifdef __APPLE__
+#ifdef VLC_SELF_HEALING_PLUGIN_CACHE
     /* Collect entries whenever scanning, so an updated cache can be saved
      * when the on-disk one turns out missing or stale (see below). */
     if (bank->mode & (CACHE_WRITE_FILE|CACHE_SCAN_DIR))

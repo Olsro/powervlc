@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build VLC-universal.icns: one .icns that renders the app icon correctly from
-Mac OS X 10.4 all the way to current macOS.
+Mac OS X 10.2 all the way to current macOS.
 
 The trap this works around
 --------------------------
@@ -22,11 +22,13 @@ reader knows*, i.e. ic08/ic09.
 
 The recipe
 ----------
-  * classic families is32/il32/ih32/it32 (+ 8-bit masks) — 10.4/10.5 Finder,
-    Dock and NSImage;
-  * ic08/ic09 taken from VLC-tiger.icns, which are JPEG 2000 — decodable by the
-    10.5 in-process reader AND by modern macOS;
-  * ic07/ic11/ic12/ic13/ic14 (PNG) — retina detail for 10.7+, invisible to 10.5.
+  * classic families is32/il32/ih32/it32 (+ 8-bit masks) — usable by Jaguar,
+    Tiger and modern macOS;
+The universal icon deliberately contains only the classic representations.
+Jaguar does not reliably skip any newer element types, so a mixed classic /
+Retina file can still become a generic icon. Modern macOS can display the
+classic representations as a fallback; architecture-specific modern bundles
+may add Retina artwork separately.
 
 That single file validates (`+[NSImage initWithContentsOfFile:]` returns a
 6-representation image) on Leopard while still carrying the modern retina
@@ -41,14 +43,8 @@ import struct
 import sys
 
 CLASSIC = ["is32", "s8mk", "il32", "l8mk", "ih32", "h8mk", "it32", "t8mk"]
-# ic08/ic09 must come from a JPEG-2000 source (tiger); ic07/ic11..ic14 are the
-# modern PNG retina detail harvested from the previous universal icon.
-FROM_TIGER = ["ic08", "ic09"]
-FROM_RETINA = ["ic07", "ic11", "ic12", "ic13", "ic14"]
-
-# element write order: classic first (so the 10.5 reader locks onto a usable
-# representation immediately), then the JPEG-2000 mid sizes, then retina PNG.
-ORDER = CLASSIC + ["ic08", "ic09"] + FROM_RETINA
+# Keep the universal file to the Jaguar-safe classic representations only.
+ORDER = CLASSIC
 
 
 def read_elements(path):
@@ -67,10 +63,6 @@ def read_elements(path):
     return out
 
 
-def is_jpeg2000(blob):
-    return blob[:12] == b"\x00\x00\x00\x0cjP  \r\n\x87\n" or blob[:4] == b"\x00\x00\x00\x0c"
-
-
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     res = os.path.join(here, "..", "..", "..", "modules", "gui",
@@ -82,20 +74,10 @@ def main():
     t = read_elements(tiger)
     r = read_elements(retina)
 
-    for k in FROM_TIGER:
-        if not is_jpeg2000(t[k]):
-            raise SystemExit("%s in %s is not JPEG 2000 — 10.5 would reject the "
-                             "whole icon; regenerate the tiger icns first" % (k, tiger))
-
     picked = []
     for etype in ORDER:
         if etype in CLASSIC:
             picked.append((etype, t[etype]))
-        elif etype in FROM_TIGER:
-            picked.append((etype, t[etype]))
-        else:
-            if etype in r:
-                picked.append((etype, r[etype]))
 
     body = b"".join(t_.encode("latin1") + struct.pack(">I", len(b) + 8) + b
                     for t_, b in picked)

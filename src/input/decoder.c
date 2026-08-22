@@ -116,6 +116,7 @@ struct decoder_owner_sys_t
     vlc_tick_t pause_date;
     unsigned frames_countdown;
     bool paused;
+    bool frame_after_flush;
 
     bool error;
 
@@ -1979,6 +1980,19 @@ static void *DecoderThread( void *p_data )
              * harmless). */
             p_owner->flushing = false;
 
+            /* An old in-flight picture can finish while the flush request is
+             * being handled. Arm the paused seek only after the codec and
+             * vout flush have completed so that picture cannot consume it. */
+            if( p_owner->frame_after_flush )
+            {
+                p_owner->frame_after_flush = false;
+                if( p_owner->paused
+                 && ( p_owner->fmt.i_cat == VIDEO_ES
+                   || p_owner->fmt.i_cat == SPU_ES )
+                 && p_owner->frames_countdown == 0 )
+                    p_owner->frames_countdown++;
+            }
+
             continue;
         }
 
@@ -2255,6 +2269,7 @@ static decoder_t * CreateDecoder( vlc_object_t *p_parent,
     p_owner->paused = false;
     p_owner->pause_date = VLC_TICK_INVALID;
     p_owner->frames_countdown = 0;
+    p_owner->frame_after_flush = false;
 
     p_owner->b_waiting = false;
     p_owner->b_first = true;
@@ -2755,17 +2770,29 @@ void input_DecoderFlush( decoder_t *p_dec )
      * a row. */
     p_owner->flushing = true;
 
-    /* Flush video/spu decoder when paused: increment frames_countdown in order
-     * to display one frame/subtitle */
-    if( p_owner->paused
-     && ( p_owner->fmt.i_cat == VIDEO_ES || p_owner->fmt.i_cat == SPU_ES )
-     && p_owner->frames_countdown == 0 )
-        p_owner->frames_countdown++;
+    /* Request one new video/subtitle after the flush itself has completed.
+     * Arming it here lets an in-flight pre-seek picture consume it. */
+    p_owner->frame_after_flush = p_owner->paused
+        && ( p_owner->fmt.i_cat == VIDEO_ES || p_owner->fmt.i_cat == SPU_ES );
+    const bool flush_paused_vout = p_owner->paused
+                                && p_owner->fmt.i_cat == VIDEO_ES;
 
     vlc_fifo_Signal( p_owner->p_fifo );
     vlc_cond_signal( &p_owner->wait_timed );
 
     vlc_fifo_Unlock( p_owner->p_fifo );
+
+    /* With direct rendering the paused vout can own every display buffer,
+     * leaving the decoder blocked inside its codec before it can observe the
+     * flush flag. Purge its queued pictures now to release a buffer without
+     * presenting a stale pre-seek frame. The current image stays visible. */
+    if( flush_paused_vout )
+    {
+        vlc_mutex_lock( &p_owner->lock );
+        if( p_owner->p_vout != NULL )
+            vout_Flush( p_owner->p_vout, VLC_TICK_INVALID + 1 );
+        vlc_mutex_unlock( &p_owner->lock );
+    }
 }
 
 void input_DecoderGetCcDesc( decoder_t *p_dec, decoder_cc_desc_t *p_desc )
@@ -2877,10 +2904,16 @@ void input_DecoderChangePause( decoder_t *p_dec, bool b_paused, vlc_tick_t i_dat
      * while the input is paused (e.g. add sub file), then b_paused is
      * (incorrectly) false. FIXME: This is a bug in the decoder owner. */
     vlc_fifo_Lock( p_owner->p_fifo );
-    p_owner->paused = b_paused;
-    p_owner->pause_date = i_date;
-    p_owner->frames_countdown = 0;
-    vlc_fifo_Signal( p_owner->p_fifo );
+    /* Re-applying the same pause state after a seek must not erase the frame
+     * armed by input_DecoderFlush(), otherwise the paused decoder never
+     * produces the requested preview picture. */
+    if( p_owner->paused != b_paused )
+    {
+        p_owner->paused = b_paused;
+        p_owner->pause_date = i_date;
+        p_owner->frames_countdown = 0;
+        vlc_fifo_Signal( p_owner->p_fifo );
+    }
     vlc_fifo_Unlock( p_owner->p_fifo );
 }
 
@@ -2927,6 +2960,13 @@ void input_DecoderStopWait( decoder_t *p_dec )
     p_owner->b_cache_hold = false;
     vlc_cond_signal( &p_owner->wait_request );
     vlc_mutex_unlock( &p_owner->lock );
+
+    /* A paused decoder can already have gone back to sleep on its input
+     * fifo while the buffering gate is being released. Wake that wait too:
+     * a seek flush and its requested preview frame may be pending there. */
+    vlc_fifo_Lock( p_owner->p_fifo );
+    vlc_fifo_Signal( p_owner->p_fifo );
+    vlc_fifo_Unlock( p_owner->p_fifo );
 }
 
 /* Look-ahead decode cache: reports how full this (video) decoder's vout

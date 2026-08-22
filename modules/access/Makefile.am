@@ -77,6 +77,24 @@ if HAVE_PULSE
 access_LTLIBRARIES += libpulsesrc_plugin.la
 endif
 
+libqtsound_plugin_la_SOURCES = access/qtsound.m
+libqtsound_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(accessdir)' \
+                               -Wl,-undefined,dynamic_lookup \
+                               -Wl,-framework,Foundation -Wl,-framework,QTKit \
+	-Wl,-framework,CoreAudio
+if HAVE_QTKIT
+access_LTLIBRARIES += libqtsound_plugin.la
+endif
+
+# Carbon QuickTime capture for Mac OS X 10.2-10.4.  One plugin exposes the
+# sgcapture:// (video) and sgsound:// (audio) access-demux shortcuts.
+libsequence_grabber_plugin_la_SOURCES = access/sequence_grabber.c
+libsequence_grabber_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(accessdir)' \
+	$(SEQUENCE_GRABBER_LIBS)
+if HAVE_SEQUENCE_GRABBER
+access_LTLIBRARIES += libsequence_grabber_plugin.la
+endif
+
 libavaudiocapture_plugin_la_SOURCES = access/avaudiocapture.m
 # ARC and AVFoundation need 10.7+ (see libavcapture above)
 libavaudiocapture_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -fobjc-arc -mmacosx-version-min=10.7
@@ -95,6 +113,15 @@ endif
 
 
 ### Video capture ###
+
+libqtcapture_plugin_la_SOURCES = access/qtcapture.m
+libqtcapture_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(accessdir)' \
+	-Wl,-framework,Foundation -Wl,-framework,QTKit \
+	-Wl,-framework,CoreVideo -Wl,-framework,QuartzCore \
+	-Wl,-framework,CoreAudio
+if HAVE_QTKIT
+access_LTLIBRARIES += libqtcapture_plugin.la
+endif
 
 libavcapture_plugin_la_SOURCES = access/avcapture.m
 # ARC (and AVFoundation itself) needs 10.7+: raise the minimum for this

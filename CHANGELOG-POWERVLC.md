@@ -2,6 +2,99 @@
 
 PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more legacy systems, not affiliated with VideoLAN.
 
+## 1.3.2 (2026-08-22)
+
+### Capture on Mac OS X 10.2 to 10.6 and fixed on the Legacy UI
+
+- **Capture devices are available again throughout the supported macOS
+  range.** The Open Capture panel now lists cameras, capture cards and audio
+  inputs instead of a permanently empty menu, opens the device selected by
+  its stable system identifier, and can add a microphone or line input to a
+  camera or screen capture. It chooses the capture API that the system has:
+  AVFoundation on recent macOS, QTKit on Leopard through Snow Leopard, and
+  QuickTime Sequence Grabber on 32-bit Jaguar, Panther and Tiger. These last
+  three releases can therefore use the same Open Capture workflow despite
+  predating the modern capture frameworks.
+- **Audio capture is reliable alongside legacy video capture.** On Mac OS X
+  10.2 through 10.6, the interface uses Sequence Grabber for a separate audio
+  input rather than opening a competing QTKit audio graph. Its delayed audio
+  callbacks are now accepted, their clock is aligned with the video capture
+  clock, and 16-bit PCM is exported in the byte order expected by recordings.
+  This restores sound to camera and screen captures and keeps it synchronized
+  with the picture.
+- **QTKit capture tolerates the older implementations actually shipped by
+  Tiger.** Methods advertised by newer SDK headers are checked at runtime;
+  when timestamps or frame-rate controls are unavailable, capture uses VLC's
+  monotonic clock instead of crashing the capture thread.
+- **The Capture panel and its device discovery are now Jaguar-safe.** Device
+  names use CoreFoundation conversions available on 10.2, QuickTime remains
+  initialized while devices are enumerated, and the panel avoids the workspace
+  APIs that crash during Jaguar startup. It also always refreshes the selected
+  tab, preventing a stale capture URL from being opened.
+
+### Extensions and adaptive streaming
+
+- **Invidious can now choose a dubbing track before playback.** When YouTube
+  exposes several audio tracks, the video dialog lists them (with the
+  original/default track first) and starts the selected one alongside the
+  chosen resolution. This works with both the Invidious API and its HTML
+  fallback, including DASH manifests with one adaptation set per language.
+- **Invidious subtitles can now be chosen before playback.** Captions from
+  the API and from the HTML player fallback are listed in the dialog and are
+  passed to the player as an external subtitle track. URLs with HTML-escaped
+  characters or literal spaces are normalised before opening.
+- **Changing to a selected audio stream in adaptive media no longer leaves
+  playback silent.** A newly selected, previously disabled stream is now
+  reactivated, positioned and primed before normal buffering priorities can
+  abandon it. DASH indexes needed by that stream are also read up front, so
+  the first media segment is available immediately.
+- **Copy Link now copies the quality actually selected.** A per-resolution
+  adaptive video entry copies its own stream URL; the untouched DASH choice
+  still copies the manifest URL.
+
+### Fixes — playback and video output
+
+- **Seeking while paused reliably shows the new picture.** A picture still
+  in flight before the seek could consume the single frame requested after a
+  decoder flush; with direct rendering, the decoder could also be blocked by
+  every display buffer held by the paused output. The flush now releases only
+  obsolete queued frames, arms the post-seek picture at the right moment and
+  makes the video output present it immediately. This restores reliable
+  seek-bar previews and frame-accurate clip trimming while paused.
+- **VDA H.264 decoding is more stable on older NVIDIA Macs.** VDA callbacks
+  now retain only CoreVideo buffers and are delivered on VLC's decoder thread,
+  rather than allocating output pictures from Apple's private callback thread.
+  The compressed input stays alive until the asynchronous driver has finished
+  with it, fixing a use-after-free seen on Snow Leopard; flushes and format
+  changes also reject racing callbacks safely. Frames retain their display
+  order and the zero-copy path remains in use.
+- **Automatic black-bar cropping works with VDA's native UYVY output.** It
+  now reads the luma bytes from packed UYVY directly instead of requiring a
+  conversion that the CoreVideo path cannot perform, preserving hardware
+  decoding and its low CPU use.
+- **Hardware video picture pools no longer ask old allocators for a zero-byte
+  buffer.** Opaque CoreVideo pictures have no CPU planes by design; avoiding
+  that allocation fixes the allocator corruption seen when a full hardware
+  picture pool is created on older macOS.
+
+### Fixes — macOS integration and compatibility
+
+- **Audio output recovers automatically after waking a legacy Mac.** The
+  legacy interface restarts the output device on wake, addressing CoreAudio
+  drivers that did not resume their render callback after sleep.
+- **The About window reports the installed bundle's version consistently.**
+  Both Mac interfaces take the product version, core version and build date
+  from the application bundle, with the compiled values as a fallback. A
+  universal application can no longer show an old version in one incrementally
+  rebuilt architecture slice.
+- **Modern Apple toolchains and older deployment targets build more
+  reliably.** The VDA plugin keeps the module-name symbol visible while the
+  current linker combines its helper objects, and the CoreVideo-to-CoreVideo
+  transfer module is omitted where its VideoToolbox API is unavailable.
+- **The PowerVLC icon appears on Jaguar in the universal application bundle.**
+  The universal icon now contains only the classic representations Jaguar can
+  read; newer icon formats previously made Finder fall back to a generic icon.
+
 ## 1.3.1 (2026-08-15)
 
 ### Fixes — all platforms

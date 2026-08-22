@@ -223,6 +223,7 @@ namespace adaptive
             const Role & getStreamRole() const;
             void reset();
             ChunkInterface* getNextChunk(bool);
+            bool preloadIndex();
             bool setPositionByTime(mtime_t, bool, bool);
             void setPosition(const Position &, bool);
             bool setStartPosition();

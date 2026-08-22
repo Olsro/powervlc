@@ -473,10 +473,17 @@ struct PrioritizedAbstractStream
     AbstractStream::BufferingStatus status;
     vlc_tick_t demuxed_amount;
     AbstractStream *st;
+    bool just_reactivated;
 };
 
 static bool streamCompare(const PrioritizedAbstractStream &a,  const PrioritizedAbstractStream &b)
 {
+    /* A newly selected alternate stream has no media queued yet.  Give it one
+     * buffering turn before an already active but starving video stream can
+     * make the loop bail out below. */
+    if(a.just_reactivated != b.just_reactivated)
+        return a.just_reactivated;
+
     if( a.status >= b.status ) /* Highest prio is higher value in enum */
     {
         if ( a.status == b.status ) /* Highest prio is lowest buffering */
@@ -494,6 +501,38 @@ AbstractStream::BufferingStatus PlaylistManager::bufferize(Times deadline,
 {
     AbstractStream::BufferingStatus i_return = AbstractStream::BufferingStatus::End;
 
+    /* A disabled alternate stream normally has BufferingStatus::End and is
+     * sorted behind every active stream below.  If an active stream is short
+     * of data, the loop deliberately bails out early and the newly selected
+     * alternate stream is never reached.  This is especially visible with
+     * DASH manifests containing one AdaptationSet per dubbed audio track: the
+     * decoder switches to the selected ES, but its stream stays disabled and
+     * therefore produces silence indefinitely.
+     *
+     * Honour an explicit ES selection before prioritizing downloads.  The
+     * reactivated stream is positioned at the current playback time and then
+     * participates normally in the buffering sort. */
+    std::vector<AbstractStream *> reactivated_streams;
+    for(AbstractStream *st : streams)
+    {
+        if(st->isValid() && st->isDisabled() && st->isSelected())
+        {
+            if(st->esCount() && reactivateStream(st))
+            {
+                reactivated_streams.push_back(st);
+            }
+        }
+    }
+
+    /* Do not merely move a reactivated stream to the front of the sorted
+     * list.  ES selection and decoder teardown happen asynchronously; while
+     * the old audio output is being drained, another stream can otherwise
+     * consume the only buffering turn.  Prime the selected stream here so
+     * its init/index and first media chunk are queued deterministically. */
+    for(AbstractStream *st : reactivated_streams)
+        st->bufferize(deadline, i_min_buffering, i_max_buffering,
+                      i_target_buffering, false);
+
     /* First reorder by status >> buffering level */
     std::vector<PrioritizedAbstractStream> prioritized_streams(streams.size());
     std::vector<PrioritizedAbstractStream>::iterator it = prioritized_streams.begin();
@@ -502,6 +541,9 @@ AbstractStream::BufferingStatus PlaylistManager::bufferize(Times deadline,
     {
         PrioritizedAbstractStream &p = *it;
         p.st = *sit;
+        p.just_reactivated = std::find(reactivated_streams.cbegin(),
+                                      reactivated_streams.cend(), p.st) !=
+                             reactivated_streams.cend();
         p.status = p.st->getBufferAndStatus(deadline, i_min_buffering, i_max_buffering, &p.demuxed_amount);
         ++it;
     }

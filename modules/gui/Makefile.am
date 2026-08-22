@@ -76,7 +76,7 @@ liblegacy_macosx_plugin_la_CFLAGS = $(AM_CFLAGS)
 # IOKit: optical media type detection (Open dialog) and the Apple Remote
 # HID access; CoreAudio: system volume control for the Apple Remote;
 # ApplicationServices: the CGEventTap of the media keys support.
-liblegacy_macosx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(guidir)' -Wl,-framework,Cocoa,-framework,Carbon,-framework,IOKit,-framework,CoreAudio,-framework,ApplicationServices,-framework,Security
+liblegacy_macosx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(guidir)' -Wl,-framework,Cocoa,-framework,Carbon,-framework,IOKit,-framework,CoreAudio,-framework,ApplicationServices,-framework,Security $(SEQUENCE_GRABBER_LIBS)
 EXTRA_LTLIBRARIES += liblegacy_macosx_plugin.la
 gui_LTLIBRARIES += $(LTLIBlegacy_macosx)
 

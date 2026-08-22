@@ -132,13 +132,6 @@ private:
     bool b_clipMode;
     int activeClipKnob;      /* 0 none, 1 start, 2 end, 3 scrub */
     float f_clipMarker;      /* playback position fraction, 0..1 */
-    /* the preview seek behind a dragged bound is paced, with a trailing
-     * shot so that a single pixel nudge is previewed too (see
-     * -clipSeekPreview) */
-    QTimer *clipPreviewTimer;
-    bool b_clipPreviewPending;
-    float f_clipPreviewFraction;
-
     void clipKnobInteract( int xPos );
     void clipSeekPreview( float fraction );
     void paintClipExtras( QPainter &painter );
@@ -167,9 +160,6 @@ private slots:
     /* PowerVLC hover previews */
     void requestHoverThumbnail();
     void hoverThumbnailReady( const QImage &, double fraction );
-    /* PowerVLC clip creation: trailing shot of the paced preview seek */
-    void clipPreviewTimeout();
-
 signals:
     void sliderDragged( float );
 

@@ -205,6 +205,9 @@ modules/access/mtp.c
 modules/access/nfs.c
 modules/access/oss.c
 modules/access/pulse.c
+modules/access/qtcapture.m
+modules/access/qtsound.m
+modules/access/sequence_grabber.c
 modules/access/radiobrowser.c
 modules/access/rdp.c
 modules/access/rist.c

@@ -51,6 +51,11 @@ return {
     msg_select_result = "Sélectionnez d'abord un résultat dans la liste",
 
     lbl_quality = "Qualité :",
+    lbl_audio_track = "Doublage :",
+    audio_default = "Piste audio par défaut",
+    audio_original = "originale",
+    lbl_subtitles = "Sous-titres :",
+    subtitles_none = "Aucun",
     lbl_by = "par",
     audio_only = "Audio seul",
     combined = "audio+vidéo",

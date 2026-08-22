@@ -43,6 +43,8 @@
 
 #include <vlc_dialog.h>
 #include <vlc_configuration.h>
+#include <vlc_playlist.h>
+#include <vlc_aout.h>
 
 #define _NS(s) ((NSString *)[NSString stringWithUTF8String:vlc_gettext(s)])
 
@@ -359,6 +361,24 @@ static const vlc_dialog_cbs dialog_callbacks = {
                name:NSApplicationDidResignActiveNotification
              object:nil];
 
+    /* NSWorkspaceDidWakeNotification was introduced in Panther.  The same
+     * PowerPC binary runs on Jaguar, where touching this notification during
+     * AppKit startup can dereference an unavailable Foundation/AppKit object
+     * and terminate the process before the first window appears.  The wake
+     * recovery is useful on Panther and later, but is not worth making
+     * Jaguar startup depend on a post-Jaguar API. */
+#if !defined(MAC_OS_X_VERSION_MIN_REQUIRED) || MAC_OS_X_VERSION_MIN_REQUIRED >= 1030
+    /* Some old CoreAudio drivers do not restart their render callback after
+     * system sleep (reported with the built-in TI audio device of a G5).
+     * Reopening the output is the programmatic equivalent of selecting None
+     * and then the audio track again, which is known to recover it. */
+    [[[NSWorkspace sharedWorkspace] notificationCenter]
+        addObserver:self
+           selector:@selector(computerDidWake:)
+               name:NSWorkspaceDidWakeNotification
+             object:nil];
+#endif
+
     /* first launch: ask for the metadata network access permission, the
      * same question (and NSUserDefaults key) as the modern interface */
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
@@ -516,11 +536,25 @@ static const vlc_dialog_cbs dialog_callbacks = {
     [core stopListeningWithAppleRemote];
 }
 
+- (void)computerDidWake:(NSNotification *)notification
+{
+    (void)notification;
+
+    audio_output_t *p_aout = playlist_GetAout(pl_Get(p_intf));
+    if (p_aout == NULL)
+        return;
+
+    msg_Dbg(p_intf, "restarting audio output after system wake");
+    aout_RestartRequest(p_aout, AOUT_RESTART_OUTPUT);
+    vlc_object_release(p_aout);
+}
+
 - (void)shutdown
 {
     if ([NSApp delegate] == self)
         [NSApp setDelegate:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [[[NSWorkspace sharedWorkspace] notificationCenter] removeObserver:self];
     [core shutdownAutoHide];
     [core shutdownClipExport];
     [core shutdownRemoteAndMediaKeys];
