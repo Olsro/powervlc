@@ -94,6 +94,14 @@ InputManager::InputManager( MainInputManager *mim, intf_thread_t *_p_intf) :
     clipExportTimer->setInterval( 250 );
     connect( clipExportTimer, &QTimer::timeout,
              this, &InputManager::clipExportPoll );
+    clipPreviewTimer = new QTimer( this );
+    clipPreviewTimer->setSingleShot( true );
+    clipPreviewTimer->setInterval( 33 );
+    clipPreviewTimer->setTimerType( Qt::PreciseTimer );
+    b_clipPreviewPending = false;
+    f_clipPreviewTarget = 0.;
+    connect( clipPreviewTimer, &QTimer::timeout,
+             this, &InputManager::clipPreviewTimeout );
     f_cache      = -1.; /* impossible initial value, different from all */
     registerAndCheckEventIds( IMEvent::PositionUpdate, IMEvent::FullscreenControlPlanHide );
     registerAndCheckEventIds( PLEvent::PLItemAppended, PLEvent::PLEmpty );
@@ -828,9 +836,14 @@ void InputManager::UpdateProgramEvent()
 /* User update of the slider */
 void InputManager::sliderUpdate( float new_pos )
 {
-    if( hasInput() )
-        var_SetFloat( p_input, "position", new_pos );
-    emit seekRequested( new_pos );
+    if( b_clipMode )
+        queueClipPreview( new_pos );
+    else
+    {
+        if( hasInput() )
+            var_SetFloat( p_input, "position", new_pos );
+        emit seekRequested( new_pos );
+    }
 }
 
 void InputManager::sectionPrev()
@@ -1059,6 +1072,9 @@ void InputManager::toggleClipCreationMode()
     /* the frame-step shortcuts default to the end bound, like the two
      * macOS interfaces */
     i_clipSelectedKnob = 2;
+    clipPreviewTimer->stop();
+    b_clipPreviewPending = false;
+    f_clipPreviewTarget = pos;
     b_clipMode = true;
 
     /* hotkeys -> interface channel for the frame-step shortcuts */
@@ -1092,6 +1108,11 @@ void InputManager::exitClipCreationMode()
         var_DelCallback( p_input, "clip-frame-step", ClipStepCallback, this );
         var_Destroy( p_input, "clip-frame-step" );
     }
+    /* Do not lose the exact last pixel/frame if the mode is closed inside
+     * the 33 ms trailing window. */
+    flushClipPreview();
+    clipPreviewTimer->stop();
+
     b_clipRecording = false;
     b_clipMode = false;
     i_clipPausedAtEnd = 0;
@@ -1172,7 +1193,7 @@ void InputManager::clipNudgeSelectedBoundBySeconds( double seconds )
     }
     noteClipInteraction();
 
-    var_SetFloat( p_input, "position", (float)target );
+    queueClipPreview( target );
 }
 
 /* A jump shortcut the core hotkeys module redirected to us (Qt thread). */
@@ -1194,6 +1215,53 @@ void InputManager::noteClipInteraction()
     /* touching a bound invalidates a pending "parked at the end bound":
      * the next play must resume normally, not jump back to the start */
     i_clipPausedAtEnd = 0;
+}
+
+/* Accurate seeks are much slower than Windows mouse/touch/key-repeat events.
+ * Sending every raw event simply flushes the decoder again before its first
+ * requested picture can reach the vout.  Send the leading edge immediately,
+ * then coalesce to the newest target at roughly one 30-fps display interval.
+ * A lone arrow press therefore remains immediate, while a drag remains live
+ * and always finishes on its exact last position. */
+void InputManager::queueClipPreview( double position )
+{
+    f_clipPreviewTarget = qBound( 0., position, 1. );
+    if( clipPreviewTimer->isActive() )
+    {
+        b_clipPreviewPending = true;
+        return;
+    }
+
+    b_clipPreviewPending = false;
+    sendClipPreview( f_clipPreviewTarget );
+    clipPreviewTimer->start();
+}
+
+void InputManager::sendClipPreview( double position )
+{
+    if( p_input )
+        var_SetFloat( p_input, "position", (float)position );
+    emit seekRequested( (float)position );
+}
+
+void InputManager::flushClipPreview()
+{
+    if( !b_clipPreviewPending )
+        return;
+
+    clipPreviewTimer->stop();
+    b_clipPreviewPending = false;
+    sendClipPreview( f_clipPreviewTarget );
+}
+
+void InputManager::clipPreviewTimeout()
+{
+    if( !b_clipMode || !b_clipPreviewPending )
+        return;
+
+    b_clipPreviewPending = false;
+    sendClipPreview( f_clipPreviewTarget );
+    clipPreviewTimer->start();
 }
 
 /* Message on the video and in the log: a fast extraction is over in a

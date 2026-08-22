@@ -1547,6 +1547,12 @@
 	<string>PowerVLC</string>
 	<key>CFBundleShortVersionString</key>
 	<string>@POWERVLC_VERSION@</string>
+	<!-- Kept beside the product version so a universal bundle does not expose
+	     a stale __DATE__ literal from one incrementally rebuilt plugin slice. -->
+	<key>PowerVLCBuildDate</key>
+	<string>@VERSION_DATE@</string>
+	<key>PowerVLCCoreVersion</key>
+	<string>@VERSION_MESSAGE@</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleSignature</key>

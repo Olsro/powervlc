@@ -51,6 +51,11 @@ return {
     msg_select_result = "Select a result in the list first",
 
     lbl_quality = "Quality:",
+    lbl_audio_track = "Audio track:",
+    audio_default = "Default audio",
+    audio_original = "original",
+    lbl_subtitles = "Subtitles:",
+    subtitles_none = "None",
     lbl_by = "by",
     audio_only = "Audio only",
     combined = "audio+video",

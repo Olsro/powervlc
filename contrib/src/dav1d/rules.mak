@@ -54,8 +54,9 @@ $(TARBALLS)/dav1d-$(DAV1D_VERSION).tar.xz:
 # 0002..0007 are the PowerPC AltiVec backend, taken verbatim from
 # https://github.com/macos-powerpc/powerpc-ports/tree/main/multimedia/dav1d/files
 # (0001-Support-altivec.patch and the five 000{2..6}-PPC-* that follow it,
-# renumbered here to keep the local patch order). They apply to 1.5.1 as they do
-# to the 1.5.4 that port carries. 0008 is ours; see the note above.
+# renumbered here to keep the local patch order), synced at powerpc-ports commit
+# 17d8cbbd (2026-08-21). They apply to the same dav1d 1.5.4 base used here.
+# 0008 is the Darwin runtime guard described above.
 dav1d: dav1d-$(DAV1D_VERSION).tar.xz .sum-dav1d
 	$(UNPACK)
 	$(APPLY) $(SRC)/dav1d/0002-ppc-support-altivec.patch

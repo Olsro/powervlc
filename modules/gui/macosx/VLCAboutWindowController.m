@@ -137,7 +137,21 @@
 
     /* Setup the nameversion field */
 #ifdef POWERVLC_VERSION
-    [o_name_version_field setStringValue: [NSString stringWithFormat:@"Version %s (%s) - Forked from VLC %s", POWERVLC_VERSION, __DATE__, VERSION_MESSAGE]];
+    NSString *productVersion = [[NSBundle mainBundle]
+        objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+    if (![productVersion isKindOfClass:[NSString class]]
+        || [productVersion length] == 0)
+        productVersion = [NSString stringWithUTF8String:POWERVLC_VERSION];
+    NSString *buildDate = [[NSBundle mainBundle]
+        objectForInfoDictionaryKey:@"PowerVLCBuildDate"];
+    if (![buildDate isKindOfClass:[NSString class]] || [buildDate length] == 0)
+        buildDate = [NSString stringWithUTF8String:__DATE__];
+    NSString *coreVersion = [[NSBundle mainBundle]
+        objectForInfoDictionaryKey:@"PowerVLCCoreVersion"];
+    if (![coreVersion isKindOfClass:[NSString class]]
+        || [coreVersion length] == 0)
+        coreVersion = [NSString stringWithUTF8String:VERSION_MESSAGE];
+    [o_name_version_field setStringValue: [NSString stringWithFormat:@"Version %@ (%@) - Forked from VLC %@", productVersion, buildDate, coreVersion]];
 #else
     [o_name_version_field setStringValue: [NSString stringWithFormat:@"Version %s (%s)", VERSION_MESSAGE, PLATFORM]];
 #endif

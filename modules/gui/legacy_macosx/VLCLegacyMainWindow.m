@@ -586,6 +586,18 @@ extern VLCLegacyCoreInteraction *VLCLegacyGetCore(void);
     return keyable;
 }
 
+/* NSWindow's Tiger dispatch can send a wheel event to a generic content
+ * view instead of the view under the pointer.  Catch it at the dedicated
+ * video window boundary: every pixel of this borderless child is video. */
+- (void)sendEvent:(NSEvent *)event
+{
+    if ([event type] == NSScrollWheel) {
+        VLCLegacyHandleScrollWheel([VLCLegacyGetCore() intf], event);
+        return;
+    }
+    [super sendEvent:event];
+}
+
 - (void)mouseDown:(NSEvent *)event
 {
     /* see VLCLegacyRestoreKeyWindowForVideoClick: this window refuses to
@@ -819,10 +831,44 @@ static BOOL VLCLegacyKeyBelongsToFocusedList(NSWindow *window, NSEvent *event)
     }
 }
 
+/* Tiger sends wheel events to the KEY window too.  In the embedded-video
+ * arrangement that is the main window, while the picture lives in the
+ * deliberately non-key child above it.  The vout view therefore never sees
+ * the event in windowed mode (the very same child becomes key in fullscreen,
+ * which is why scrolling worked there).  Consume the wheel only when its
+ * screen position is actually over that child; elsewhere the playlist and
+ * other scroll views retain their native scrolling. */
+- (BOOL)relayScrollWheelToVideoChild:(NSEvent *)event
+{
+    NSEnumerator *children = [[self childWindows] objectEnumerator];
+    NSWindow *child;
+
+    while ((child = [children nextObject]) != nil) {
+        if (![child isKindOfClass:[VLCLegacyVideoHostWindow class]]
+            || [child isKeyWindow])
+            continue;
+
+        /* A scroll event can name the non-key child as its source even when
+         * Tiger dispatches it through this key window.  Its location is then
+         * in the CHILD coordinate system, so converting it as ours misses the
+         * child frame.  The global pointer location is unambiguous. */
+        NSPoint screen = [NSEvent mouseLocation];
+        if (!NSPointInRect(screen, [child frame]))
+            continue;
+
+        VLCLegacyHandleScrollWheel([VLCLegacyGetCore() intf], event);
+        return YES;
+    }
+    return NO;
+}
+
 - (void)sendEvent:(NSEvent *)event
 {
     if ([event type] == NSMouseMoved)
         [self relayMouseMovedToVideoChild:event];
+    else if ([event type] == NSScrollWheel
+          && [self relayScrollWheelToVideoChild:event])
+        return;
     [super sendEvent:event];
 }
 
@@ -2866,7 +2912,7 @@ static const struct {
     NSScreen *screen = [window screen];
     if (!screen)
         screen = [NSScreen mainScreen];
-    NSRect visible = [screen visibleFrame];
+    NSRect visible = VLCLegacyLiveVisibleScreenFrame(screen);
     float fitW = visible.size.width / picture.width;
     float fitH = visible.size.height / picture.height;
     float fit = fitW < fitH ? fitW : fitH;
@@ -3077,7 +3123,7 @@ static const struct {
     NSScreen *screen = [window screen];
     if (!screen)
         screen = [NSScreen mainScreen];
-    NSRect visible = [screen visibleFrame];
+    NSRect visible = VLCLegacyLiveVisibleScreenFrame(screen);
     if (NSMaxY(frame) > NSMaxY(visible))
         frame.origin.y = NSMaxY(visible) - frame.size.height;
 
@@ -3192,7 +3238,7 @@ static const struct {
  * as everywhere else on the system. */
 - (NSPoint)dragOriginKeptReachable:(NSPoint)origin
 {
-    NSRect visible = [[window screen] visibleFrame];
+    NSRect visible = VLCLegacyLiveVisibleScreenFrame([window screen]);
     NSRect frame = [window frame];
     float margin = (frame.size.width < 120.f) ? frame.size.width : 120.f;
     float vmargin = (frame.size.height < 60.f) ? frame.size.height : 60.f;
@@ -3303,7 +3349,7 @@ static const struct {
     NSScreen *screen = [window screen];
     if (!screen)
         screen = [NSScreen mainScreen];
-    NSRect visible = [screen visibleFrame];
+    NSRect visible = VLCLegacyLiveVisibleScreenFrame(screen);
     if (newFrame.size.width > visible.size.width)
         newFrame.size.width = visible.size.width;
     if (newFrame.size.height > visible.size.height)
@@ -3356,7 +3402,7 @@ static const struct {
         if (other == screen)
             continue;
         NSWindow *black = [[[NSWindow alloc]
-            initWithContentRect:[other frame]
+            initWithContentRect:VLCLegacyLiveScreenFrame(other)
                       styleMask:NSBorderlessWindowMask
                         backing:NSBackingStoreBuffered
                           defer:NO] autorelease];
@@ -3404,7 +3450,8 @@ static const struct {
         if ([screen hasMenuBar] || [screen hasDock])
             SetSystemUIMode(kUIModeAllHidden, kUIOptionAutoShowMenuBar);
         host->keyable = YES;          /* Échap / Espace en plein écran */
-        [host setFrame:[screen frame] display:YES animate:NO];
+        [host setFrame:VLCLegacyLiveScreenFrame(screen)
+                display:YES animate:NO];
         videoHostFullscreen = YES;
         /* ⚠ The view does not follow the window on its own here: growing
          * the host window leaves the video view at the size it had, and
@@ -3489,7 +3536,7 @@ static const struct {
          * (same tags as the preferences popup) */
         NSScreen *screen = [self fullscreenScreen];
         fsVideoWindow = [[VLCLegacyBorderlessWindow alloc]
-            initWithContentRect:[screen frame]
+            initWithContentRect:VLCLegacyLiveScreenFrame(screen)
                       styleMask:NSBorderlessWindowMask
                         backing:NSBackingStoreBuffered
                           defer:NO];

@@ -1,0 +1,61 @@
+From: PowerVLC
+Subject: [PATCH] ppc: keep four slower tiny AltiVec kernels in C on G4
+
+x264 checkasm --bench on a 1.42 GHz 7447A finds four of the restored
+AltiVec registrations slower than their C references:
+
+  quant_2x2_dc              9 -> 15 timebase ticks
+  zigzag_scan_4x4_field     8 -> 11
+  satd_4x4                 34 -> 35
+  intra_satd_x3_4x4       116 -> 125
+
+Leave the implementations compiled and tested, but do not install them in
+the G4/G5 shared contrib's function tables. The other 103 paired AltiVec
+functions all win. Three interleaved medium-preset encodes on the same G4
+show no end-to-end regression (11.953 s -> 11.940 s mean wall time), while
+interlaced input also benefits from avoiding the losing field-scan kernel.
+
+--- a/common/dct.c
++++ b/common/dct.c
+@@ -991,7 +991,7 @@ void x264_zigzag_init( int cpu, x264_zigzag_function_t *pf_progressive,
+ #if HAVE_ALTIVEC
+     if( cpu&X264_CPU_ALTIVEC )
+     {
+-        pf_interlaced->scan_4x4  = x264_zigzag_scan_4x4_field_altivec;
++        /* Keep scan_4x4 field in C: 8 vs 11 ticks on a 7447A. */
+         pf_progressive->scan_4x4 = x264_zigzag_scan_4x4_frame_altivec;
+         pf_progressive->scan_8x8  = x264_zigzag_scan_8x8_frame_altivec;
+     }
+--- a/common/ppc/pixel.c
++++ b/common/ppc/pixel.c
+@@ -1589,7 +1589,7 @@ void x264_pixel_init_altivec( x264_pixel_function_t *pixf )
+     pixf->satd[PIXEL_8x8]   = pixel_satd_8x8_altivec;
+     pixf->satd[PIXEL_8x4]   = pixel_satd_8x4_altivec;
+     pixf->satd[PIXEL_4x8]   = pixel_satd_4x8_altivec;
+-    pixf->satd[PIXEL_4x4]   = pixel_satd_4x4_altivec;
++    /* Keep SATD 4x4 in C: 34 vs 35 ticks on a 7447A. */
+ 
+     pixf->satd_x3[PIXEL_16x16] = pixel_satd_x3_16x16_altivec;
+     pixf->satd_x3[PIXEL_8x16]  = pixel_satd_x3_8x16_altivec;
+@@ -1611,7 +1611,7 @@ void x264_pixel_init_altivec( x264_pixel_function_t *pixf )
+     pixf->intra_sad_x3_8x8c   = intra_sad_x3_8x8c_altivec;
+     pixf->intra_sad_x3_16x16  = intra_sad_x3_16x16_altivec;
+ 
+-    pixf->intra_satd_x3_4x4   = intra_satd_x3_4x4_altivec;
++    /* Keep intra SATD x3 4x4 in C: 116 vs 125 ticks on a 7447A. */
+     pixf->intra_satd_x3_8x8c  = intra_satd_x3_8x8c_altivec;
+     pixf->intra_satd_x3_16x16 = intra_satd_x3_16x16_altivec;
+ 
+--- a/common/quant.c
++++ b/common/quant.c
+@@ -734,7 +734,7 @@ void x264_quant_init( x264_t *h, int cpu, x264_quant_function_t *pf )
+ #if HAVE_ALTIVEC
+     if( cpu&X264_CPU_ALTIVEC )
+     {
+-        pf->quant_2x2_dc = x264_quant_2x2_dc_altivec;
++        /* Keep quant_2x2_dc in C: 9 vs 15 timebase ticks on a 7447A. */
+         pf->quant_4x4_dc = x264_quant_4x4_dc_altivec;
+         pf->quant_4x4 = x264_quant_4x4_altivec;
+         pf->quant_4x4x4 = x264_quant_4x4x4_altivec;
+-- 
+2.43.0

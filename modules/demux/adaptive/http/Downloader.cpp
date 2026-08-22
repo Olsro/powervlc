@@ -41,9 +41,23 @@ Downloader::Downloader()
 
 bool Downloader::start()
 {
+    /* The downloader works ahead into a bounded buffer.  Giving it input
+     * priority makes TLS decryption of a freshly arrived HLS segment run in
+     * the same fixed-priority band as the video output on Darwin.  On a
+     * single-core G4 that burst can hold the CPU for several frame periods,
+     * even though decoded pictures are already queued well ahead of their
+     * deadlines.  Keep network prefetch in the normal time-sharing class so
+     * the output thread can retain punctual presentation.  Other systems do
+     * not use Darwin's fixed-priority mapping and retain the existing input
+     * priority. */
+#ifdef __APPLE__
+    const int priority = VLC_THREAD_PRIORITY_LOW;
+#else
+    const int priority = VLC_THREAD_PRIORITY_INPUT;
+#endif
     if(!thread_handle_valid &&
        vlc_clone(&thread_handle, downloaderThread,
-                 static_cast<void *>(this), VLC_THREAD_PRIORITY_INPUT))
+                 static_cast<void *>(this), priority))
     {
         return false;
     }

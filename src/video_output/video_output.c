@@ -1465,10 +1465,28 @@ static int ThreadDisplayPicture(vout_thread_t *vout, vlc_tick_t *deadline)
         while (!vout->p->displayed.next && !ThreadDisplayPreparePicture(vout, false, frame_by_frame))
             ;
 
+    /* A seek while paused flushes the decoder fifo, then queues its first
+     * picture with b_force set.  Do not leave that picture behind the
+     * already displayed pre-seek frame: consume and present it immediately.
+     * Ordinary paused pictures remain queued until an explicit frame step. */
+    bool forced_next = false;
+    if (paused && !frame_by_frame && vout->p->displayed.current
+     && !vout->p->displayed.next)
+    {
+        picture_t *head = picture_fifo_Peek(vout->p->decoder_fifo);
+        forced_next = head != NULL && head->b_force;
+        if (head != NULL)
+            picture_Release(head);
+
+        if (forced_next
+         && ThreadDisplayPreparePicture(vout, false, false) != VLC_SUCCESS)
+            forced_next = false;
+    }
+
     const vlc_tick_t date = mdate();
     const vlc_tick_t render_delay = vout_chrono_GetHigh(&vout->p->render) + VOUT_MWAIT_TOLERANCE;
 
-    bool drop_next_frame = frame_by_frame;
+    bool drop_next_frame = frame_by_frame || forced_next;
     vlc_tick_t date_next = VLC_TICK_INVALID;
     if (!paused && vout->p->displayed.next) {
         date_next = vout->p->displayed.next->date - render_delay;
@@ -1635,6 +1653,17 @@ static void ThreadFlush(vout_thread_t *vout, bool below, vlc_tick_t date)
     ThreadChangeCacheHold(vout, false);
 
     ThreadFilterFlush(vout, false); /* FIXME too much */
+
+    /* displayed.next is outside decoder_fifo, but it is still a queued
+     * pre-seek picture and may own the last direct-rendering buffer. Apply
+     * the same date rule as the fifo instead of letting a paused seek expose
+     * that stale image (or deadlock waiting for its buffer). */
+    picture_t *next = vout->p->displayed.next;
+    if (next && ((below && next->date <= date) ||
+                 (!below && next->date >= date))) {
+        picture_Release(next);
+        vout->p->displayed.next = NULL;
+    }
 
     picture_t *last = vout->p->displayed.decoded;
     if (last) {

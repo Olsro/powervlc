@@ -147,6 +147,7 @@ namespace adaptive
                 vlc_tick_t          requestStartTime;
                 vlc_tick_t          responseTime;
                 vlc_tick_t          downloadEndTime;
+                BytesRange          requestRange;
 
             private:
                 bool init(const std::string &);
@@ -180,10 +181,14 @@ namespace adaptive
                 const block_t      *p_read;
                 size_t              inblockreadoffset;
                 size_t              buffered; /* read cache size */
+                size_t              totalContentLength;
+                size_t              requestBufferedOffset;
+                unsigned            retryCount;
                 bool                done;
                 bool                eof;
                 vlc_cond_t          avail;
                 bool                held;
+                bool                resetForRetry(bool);
         };
 
         class HTTPChunk : public AbstractChunk

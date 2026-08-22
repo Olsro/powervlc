@@ -210,6 +210,8 @@ local app = {
   results = {},      -- id -> { kind, id, title, author, published }
   video = nil,       -- currently opened video { id, title, author, ... }
   formats = {},      -- id -> { label, url }
+  audio_tracks = {}, -- selectable adaptive audio tracks (dub/original)
+  captions = {},     -- selectable WebVTT tracks exposed by Invidious
   thumb = nil,       -- the picture of that video { path, w, h }
   -- The picture and sound just downloaded separately, when there are
   -- any: { video, audio, out, dir }. What the Combine button acts on.
@@ -1175,7 +1177,7 @@ local function html_video(instance, video_id)
     return nil, err
   end
 
-  local info = { sources = {} }
+  local info = { sources = {}, captions = {} }
   info.title = html_decode(string.match(body, '"title":%s*"(.-)"')
     or string.match(body, "<title>(.-)</title>"))
   info.author = html_decode(string.match(body, CHANNEL_NAME))
@@ -1190,6 +1192,30 @@ local function html_video(instance, video_id)
       src = (string.gsub(src, "&amp;", "&"))
       table.insert(info.sources,
         { url = src, label = label, mime = mime })
+    end
+  end
+  -- The HTML player writes every subtitle as a normal <track> element.
+  -- This path is used precisely when /api/v1/videos is disabled, so keeping
+  -- these here makes captions available on API-less instances too.
+  local caption_seen = {}
+  for tag in string.gmatch(body, "<track[^>]*>") do
+    if string.match(tag, 'kind=["\']captions["\']') then
+      local src = string.match(tag, 'src=["\'](.-)["\']')
+      local label = string.match(tag, 'label=["\'](.-)["\']')
+      local code = string.match(tag, 'srclang=["\'](.-)["\']')
+      if src then
+        src = string.gsub(src, "&amp;", "&")
+        -- Invidious leaves spaces in labels such as
+        -- "English (auto-generated)" literally inside the href. Browsers
+        -- repair that automatically; VLC's URL parser correctly rejects it.
+        src = string.gsub(src, " ", "%%20")
+        label = html_decode(label) or code or "?"
+        local key = src .. "\n" .. label
+        if not caption_seen[key] then
+          caption_seen[key] = true
+          table.insert(info.captions, { url = src, label = label, code = code })
+        end
+      end
     end
   end
   return info
@@ -2552,8 +2578,7 @@ local function parse_dash_manifest(body, origin)
     return url
   end
 
-  local audio, audio_rate = nil, -1
-  local audio_mime = nil
+  local audio_tracks = {}
   local videos = {}
 
   for set in string.gmatch(body, "<AdaptationSet.-</AdaptationSet>") do
@@ -2563,6 +2588,7 @@ local function parse_dash_manifest(body, origin)
     -- the set. Only the download reads it, to give the file a name that
     -- matches what is inside it.
     local set_mime = string.match(set, 'mimeType="([%w%-]+/[%w%-%.]+)"')
+    local set_audio = nil
     for rep in string.gmatch(set, "<Representation.-</Representation>") do
       local url = string.match(rep, "<BaseURL>(.-)</BaseURL>")
       local rate = tonumber(string.match(rep, 'bandwidth="(%d+)"') or "") or 0
@@ -2570,8 +2596,32 @@ local function parse_dash_manifest(body, origin)
                 or set_mime
       if url then
         if is_audio then
-          if rate > audio_rate then
-            audio, audio_rate, audio_mime = absolute(url), rate, mime
+          -- An AdaptationSet is one language/role but may contain several
+          -- codecs. Keep its best representation; comparing bitrates across
+          -- sets used to select an essentially random dubbing language.
+          if not set_audio or rate > set_audio.rate then
+            local roles = " "
+            for role in string.gmatch(set, '<Role[^>]-value="([^"]+)"') do
+              roles = roles .. role .. " "
+            end
+            local code = string.match(set, 'lang="([^"]+)"')
+            local label = html_decode(string.match(set,
+                                      "<Label[^>]*>(.-)</Label>"))
+            set_audio = {
+              id = string.match(rep, 'id="([^"]+)"')
+                or string.match(set, 'id="([^"]+)"')
+                or code or tostring(#audio_tracks + 1),
+              label = label or code or lang.audio_default,
+              code = code,
+              original = string.find(roles, " main ", 1, true) ~= nil,
+              enhanced = string.find(roles,
+                                     " enhanced-audio-intelligibility ",
+                                     1, true) ~= nil,
+              url = absolute(url),
+              mime = mime,
+              rate = rate,
+              container = string.match(mime or "", "/([%w-]+)") or "?",
+            }
           end
         else
           local height = tonumber(string.match(rep, 'height="(%d+)"') or "")
@@ -2590,9 +2640,20 @@ local function parse_dash_manifest(body, origin)
         end
       end
     end
+    if set_audio then
+      table.insert(audio_tracks, set_audio)
+    end
   end
 
-  return audio, videos, audio_mime
+  -- Original first, with the unprocessed original ahead of "Stable Volume";
+  -- the remaining dubbings are alphabetical and therefore deterministic.
+  table.sort(audio_tracks, function(a, b)
+    if a.original ~= b.original then return a.original end
+    if a.enhanced ~= b.enhanced then return not a.enhanced end
+    return a.label < b.label
+  end)
+  local audio = audio_tracks[1]
+  return audio and audio.url, videos, audio and audio.mime, audio_tracks
 end
 
 local function dash_formats(manifest_url)
@@ -2602,7 +2663,8 @@ local function dash_formats(manifest_url)
   end
   local origin = string.match(manifest_url, "^(https?://[^/]+)") or ""
 
-  local audio, videos, audio_mime = parse_dash_manifest(body, origin)
+  local audio, videos, audio_mime, audio_tracks =
+      parse_dash_manifest(body, origin)
 
   if not audio or #videos == 0 then
     return nil
@@ -2637,7 +2699,8 @@ local function dash_formats(manifest_url)
       end
       -- NOT inlined into `direct_body and parse_...`: an and/or expression
       -- truncates multiple return values to the first one.
-      local direct_audio, direct_videos, direct_audio_mime =
+      local direct_audio, direct_videos, direct_audio_mime,
+            direct_audio_tracks =
           parse_dash_manifest(direct_body, origin)
       -- "Direct" only counts when the URLs actually leave the instance:
       -- companion-based instances rewrite the BaseURLs to their own
@@ -2677,6 +2740,7 @@ local function dash_formats(manifest_url)
       if replaced > 0 then
         audio = direct_audio
         audio_mime = direct_audio_mime or audio_mime
+        audio_tracks = direct_audio_tracks or audio_tracks
         vlc.msg.info("[Invidious] streams: direct googlevideo ("
                      .. replaced .. "/" .. #videos
                      .. " qualities), instance relay kept as fallback")
@@ -2732,12 +2796,11 @@ local function dash_formats(manifest_url)
       mime = entry.video.mime,
       -- the video stream carries no sound of its own
       options = { ":input-slave=" .. audio },
+      audio_selectable = #audio_tracks > 0,
       -- ... which is why the download has to be told about it by name:
       -- it writes files, and a file of this URL alone would be silent.
       audio = audio,
       audio_mime = audio_mime,
-      -- pasting a video-only URL would be useless: hand out the manifest
-      copy = manifest_url,
     })
   end
   -- Tallest first, and at equal height the plain cadence before the high one.
@@ -2747,7 +2810,7 @@ local function dash_formats(manifest_url)
     if a.height ~= b.height then return a.height > b.height end
     return a.hifps < b.hifps
   end)
-  return formats
+  return formats, audio_tracks
 end
 
 -- HTML mode: the watch page offers a DASH manifest (adaptive, every
@@ -2760,28 +2823,39 @@ local function open_video_html(result)
   end
 
   local formats = {}
+  local audio_tracks = {}
   for _, src in ipairs(info.sources) do
     local label, manifest
     if src.label == "dash" or (src.mime and string.find(src.mime, "dash", 1, true)) then
-      -- expand the manifest into per-resolution entries, and keep the
-      -- manifest itself as the last "let VLC decide" option
-      local expanded = dash_formats(src.url)
-      if expanded then
+      local expanded, dash_audio = dash_formats(src.url)
+      if expanded and #expanded > 0 then
         for _, f in ipairs(expanded) do
           table.insert(formats, f)
         end
+        if dash_audio and #dash_audio > 0 then
+          audio_tracks = dash_audio
+        end
       end
+      -- Keep the untouched manifest as the automatic DASH choice. The
+      -- per-resolution entries above remain the reliable way to apply the
+      -- dubbing selected in this dialog; this entry deliberately lets VLC
+      -- expose and choose the AdaptationSets itself.
       label = lang.dash_auto
-      -- a description of where the streams are, not a stream
+      -- a description of where the streams are, not a single media file
       manifest = true
     else
       label = (src.label or "?") .. " — "
            .. (src.mime and string.match(src.mime, "/([%w-]+)") or "?")
            .. " (" .. lang.combined .. ")"
     end
-    table.insert(formats, { label = label, url = src.url,
-                            mime = not manifest and src.mime or nil,
-                            playlist = manifest })
+    if label then
+      table.insert(formats, { label = label, url = src.url,
+                              mime = not manifest and src.mime or nil,
+                              playlist = manifest,
+                              dash_manifest = manifest,
+                              audio_selectable = manifest
+                                                and #audio_tracks > 0 })
+    end
   end
   if #formats == 0 then
     return false, "no source"
@@ -2793,6 +2867,8 @@ local function open_video_html(result)
                 published = result.published,
                 publishedText = result.publishedText }
   app.formats = formats
+  app.audio_tracks = audio_tracks
+  app.captions = info.captions or {}
   return true
 end
 
@@ -2816,7 +2892,7 @@ function open_video(result)
 
   local url = app.instance .. "/api/v1/videos/" .. result.id
            .. "?fields=title,author,published,publishedText,"
-           .. "formatStreams,adaptiveFormats,hlsUrl,liveNow"
+           .. "formatStreams,adaptiveFormats,captions,hlsUrl,liveNow"
            .. content_params()
   if app.proxy then
     url = url .. "&local=true"
@@ -2837,12 +2913,67 @@ function open_video(result)
                   author = result.author or "?",
                   published = result.published }
     app.formats = formats
+    app.audio_tracks = {}
+    app.captions = {}
     show_video()
     set_message(lang.msg_fallback_formats)
     return
   end
 
   local formats = {}
+  local audio_by_id = {}
+  local audio_tracks = {}
+  local adaptive_videos = {}
+
+  -- Recent Invidious instances expose YouTube's optional audioTrack object
+  -- on adaptive audio entries: id, displayName and audioIsDefault.  Older
+  -- instances omit it, in which case all audio entries deliberately collapse
+  -- to one unnamed/default track and the launch window keeps its old shape.
+  for _, af in ipairs(obj.adaptiveFormats or {}) do
+    if af.url and string.match(af.type or "", "^audio/") then
+      local track = type(af.audioTrack) == "table" and af.audioTrack or nil
+      local id = track and track.id or "__default"
+      local rate = tonumber(af.bitrate) or 0
+      local previous = audio_by_id[id]
+      if not previous or rate > previous.rate then
+        local container = string.match(af.type or "", "/([%w-]+)") or "?"
+        audio_by_id[id] = {
+          id = id,
+          label = (track and track.displayName) or lang.audio_default,
+          original = track and track.audioIsDefault == true,
+          url = af.url,
+          mime = af.type,
+          rate = rate,
+          container = container,
+        }
+      end
+    elseif af.url and string.match(af.type or "", "^video/") then
+      table.insert(adaptive_videos, af)
+    end
+  end
+  for _, track in pairs(audio_by_id) do
+    table.insert(audio_tracks, track)
+  end
+  table.sort(audio_tracks, function(a, b)
+    if a.original ~= b.original then return a.original end
+    return a.label < b.label
+  end)
+
+  local captions = {}
+  for _, caption in ipairs(obj.captions or {}) do
+    local url = caption.url
+    if url and url ~= "" then
+      if string.sub(url, 1, 1) == "/" then
+        url = app.instance .. url
+      end
+      table.insert(captions, {
+        label = caption.label or caption.languageCode
+             or caption.language_code or "?",
+        code = caption.languageCode or caption.language_code,
+        url = url,
+      })
+    end
+  end
   local combined = {}
   for _, fs in ipairs(obj.formatStreams or {}) do
     if fs.url then
@@ -2865,19 +2996,58 @@ function open_video(result)
     table.insert(formats, { label = lang.live_hls, url = obj.hlsUrl,
                             playlist = true })
   end
-  for _, af in ipairs(obj.adaptiveFormats or {}) do
-    if af.url and string.match(af.type or "", "^audio/") then
-      local rate = tonumber(af.bitrate)
-      local container = string.match(af.type or "", "/([%w-]+)") or "?"
+  -- A dubbed track is separate from the picture, so expose one compact set
+  -- of video-only qualities and attach the audio selected at launch time.
+  -- Keep the most widely decodable codec for each resolution/cadence pair.
+  local best_video = {}
+  for _, af in ipairs(adaptive_videos) do
+    local quality = af.qualityLabel or af.resolution
+    if quality then
+      local codec = af.encoding
+                 or string.match(af.type or "", 'codecs="?([^",]+)') or "?"
+      local fps = tonumber(af.fps)
+      local key = quality .. "/" .. fps_penalty(fps)
+      local rank = CODEC_RANK[string.sub(codec, 1, 3)] or 9
+      if not best_video[key] or rank < best_video[key].rank then
+        best_video[key] = { af = af, rank = rank, codec = codec, fps = fps }
+      end
+    end
+  end
+  local selectable_video = {}
+  for _, entry in pairs(best_video) do
+    local af = entry.af
+    local quality = af.qualityLabel or af.resolution
+    table.insert(selectable_video, {
+      label = quality .. " — " .. entry.codec
+           .. (entry.fps and (" — " .. math.floor(entry.fps + 0.5)
+                               .. " fps") or "")
+           .. " (" .. lang.video_only .. ")",
+      url = af.url,
+      mime = af.type,
+      rank = quality_rank(quality),
+      hifps = fps_penalty(entry.fps),
+      audio_selectable = #audio_tracks > 0,
+    })
+  end
+  table.sort(selectable_video, function(a, b)
+    if a.rank ~= b.rank then return a.rank > b.rank end
+    return a.hifps < b.hifps
+  end)
+  for _, f in ipairs(selectable_video) do
+    table.insert(formats, f)
+  end
+
+  for _, track in ipairs(audio_tracks) do
+      local rate = track.rate
       table.insert(formats, {
         label = lang.audio_only
-             .. (rate and (" — " .. math.floor(rate / 1000) .. " kb/s") or "")
-             .. " (" .. container .. ")",
-        url = af.url,
-        mime = af.type,
+             .. (rate > 0 and (" — " .. math.floor(rate / 1000) .. " kb/s") or "")
+             .. (#audio_tracks > 1 and (" — " .. track.label) or "")
+             .. " (" .. track.container .. ")",
+        url = track.url,
+        mime = track.mime,
         sound_only = true
       })
-    end
   end
 
   app.video = { id = result.id,
@@ -2886,6 +3056,8 @@ function open_video(result)
                 published = obj.published or result.published,
                 publishedText = obj.publishedText }
   app.formats = formats
+  app.audio_tracks = audio_tracks
+  app.captions = captions
   show_video()
 end
 
@@ -2987,20 +3159,39 @@ function show_video()
   for i, f in ipairs(app.formats) do
     ui.quality:add_value(f.label, i)
   end
-  dlg:add_button(lang.btn_play, click_play, 1, 4, 1, 1)
+  local row = 4
+  if #app.audio_tracks > 1 then
+    dlg:add_label(lang.lbl_audio_track, 1, row, 1, 1)
+    ui.audio_track = dlg:add_dropdown(2, row, 3, 1)
+    for i, track in ipairs(app.audio_tracks) do
+      ui.audio_track:add_value(track.label
+          .. (track.original and (" (" .. lang.audio_original .. ")") or ""), i)
+    end
+    row = row + 1
+  end
+  if #app.captions > 0 then
+    dlg:add_label(lang.lbl_subtitles, 1, row, 1, 1)
+    ui.caption = dlg:add_dropdown(2, row, 3, 1)
+    ui.caption:add_value(lang.subtitles_none, 1)
+    for i, caption in ipairs(app.captions) do
+      ui.caption:add_value(caption.label, i + 1)
+    end
+    row = row + 1
+  end
+  dlg:add_button(lang.btn_play, click_play, 1, row, 1, 1)
   -- One button for the two states of the only download there is room to
   -- run: what a download already going offers is to stop it. It also has
   -- to be put back to what it says here, because a download outlives the
   -- view it was started from and this may be a rebuilt one.
   ui.download = dlg:add_button(dl.active and lang.btn_dl_cancel
                                           or lang.btn_download,
-                               click_download, 2, 4, 1, 1)
-  dlg:add_button(lang.btn_copy, click_copy, 3, 4, 1, 1)
-  dlg:add_button(lang.btn_back, show_search, 4, 4, 1, 1)
+                               click_download, 2, row, 1, 1)
+  dlg:add_button(lang.btn_copy, click_copy, 3, row, 1, 1)
+  dlg:add_button(lang.btn_back, show_search, 4, row, 1, 1)
   -- A second row for the actions that are not the main one: the sound on
   -- its own, and -- once there is a pair on disk -- putting it back
   -- together. The first row stays four plain buttons whatever happens.
-  local row = 5
+  row = row + 1
   dlg:add_button(lang.btn_download_audio, click_download_audio, 1, row, 2, 1)
   -- Only when there is really a pair sitting on disk: a button that acts
   -- on files somebody has since moved is worse than no button.
@@ -3031,7 +3222,26 @@ local function selected_format()
     set_message(lang.msg_no_formats)
     return nil
   end
-  return app.formats[ui.quality:get_value()] or app.formats[1]
+  local f = app.formats[ui.quality:get_value()] or app.formats[1]
+  if f.audio_selectable then
+    local i = ui.audio_track and ui.audio_track:get_value() or 1
+    local audio = app.audio_tracks[i] or app.audio_tracks[1]
+    if audio then
+      if f.dash_manifest and audio.code then
+        -- Ask the DASH demuxer for the language before it opens its
+        -- AdaptationSets. This avoids switching a live Companion audio ES,
+        -- which is the operation that produced silence in the first report.
+        f.options = { ":audio-language=" .. audio.code }
+        f.audio = nil
+        f.audio_mime = nil
+      else
+        f.options = { ":input-slave=" .. audio.url }
+        f.audio = audio.url
+        f.audio_mime = audio.mime
+      end
+    end
+  end
+  return f
 end
 
 function click_play()
@@ -3045,6 +3255,14 @@ function click_play()
   local options = {}
   for _, opt in ipairs(f.options or {}) do
     table.insert(options, opt)
+  end
+  if ui.caption then
+    local selected = ui.caption:get_value()
+    local caption = selected and selected > 1
+                    and app.captions[selected - 1] or nil
+    if caption then
+      table.insert(options, ":sub-file=" .. caption.url)
+    end
   end
   local session = session_for(f.url)
   if session and session.user_agent and session.user_agent ~= "" then
@@ -3063,9 +3281,11 @@ function click_copy()
   if not f then
     return
   end
-  -- a per-resolution DASH stream has no audio on its own: what gets
-  -- copied is the manifest, which plays as-is elsewhere
-  local url = f.copy or f.url
+  -- This button names one stream, so copy the stream actually selected in
+  -- the quality menu. Adaptive video entries are video-only; their paired
+  -- audio remains available separately through "Download audio". The raw
+  -- DASH choice naturally copies the manifest URL itself.
+  local url = f.url
   ui.link:set_text(url)
   if copy_to_clipboard(url) then
     set_message(lang.msg_copied)

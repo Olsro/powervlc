@@ -152,7 +152,8 @@ HTTPChunkSource::HTTPChunkSource(const std::string& url, AbstractConnectionManag
     AbstractChunkSource(t, range),
     connection   (nullptr),
     connManager  (manager),
-    consumed     (0)
+    consumed     (0),
+    requestRange (range)
 {
     vlc_mutex_init(&lock);
     prepared = false;
@@ -302,7 +303,7 @@ bool HTTPChunkSource::prepare()
                 break;
         }
 
-        requeststatus = connection->request(connparams.getPath(), bytesRange);
+        requeststatus = connection->request(connparams.getPath(), requestRange);
         if(requeststatus != RequestStatus::Success)
         {
             if(requeststatus == RequestStatus::Redirection)
@@ -339,14 +340,18 @@ HTTPChunkBufferedSource::HTTPChunkBufferedSource(const std::string& url, Abstrac
     HTTPChunkSource(url, manager, sourceid, type, range, access),
     p_head     (nullptr),
     pp_tail    (&p_head),
-    buffered     (0)
+    p_read     (nullptr),
+    inblockreadoffset (0),
+    buffered     (0),
+    totalContentLength (range.isValid() && range.getEndByte() > 0
+                        ? range.getEndByte() - range.getStartByte() + 1 : 0),
+    requestBufferedOffset (0),
+    retryCount   (0),
+    done         (false),
+    eof          (false),
+    held         (false)
 {
     vlc_cond_init(&avail);
-    done = false;
-    eof = false;
-    held = false;
-    p_read = nullptr;
-    inblockreadoffset = 0;
 }
 
 HTTPChunkBufferedSource::~HTTPChunkBufferedSource()
@@ -391,16 +396,68 @@ void HTTPChunkBufferedSource::release()
     vlc_cond_signal(&avail);
 }
 
+/* A DASH representation is an independent byte-range stream.  Losing one
+ * range must not turn that representation into a permanent EOF while the
+ * other representations (typically audio) keep playing. */
+bool HTTPChunkBufferedSource::resetForRetry(bool resume)
+{
+    static const unsigned maxRetries = 3;
+
+    if(retryCount >= maxRetries)
+        return false;
+
+    if(resume)
+    {
+        if(!requestRange.isValid() || requestRange.getEndByte() == 0
+         || buffered < requestBufferedOffset)
+            return false;
+
+        const size_t received = buffered - requestBufferedOffset;
+        const size_t next = requestRange.getStartByte() + received;
+        if(next > requestRange.getEndByte())
+            return false;
+
+        requestRange = BytesRange(next, requestRange.getEndByte());
+    }
+
+    retryCount++;
+    if(connection)
+    {
+        connection->setUsed(false);
+        connection = nullptr;
+    }
+    prepared = false;
+    return true;
+}
+
 void HTTPChunkBufferedSource::bufferize(size_t readsize)
 {
     vlc_mutex_lock(&lock);
+    const bool startingRequest = !prepared;
     if(!prepare())
     {
+        if(requeststatus == RequestStatus::TransientError && resetForRetry(false))
+        {
+            const unsigned attempt = retryCount;
+            vlc_mutex_unlock(&lock);
+            msleep(INT64_C(100000) * attempt);
+            return;
+        }
+
         done = true;
         eof = true;
         vlc_cond_signal(&avail);
         vlc_mutex_unlock(&lock);
         return;
+    }
+
+    if(startingRequest)
+    {
+        if(totalContentLength == 0)
+            totalContentLength = buffered + contentLength;
+        else
+            contentLength = totalContentLength;
+        requestBufferedOffset = buffered;
     }
 
     if(readsize < HTTPChunkSource::CHUNK_SIZE)
@@ -430,17 +487,29 @@ void HTTPChunkBufferedSource::bufferize(size_t readsize)
     {
         block_Release(p_block);
         p_block = nullptr;
-        vlc_mutex_locker locker( &lock );
+        vlc_mutex_lock(&lock);
+        if(buffered < contentLength && resetForRetry(true))
+        {
+            requeststatus = RequestStatus::TransientError;
+            const unsigned attempt = retryCount;
+            vlc_mutex_unlock(&lock);
+            msleep(INT64_C(100000) * attempt);
+            return;
+        }
+
+        if(buffered < contentLength)
+            requeststatus = RequestStatus::TransientError;
         done = true;
         downloadEndTime = mdate();
         rate.size = buffered;
         rate.time = downloadEndTime - requestStartTime;
         rate.latency = responseTime - requestStartTime;
+        vlc_mutex_unlock(&lock);
     }
     else
     {
         p_block->i_buffer = (size_t) ret;
-        vlc_mutex_locker locker( &lock );
+        vlc_mutex_lock(&lock);
         buffered += p_block->i_buffer;
         block_ChainLastAppend(&pp_tail, p_block);
         if(p_read == nullptr)
@@ -450,15 +519,31 @@ void HTTPChunkBufferedSource::bufferize(size_t readsize)
         }
         if((size_t) ret < readsize)
         {
+            if(buffered < contentLength && resetForRetry(true))
+            {
+                requeststatus = RequestStatus::TransientError;
+                const unsigned attempt = retryCount;
+                vlc_cond_signal(&avail);
+                vlc_mutex_unlock(&lock);
+                msleep(INT64_C(100000) * attempt);
+                return;
+            }
+
+            if(buffered < contentLength)
+                requeststatus = RequestStatus::TransientError;
             done = true;
             downloadEndTime = mdate();
             rate.size = buffered;
             rate.time = downloadEndTime - requestStartTime;
             rate.latency = responseTime - requestStartTime;
         }
+        vlc_mutex_unlock(&lock);
     }
 
-    if(rate.size && rate.time && type == ChunkType::Segment)
+    /* A retry resets the per-request timing while "buffered" still covers the
+     * whole segment.  Do not feed that mismatched sample to adaptation: it
+     * would overestimate bandwidth immediately after network recovery. */
+    if(rate.size && rate.time && retryCount == 0 && type == ChunkType::Segment)
     {
         connManager->updateDownloadRate(sourceid, rate.size,
                                         rate.time, rate.latency);

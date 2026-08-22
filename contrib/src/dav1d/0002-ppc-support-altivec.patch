@@ -1,7 +1,7 @@
-From 763aeab018824b827968ba76a2f2b1e9703e78cb Mon Sep 17 00:00:00 2001
+From 37f8086e368b2c971ed0dba4e68e525b0fdd837e Mon Sep 17 00:00:00 2001
 From: Sergey Fedorov <barracuda@macos-powerpc.org>
 Date: Tue, 14 Jul 2026 09:03:13 +0000
-Subject: [PATCH] Support powerpc
+Subject: [PATCH 1/6] Support powerpc
 
 Enable the plain-AltiVec (VSX-less) PPC backend for big-endian G4/G5
 targets, including 32-bit Darwin: gate runtime dispatch and the
@@ -36,27 +36,46 @@ against a qemu-ppc-emulated gcc -maltivec build):
   apart) and showed up as color/"purple" flare on object borders.
   Use the unaligned vec_vsx_st for every tmp store.
 ---
- meson.build                |   4 +
- src/cdef_tmpl.c            |   4 +-
- src/cpu.c                  |   2 +-
- src/cpu.h                  |   7 +-
- src/looprestoration_tmpl.c |   4 +-
- src/meson.build            |  56 +++++++---
- src/ppc/cdef.h             |   3 +-
- src/ppc/cdef_tmpl.c        |  44 +++++---
- src/ppc/cpu.c              |   5 +-
- src/ppc/cpu.h              |   5 +-
- src/ppc/dav1d_types.h      | 215 +++++++++++++++++++++++++++++++++++--
- src/ppc/itx.h              |  10 ++
- src/ppc/itx_tmpl.c         |   4 +
- src/ppc/loopfilter.h       |   9 ++
- src/ppc/loopfilter_tmpl.c  |   4 +
- src/ppc/looprestoration.h  |   3 +-
- src/ppc/mc.h               |   9 +-
- src/ppc/mc_tmpl.c          |   4 +
- tests/checkasm/checkasm.c  |   5 +-
- 19 files changed, 350 insertions(+), 47 deletions(-)
+ include/common/attributes.h    |   6 +-
+ meson.build                    |   4 +
+ src/cdef_tmpl.c                |   4 +-
+ src/cpu.c                      |   2 +-
+ src/cpu.h                      |   7 +-
+ src/looprestoration_tmpl.c     |   4 +-
+ src/meson.build                |  46 +++++--
+ src/ppc/cdef.h                 |   3 +-
+ src/ppc/cdef_tmpl.c            |  44 ++++---
+ src/ppc/cpu.c                  |   5 +-
+ src/ppc/cpu.h                  |   5 +-
+ src/ppc/dav1d_types.h          | 215 ++++++++++++++++++++++++++++++++-
+ src/ppc/itx.h                  |  10 ++
+ src/ppc/itx_tmpl.c             |   4 +
+ src/ppc/loopfilter.h           |   9 ++
+ src/ppc/loopfilter_tmpl.c      |   4 +
+ src/ppc/looprestoration.h      |   3 +-
+ src/ppc/looprestoration_tmpl.c |  14 +++
+ src/ppc/mc.h                   |   9 +-
+ src/ppc/mc_tmpl.c              |   4 +
+ tests/checkasm/checkasm.c      |   5 +-
+ 21 files changed, 359 insertions(+), 48 deletions(-)
 
+diff --git a/include/common/attributes.h b/include/common/attributes.h
+index c6cecc7a..13c53d4a 100644
+--- a/include/common/attributes.h
++++ b/include/common/attributes.h
+@@ -60,7 +60,11 @@
+ #define ALIGN_64_VAL 64
+ #define ALIGN_32_VAL 32
+ #define ALIGN_16_VAL 16
+-#elif ARCH_AARCH64 || ARCH_ARM || ARCH_LOONGARCH || ARCH_PPC64LE || ARCH_X86_32
++/* ARCH_PPC (not just ARCH_PPC64LE): the big-endian AltiVec (G4/G5) build also
++ * runs vector kernels, and its aligned vec_ld/vec_st silently mask the low 4
++ * address bits — an ALIGN_STK_16 buffer that is only 8-byte aligned makes them
++ * read/write 8 bytes off. */
++#elif ARCH_AARCH64 || ARCH_ARM || ARCH_LOONGARCH || ARCH_PPC || ARCH_X86_32
+ /* ARM doesn't benefit from anything more than 16-byte alignment. */
+ #define ALIGN_64_VAL 16
+ #define ALIGN_32_VAL 16
 diff --git a/meson.build b/meson.build
 index b7e4c4be..943085ab 100644
 --- a/meson.build
@@ -169,10 +188,10 @@ index c172462b..d7722a1a 100644
  #elif ARCH_X86
      loop_restoration_dsp_init_x86(c, bpc);
 diff --git a/src/meson.build b/src/meson.build
-index 108b7623..a7e826e5 100644
+index 108b7623..8b4283c5 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -249,21 +249,44 @@ if is_asm_enabled
+@@ -249,21 +249,43 @@ if is_asm_enabled
              'loongarch/itx.S',
          )
          libdav1d_asm_objs += libdav1d_sources_asm
@@ -219,8 +238,7 @@ index 108b7623..a7e826e5 100644
 +        else
 +            # Big-endian 32/64-bit PowerPC (G4/G5): AltiVec baseline only.
 +            # This runs on every VMX-capable PowerPC without needing VSX.
-+            altivec_flags = ['-maltivec', '-DDAV1D_ALTIVEC']
-+            arch_flags += {'altivec': altivec_flags}
++            arch_flags += {'altivec': ['-maltivec', '-DDAV1D_ALTIVEC']}
 +            libdav1d_arch_tmpl_sources += {'altivec': files(
 +                'ppc/cdef_tmpl.c',
 +                'ppc/looprestoration_tmpl.c',
@@ -759,6 +777,37 @@ index 614234ab..ef2c3f44 100644
  
  #if BITDEPTH == 8
      c->wiener[0] = c->wiener[1] = dav1d_wiener_filter_vsx;
+diff --git a/src/ppc/looprestoration_tmpl.c b/src/ppc/looprestoration_tmpl.c
+index 76c1d07f..f0c028e6 100644
+--- a/src/ppc/looprestoration_tmpl.c
++++ b/src/ppc/looprestoration_tmpl.c
+@@ -76,12 +76,26 @@ static void wiener_filter_h_vsx(int32_t *hor_ptr,
+             u8x16 tmp_v0 = vec_ld(0, &tmp_ptr[i]);
+             u8x16 tmp_v7 = vec_ld(0, &tmp_ptr[i+16]);
+ 
++            /* tmp_vk must hold the 16 pixels starting k bytes into the row
++             * (memory order). vec_sld concatenates and shifts in register
++             * element order, which matches memory order only on big-endian;
++             * the upstream form vec_sld(tmp_v7, tmp_v0, 16 - k) is the
++             * little-endian compensation and produces rotated garbage on BE. */
++#if ENDIANNESS_BIG
++            u8x16 tmp_v1 = vec_sld( tmp_v0, tmp_v7, 1);
++            u8x16 tmp_v2 = vec_sld( tmp_v0, tmp_v7, 2);
++            u8x16 tmp_v3 = vec_sld( tmp_v0, tmp_v7, 3);
++            u8x16 tmp_v4 = vec_sld( tmp_v0, tmp_v7, 4);
++            u8x16 tmp_v5 = vec_sld( tmp_v0, tmp_v7, 5);
++            u8x16 tmp_v6 = vec_sld( tmp_v0, tmp_v7, 6);
++#else
+             u8x16 tmp_v1 = vec_sld( tmp_v7, tmp_v0, 15);
+             u8x16 tmp_v2 = vec_sld( tmp_v7, tmp_v0, 14);
+             u8x16 tmp_v3 = vec_sld( tmp_v7, tmp_v0, 13);
+             u8x16 tmp_v4 = vec_sld( tmp_v7, tmp_v0, 12);
+             u8x16 tmp_v5 = vec_sld( tmp_v7, tmp_v0, 11);
+             u8x16 tmp_v6 = vec_sld( tmp_v7, tmp_v0, 10);
++#endif
+ 
+             u16x8 tmp_u16_high = u8h_to_u16(tmp_v3);
+             u16x8 tmp_u16_low  = u8l_to_u16(tmp_v3);
 diff --git a/src/ppc/mc.h b/src/ppc/mc.h
 index 44fa142a..b946d47f 100644
 --- a/src/ppc/mc.h

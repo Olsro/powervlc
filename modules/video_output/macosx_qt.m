@@ -2179,6 +2179,15 @@ static int Control (vout_display_t *vd, int query, va_list ap)
         [super rightMouseDown:o_event];
 }
 
+- (void)scrollWheel:(NSEvent *)o_event
+{
+    /* Same responder-chain hole as NSOpenGLView on the old AppKit. */
+    if ([self superview])
+        [[self superview] scrollWheel:o_event];
+    else
+        [super scrollWheel:o_event];
+}
+
 - (void)otherMouseDown:(NSEvent *)o_event
 {
     @synchronized (self) {

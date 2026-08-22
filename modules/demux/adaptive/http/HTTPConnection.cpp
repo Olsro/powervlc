@@ -330,7 +330,7 @@ RequestStatus LibVLCHTTPConnection::request(const std::string &path,
     {
         vlc_credential_clean(&crd);
         vlc_UrlClean(&crd_url);
-        return RequestStatus::GenericError;
+        return RequestStatus::TransientError;
     }
 
     char *psz_realm = nullptr;
@@ -371,6 +371,12 @@ RequestStatus LibVLCHTTPConnection::request(const std::string &path,
     vlc_credential_clean(&crd);
     vlc_UrlClean(&crd_url);
     free(psz_realm);
+
+    if (status == 404 || status == 410)
+        return RequestStatus::NotFound;
+
+    if (status == 408 || status == 425 || status == 429 || status >= 500)
+        return RequestStatus::TransientError;
 
     if (status >= 400)
         return RequestStatus::GenericError;

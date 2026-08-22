@@ -177,10 +177,19 @@ private:
     input_clip_export_t *p_clipExport;
     QTimer         *clipExportTimer;
     int             i_clipSelectedKnob;  /* frame-step target: 1 start, 2 end */
+    /* Qt/Windows can deliver drag and key-repeat events faster than an
+     * accurate seek can decode its first picture.  Keep one immediate seek
+     * plus the newest trailing target at display cadence, shared by mouse
+     * bounds and frame-step shortcuts. */
+    QTimer         *clipPreviewTimer;
+    bool            b_clipPreviewPending;
+    double          f_clipPreviewTarget;
 
     bool startClipExport();
     void finishClipExport( bool b_cancelled );
     void clipExportNotify( const QString &message );
+    void queueClipPreview( double position );
+    void sendClipPreview( double position );
 
     void customEvent( QEvent * ) override;
 
@@ -210,6 +219,7 @@ private:
 public slots:
     void inputChangedHandler(); ///< Our controlled input changed
     void sliderUpdate( float ); ///< User dragged the slider. We get new pos
+    void flushClipPreview();    ///< Send the exact trailing clip seek now
     /* SpeedRate Rate Management */
     void reverse();
     void slower();
@@ -260,6 +270,7 @@ private slots:
     void AtoBLoop( float, int64_t, int );
     void clipModeLoop( float, int64_t, int );
     void clipExportPoll();
+    void clipPreviewTimeout();
     /* a jump shortcut redirected here by the core hotkeys module */
     void clipStepFromCore( qint64 value );
 

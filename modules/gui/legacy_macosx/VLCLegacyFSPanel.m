@@ -158,7 +158,7 @@ static NSString *fsTimeToString(int seconds)
     /* Geometry of the 3.0 fullscreen controller: time and title on top,
      * the seek bar across, transport centered at the bottom with the
      * volume on the left and the exit button on the right. */
-    NSRect screenFrame = [[NSScreen mainScreen] frame];
+    NSRect screenFrame = VLCLegacyLiveScreenFrame([NSScreen mainScreen]);
     NSRect rect = NSMakeRect(screenFrame.origin.x
                                  + (screenFrame.size.width - 550) / 2,
                              screenFrame.origin.y + 90, 550, 84);

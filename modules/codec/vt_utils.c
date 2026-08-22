@@ -60,9 +60,9 @@ cvpxpic_destroy_cb(picture_context_t *opaque)
 
     if (atomic_fetch_sub(&ctx->ref_count, 1) == 1)
     {
-        CFRelease(ctx->cvpx);
         if (ctx->on_released_cb)
             ctx->on_released_cb(ctx->cvpx, ctx->on_released_data, ctx->nb_fields);
+        CFRelease(ctx->cvpx);
         free(opaque);
     }
 }

@@ -32,6 +32,8 @@
 #include "logic/AbstractAdaptationLogic.h"
 #include "logic/BufferingLogic.hpp"
 
+#include <vlc_block.h>
+
 #include <cassert>
 #include <limits>
 
@@ -482,6 +484,36 @@ bool SegmentTracker::setPositionByTime(vlc_tick_t time, bool restarted, bool try
         return true;
     }
     return false;
+}
+
+bool SegmentTracker::preloadIndex()
+{
+    BaseRepresentation *rep = current.rep;
+    if(!rep)
+        rep = logic->getRepresentation(adaptationSet, nullptr);
+
+    if(!rep || !rep->needsIndex())
+        return false;
+
+    IndexSegment *segment = rep->getIndexSegment();
+    if(!segment)
+        return false;
+
+    SegmentChunk *chunk = segment->toChunk(resources, 0, rep);
+    if(!chunk)
+        return false;
+
+    block_t *block;
+    do
+    {
+        block = chunk->readBlock();
+        if(block)
+            block_Release(block);
+    }
+    while(block && chunk->hasMoreData());
+
+    delete chunk;
+    return !rep->needsIndex();
 }
 
 void SegmentTracker::setPosition(const Position &pos, bool restarted)

@@ -563,7 +563,7 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
     if (!screen)
         screen = [NSScreen mainScreen];
     if (screen != nil) {
-        NSRect visible = [screen visibleFrame];
+        NSRect visible = VLCLegacyLiveVisibleScreenFrame(screen);
         if (NSMaxY(frame) > NSMaxY(visible))
             frame.origin.y = NSMaxY(visible) - frame.size.height;
         if (frame.origin.y < visible.origin.y)
@@ -856,7 +856,7 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
         if (!screen)
             screen = [NSScreen mainScreen];
         if (screen != nil) {
-            NSRect visible = [screen visibleFrame];
+            NSRect visible = VLCLegacyLiveVisibleScreenFrame(screen);
             float chromeW = content.size.width - size.width;
             float chromeH = content.size.height - size.height;
             float maxW = visible.size.width - chromeW;
@@ -886,7 +886,7 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
         if (!screen)
             screen = [NSScreen mainScreen];
         if (screen != nil) {
-            NSRect visible = [screen visibleFrame];
+            NSRect visible = VLCLegacyLiveVisibleScreenFrame(screen);
             if (NSMaxX(content) > NSMaxX(visible))
                 content.origin.x = NSMaxX(visible) - content.size.width;
             if (content.origin.x < visible.origin.x)
@@ -976,7 +976,7 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
      * RÉTRACTÉ et la sortie de plein écran rendrait une fenêtre trop courte,
      * avec une barre remise sur une hauteur qui ne l'attend pas. */
     [self revealControlsForPlayback];
-    target = [screen frame];
+    target = VLCLegacyLiveScreenFrame(screen);
     initialFrame = [self frame];
     /* La barre de contrôles s'efface : en plein écran c'est le panneau
      * flottant (VLCLegacyFSPanel) qui prend le relais, exactement comme pour

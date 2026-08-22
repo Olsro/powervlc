@@ -1,7 +1,7 @@
-From 96f5186c65552f2055fc6fe6575bd88f53b21e99 Mon Sep 17 00:00:00 2001
+From 71c828889207782d2dbf251ab198402c5cd30627 Mon Sep 17 00:00:00 2001
 From: Sergey Fedorov <barracuda@macos-powerpc.org>
 Date: Fri, 17 Jul 2026 15:55:29 +0000
-Subject: [PATCH 3/4] PPC: Enable the motion-comp blend kernels on plain
+Subject: [PATCH 3/6] PPC: Enable the motion-comp blend kernels on plain
  AltiVec (G4/G5)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -40,17 +40,40 @@ AltiVec paths.
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 ---
+ src/mc_tmpl.c         |  4 ++--
  src/meson.build       |  1 +
  src/ppc/dav1d_types.h | 36 ++++++++++++++++++++----------------
  src/ppc/mc.h          | 14 ++++++++------
  src/ppc/mc_tmpl.c     |  4 ++--
- 4 files changed, 31 insertions(+), 24 deletions(-)
+ 5 files changed, 33 insertions(+), 26 deletions(-)
 
+diff --git a/src/mc_tmpl.c b/src/mc_tmpl.c
+index b936d94c..1ac259da 100644
+--- a/src/mc_tmpl.c
++++ b/src/mc_tmpl.c
+@@ -948,7 +948,7 @@ static void resize_c(pixel *dst, const ptrdiff_t dst_stride,
+ #include "src/arm/mc.h"
+ #elif ARCH_LOONGARCH64
+ #include "src/loongarch/mc.h"
+-#elif ARCH_PPC64LE
++#elif ARCH_PPC
+ #include "src/ppc/mc.h"
+ #elif ARCH_RISCV
+ #include "src/riscv/mc.h"
+@@ -995,7 +995,7 @@ COLD void bitfn(dav1d_mc_dsp_init)(Dav1dMCDSPContext *const c) {
+     mc_dsp_init_arm(c);
+ #elif ARCH_LOONGARCH64
+     mc_dsp_init_loongarch(c);
+-#elif ARCH_PPC64LE
++#elif ARCH_PPC
+     mc_dsp_init_ppc(c);
+ #elif ARCH_RISCV
+     mc_dsp_init_riscv(c);
 diff --git a/src/meson.build b/src/meson.build
-index f3a91dd2..1d14968a 100644
+index bbd3e516..9b3b69e9 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -295,6 +295,7 @@ if is_asm_enabled
+@@ -285,6 +285,7 @@ if is_asm_enabled
                  'ppc/cdef_tmpl.c',
                  'ppc/itx_tmpl.c',
                  'ppc/looprestoration_tmpl.c',
@@ -164,3 +187,6 @@ index 262eab35..a0393cb1 100644
  
 -#endif // __VSX__ || __POWER9_VECTOR__
 +#endif // __VSX__ || __POWER9_VECTOR__ || DAV1D_ALTIVEC
+-- 
+2.43.0
+

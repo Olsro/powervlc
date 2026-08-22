@@ -31,6 +31,10 @@
 #include <vlc_playlist.h>
 #include <vlc_input_item.h>
 #include <vlc_url.h>
+
+#ifdef HAVE_SEQUENCE_GRABBER
+# include <QuickTime/QuickTime.h>
+#endif
 #include <vlc_configuration.h>
 #include <vlc_plugin.h>    /* CONFIG_ITEM_* */
 
@@ -58,6 +62,171 @@ static NSString *const kVLCMediaBD = @"Blu-ray";
 static NSString *const kVLCMediaVideoTSFolder = @"VIDEO_TS";
 static NSString *const kVLCMediaBDMVFolder = @"BDMV";
 static NSString *const kVLCMediaUnknown = @"Unknown";
+
+/* Capture device discovery without a compile-time dependency on either
+ * framework.  The legacy interface is built with SDKs from 10.4 through the
+ * current one: QTKit exists on the former and AVFoundation on the latter,
+ * while neither set of headers spans that whole range.  Their device objects
+ * share the few selectors needed by the popup, so load the available class at
+ * runtime and let the corresponding access module open the selected UID. */
+static Class captureDeviceClass(NSString *frameworkPath, NSString *className)
+{
+    Class cls = NSClassFromString(className);
+    if (cls != Nil)
+        return cls;
+
+    /* NSClassFromString() does not load an unloaded framework. That matters
+     * on Snow Leopard: QTKit is linked only by the qtcapture plugin, which
+     * cannot be selected until this popup has already enumerated a device.
+     * Load it explicitly to break that circular dependency, while keeping the
+     * GUI plugin usable on systems where the framework does not exist. */
+    NSBundle *framework = [NSBundle bundleWithPath:frameworkPath];
+    if (framework != nil)
+        [framework load];
+    return NSClassFromString(className);
+}
+
+static NSArray *captureDevices(Class cls, NSString *selectorName,
+                               NSString *mediaType)
+{
+    SEL selector = NSSelectorFromString(selectorName);
+    if (cls == Nil || ![cls respondsToSelector:selector])
+        return [NSArray array];
+    NSArray *devices = [cls performSelector:selector withObject:mediaType];
+    return devices ? devices : [NSArray array];
+}
+
+#ifdef HAVE_SEQUENCE_GRABBER
+static NSString *sequenceGrabberPascalString(const unsigned char *text)
+{
+    /* +stringWithCString:encoding: is not implemented by Foundation 10.2.
+     * Jaguar returns localized Sequence Grabber names in MacRoman, whereas
+     * newer QuickTime versions can put UTF-8 bytes in the same Pascal field.
+     * Accept UTF-8 when valid, then fall back to the documented legacy
+     * encoding. Both CoreFoundation constructors exist since Mac OS X 10.0. */
+    CFStringRef value = CFStringCreateWithBytes(kCFAllocatorDefault,
+        text + 1, text[0], kCFStringEncodingUTF8, false);
+    if (value == NULL)
+        value = CFStringCreateWithPascalString(kCFAllocatorDefault,
+            text, kCFStringEncodingMacRoman);
+    if (value == NULL)
+        return @"?";
+    return [(NSString *)value autorelease];
+}
+
+/* QTCaptureDevice was introduced only with Leopard.  On Jaguar, Panther and
+ * Tiger enumerate the Component Manager devices directly.  The UID is the
+ * device/input pair used by sequence_grabber.c; the display name remains a
+ * normal Cocoa string so the rest of the Open panel needs no Carbon types. */
+static NSArray *sequenceGrabberDevices(OSType mediaType)
+{
+    NSMutableArray *result = [NSMutableArray array];
+    /* Keep QuickTime initialized for the lifetime of the legacy interface.
+     * On Jaguar, balancing each discovery pass with ExitMovies works in an
+     * isolated process but terminates PowerVLC when other VLC components have
+     * already initialized QuickTime state. */
+    static BOOL moviesEntered = NO;
+    if (!moviesEntered) {
+        EnterMovies();
+        moviesEntered = YES;
+    }
+    SeqGrabComponent grabber = OpenDefaultComponent(SeqGrabComponentType, 0);
+    SGChannel channel = NULL;
+    if (grabber == NULL || SGInitialize(grabber) != noErr
+     || SGNewChannel(grabber, mediaType, &channel) != noErr)
+        goto out;
+
+    SGDeviceList list = NULL;
+    if (SGGetChannelDeviceList(channel, sgDeviceListIncludeInputs, &list)
+            != noErr || list == NULL)
+        goto out;
+
+    HLock((Handle)list);
+    SGDeviceListPtr devices = *list;
+    short deviceIndex;
+    for (deviceIndex = 0; deviceIndex < devices->count; deviceIndex++) {
+        SGDeviceName *device = &devices->entry[deviceIndex];
+        if (device->flags & sgDeviceNameFlagDeviceUnavailable)
+            continue;
+        NSString *deviceName = sequenceGrabberPascalString(device->name);
+        BOOL addedInput = NO;
+        if (device->inputs != NULL) {
+            HLock((Handle)device->inputs);
+            SGDeviceInputListPtr inputs = *device->inputs;
+            short inputIndex;
+            for (inputIndex = 0; inputIndex < inputs->count; inputIndex++) {
+                SGDeviceInputName *input = &inputs->entry[inputIndex];
+                if (input->flags & sgDeviceInputNameFlagInputUnavailable)
+                    continue;
+                NSString *inputName = sequenceGrabberPascalString(input->name);
+                /* GCC emits non-ASCII Objective-C literals as UTF-8, while
+                 * Jaguar reads them using the process' MacRoman encoding. */
+                NSString *name = [NSString stringWithFormat:@"%@ - %@",
+                                                            deviceName, inputName];
+                NSString *uid = [NSString stringWithFormat:@"%d:%d",
+                                                           deviceIndex, inputIndex];
+                [result addObject:[NSDictionary dictionaryWithObjectsAndKeys:
+                    name, @"name", uid, @"uid", @"sequence-grabber", @"backend",
+                    nil]];
+                addedInput = YES;
+            }
+            HUnlock((Handle)device->inputs);
+        }
+        if (!addedInput) {
+            NSString *uid = [NSString stringWithFormat:@"%d:-1", deviceIndex];
+            [result addObject:[NSDictionary dictionaryWithObjectsAndKeys:
+                deviceName, @"name", uid, @"uid", @"sequence-grabber", @"backend",
+                nil]];
+        }
+    }
+    HUnlock((Handle)list);
+    SGDisposeDeviceList(grabber, list);
+
+out:
+    if (channel != NULL && grabber != NULL)
+        SGDisposeChannel(grabber, channel);
+    if (grabber != NULL)
+        CloseComponent(grabber);
+    return result;
+}
+#endif
+
+static NSString *captureDeviceName(id device)
+{
+    if ([device isKindOfClass:[NSDictionary class]])
+        return [device objectForKey:@"name"];
+    if ([device respondsToSelector:NSSelectorFromString(@"localizedName")])
+        return [device performSelector:NSSelectorFromString(@"localizedName")];
+    if ([device respondsToSelector:
+            NSSelectorFromString(@"localizedDisplayName")])
+        return [device performSelector:
+            NSSelectorFromString(@"localizedDisplayName")];
+    return @"?";
+}
+
+static NSString *captureDeviceUID(id device)
+{
+    if ([device isKindOfClass:[NSDictionary class]])
+        return [device objectForKey:@"uid"];
+    if (![device respondsToSelector:NSSelectorFromString(@"uniqueID")])
+        return nil;
+    return [[device performSelector:NSSelectorFromString(@"uniqueID")]
+        stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceCharacterSet]];
+}
+
+static BOOL isQTKitCaptureDevice(id device)
+{
+    Class cls = NSClassFromString(@"QTCaptureDevice");
+    return cls != Nil && [device isKindOfClass:cls];
+}
+
+static BOOL isSequenceGrabberCaptureDevice(id device)
+{
+    return [device isKindOfClass:[NSDictionary class]]
+        && [[device objectForKey:@"backend"]
+            isEqualToString:@"sequence-grabber"];
+}
 
 /*****************************************************************************
  * volume inspection, 10.4-safe stand-ins for the VLCStringUtility helpers
@@ -317,6 +486,8 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
     [allMediaDevices release];
     [specialMediaFolders release];
     [displayIDs release];
+    [videoCaptureDevices release];
+    [audioCaptureDevices release];
     [filePath release];
     [fileSlavePath release];
     [subPath release];
@@ -1538,17 +1709,94 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
                                action:@selector(qtkToggleUIElements:)
                                    in:devices];
     qtkVideoDevicePopup = [self popup:NSMakeRect(140, 190, 320, 26)
-                               action:nil in:devices];
-    [qtkVideoDevicePopup addItemWithTitle:_NS("None")];
+                               action:@selector(qtkChanged:) in:devices];
     [qtkVideoDevicePopup setEnabled:NO];
     qtkAudioCheckbox = [self checkbox:_NS("Audio")
                                 frame:NSMakeRect(24, 156, 100, 18)
                                action:@selector(qtkToggleUIElements:)
                                    in:devices];
     qtkAudioDevicePopup = [self popup:NSMakeRect(140, 150, 320, 26)
-                               action:nil in:devices];
-    [qtkAudioDevicePopup addItemWithTitle:_NS("None")];
+                               action:@selector(qtkAudioChanged:) in:devices];
     [qtkAudioDevicePopup setEnabled:NO];
+
+    /* Prefer AVFoundation where it exists, then fall back to QTKit on
+     * Snow Leopard and older systems.  The four-character media strings are
+     * the public values used by both frameworks (vide/soun/muxx). */
+    BOOL supportsQTKitCapture = VLCLegacyOSVersionAtLeast(10, 4, 0);
+    Class captureClass = Nil;
+    NSString *deviceSelector = @"devicesWithMediaType:";
+    NSArray *videos = [NSArray array];
+    NSArray *audios = [NSArray array];
+    NSArray *muxed = [NSArray array];
+    if (supportsQTKitCapture) {
+        captureClass = captureDeviceClass(
+            @"/System/Library/Frameworks/AVFoundation.framework",
+            @"AVCaptureDevice");
+        videos = captureDevices(captureClass, deviceSelector, @"vide");
+        audios = captureDevices(captureClass, deviceSelector, @"soun");
+        muxed = captureDevices(captureClass, deviceSelector, @"muxx");
+    }
+    NSArray *audioMuxed = muxed;
+    if (supportsQTKitCapture && [videos count] == 0
+            && [audios count] == 0 && [muxed count] == 0) {
+        captureClass = captureDeviceClass(
+            @"/System/Library/Frameworks/QTKit.framework",
+            @"QTCaptureDevice");
+        deviceSelector = @"inputDevicesWithMediaType:";
+        videos = captureDevices(captureClass, deviceSelector, @"vide");
+        audios = captureDevices(captureClass, deviceSelector, @"soun");
+        muxed = captureDevices(captureClass, deviceSelector, @"muxx");
+    }
+#ifdef HAVE_SEQUENCE_GRABBER
+    /* Panther's QuickTime 7 exposes QTCaptureDevice but crashes inside
+     * QTCaptureHALDevice while enumerating it. Jaguar does not implement the
+     * class at all. Use Component Manager discovery directly on both. */
+    if (!supportsQTKitCapture) {
+        videos = sequenceGrabberDevices(VideoMediaType);
+        audios = sequenceGrabberDevices(SoundMediaType);
+        muxed = [NSArray array];
+        audioMuxed = muxed;
+    }
+    /* Tiger through Snow Leopard can capture video through QTKit, but a
+     * separate decompressed-audio QTKit graph is unsafe beside the iSight
+     * graph (component-load races on 10.4/10.5 and a Tundra teardown race on
+     * 10.6). Keep QTKit video but use the native Sequence Grabber sound
+     * channel on those systems. */
+    else if (!VLCLegacyOSVersionAtLeast(10, 7, 0)) {
+        audios = sequenceGrabberDevices(SoundMediaType);
+        audioMuxed = [NSArray array];
+    }
+    if ([videos count] == 0 && [audios count] == 0 && [muxed count] == 0) {
+        videos = sequenceGrabberDevices(VideoMediaType);
+        audios = sequenceGrabberDevices(SoundMediaType);
+        muxed = [NSArray array];
+        audioMuxed = muxed;
+    }
+#endif
+    videoCaptureDevices = [[videos arrayByAddingObjectsFromArray:muxed] retain];
+    audioCaptureDevices = [[audios arrayByAddingObjectsFromArray:audioMuxed] retain];
+
+    [qtkVideoDevicePopup removeAllItems];
+    NSUInteger captureIndex;
+    for (captureIndex = 0; captureIndex < [videoCaptureDevices count];
+         captureIndex++) {
+        id device = [videoCaptureDevices objectAtIndex:captureIndex];
+        [[qtkVideoDevicePopup menu] addItemWithTitle:captureDeviceName(device)
+                                              action:nil keyEquivalent:@""];
+    }
+    if ([videoCaptureDevices count] == 0)
+        [qtkVideoDevicePopup addItemWithTitle:_NS("None")];
+
+    [qtkAudioDevicePopup removeAllItems];
+    for (captureIndex = 0; captureIndex < [audioCaptureDevices count];
+         captureIndex++) {
+        id device = [audioCaptureDevices objectAtIndex:captureIndex];
+        NSString *name = captureDeviceName(device);
+        [[qtkAudioDevicePopup menu] addItemWithTitle:name
+                                             action:nil keyEquivalent:@""];
+    }
+    if ([audioCaptureDevices count] == 0)
+        [qtkAudioDevicePopup addItemWithTitle:_NS("None")];
     NSTabViewItem *devicesItem = [[[NSTabViewItem alloc]
         initWithIdentifier:@"devices"] autorelease];
     [devicesItem setView:devices];
@@ -1609,7 +1857,14 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
                                          in:screen];
     screenqtkAudioPopup = [self popup:NSMakeRect(180, 34, 260, 26)
                                action:nil in:screen];
-    [screenqtkAudioPopup addItemWithTitle:_NS("None")];
+    for (captureIndex = 0; captureIndex < [audioCaptureDevices count];
+         captureIndex++) {
+        id device = [audioCaptureDevices objectAtIndex:captureIndex];
+        [[screenqtkAudioPopup menu] addItemWithTitle:captureDeviceName(device)
+                                             action:nil keyEquivalent:@""];
+    }
+    if ([audioCaptureDevices count] == 0)
+        [screenqtkAudioPopup addItemWithTitle:_NS("None")];
     [screenqtkAudioPopup setEnabled:NO];
     NSTabViewItem *screenItem = [[[NSTabViewItem alloc]
         initWithIdentifier:@"screen"] autorelease];
@@ -1663,8 +1918,9 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
                             i + 1, (int)rect.size.width,
                             (int)rect.size.height]];
                     [displayIDs addObject:
-                        [NSNumber numberWithUnsignedInt:ids[i]]];
-                    if (i == 0 || displayID == (int)ids[i]
+                        [NSNumber numberWithUnsignedLongLong:
+                            (unsigned long long)(uintptr_t)ids[i]]];
+                    if (i == 0 || displayID == (int)(uintptr_t)ids[i]
                      || screenIndex - 1 == (int)i) {
                         [screenPopup selectItemAtIndex:i];
                         [screenLeftStepper setMaxValue:rect.size.width];
@@ -1709,8 +1965,8 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
     int selected = (int)[screenPopup indexOfSelectedItem];
     if (selected < 0 || (unsigned)selected >= [displayIDs count])
         return;
-    CGRect rect = CGDisplayBounds((CGDirectDisplayID)
-        [[displayIDs objectAtIndex:selected] unsignedIntValue]);
+    CGRect rect = CGDisplayBounds((CGDirectDisplayID)(uintptr_t)
+        [[displayIDs objectAtIndex:selected] unsignedLongLongValue]);
     [screenLeftStepper setMaxValue:rect.size.width];
     [screenTopStepper setMaxValue:rect.size.height];
     [screenWidthStepper setMaxValue:rect.size.width];
@@ -1723,14 +1979,57 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
     [screenqtkAudioPopup setEnabled:[screenqtkAudioCheckbox state]];
 }
 
+- (NSString *)captureMRLForDevice:(id)device video:(BOOL)video
+{
+    NSString *uid = captureDeviceUID(device);
+    if (!uid)
+        return @"";
+    NSString *scheme;
+    if (isSequenceGrabberCaptureDevice(device))
+        scheme = video ? @"sgcapture" : @"sgsound";
+    else if (isQTKitCaptureDevice(device))
+        scheme = video ? @"qtcapture" : @"qtsound";
+    else
+        scheme = video ? @"avcapture" : @"avaudiocapture";
+    return [NSString stringWithFormat:@"%@://%@", scheme, uid];
+}
+
+- (void)updateCaptureMRL
+{
+    if ([[[captureModePopup selectedItem] title]
+            isEqualToString:_NS("Screen")])
+        return;
+    NSInteger video = [qtkVideoDevicePopup indexOfSelectedItem];
+    NSInteger audio = [qtkAudioDevicePopup indexOfSelectedItem];
+    if ([qtkVideoCheckbox state] == NSOnState && video >= 0
+        && (NSUInteger)video < [videoCaptureDevices count])
+        [self setMRL:[self captureMRLForDevice:
+            [videoCaptureDevices objectAtIndex:video] video:YES]];
+    else if ([qtkAudioCheckbox state] == NSOnState && audio >= 0
+             && (NSUInteger)audio < [audioCaptureDevices count])
+        [self setMRL:[self captureMRLForDevice:
+            [audioCaptureDevices objectAtIndex:audio] video:NO]];
+    else
+        [self setMRL:@""];
+}
+
+- (void)qtkChanged:(id)sender
+{
+    [self updateCaptureMRL];
+}
+
+- (void)qtkAudioChanged:(id)sender
+{
+    [self updateCaptureMRL];
+}
+
 - (void)qtkToggleUIElements:(id)sender
 {
-    /* AVFoundation/QTKit capture devices need modules that only exist on
-     * newer releases; the popups list "None" and the MRL stays empty,
-     * exactly what 3.0 shows without any capture device */
-    [qtkAudioDevicePopup setEnabled:[qtkAudioCheckbox state]];
-    [qtkVideoDevicePopup setEnabled:[qtkVideoCheckbox state]];
-    [self setMRL:@""];
+    [qtkAudioDevicePopup setEnabled:[qtkAudioCheckbox state]
+                                  && [audioCaptureDevices count] > 0];
+    [qtkVideoDevicePopup setEnabled:[qtkVideoCheckbox state]
+                                  && [videoCaptureDevices count] > 0];
+    [self updateCaptureMRL];
 }
 
 /*****************************************************************************
@@ -1804,6 +2103,9 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
                               frame:NSMakeRect(398, 10, 92, 28) in:content];
     [cancel setKeyEquivalent:@"\033"];
 
+    /* Jaguar exposes the notification names but its NSWorkspace notification
+     * center is not safe during construction of this window. */
+#if !defined(MAC_OS_X_VERSION_MIN_REQUIRED) || MAC_OS_X_VERSION_MIN_REQUIRED >= 1030
     /* watch mounts/unmounts like the 3.0 controller */
     NSNotificationCenter *wsCenter =
         [[NSWorkspace sharedWorkspace] notificationCenter];
@@ -1811,6 +2113,7 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
                      name:NSWorkspaceDidMountNotification object:nil];
     [wsCenter addObserver:self selector:@selector(scanOpticalMedia:)
                      name:NSWorkspaceDidUnmountNotification object:nil];
+#endif
 
     [self scanOpticalMedia:nil];
     [window center];
@@ -1865,12 +2168,18 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
 {
     if (!window)
         [self buildWindow];
-    if ([tabView indexOfTabViewItem:[tabView selectedTabViewItem]] == tab)
-        [self tabView:tabView
-            didSelectTabViewItem:[tabView selectedTabViewItem]];
-    else
+    /* Jaguar's NSTabView implementation has a broken selector cache for
+     * selectedTabViewItem/indexOfTabViewItem when the tab view is first
+     * created. Select by index, then refresh explicitly: selecting the tab
+     * that is already active does not invoke the delegate and used to retain
+     * a manually entered capture MRL such as sgsound://1 forever. */
+    if (tabView && tab >= 0 && tab < [tabView numberOfTabViewItems]) {
         [tabView selectTabViewItemAtIndex:tab];
-    [window makeKeyAndOrderFront:nil];
+        [self tabView:tabView
+            didSelectTabViewItem:[tabView tabViewItemAtIndex:tab]];
+    }
+    if (window)
+        [window makeKeyAndOrderFront:nil];
 }
 
 /*****************************************************************************
@@ -1988,10 +2297,29 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
             [options addObject:@"screen-follow-mouse"];
         else
             [options addObject:@"no-screen-follow-mouse"];
+        if ([screenqtkAudioCheckbox state] == NSOnState) {
+            NSInteger audio = [screenqtkAudioPopup indexOfSelectedItem];
+            if (audio >= 0 && (NSUInteger)audio < [audioCaptureDevices count])
+                [options addObject:[NSString stringWithFormat:@"input-slave=%@",
+                    [self captureMRLForDevice:
+                        [audioCaptureDevices objectAtIndex:audio] video:NO]]];
+        }
+    } else if ([[[tabView selectedTabViewItem] identifier] intValue]
+                    == OPEN_TAB_CAPTURE
+            && [qtkVideoCheckbox state] == NSOnState
+            && [qtkAudioCheckbox state] == NSOnState) {
+        NSInteger audio = [qtkAudioDevicePopup indexOfSelectedItem];
+        if (audio >= 0 && (NSUInteger)audio < [audioCaptureDevices count])
+            [options addObject:[NSString stringWithFormat:@"input-slave=%@",
+                [self captureMRLForDevice:
+                    [audioCaptureDevices objectAtIndex:audio] video:NO]]];
     }
 
-    [self addMRL:theMrl options:options];
+    /* Starting a live Sequence Grabber input can synchronously wait for its
+     * first samples on Jaguar. Hide the panel before handing the MRL to the
+     * playlist so Open always gives immediate visual feedback. */
     [window orderOut:nil];
+    [self addMRL:theMrl options:options];
 }
 
 @end

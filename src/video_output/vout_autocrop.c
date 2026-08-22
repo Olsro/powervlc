@@ -215,28 +215,31 @@ static inline unsigned ClampBlack(unsigned x)
     return x < 16 ? 16 : x;
 }
 
-static bool RowAllDark(const uint8_t *luma, int pitch, unsigned width,
-                       unsigned row)
+static bool RowAllDark(const uint8_t *luma, int pitch, unsigned pixel_pitch,
+                       unsigned width, unsigned row)
 {
     const uint8_t *line = luma + (size_t)pitch * row;
 
     unsigned avg = 0;
     for (unsigned i = 0; i < width; i++)
-        avg += ClampBlack(line[i]);
+        avg += ClampBlack(line[(size_t)pixel_pitch * i]);
     avg /= width;
     if (avg >= AUTOCROP_DARK)
         return false;
 
     for (unsigned i = 0; i < width; i++)
-        if (AbsDiff(avg, ClampBlack(line[i])) > AUTOCROP_FLATNESS)
+        if (AbsDiff(avg, ClampBlack(line[(size_t)pixel_pitch * i]))
+            > AUTOCROP_FLATNESS)
             return false;
     return true;
 }
 
-static bool ColumnAllDark(const uint8_t *luma, int pitch, unsigned height,
-                          unsigned top, unsigned bottom, unsigned col)
+static bool ColumnAllDark(const uint8_t *luma, int pitch, unsigned pixel_pitch,
+                          unsigned height, unsigned top, unsigned bottom,
+                          unsigned col)
 {
-    const uint8_t *column = luma + (size_t)pitch * top + col;
+    const uint8_t *column = luma + (size_t)pitch * top
+                          + (size_t)pixel_pitch * col;
     const unsigned lines = height - top - bottom;
 
     unsigned avg = 0;
@@ -258,7 +261,7 @@ static bool ColumnAllDark(const uint8_t *luma, int pitch, unsigned height,
  * \return false when the frame must not be counted at all (all black, or a
  * border reaching a quarter of the frame: a fade, a title card, credits).
  */
-static bool DetectBorder(const uint8_t *luma, int pitch,
+static bool DetectBorder(const uint8_t *luma, int pitch, unsigned pixel_pitch,
                          unsigned width, unsigned height,
                          vout_autocrop_border_t *border)
 {
@@ -279,33 +282,35 @@ static bool DetectBorder(const uint8_t *luma, int pitch,
     unsigned top, bottom, left, right;
 
     for (top = edge; top < h4; top++)
-        if (!RowAllDark(luma, pitch, width, top))
+        if (!RowAllDark(luma, pitch, pixel_pitch, width, top))
             break;
     if (top <= edge) {
         for (top = 0; top < edge; top++)
-            if (!RowAllDark(luma, pitch, width, top))
+            if (!RowAllDark(luma, pitch, pixel_pitch, width, top))
                 break;
         if (top >= edge)
             top = 0;
     }
 
     for (bottom = edge; bottom < h4; bottom++)
-        if (!RowAllDark(luma, pitch, width, height - 1 - bottom))
+        if (!RowAllDark(luma, pitch, pixel_pitch, width, height - 1 - bottom))
             break;
     if (bottom <= edge) {
         for (bottom = 0; bottom < edge; bottom++)
-            if (!RowAllDark(luma, pitch, width, height - 1 - bottom))
+            if (!RowAllDark(luma, pitch, pixel_pitch, width,
+                            height - 1 - bottom))
                 break;
         if (bottom >= edge)
             bottom = 0;
     }
 
     for (left = 0; left < w4; left++)
-        if (!ColumnAllDark(luma, pitch, height, top, bottom, left))
+        if (!ColumnAllDark(luma, pitch, pixel_pitch, height, top, bottom, left))
             break;
 
     for (right = 0; right < w4; right++)
-        if (!ColumnAllDark(luma, pitch, height, top, bottom, width - 1 - right))
+        if (!ColumnAllDark(luma, pitch, pixel_pitch, height, top, bottom,
+                           width - 1 - right))
             break;
 
     /* Only keep the result if none of the borders reached a quarter of the
@@ -325,19 +330,22 @@ static bool DetectBorder(const uint8_t *luma, int pitch,
  * Getting at the luma
  *****************************************************************************/
 /* Anything with a byte-per-sample luma plane first: I420, YV12, I422, I444,
- * NV12, NV21, GREY and their JPEG-range twins. Everything else (hardware
- * surfaces, 10-bit, packed YUV, RGB) goes through a conversion. */
+ * NV12, NV21, GREY and their JPEG-range twins. UYVY is also usable once it
+ * has been mapped: its luma samples are the odd bytes. Everything else
+ * (hardware surfaces, 10-bit, other packed YUV, RGB) goes through a
+ * conversion. */
 static bool LumaIsReadable(const picture_t *pic)
 {
     const vlc_chroma_description_t *desc =
         vlc_fourcc_GetChromaDescription(pic->format.i_chroma);
 
-    return desc != NULL && desc->plane_count > 0 && desc->pixel_size == 1
-        && vlc_fourcc_IsYUV(pic->format.i_chroma)
-        && pic->p[0].p_pixels != NULL;
+    return pic->p[0].p_pixels != NULL
+        && ((desc != NULL && desc->plane_count > 0 && desc->pixel_size == 1
+             && vlc_fourcc_IsYUV(pic->format.i_chroma))
+            || pic->format.i_chroma == VLC_CODEC_UYVY);
 }
 
-static picture_t *ConvertToI420(vout_autocrop_t *ac, picture_t *pic)
+static picture_t *ConvertToReadable(vout_autocrop_t *ac, picture_t *pic)
 {
     if (ac->image_failed)
         return NULL;
@@ -352,7 +360,12 @@ static picture_t *ConvertToI420(vout_autocrop_t *ac, picture_t *pic)
     /* Same geometry, only the layout changes: the CVPX converter (and most
      * others) refuse anything that would also resize. */
     video_format_t fmt_out = pic->format;
-    fmt_out.i_chroma  = VLC_CODEC_I420;
+    /* VDA's native, zero-copy output is CVPX/UYVY. The CVPX converter can
+     * map it to UYVY but deliberately cannot turn it into I420 in one step.
+     * We only need luma and can read the packed samples directly, which keeps
+     * the native VDA output (and its low CPU cost) intact. */
+    fmt_out.i_chroma = pic->format.i_chroma == VLC_CODEC_CVPX_UYVY
+                     ? VLC_CODEC_UYVY : VLC_CODEC_I420;
     fmt_out.p_palette = NULL;
 
     picture_t *converted = image_Convert(ac->image, pic, &pic->format, &fmt_out);
@@ -634,19 +647,23 @@ bool vout_autocrop_Feed(vout_autocrop_t *ac, picture_t *pic, vlc_tick_t now,
     picture_t *converted = NULL;
     const picture_t *readable = pic;
     if (!LumaIsReadable(pic)) {
-        converted = ConvertToI420(ac, pic);
+        converted = ConvertToReadable(ac, pic);
         if (converted == NULL)
             return false;
         readable = converted;
     }
 
     const plane_t *plane = &readable->p[0];
+    const unsigned pixel_pitch = plane->i_pixel_pitch;
     const uint8_t *luma = plane->p_pixels
                         + (size_t)plane->i_pitch * readable->format.i_y_offset
-                        + readable->format.i_x_offset;
+                        + (size_t)pixel_pitch * readable->format.i_x_offset;
+    if (readable->format.i_chroma == VLC_CODEC_UYVY)
+        luma++;
 
     vout_autocrop_border_t sample;
-    const bool usable = DetectBorder(luma, plane->i_pitch, width, height,
+    const bool usable = DetectBorder(luma, plane->i_pitch, pixel_pitch,
+                                     width, height,
                                      &sample);
     if (converted != NULL)
         picture_Release(converted);

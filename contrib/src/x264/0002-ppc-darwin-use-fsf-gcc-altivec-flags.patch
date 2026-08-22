@@ -1,0 +1,25 @@
+From: PowerVLC
+Subject: [PATCH] configure: use FSF GCC AltiVec flags and header on Darwin
+ PowerPC
+
+x264 assumes that every Darwin PowerPC compiler is Apple GCC and forces
+-faltivec -fastf -mcpu=G4.  PowerVLC cross-builds the legacy slices with
+FSF GCC 13, which rejects all three Apple spellings.  Unlike Apple GCC,
+FSF GCC also exposes the vec_* intrinsics through <altivec.h>.  The contrib
+driver already supplies the selected CPU and tuning flags; add only the
+portable AltiVec ABI flags and enable the standard header.
+
+--- a/configure
++++ b/configure
+@@ -799,7 +799,8 @@ case $host_cpu in
+             AS="${AS-${CC}}"
+             AS_EXT=".c"
+             if [ $SYS = MACOSX ] ; then
+-                CFLAGS="$CFLAGS -faltivec -fastf -mcpu=G4"
++                CFLAGS="$CFLAGS -maltivec -mabi=altivec"
++                define HAVE_ALTIVEC_H
+             else
+                 CFLAGS="$CFLAGS -maltivec -mabi=altivec"
+                 define HAVE_ALTIVEC_H
+-- 
+2.43.0

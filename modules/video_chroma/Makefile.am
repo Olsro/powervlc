@@ -125,7 +125,8 @@ endif
 
 libcvpx_plugin_la_SOURCES = codec/vt_utils.c codec/vt_utils.h video_chroma/cvpx.c
 if HAVE_OSX
-libcvpx_plugin_la_CFLAGS = $(AM_CFLAGS) -mmacosx-version-min=10.8
+# This converter is needed to map VDA CVPX frames on Snow Leopard too.
+libcvpx_plugin_la_CFLAGS = $(AM_CFLAGS)
 endif
 if HAVE_IOS
 libcvpx_plugin_la_CFLAGS = $(AM_CFLAGS) -miphoneos-version-min=8.0
@@ -133,7 +134,9 @@ endif
 if HAVE_TVOS
 libcvpx_plugin_la_CFLAGS = $(AM_CFLAGS) -mtvos-version-min=10.2
 endif
-libcvpx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(chromadir)' -Wl,-framework,Foundation -Wl,-framework,VideoToolbox -Wl,-framework,CoreMedia -Wl,-framework,CoreVideo
+# The 10.8+ transfer submodule uses VideoToolbox; mapping CVPX to software
+# pixels does not. Weak-link it so the module can load on 10.6.
+libcvpx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(chromadir)' -Wl,-framework,Foundation -Wl,-weak_framework,VideoToolbox -Wl,-framework,CoreVideo
 libcvpx_plugin_la_LIBADD = libchroma_copy.la
 EXTRA_LTLIBRARIES += libcvpx_plugin.la
 if HAVE_VT_FRAMEWORK

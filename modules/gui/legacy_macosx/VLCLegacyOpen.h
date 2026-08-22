@@ -142,6 +142,8 @@ enum {
     NSPopUpButton *qtkVideoDevicePopup;
     NSButton *qtkAudioCheckbox;
     NSPopUpButton *qtkAudioDevicePopup;
+    NSArray *videoCaptureDevices;       /* AVCaptureDevice or QTCaptureDevice */
+    NSArray *audioCaptureDevices;
     NSPopUpButton *screenPopup;
     NSMutableArray *displayIDs;          /* NSNumber (CGDirectDisplayID) */
     NSTextField *screenFPSField;
@@ -158,6 +160,10 @@ enum {
     NSButton *screenqtkAudioCheckbox;
     NSPopUpButton *screenqtkAudioPopup;
 }
+
+- (void)qtkChanged:(id)sender;
+- (void)qtkAudioChanged:(id)sender;
+- (void)qtkToggleUIElements:(id)sender;
 
 - (id)initWithCore:(VLCLegacyCoreInteraction *)interaction;
 

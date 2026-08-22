@@ -144,10 +144,31 @@
                frame:NSMakeRect(180, 366, 520, 34)
                 font:[NSFont boldSystemFontOfSize:24] in:content];
 
+    /* Read the product version from the bundle first.  In a universal app
+     * each architecture's interface plugin is built independently and an
+     * incremental legacy-toolchain build can otherwise leave the literal
+     * compiled into one slice behind the Info.plist (the i386 1.3.1 bundle
+     * was consequently still displaying 1.2.0 here).  The bundle value is
+     * also what Finder and LaunchServices report, so it is the authoritative
+     * value for an installed application. */
 #if defined(POWERVLC_VERSION) && defined(VERSION_MESSAGE)
+    NSString *productVersion = [[NSBundle mainBundle]
+        objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+    if (![productVersion isKindOfClass:[NSString class]]
+        || [productVersion length] == 0)
+        productVersion = [NSString stringWithUTF8String:POWERVLC_VERSION];
+    NSString *buildDate = [[NSBundle mainBundle]
+        objectForInfoDictionaryKey:@"PowerVLCBuildDate"];
+    if (![buildDate isKindOfClass:[NSString class]] || [buildDate length] == 0)
+        buildDate = [NSString stringWithUTF8String:__DATE__];
+    NSString *coreVersion = [[NSBundle mainBundle]
+        objectForInfoDictionaryKey:@"PowerVLCCoreVersion"];
+    if (![coreVersion isKindOfClass:[NSString class]]
+        || [coreVersion length] == 0)
+        coreVersion = [NSString stringWithUTF8String:VERSION_MESSAGE];
     NSString *version = [NSString stringWithFormat:
-        @"Version %s (%s) - Forked from VLC %s",
-        POWERVLC_VERSION, __DATE__, VERSION_MESSAGE];
+        @"Version %@ (%@) - Forked from VLC %@",
+        productVersion, buildDate, coreVersion];
 #else
     NSString *version = @"";
 #endif

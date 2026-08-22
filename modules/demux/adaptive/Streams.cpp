@@ -254,7 +254,8 @@ AbstractStream::StreamPosition::StreamPosition()
 bool AbstractStream::reactivate(const StreamPosition &pos)
 {
     vlc_mutex_locker locker(&lock);
-    if(setPosition(pos, false))
+    if(setPosition(pos, false) ||
+       (segmentTracker->preloadIndex() && setPosition(pos, false)))
     {
         setDisabled(false);
         return true;
