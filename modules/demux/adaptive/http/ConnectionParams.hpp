@@ -35,6 +35,7 @@ namespace adaptive
             Redirection,
             Unauthorized,
             NotFound,
+            TransientError,
             GenericError,
         };
 

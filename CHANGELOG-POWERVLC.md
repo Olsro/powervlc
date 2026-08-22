@@ -59,6 +59,12 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   bursts. On a Mac mini G4 playing Pluto TV, this removes the regular dropped
   frames previously seen at every five-second segment boundary while keeping
   the decoded-picture and network buffers full.
+- **DASH video no longer freezes permanently while audio continues after a
+  transient range failure.** Byte-range downloads retry temporary HTTP
+  failures (408, 425, 429 and server-side 5xx errors) and resume an interrupted
+  response at the exact missing byte, with three bounded attempts. Recovered
+  segments are excluded from bandwidth estimation so a retry cannot trigger an
+  unjustified jump to a higher-quality representation.
 - **Standing stream-quality choices are saved immediately.** Choosing
   Automatic, Lowest, Highest or a resolution ceiling now survives a crash,
   forced quit or indefinitely running TV stream; only an individual
