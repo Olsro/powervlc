@@ -326,9 +326,10 @@ void PlaylistManager::unexportQualities()
      * bandwidth of THIS playlist and means nothing for the next one, so it
      * is deliberately not kept.
      *
-     * Written when the stream ends rather than when the menu is used: that
-     * is early enough for "the next stream", it costs nothing while
-     * something plays, and it keeps the whole feature callback-free.
+     * The legacy Mac menu saves these standing choices immediately.  Keep
+     * this teardown fallback for other interfaces and remote controls that
+     * only change the input variable: it is still early enough for the next
+     * stream and keeps the adaptive core itself callback-free.
      *
      * Against what WE put in the variable, not against the stored value:
      * a preference this playlist could not offer never made it into the

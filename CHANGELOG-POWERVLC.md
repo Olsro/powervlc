@@ -53,6 +53,16 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
 
 ### Extensions and adaptive streaming
 
+- **Live HLS streams stay smooth when a new segment arrives on single-core
+  Macs.** The background downloader no longer competes with the real-time
+  video output at the same fixed scheduler priority while decrypting TLS
+  bursts. On a Mac mini G4 playing Pluto TV, this removes the regular dropped
+  frames previously seen at every five-second segment boundary while keeping
+  the decoded-picture and network buffers full.
+- **Standing stream-quality choices are saved immediately.** Choosing
+  Automatic, Lowest, Highest or a resolution ceiling now survives a crash,
+  forced quit or indefinitely running TV stream; only an individual
+  playlist's exact-bitrate pin remains intentionally temporary.
 - **Invidious can now choose a dubbing track before playback.** When YouTube
   exposes several audio tracks, the video dialog lists them (with the
   original/default track first) and starts the selected one alongside the
@@ -73,6 +83,16 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
 
 ### Fixes — playback and video output
 
+- **Fullscreen follows live display-mode changes on legacy macOS.** Tiger can
+  keep reporting the previous `NSScreen` size after a resolution switch, so a
+  1440×900 desktop changed to 1024×768 still produced a 1440×900 fullscreen
+  window. PowerVLC now takes the current geometry from Core Graphics for its
+  video windows, black secondary screens and fullscreen controller, and also
+  keeps automatic video resizing inside the newly visible desktop.
+- **The mouse wheel changes volume while it is over the video again.** The
+  OpenGL view used by G4/G5 Macs and the QuickTime/QuickDraw view retained for
+  G3 and old Intel Macs now pass wheel events to the legacy interface's volume
+  handler, including its on-screen feedback.
 - **Seeking while paused reliably shows the new picture.** A picture still
   in flight before the seek could consume the single frame requested after a
   decoder flush; with direct rendering, the decoder could also be blocked by

@@ -701,6 +701,73 @@ void VLCLegacyApplyHotkeyToMenuItem(intf_thread_t *p_intf, NSMenuItem *item,
 
 @end
 
+NSRect VLCLegacyLiveScreenFrame(NSScreen *screen)
+{
+    if (screen == nil)
+        screen = [NSScreen mainScreen];
+    if (screen == nil)
+        return NSZeroRect;
+
+    /* Tiger does send NSApplicationDidChangeScreenParametersNotification,
+     * but its existing NSScreen objects can retain the PREVIOUS mode's
+     * -frame indefinitely (reproduced on a Radeon 9200 Mac mini G4).
+     * CGDisplayBounds reads the current display mode instead.  Quartz global
+     * coordinates start at the main display's TOP-left whereas AppKit starts
+     * at its BOTTOM-left, hence the Y conversion below. */
+    CGRect quartz = CGDisplayBounds([screen displayID]);
+    CGRect mainQuartz = CGDisplayBounds(CGMainDisplayID());
+    if (quartz.size.width <= 0.0 || quartz.size.height <= 0.0
+     || mainQuartz.size.width <= 0.0 || mainQuartz.size.height <= 0.0)
+        return [screen frame];
+
+    return NSMakeRect(quartz.origin.x - mainQuartz.origin.x,
+                      mainQuartz.size.height
+                        - (quartz.origin.y - mainQuartz.origin.y)
+                        - quartz.size.height,
+                      quartz.size.width, quartz.size.height);
+}
+
+NSRect VLCLegacyLiveVisibleScreenFrame(NSScreen *screen)
+{
+    if (screen == nil)
+        screen = [NSScreen mainScreen];
+    if (screen == nil)
+        return NSZeroRect;
+
+    NSRect live = VLCLegacyLiveScreenFrame(screen);
+    NSRect visible = [screen visibleFrame];
+
+    /* Some Tiger drivers refresh -visibleFrame but not -frame.  When the
+     * former already fits the live CoreGraphics bounds, keep it verbatim. */
+    if (NSMinX(visible) >= NSMinX(live)
+     && NSMinY(visible) >= NSMinY(live)
+     && NSMaxX(visible) <= NSMaxX(live)
+     && NSMaxY(visible) <= NSMaxY(live))
+        return visible;
+
+    /* Otherwise both values are the stale pair.  Preserve their menu/Dock
+     * edge insets and apply those to the live display size. */
+    NSRect cached = [screen frame];
+    CGFloat left = MAX(NSMinX(visible) - NSMinX(cached), 0.0);
+    CGFloat right = MAX(NSMaxX(cached) - NSMaxX(visible), 0.0);
+    CGFloat bottom = MAX(NSMinY(visible) - NSMinY(cached), 0.0);
+    CGFloat top = MAX(NSMaxY(cached) - NSMaxY(visible), 0.0);
+
+    if (left + right >= live.size.width) {
+        left = 0.0;
+        right = 0.0;
+    }
+    if (bottom + top >= live.size.height) {
+        bottom = 0.0;
+        top = 0.0;
+    }
+    live.origin.x += left;
+    live.origin.y += bottom;
+    live.size.width -= left + right;
+    live.size.height -= bottom + top;
+    return live;
+}
+
 NSRect VLCLegacySafeContentRect(NSWindow *window, NSScreen *screen)
 {
     NSRect bounds = [[window contentView] bounds];

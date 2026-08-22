@@ -3860,6 +3860,18 @@ static void OpenglSwap (vlc_gl_t *gl)
         [super rightMouseDown:o_event];
 }
 
+- (void)scrollWheel:(NSEvent *)o_event
+{
+    /* NSOpenGLView consumes wheel events on Tiger instead of letting them
+     * climb to the legacy video view/window, where volume + OSD are handled.
+     * Forward exactly as for the contextual click so every host path keeps a
+     * single volume implementation. */
+    if ([self superview])
+        [[self superview] scrollWheel:o_event];
+    else
+        [super scrollWheel:o_event];
+}
+
 - (void)otherMouseDown:(NSEvent *)o_event
 {
     @synchronized (self) {

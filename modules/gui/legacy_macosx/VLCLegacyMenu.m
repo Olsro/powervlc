@@ -1508,8 +1508,23 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     id value = [info objectForKey:@"value"];
     if ([value isKindOfClass:[NSString class]])
         var_SetString(p_object, name, [value UTF8String]);
-    else
-        var_SetInteger(p_object, name, [value longLongValue]);
+    else {
+        int64_t selected = [value longLongValue];
+        var_SetInteger(p_object, name, selected);
+
+        /* These are machine preferences, not merely properties of the
+         * current item.  Saving them only when the adaptive demuxer closed
+         * meant that a long-running TV stream, a crash or a forced quit lost
+         * the user's choice.  Persist standing quality modes (Automatic,
+         * Lowest, Highest are non-positive; a positive value is a bitrate
+         * belonging only to this playlist) and every resolution ceiling as
+         * soon as the menu item is selected. */
+        if ((!strcmp(name, "adaptive-quality") && selected <= 0)
+         || !strcmp(name, "adaptive-maxheight")) {
+            config_PutInt(p_intf, name, selected);
+            config_SaveConfigFile(p_intf);
+        }
+    }
     vlc_object_release(p_object);
 }
 

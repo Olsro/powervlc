@@ -247,6 +247,13 @@ void VLCLegacySortDictionariesByTitle(NSMutableArray *array);
 - (CGFloat)vlcTopSafeAreaInset;
 @end
 
+/* AppKit 10.4 keeps -[NSScreen frame] cached after a live display-mode
+ * change.  CoreGraphics, on the other hand, publishes the new mode
+ * immediately.  Fullscreen windows must therefore use this live frame or a
+ * 1440x900 -> 1024x768 switch still creates a 1440x900 window. */
+NSRect VLCLegacyLiveScreenFrame(NSScreen *screen);
+NSRect VLCLegacyLiveVisibleScreenFrame(NSScreen *screen);
+
 /* Le cadre à donner à la VUE vidéo dans une fenêtre de plein écran.
  *
  * ⚠ La FENÊTRE, elle, garde tout l'écran : une fenêtre qu'on rétrécit pour
