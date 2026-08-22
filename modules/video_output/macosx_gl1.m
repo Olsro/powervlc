@@ -80,9 +80,10 @@ static struct { uint64_t upload, clear, draw, swap; unsigned n; } gl1_prof;
 #ifndef GL_UNSIGNED_SHORT_8_8_APPLE
 # define GL_UNSIGNED_SHORT_8_8_APPLE 0x85BA
 #endif
-/* The reversed order of the same extension: _APPLE uploads UYVY, _REV_APPLE
- * uploads YUY2. Having both lets a 4:2:2 source of either order be textured
- * as it stands, with no conversion. */
+/* The reversed component order of the same extension. Which byte layout each
+ * type accepts depends on the CPU endianness; VLCGL1_CHROMA below names the
+ * in-memory chroma accepted by the non-REV type on this target. Having both
+ * types lets a 4:2:2 source of either order be textured without conversion. */
 #ifndef GL_UNSIGNED_SHORT_8_8_REV_APPLE
 # define GL_UNSIGNED_SHORT_8_8_REV_APPLE 0x85BB
 #endif
@@ -380,7 +381,7 @@ struct vout_display_sys_t
     bool fragprog;        /* planar in one pass, via ARB_fragment_program */
     GLuint fp;            /* the compiled fragment program, 0 = none */
     bool packed_cached;   /* gl1-packed-cached option */
-    GLenum packed_type;   /* 8_8 for UYVY, 8_8_REV for YUY2 */
+    GLenum packed_type;   /* GL type matching the source's packed byte order */
     GLuint textures[2][3];
     unsigned tex_index;
     GLenum storage_hint;  /* current GL_TEXTURE_STORAGE_HINT_APPLE value */
@@ -1775,7 +1776,7 @@ static int Open (vlc_object_t *this)
          * nothing and impose the opposite conversion, one full-frame pass per
          * picture, which is enough on a GMA 950 to turn 1080p into a
          * slideshow. */
-        sys->packed_type = GL_UNSIGNED_SHORT_8_8_APPLE;   /* UYVY */
+        sys->packed_type = GL_UNSIGNED_SHORT_8_8_APPLE;
         if (fmt.i_chroma == VLC_CODEC_YUYV || fmt.i_chroma == VLC_CODEC_UYVY)
         {
             if (sys->planar)
@@ -1785,7 +1786,11 @@ static int Open (vlc_object_t *this)
             sys->planar = false;
             sys->per_buffer_tex = false;
             sys->fragprog = false;
-            if (fmt.i_chroma == VLC_CODEC_YUYV)
+            /* GL_UNSIGNED_SHORT_8_8_APPLE consumes YUYV bytes on big-endian
+             * PowerPC and UYVY bytes on little-endian Intel. The previous
+             * chroma-only test assumed little-endian and therefore displayed
+             * a 2vuy webcam frame as YUYV on a G3/G4 (green/magenta image). */
+            if (fmt.i_chroma != VLCGL1_CHROMA)
                 sys->packed_type = GL_UNSIGNED_SHORT_8_8_REV_APPLE;
         }
         else

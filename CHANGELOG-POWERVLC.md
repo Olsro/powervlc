@@ -39,6 +39,12 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   Tiger.** Methods advertised by newer SDK headers are checked at runtime;
   when timestamps or frame-rate controls are unavailable, capture uses VLC's
   monotonic clock instead of crashing the capture thread.
+- **Webcam colours are correct on big-endian PowerPC Macs.** The zero-copy
+  OpenGL 1.1 path treated QTKit's `2vuy`/UYVY frames as YUY2, producing a
+  green and magenta picture on G3 and G4 systems. Packed YCbCr texture order
+  now follows the target's endianness without adding a CPU conversion. The
+  fix was validated with an AUKEY PC-LM1E USB webcam on a Mac mini G4 running
+  Tiger.
 - **The Capture panel and its device discovery are now Jaguar-safe.** Device
   names use CoreFoundation conversions available on 10.2, QuickTime remains
   initialized while devices are enumerated, and the panel avoids the workspace
