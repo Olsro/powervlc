@@ -68,6 +68,8 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   authentication and random-number APIs.
 - Prevent the AFP event thread from busy-looping on an empty Winsock descriptor
   set after a connection closes on Windows.
+- Fix a 32-bit Windows CD table-of-contents allocation that could corrupt the
+  heap and crash PowerVLC as soon as an audio CD was opened, notably on XP.
 - Fix a Darwin CD table-of-contents buffer over-read which could abort the
   application while optical drives were enumerated, notably in arm64 builds.
 - Avoid linking macOS 10.10/10.12-only POSIX file APIs into binaries whose
