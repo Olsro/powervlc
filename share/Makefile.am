@@ -136,6 +136,7 @@ luac_verbose_0 = @echo "  LUAC   $@";
 if BUILD_LUA
 nobase_vlclib_DATA += \
 	lua/extensions/Podcasts-Discovery-iTunes.luac \
+	lua/extensions/Twitch.luac \
 	lua/extensions/VLSub.luac \
 	lua/extensions/invidious.luac \
 	lua/extensions/jellyfin.luac \
@@ -267,6 +268,8 @@ nobase_dist_vlcdata_DATA += \
 	lua/i18n/subsonic/uk.lua \
 	lua/i18n/subsonic/zh_CN.lua \
 	lua/i18n/subsonic/zh_TW.lua \
+	lua/i18n/twitch/en.lua \
+	lua/i18n/twitch/fr.lua \
 	$(NULL)
 
 nobase_doc_DATA = \
@@ -355,6 +358,7 @@ EXTRA_DIST += \
 	lua/README.txt \
 	lua/extensions/README.txt \
 	lua/extensions/Podcasts-Discovery-iTunes.lua \
+	lua/extensions/Twitch.lua \
 	lua/extensions/VLSub.lua \
 	lua/extensions/invidious.lua \
 	lua/extensions/jellyfin.lua \

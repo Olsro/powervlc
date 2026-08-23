@@ -41,6 +41,7 @@
 #define B64EncAndFree(s) [[VLCStringUtility sharedInstance] b64EncodeAndFree: s]
 
 extern NSString *const kVLCMediaAudioCD;
+extern NSString *const kVLCMediaAudioDVD;
 extern NSString *const kVLCMediaDVD;
 extern NSString *const kVLCMediaVCD;
 extern NSString *const kVLCMediaSVCD;

@@ -49,7 +49,10 @@ mkdir -p "$OUT"
 # PowerVLC product version, for AppImage filenames (the Windows targets derive
 # their own version from configure/git).
 PVLC_VER="$(sed -n 's/^POWERVLC_VERSION="\(.*\)"/\1/p' "$REPO/configure.ac" | head -1)"
-[ -n "$PVLC_VER" ] || PVLC_VER="1.3.2"
+[ -n "$PVLC_VER" ] || {
+    echo "Unable to read POWERVLC_VERSION from configure.ac" >&2
+    exit 1
+}
 
 # VLC derives its revision string from git; /work is not a git repo (the clean
 # copy excludes .git), so compute it here and drop it into src/revision.txt,
@@ -214,6 +217,13 @@ build_windows() { # build_windows <arch-flags> <name-glob>
      # without renamed-away leftovers (e.g. a stale libvlc.dll shipped by the
      # 'InstallFile *.dll' wildcard next to the new libpowervlc.dll).
      rm -rf /work/$2*/vlc-* /work/$2*/PowerVLC-* /work/$2*/symbols-* /work/$2*/spad-setup.exe /work/$2*/_win32 2>/dev/null || true
+     # libafpclient and libsmb2 are linked statically into their plugins, which
+     # means Automake cannot see changed contrib archives through pkg-config
+     # -l flags. Relink these small targets on every packaging run so network
+     # fixes are never hidden behind an otherwise valid incremental build.
+     rm -f /work/$2*/modules/libafp_plugin.la /work/$2*/modules/.libs/libafp_plugin.dll \
+           /work/$2*/modules/libsmb2_plugin.la /work/$2*/modules/.libs/libsmb2_plugin.dll \
+           2>/dev/null || true
      # -l enables NLS. Without it win32/build.sh adds --disable-nls and the
      # installed app has NO locale/ catalogs at all, so the UI stays English
      # whatever language the user picks in the preferences (the NSIS
@@ -267,18 +277,22 @@ build_linux_appimage() { # build_linux_appimage <platform> <base-image> <appimag
      # distribution's ancient one: same decoders (ATRAC9, APV, the 8.x
      # improvements) in the AppImages as in every other target. The
      # contrib state persists in the work volume, so this is a one-off.
-     # ffmpeg's x86 assembly needs nasm, absent from the image: build it
-     # with the in-tree tools (no-op when the tool already exists).
-     ( cd extras/tools && ./bootstrap && make .buildnasm 2>/dev/null || make .nasm || true )
+     # ffmpeg's x86 assembly needs nasm and the libsmb2 contrib needs CMake;
+     # neither is present in the old distro images. Build both with the
+     # in-tree tools (a no-op after the per-architecture volume has cached
+     # them).
+     ( cd extras/tools && ./bootstrap && make .buildnasm && \
+       { command -v cmake >/dev/null 2>&1 || make .buildcmake; } )
      export PATH=\"/work/extras/tools/build/bin:\$PATH\"
      ( cd contrib && mkdir -p native && cd native && \
-       ../bootstrap && VLC_FFMPEG_NO_OPENJPEG=1 make .ffmpeg .postproc )
+       ../bootstrap && VLC_FFMPEG_NO_OPENJPEG=1 \
+       make -j\$(nproc) .ffmpeg .postproc .afpclient .smb2 )
      CONTRIB_PREFIX=\$(ls -d /work/contrib/*-linux-gnu* 2>/dev/null | grep -v contrib- | head -1)
      export PKG_CONFIG_PATH=\"\$CONTRIB_PREFIX/lib/pkgconfig\${PKG_CONFIG_PATH:+:\$PKG_CONFIG_PATH}\"
      ./bootstrap
      # --disable-update-check: no integrated updater in the fork. It is
      # already configure's default, stated here so it stays off.
-     ./configure --disable-wayland --enable-merge-ffmpeg \
+     ./configure --disable-wayland --enable-merge-ffmpeg --enable-smb2 \
                  --disable-update-check --prefix=/usr
      make -j\$(nproc)
      # Stale AppImages from previous runs (older version strings) linger in

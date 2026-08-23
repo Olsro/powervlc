@@ -36,6 +36,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (readwrite, weak) PXSourceList *sidebarView;
 
 - (void)reloadSidebar;
+- (BOOL)addNetworkLocation:(NSString *)mrl;
+- (IBAction)ejectNetworkLocation:(id)sender;
 
 @end
 

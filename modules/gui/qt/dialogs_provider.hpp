@@ -139,9 +139,7 @@ public slots:
     void vlmDialog();
 #endif
     void helpDialog();
-#if defined(UPDATE_CHECK)
     void updateDialog();
-#endif
     void aboutDialog();
     void gotoTimeDialog();
     void podcastConfigureDialog();
@@ -161,6 +159,7 @@ public slots:
     void openUrlDialog();
     void openNetDialog();
     void openCaptureDialog();
+    void connectToServerDialog();
 
     void PLAppendDialog( int tab = OPEN_FILE_TAB );
     void MLAppendDialog( int tab = OPEN_FILE_TAB );

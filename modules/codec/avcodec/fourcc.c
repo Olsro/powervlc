@@ -199,6 +199,9 @@ static const struct vlc_avcodec_fourcc video_codecs[] =
     /* AV_CODEC_ID_IFF_BYTERUN1 */
     { VLC_CODEC_KGV1, AV_CODEC_ID_KGV1 },
     { VLC_CODEC_YOP, AV_CODEC_ID_YOP },
+#if LIBAVCODEC_VERSION_CHECK( 58, 53, 100 )
+    { VLC_CODEC_VP4, AV_CODEC_ID_VP4 },
+#endif
     { VLC_CODEC_VP8, AV_CODEC_ID_VP8 },
     /* AV_CODEC_ID_PICTOR */
     /* AV_CODEC_ID_ANSI */
@@ -305,6 +308,12 @@ static const struct vlc_avcodec_fourcc video_codecs[] =
 
 #if LIBAVCODEC_VERSION_CHECK( 57, 79, 100 )
     { VLC_CODEC_FMVC, AV_CODEC_ID_FMVC },
+#endif
+#if LIBAVCODEC_VERSION_CHECK( 58, 24, 100 )
+    { VLC_CODEC_IMM4, AV_CODEC_ID_IMM4 },
+#endif
+#if LIBAVCODEC_VERSION_CHECK( 58, 49, 100 )
+    { VLC_CODEC_AGM, AV_CODEC_ID_AGM },
 #endif
 #if LIBAVCODEC_VERSION_CHECK( 62, 1, 100 )
     { VLC_CODEC_APV, AV_CODEC_ID_APV },
@@ -427,6 +436,9 @@ static const struct vlc_avcodec_fourcc audio_codecs[] =
 #if LIBAVCODEC_VERSION_CHECK( 57, 71, 100 )
     { VLC_CODEC_QDMC, AV_CODEC_ID_QDMC },
 #endif
+#if LIBAVCODEC_VERSION_CHECK( 60, 35, 100 )
+    { VLC_CODEC_QOA, AV_CODEC_ID_QOA },
+#endif
     { VLC_CODEC_COOK, AV_CODEC_ID_COOK },
     { VLC_CODEC_TRUESPEECH, AV_CODEC_ID_TRUESPEECH },
     { VLC_CODEC_TTA, AV_CODEC_ID_TTA },
@@ -443,6 +455,9 @@ static const struct vlc_avcodec_fourcc audio_codecs[] =
     { VLC_CODEC_NELLYMOSER, AV_CODEC_ID_NELLYMOSER },
     { VLC_CODEC_MUSEPACK8, AV_CODEC_ID_MUSEPACK8 },
     { VLC_CODEC_SPEEX, AV_CODEC_ID_SPEEX },
+#if LIBAVCODEC_VERSION_CHECK( 58, 91, 100 )
+    { VLC_CODEC_CODEC2, AV_CODEC_ID_CODEC2 },
+#endif
     { VLC_CODEC_WMAS, AV_CODEC_ID_WMAVOICE },
     { VLC_CODEC_WMAP, AV_CODEC_ID_WMAPRO },
     { VLC_CODEC_WMAL, AV_CODEC_ID_WMALOSSLESS },
@@ -478,6 +493,9 @@ static const struct vlc_avcodec_fourcc audio_codecs[] =
     { VLC_CODEC_METASOUND, AV_CODEC_ID_METASOUND },
     /* AV_CODEC_ID_PAF_AUDIO */
     { VLC_CODEC_ON2AVC, AV_CODEC_ID_ON2AVC },
+#if LIBAVCODEC_VERSION_CHECK( 59, 23, 100 )
+    { VLC_CODEC_DFPWM, AV_CODEC_ID_DFPWM },
+#endif
 
     /* ffmpeg only: AV_CODEC_ID_FFWAVESYNTH */
     /* ffmpeg only: AV_CODEC_ID_SONIC */

@@ -52,6 +52,7 @@
 static int  OpenGzip (vlc_object_t *);
 static int  OpenBzip2 (vlc_object_t *);
 static int  OpenXZ (vlc_object_t *);
+static int  OpenZstd (vlc_object_t *);
 static void Close (vlc_object_t *);
 
 vlc_module_begin ()
@@ -59,6 +60,10 @@ vlc_module_begin ()
     set_subcategory (SUBCAT_INPUT_STREAM_FILTER)
     set_capability ("stream_filter", 20)
 
+    set_description (N_("Zstandard decompression"))
+    set_callbacks (OpenZstd, Close)
+
+    add_submodule ()
     set_description (N_("LZMA decompression"))
     set_callbacks (OpenXZ, Close)
 
@@ -426,4 +431,19 @@ static int OpenXZ (vlc_object_t *obj)
 
     msg_Dbg (obj, "detected xz compressed stream");
     return Open (stream, "xzcat");
+}
+
+/** Detects the Zstandard frame format and pipes it through zstdcat. */
+static int OpenZstd (vlc_object_t *obj)
+{
+    stream_t *stream = (stream_t *)obj;
+    const uint8_t *peek;
+
+    if (vlc_stream_Peek(stream->p_source, &peek, 6) < 6)
+        return VLC_EGENERIC;
+    if (memcmp(peek, "\x28\xb5\x2f\xfd", 4) || (peek[4] & 0x08))
+        return VLC_EGENERIC;
+
+    msg_Dbg(obj, "detected Zstandard compressed stream");
+    return Open(stream, "zstdcat");
 }

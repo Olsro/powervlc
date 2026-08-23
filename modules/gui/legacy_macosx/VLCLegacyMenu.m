@@ -73,31 +73,95 @@ enum {
 #define EXT_MENU_ACTION(tag) ((int)(((tag) >> 16) & 0xFFFF))
 #define EXT_MENU_INDEX(tag)  ((int)((tag) & 0xFFFF))
 
-/* "Open Recent": a small user-defaults backed list, like the 3.0 one */
-#define VLC_RECENT_ITEMS_KEY @"VLCLegacyRecentItems"
+/* Two small user-defaults backed lists. The stream key is deliberately the
+ * same as the modern macOS interface so switching interfaces keeps it. */
+#define VLC_OLD_RECENT_ITEMS_KEY @"VLCLegacyRecentItems"
+#define VLC_RECENT_FILES_KEY @"VLCLegacyRecentFiles"
+#define VLC_RECENT_STREAMS_KEY @"VLCRecentStreams"
 #define VLC_RECENT_ITEMS_MAX 10
+#define VLC_RECENT_STREAMS_MAX 30
+#define VLC_CONNECT_SERVER_RECENTS_KEY @"VLCConnectToServerRecents"
+
+extern VLCLegacyMainWindow *VLCLegacyGetMainWindow(void);
+
+static BOOL VLCLegacyMRLIsFile(NSString *mrl)
+{
+    char *path = vlc_uri2path([mrl UTF8String]);
+    if (!path)
+        return NO;
+    free(path);
+    return YES;
+}
+
+static NSString *VLCLegacyMRLWithoutPassword(NSString *mrl)
+{
+    vlc_url_t url;
+    if (vlc_UrlParseFixup(&url, [mrl UTF8String]) != 0)
+        return mrl;
+    /* Components returned by vlc_UrlParseFixup() point into psz_buffer.
+     * Hiding the password only requires omitting that component while
+     * composing the display URI; vlc_UrlClean() owns and frees the buffer. */
+    url.psz_password = NULL;
+    char *composed = vlc_uri_compose(&url);
+    vlc_UrlClean(&url);
+    if (!composed)
+        return mrl;
+    NSString *result = [NSString stringWithUTF8String:composed];
+    free(composed);
+    return result ?: mrl;
+}
+
+static void VLCLegacyPrependRecentItem(NSUserDefaults *defaults,
+                                        NSString *key, NSString *mrl)
+{
+    NSArray *stored = [defaults stringArrayForKey:key];
+    NSMutableArray *list = stored
+        ? [NSMutableArray arrayWithArray:stored] : [NSMutableArray array];
+    [list removeObject:mrl];
+    [list insertObject:mrl atIndex:0];
+    NSUInteger maximum = [key isEqualToString:VLC_RECENT_STREAMS_KEY]
+                       ? VLC_RECENT_STREAMS_MAX : VLC_RECENT_ITEMS_MAX;
+    while ([list count] > maximum)
+        [list removeLastObject];
+    [defaults setObject:list forKey:key];
+}
+
+/* Split the list written by older PowerVLC versions once, without losing its
+ * most-recent-first ordering. */
+static void VLCLegacyMigrateRecentItems(NSUserDefaults *defaults)
+{
+    NSArray *oldItems = [defaults stringArrayForKey:VLC_OLD_RECENT_ITEMS_KEY];
+    if (!oldItems)
+        return;
+
+    NSInteger i;
+    for (i = (NSInteger)[oldItems count] - 1; i >= 0; i--) {
+        NSString *mrl = [oldItems objectAtIndex:(NSUInteger)i];
+        VLCLegacyPrependRecentItem(defaults,
+            VLCLegacyMRLIsFile(mrl) ? VLC_RECENT_FILES_KEY
+                                    : VLC_RECENT_STREAMS_KEY,
+            mrl);
+    }
+    [defaults removeObjectForKey:VLC_OLD_RECENT_ITEMS_KEY];
+}
 
 void VLCLegacyNoteRecentItem(NSString *mrl)
 {
     if (![mrl length])
         return;
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    NSArray *stored = [defaults stringArrayForKey:VLC_RECENT_ITEMS_KEY];
-    NSMutableArray *list = stored
-        ? [NSMutableArray arrayWithArray:stored] : [NSMutableArray array];
-    [list removeObject:mrl];
-    [list insertObject:mrl atIndex:0];
-    while ([list count] > VLC_RECENT_ITEMS_MAX)
-        [list removeLastObject];
-    [defaults setObject:list forKey:VLC_RECENT_ITEMS_KEY];
+    VLCLegacyMigrateRecentItems(defaults);
+    BOOL isFile = VLCLegacyMRLIsFile(mrl);
+    VLCLegacyPrependRecentItem(defaults,
+        isFile ? VLC_RECENT_FILES_KEY : VLC_RECENT_STREAMS_KEY, mrl);
 
-    /* feed the system recent-documents list too: the modern interface's
-     * File > Open Recent reads it, so items opened in the legacy
-     * interface survive a switch of interfaces */
-    NSURL *url = [NSURL URLWithString:mrl];
-    if (url)
-        [[NSDocumentController sharedDocumentController]
-            noteNewRecentDocumentURL:url];
+    /* Only local files belong in AppKit's recent-documents menu. */
+    if (isFile) {
+        NSURL *url = [NSURL URLWithString:mrl];
+        if (url)
+            [[NSDocumentController sharedDocumentController]
+                noteNewRecentDocumentURL:url];
+    }
 }
 
 @implementation VLCLegacyMenu
@@ -357,6 +421,8 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     NSMenu *appMenu = [self addMenuTo:menubar title:@"PowerVLC"];
     [self addItemTo:appMenu title:_NS("About PowerVLC media player")
              action:@selector(showAbout:) key:@""];
+    [self addItemTo:appMenu title:_NS("Check for Update...")
+             action:@selector(openPowerVLCReleases:) key:@""];
     [appMenu addItem:[NSMenuItem separatorItem]];
     [self addItemTo:appMenu title:_NS("Preferences...")
              action:@selector(showPrefs:) key:@","];
@@ -426,15 +492,24 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
              action:@selector(openNetwork:) key:@"n"];
     [self addItemTo:fileMenu title:_NS("Open Capture Device...")
              action:@selector(openCapture:) key:@"r"];
+    [self addItemTo:fileMenu title:_NS("Connect to Server...")
+             action:@selector(connectToServer:) key:@"k"];
     /* separators and ordering cloned from the 3.0 MainMenu.xib */
     [fileMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *recentItem = [fileMenu
-        addItemWithTitle:_NS("Open Recent")
+        addItemWithTitle:_NS("Open Recent File")
                   action:@selector(dynamicSubmenuParent:)
            keyEquivalent:@""];
     [recentItem setTarget:self];
-    recentMenu = VLCLegacyMakeDynamicMenu(_NS("Open Recent"), self);
-    [recentItem setSubmenu:recentMenu];
+    recentFilesMenu = VLCLegacyMakeDynamicMenu(_NS("Open Recent File"), self);
+    [recentItem setSubmenu:recentFilesMenu];
+    recentItem = [fileMenu
+        addItemWithTitle:_NS("Open Recent Stream")
+                  action:@selector(dynamicSubmenuParent:)
+           keyEquivalent:@""];
+    [recentItem setTarget:self];
+    recentStreamsMenu = VLCLegacyMakeDynamicMenu(_NS("Open Recent Stream"), self);
+    [recentItem setSubmenu:recentStreamsMenu];
     [fileMenu addItem:[NSMenuItem separatorItem]];
     [fileMenu addItemWithTitle:_NS("Close Window")
                         action:@selector(performClose:) keyEquivalent:@"w"];
@@ -979,6 +1054,14 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
         (int)var_InheritInteger(p_intf, "legacy-macosx-deinterlace")];
 }
 
+- (void)openPowerVLCReleases:(id)sender
+{
+    (void)sender;
+    [[NSWorkspace sharedWorkspace]
+        openURL:[NSURL URLWithString:
+            [NSString stringWithUTF8String:POWERVLC_RELEASES_URL]]];
+}
+
 - (NSMenu *)voutMenu
 {
     return voutMenu;
@@ -1061,11 +1144,14 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
 
 - (void)menuNeedsUpdate:(NSMenu *)menu
 {
-    if (menu == recentMenu) {
+    if (menu == recentFilesMenu || menu == recentStreamsMenu) {
         while ([menu numberOfItems])
             [menu removeItemAtIndex:0];
-        NSArray *recents = [[NSUserDefaults standardUserDefaults]
-            stringArrayForKey:VLC_RECENT_ITEMS_KEY];
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        VLCLegacyMigrateRecentItems(defaults);
+        NSString *key = menu == recentFilesMenu
+                      ? VLC_RECENT_FILES_KEY : VLC_RECENT_STREAMS_KEY;
+        NSArray *recents = [defaults stringArrayForKey:key];
         unsigned i;
         for (i = 0; i < [recents count]; i++) {
             NSString *mrl = [recents objectAtIndex:i];
@@ -1076,7 +1162,8 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
                     [NSString stringWithUTF8String:psz_path]];
                 free(psz_path);
             } else {
-                char *psz_mrl = strdup([mrl UTF8String]);
+                NSString *safeMRL = VLCLegacyMRLWithoutPassword(mrl);
+                char *psz_mrl = strdup([safeMRL UTF8String]);
                 if (psz_mrl) {
                     vlc_uri_decode(psz_mrl);
                     title = [NSString stringWithUTF8String:psz_mrl];
@@ -1091,7 +1178,10 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
         if ([recents count])
             [menu addItem:[NSMenuItem separatorItem]];
         [self addItemTo:menu title:_NS("Clear")
-                 action:@selector(clearRecentItems:) key:@""];
+                 action:menu == recentFilesMenu
+                        ? @selector(clearRecentFiles:)
+                        : @selector(clearRecentStreams:)
+                    key:@""];
         return;
     }
 
@@ -1554,20 +1644,38 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
 }
 
 - (void)openFile:(id)sender           { [open openFile]; }
+- (void)connectToServer:(id)sender    { [open connectToServer]; }
 
 - (void)openRecentItem:(id)sender
 {
     NSString *mrl = [sender representedObject];
     if (![mrl length])
         return;
-    playlist_Add(pl_Get(p_intf), [mrl UTF8String], true);
-    VLCLegacyNoteRecentItem(mrl);
+    NSArray *serverRecents = [[NSUserDefaults standardUserDefaults]
+        stringArrayForKey:VLC_CONNECT_SERVER_RECENTS_KEY];
+    BOOL opened = NO;
+    if ([serverRecents containsObject:mrl]) {
+        VLCLegacyMainWindow *mainWindow = VLCLegacyGetMainWindow();
+        if (mainWindow)
+            opened = [mainWindow addNetworkLocation:mrl];
+    } else {
+        opened = playlist_Add(pl_Get(p_intf), [mrl UTF8String], true)
+              == VLC_SUCCESS;
+    }
+    if (opened)
+        VLCLegacyNoteRecentItem(mrl);
 }
 
-- (void)clearRecentItems:(id)sender
+- (void)clearRecentFiles:(id)sender
 {
     [[NSUserDefaults standardUserDefaults]
-        removeObjectForKey:VLC_RECENT_ITEMS_KEY];
+        removeObjectForKey:VLC_RECENT_FILES_KEY];
+}
+
+- (void)clearRecentStreams:(id)sender
+{
+    [[NSUserDefaults standardUserDefaults]
+        removeObjectForKey:VLC_RECENT_STREAMS_KEY];
 }
 
 /* the currently playing item, revealed in the Finder like 3.0 */
@@ -1754,7 +1862,7 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
         { "renderer",     rendererMenu },
         { "extensions",   extensionsMenu },
         { "addInterface", addInterfaceMenu },
-        { "recent",       recentMenu },
+        { "recentFiles",  recentFilesMenu },
         { "crop",         cropMenu },
         { "title",        titleMenu },
         { "chapter",      chapterMenu },
@@ -2138,9 +2246,12 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     } else if (action == @selector(revealInFinder:)) {
         /* only local files can be shown in the Finder */
         return [self currentInputFilePath] != nil;
-    } else if (action == @selector(clearRecentItems:)) {
+    } else if (action == @selector(clearRecentFiles:)
+            || action == @selector(clearRecentStreams:)) {
+        NSString *key = action == @selector(clearRecentFiles:)
+                      ? VLC_RECENT_FILES_KEY : VLC_RECENT_STREAMS_KEY;
         return [[[NSUserDefaults standardUserDefaults]
-            stringArrayForKey:VLC_RECENT_ITEMS_KEY] count] > 0;
+            stringArrayForKey:key] count] > 0;
     } else if (action == @selector(toggleJumpButtons:)) {
         [item setState:var_InheritBool(p_intf,
             "legacy-macosx-show-playback-buttons")

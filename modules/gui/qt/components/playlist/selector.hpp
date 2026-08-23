@@ -35,7 +35,9 @@
 #include <QTreeWidget>
 
 class QHBoxLayout;
+class QIcon;
 class QPainter;
+class QSize;
 class QTreeWidgetItem;
 class QLabel;
 
@@ -49,7 +51,8 @@ enum SelectorItemType {
 enum SpecialData {
     IS_PODCAST = 1,
     IS_PL,
-    IS_ML
+    IS_ML,
+    IS_NETWORK
 };
 
 enum {
@@ -62,6 +65,7 @@ enum {
     SPECIAL_ROLE,        //SpecialData
     CAP_SEARCH_ROLE,
     SD_CATEGORY_ROLE,
+    NETWORK_MRL_ROLE,
 };
 
 enum ItemAction {
@@ -80,10 +84,11 @@ class PLSelItem : public QWidget
 {
     Q_OBJECT
 public:
-    PLSelItem( QTreeWidgetItem*, const QString& );
+    PLSelItem( QTreeWidgetItem*, const QString&, bool category = false );
 
     void setText( const QString& text ) { lbl->setText( text ); }
     QString text() const { return lbl->text(); }
+    void setIcon( const QIcon&, const QSize& );
 
     void addAction( ItemAction, const QString& toolTip = 0 );
     QTreeWidgetItem *treeItem() { return qitem; }
@@ -108,6 +113,7 @@ private:
 
     QTreeWidgetItem*     qitem;
     QFramelessButton* lblAction;
+    QLabel*              lblIcon;
     QLabel*              lbl;
     QHBoxLayout*         layout;
 };
@@ -125,6 +131,7 @@ public:
 
     void getCurrentItemInfos( int *type, bool *delayedSearch, QString *name );
     int getCurrentItemCategory();
+    bool addNetworkLocation( const QString& mrl );
 
 protected:
     void drawBranches ( QPainter *, const QRect &, const QModelIndex & ) const Q_DECL_OVERRIDE;
@@ -147,6 +154,7 @@ private:
 
     intf_thread_t    *p_intf;
     QTreeWidgetItem  *podcastsParent;
+    QTreeWidgetItem  *myComputerItem;
     int               podcastsParentId;
     QTreeWidgetItem  *curItem;
 
@@ -157,6 +165,8 @@ private slots:
     void inputItemUpdate( input_item_t * );
     void podcastAdd( PLSelItem* );
     void podcastRemove( PLSelItem* );
+    void networkRemove( PLSelItem* );
+    void showContextMenu( const QPoint& );
 
 signals:
     void categoryActivated( playlist_item_t *, bool );

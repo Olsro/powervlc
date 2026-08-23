@@ -1,0 +1,43 @@
+--- a/lib/loop.c
++++ b/lib/loop.c
+@@ -350,0 +351,11 @@
++
++    /* The loop is ready as soon as its descriptors and signal handling have
++     * been initialized.  Waiting for the first select() result can deadlock
++     * startup on older systems (notably Mac OS X 10.2 when nfds is zero). */
++    pthread_mutex_lock(&loop_started_mutex);
++    loop_started = 1;
++    pthread_cond_signal(&loop_started_condition);
++    pthread_mutex_unlock(&loop_started_mutex);
++
++    if (libafpclient->loop_started)
++        libafpclient->loop_started();
+@@ -550,11 +561 @@
+-            if (!loop_started) {
+-                pthread_mutex_lock(&loop_started_mutex);
+-                loop_started = 1;
+-                pthread_cond_signal(&loop_started_condition);
+-                pthread_mutex_unlock(&loop_started_mutex);
+-
+-                if (libafpclient->loop_started) {
+-                    libafpclient->loop_started();
+-                }
+-            } else {
+-                /* Select timeout - send tickles to keep connections alive */
++            /* Select timeout - send tickles to keep connections alive */
+@@ -562,4 +563,4 @@
+-                time_t now = time(NULL);
+-                if (now - last_tickle < 30)
+-                    continue;
+-                last_tickle = now;
++            time_t now = time(NULL);
++            if (now - last_tickle < 30)
++                continue;
++            last_tickle = now;
+@@ -567 +568 @@
+-                afp_lock_server_list();
++            afp_lock_server_list();
+@@ -581,2 +582 @@
+-                afp_unlock_server_list();
+-            }
++            afp_unlock_server_list();

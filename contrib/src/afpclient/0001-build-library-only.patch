@@ -1,0 +1,98 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: PowerVLC <powervlc@videolan.org>
+Date: Sat, 22 Aug 2026 00:00:00 +0200
+Subject: [PATCH] build: allow libafpclient-only builds
+
+---
+ include/meson.build | 1 +
+ lib/meson.build     | 2 +-
+ meson.build         | 10 +++++++---
+ meson_options.txt   | 6 ++++++
+ 4 files changed, 15 insertions(+), 4 deletions(-)
+
+diff --git a/include/meson.build b/include/meson.build
+index 1111111..2222222 100644
+--- a/include/meson.build
++++ b/include/meson.build
+@@ -7,6 +7,7 @@ public_headers = files(
+     'afp_xattr.h',
+     'afpfsd.h',
+     'afpsl.h',
++    'midlevel.h',
+     'libafpclient.h',
+     'map_def.h',
+     'uams_def.h',
+diff --git a/meson_options.txt b/meson_options.txt
+index 1111111..2222222 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -10,6 +10,12 @@ option(
+     description: 'Enable building of documentation',
+ )
+ option(
++    'enable-tools',
++    type: 'boolean',
++    value: true,
++    description: 'Enable building daemons and command line tools',
++)
++option(
+     'enable-fuse',
+     type: 'boolean',
+     value: true,
+diff --git a/meson.build b/meson.build
+index 1111111..2222222 100644
+--- a/meson.build
++++ b/meson.build
+@@ -4,7 +4,7 @@ project(
+     version: '0.9.5',
+     license: 'GPLv2',
+     default_options: ['warning_level=3', 'c_std=c11'],
+-    meson_version: '>=0.62',
++    meson_version: '>=0.61',
+ )
+
+ cc = meson.get_compiler('c')
+@@ -84,5 +84,6 @@ with_afpcmd = readline_dep.found() or editline_dep.found()
+ with_fuse = get_option('enable-fuse') and fuse_dep.found()
+ with_crypt = gcrypt_dep.found()
++with_tools = get_option('enable-tools')
+
+ # Check for extended attribute headers (platform-dependent)
+ if cc.has_header('sys/xattr.h')
+@@ -178,15 +179,17 @@ if with_crypt
+     add_project_arguments('-DHAVE_LIBGCRYPT', language: 'c')
+ endif
+
+-if not with_afpcmd and not with_fuse
++if with_tools and not with_afpcmd and not with_fuse
+     error(
+         'At least one of AFP command line client or FUSE client must be buildable.',
+     )
+ endif
+
+ subdir('lib')
+-subdir('daemon')
+-subdir('cmdline')
++if with_tools
++    subdir('daemon')
++    subdir('cmdline')
++    subdir('test')
++endif
+-subdir('test')
+
+ if with_fuse
+diff --git a/lib/meson.build b/lib/meson.build
+index 1111111..2222222 100644
+--- a/lib/meson.build
++++ b/lib/meson.build
+@@ -57,7 +57,7 @@ if gcrypt_dep.found()
+     )
+ endif
+
+-libafpclient = shared_library(
++libafpclient = library(
+     'afpclient',
+     sources: libafpclient_sources,
+     c_args: cflags,
+--
+2.50.1

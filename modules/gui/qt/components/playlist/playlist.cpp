@@ -167,6 +167,11 @@ PlaylistWidget::PlaylistWidget( intf_thread_t *_p_i, QWidget *_par )
     setWindowIcon( QApplication::windowIcon() );
 }
 
+bool PlaylistWidget::addNetworkLocation( const QString& mrl )
+{
+    return selector->addNetworkLocation( mrl );
+}
+
 PlaylistWidget::~PlaylistWidget()
 {
     getSettings()->beginGroup("Playlist");

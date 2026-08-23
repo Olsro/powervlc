@@ -188,8 +188,14 @@ done
 
 LD_BASE="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous"
 LDQT_BASE="https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous"
+APPIMAGETOOL_BASE="https://github.com/AppImage/appimagetool/releases/download/continuous"
 LINUXDEPLOY="$WORKDIR/linuxdeploy-${ARCH}.AppImage"
 LINUXDEPLOY_QT="$WORKDIR/linuxdeploy-plugin-qt-${ARCH}.AppImage"
+case "$ARCH" in
+    i386) APPIMAGETOOL_ARCH="i686" ;;
+    *)    APPIMAGETOOL_ARCH="$ARCH" ;;
+esac
+APPIMAGETOOL="$WORKDIR/appimagetool-${APPIMAGETOOL_ARCH}.AppImage"
 
 fetch() {
     # fetch <url> <dest>
@@ -237,8 +243,15 @@ if [ ! -x "$LINUXDEPLOY_QT" ]; then
     fetch "$LDQT_BASE/linuxdeploy-plugin-qt-${ARCH}.AppImage" "$LINUXDEPLOY_QT"
     chmod +x "$LINUXDEPLOY_QT"
 fi
+if [ ! -x "$APPIMAGETOOL" ]; then
+    echo "--- Downloading appimagetool ($APPIMAGETOOL_ARCH) ..."
+    fetch "$APPIMAGETOOL_BASE/appimagetool-${APPIMAGETOOL_ARCH}.AppImage" \
+          "$APPIMAGETOOL"
+    chmod +x "$APPIMAGETOOL"
+fi
 strip_appimage_magic "$LINUXDEPLOY"
 strip_appimage_magic "$LINUXDEPLOY_QT"
+strip_appimage_magic "$APPIMAGETOOL"
 
 # The qt plugin must be found on PATH by linuxdeploy.
 export PATH="$WORKDIR:$PATH"
@@ -349,13 +362,27 @@ done
 echo "  plugins patched : $_n"
 echo "  helpers patched : $_m"
 
+# linuxdeploy and patchelf both change plugin mtimes after `make install` has
+# generated plugins.dat.  Rebuild it only after the final ELF mutation, or the
+# shipped application emits hundreds of "stale plugins cache" errors and has
+# to rescan every module on each launch.
+CACHEGEN="$(find "$APPDIR" -type f -name 'powervlc-cache-gen' -print -quit)"
+if [ -n "$CACHEGEN" ] && [ -n "$PLUGINS_DIR" ]; then
+    echo "--- Regenerating the final plugins cache ..."
+    "$CACHEGEN" "$PLUGINS_DIR"
+else
+    echo "ERROR: could not locate powervlc-cache-gen or the plugins directory." >&2
+    exit 1
+fi
+
 # ---- 5. package the AppImage --------------------------------------------
 #
-# A second linuxdeploy run with nothing but --appdir/--output re-deploys
-# nothing and leaves the RUNPATHs above untouched (verified against linuxdeploy
-# continuous, 2026-08-10). OUTPUT controls the final filename.
+# Do not invoke linuxdeploy a second time here.  Recent continuous builds
+# reprocess every ELF during that nominally packaging-only pass, invalidating
+# the cache again.  The first pass has already finalized AppDir, so call the
+# dedicated packager directly.
 echo "--- Packaging the AppImage ..."
-OUTPUT="$OUTFILE" ARCH="$ARCH" "$LINUXDEPLOY" --appdir "$APPDIR" --output appimage
+ARCH="$ARCH" "$APPIMAGETOOL" "$APPDIR" "$OUTFILE"
 
 # ---- 6. sanity check -----------------------------------------------------
 #

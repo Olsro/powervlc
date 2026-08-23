@@ -1250,6 +1250,33 @@ static NSString *const VLCLegacyArtHeightKey = @"VLCLegacySidebarArtHeight";
 }
 @end
 
+@interface VLCLegacySidebarTable : NSTableView
+{
+@public
+    VLCLegacyMainWindow *controller;
+}
+@end
+
+@implementation VLCLegacySidebarTable
+- (void)rightMouseDown:(NSEvent *)event
+{
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+    NSInteger row = [self rowAtPoint:point];
+    if (row >= 0) {
+        VLCLegacySelectRow(self, row);
+        if ([controller respondsToSelector:@selector(sidebarMenuForRow:)]) {
+            NSMenu *menu = [controller performSelector:@selector(sidebarMenuForRow:)
+                                             withObject:[NSNumber numberWithInt:(int)row]];
+            if (menu) {
+                [NSMenu popUpContextMenu:menu withEvent:event forView:self];
+                return;
+            }
+        }
+    }
+    [super rightMouseDown:event];
+}
+@end
+
 @implementation VLCLegacyMainWindow
 
 - (id)initWithCore:(VLCLegacyCoreInteraction *)interaction
@@ -1263,6 +1290,7 @@ static NSString *const VLCLegacyArtHeightKey = @"VLCLegacySidebarArtHeight";
         browseRequestedIds = [[NSMutableDictionary alloc] init];
         dirCheckCache = [[NSMutableDictionary alloc] init];
         sidebarItems = [[NSMutableArray alloc] init];
+        networkLocations = [[NSMutableArray alloc] init];
         activatedServices = [[NSMutableSet alloc] init];
         sidebarSelection = 1;   /* the Playlist row (below the header) */
         currentItemId = -1;
@@ -1288,6 +1316,7 @@ static NSString *const VLCLegacyArtHeightKey = @"VLCLegacySidebarArtHeight";
     [videoHostWindow release];
     [jumpPanel release];
     [sidebarScroll release];
+    [networkLocations release];
     [sidebarPane release];
     [sidebarArtUrl release];
     [searchString release];
@@ -1564,8 +1593,9 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
              object:sidebarPane];
     [self layoutSidebarArtStack];
 
-    sidebarTable = [[[NSTableView alloc]
+    sidebarTable = [[[VLCLegacySidebarTable alloc]
         initWithFrame:[[sidebarScroll contentView] bounds]] autorelease];
+    ((VLCLegacySidebarTable *)sidebarTable)->controller = self;
     [sidebarTable setHeaderView:nil];
     [sidebarTable setBackgroundColor:VLCLegacySidebarBackgroundColor()];
     [sidebarTable setRowHeight:20];
@@ -4076,7 +4106,7 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
                 }
                 idx[b + 1] = v;
             }
-            if (nidx > 0)
+            if (nidx > 0 || (section == 0 && [networkLocations count] > 0))
                 [self addSidebarHeader:_NS(sections[section].title)];
             for (a = 0; a < nidx; a++) {
                 i = idx[a];
@@ -4092,6 +4122,8 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
                         icon, @"icon",
                         nil]];
             }
+            if (section == 0)
+                [sidebarItems addObjectsFromArray:networkLocations];
         }
         int i;
         for (i = 0; names[i]; i++) {
@@ -4101,6 +4133,12 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         free(names);
         free(longnames);
         free(categories);
+    }
+    else if ([networkLocations count] > 0) {
+        /* A minimal build can have no service-discovery modules at all; the
+         * live server roots still belong under My Computer. */
+        [self addSidebarHeader:_NS("MY COMPUTER")];
+        [sidebarItems addObjectsFromArray:networkLocations];
     }
     [sidebarTable reloadData];
 }
@@ -4128,7 +4166,106 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         }
         return p_playlist->p_playing;
     }
+    if ([kind isEqualToString:@"network"]) {
+        playlist_item_t *item = playlist_ItemGetById(p_playlist,
+            [[entry objectForKey:@"id"] intValue]);
+        return item ? item : p_playlist->p_playing;
+    }
     return p_playlist->p_playing;
+}
+
+- (BOOL)addNetworkLocation:(NSString *)mrl
+{
+    unsigned i;
+    for (i = 0; i < [networkLocations count]; i++) {
+        NSDictionary *entry = [networkLocations objectAtIndex:i];
+        if ([[entry objectForKey:@"mrl"] isEqualToString:mrl]) {
+            [self buildSidebarModel];
+            NSInteger row = (NSInteger)[sidebarItems indexOfObjectIdenticalTo:entry];
+            if (row >= 0)
+                VLCLegacySelectRow(sidebarTable, row);
+            [self showPlaylistView];
+            return YES;
+        }
+    }
+
+    NSURL *url = [NSURL URLWithString:mrl];
+    NSString *title = [url host];
+    NSString *pathName = [[url path] lastPathComponent];
+    if ([pathName length])
+        title = [NSString stringWithFormat:@"%@ — %@", title, pathName];
+    if (![title length])
+        title = mrl;
+
+    input_item_t *input = input_item_NewDirectory([mrl UTF8String],
+                                                   [title UTF8String], ITEM_NET);
+    if (!input)
+        return NO;
+    playlist_t *playlist = pl_Get(p_intf);
+    playlist_Lock(playlist);
+    playlist_item_t *item = playlist_NodeAddInput(playlist, input,
+                                                   &playlist->root,
+                                                   PLAYLIST_END);
+    int itemId = item ? item->i_id : -1;
+    if (item)
+        libvlc_MetadataRequest(p_intf->obj.libvlc, input,
+                               META_REQUEST_OPTION_SCOPE_ANY |
+                               META_REQUEST_OPTION_DO_INTERACT, 120000, item);
+    playlist_Unlock(playlist);
+    input_item_Release(input);
+    if (itemId < 0)
+        return NO;
+
+    NSMutableDictionary *entry = [NSMutableDictionary
+        dictionaryWithObjectsAndKeys:
+            @"network", @"kind", title, @"title",
+            [NSNumber numberWithInt:itemId], @"id", mrl, @"mrl",
+            [self sidebarIcon:@"sidebar-local"], @"icon", nil];
+    [networkLocations addObject:entry];
+    [self buildSidebarModel];
+    NSInteger row = (NSInteger)[sidebarItems indexOfObjectIdenticalTo:entry];
+    if (row >= 0)
+        VLCLegacySelectRow(sidebarTable, row);
+    [self showPlaylistView];
+    [self rebuildItemsSnapshot];
+    return YES;
+}
+
+- (NSMenu *)sidebarMenuForRow:(NSNumber *)rowNumber
+{
+    int row = [rowNumber intValue];
+    if (row < 0 || (unsigned)row >= [sidebarItems count])
+        return nil;
+    NSDictionary *entry = [sidebarItems objectAtIndex:row];
+    if (![[entry objectForKey:@"kind"] isEqualToString:@"network"])
+        return nil;
+    NSMenu *menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
+    NSMenuItem *eject = [[[NSMenuItem alloc] initWithTitle:_NS("Eject")
+                            action:@selector(ejectNetworkLocation:)
+                     keyEquivalent:@""] autorelease];
+    [eject setTarget:self];
+    [eject setRepresentedObject:entry];
+    [menu addItem:eject];
+    return menu;
+}
+
+- (void)ejectNetworkLocation:(id)sender
+{
+    NSDictionary *entry = [sender representedObject];
+    if (!entry)
+        return;
+    playlist_t *playlist = pl_Get(p_intf);
+    playlist_Lock(playlist);
+    playlist_item_t *item = playlist_ItemGetById(playlist,
+        [[entry objectForKey:@"id"] intValue]);
+    if (item)
+        playlist_NodeDelete(playlist, item);
+    playlist_Unlock(playlist);
+    [networkLocations removeObjectIdenticalTo:entry];
+    sidebarSelection = 1;
+    [self buildSidebarModel];
+    VLCLegacySelectRow(sidebarTable, 1);
+    [self rebuildItemsSnapshot];
 }
 
 /*****************************************************************************
@@ -5235,7 +5372,8 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
              * from blocking the (serial) preparser forever */
             libvlc_MetadataRequest(p_playlist->obj.libvlc,
                                    p_item->p_input,
-                                   META_REQUEST_OPTION_SCOPE_ANY,
+                                   META_REQUEST_OPTION_SCOPE_ANY |
+                                   META_REQUEST_OPTION_DO_INTERACT,
                                    120000, p_item);
         }
         playlist_Unlock(p_playlist);

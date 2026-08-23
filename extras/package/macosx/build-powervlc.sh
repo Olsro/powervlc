@@ -60,11 +60,10 @@ SCRIPTDIR=$(cd "$(dirname "$0")" && pwd)
 VLCROOT=$(cd "$SCRIPTDIR/../../.." && pwd)
 BUILDDIR="$VLCROOT/build$TARGET"
 
-# ⚠ build.sh does NOT reconfigure an existing build directory: its objects keep
-# the -mmacosx-version-min they were first configured with. When the PowerPC
-# floor dropped from 10.4 to 10.2 that would have produced a "10.2" bundle made
-# of 10.4 objects, with no error anywhere -- the failure only shows up as a dyld
-# error on the old machine. Stamp the target and refuse a mismatched reuse.
+# Keep an explicit floor stamp as a guard against accidentally pointing an
+# architecture label at the wrong build directory. build.sh now reconfigures
+# every invocation, but changing a directory's deployment floor in place can
+# still leave third-party or manually produced objects behind.
 case "$TARGET" in
     g3|g4|g5)    WANT_MIN="10.2" ;;
     x86)          WANT_MIN="10.4" ;;
@@ -75,8 +74,7 @@ esac
 STAMP="$BUILDDIR/.powervlc-osx-min"
 if [ -n "$WANT_MIN" ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP")" != "$WANT_MIN" ]; then
     echo "ERROR: $BUILDDIR was configured for macOS $(cat "$STAMP")," >&2
-    echo "       this target now needs $WANT_MIN. Remove that directory and" >&2
-    echo "       build again -- build.sh does not reconfigure in place." >&2
+    echo "       this target now needs $WANT_MIN. Use a fresh build directory." >&2
     exit 1
 fi
 mkdir -p "$BUILDDIR"
@@ -91,4 +89,18 @@ VLC_CONFIGURE_ARGS="$ARGS $VLC_CONFIGURE_ARGS" \
 # and 32-bit slices stop failing with "bad header in precompiled chunk".
 if [ -d "$BUILDDIR/PowerVLC.app" ]; then
     "$SCRIPTDIR/lua-portable.sh" "$BUILDDIR/PowerVLC.app"
+
+    # package.mak initially creates the cache before build.sh normalises and
+    # strips the bundled Mach-O plugins.  Those operations change every
+    # plugin's mtime, so the cache is already stale when the finished app is
+    # launched (and was especially harmful on the native Apple Silicon
+    # bundle).  Regenerate it only when this host can execute the target cache
+    # generator; cross-built legacy slices deliberately ship without one.
+    CACHEGEN="$BUILDDIR/bin/powervlc-cache-gen"
+    PLUGINDIR="$BUILDDIR/PowerVLC.app/Contents/MacOS/plugins"
+    if [ -x "$CACHEGEN" ] && "$CACHEGEN" --help >/dev/null 2>&1; then
+        "$CACHEGEN" "$PLUGINDIR"
+    else
+        rm -f "$PLUGINDIR/plugins.dat"
+    fi
 fi

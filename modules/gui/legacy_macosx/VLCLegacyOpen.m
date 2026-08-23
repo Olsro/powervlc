@@ -27,9 +27,12 @@
 #import "VLCLegacyOutput.h"
 #import "VLCLegacyCoreInteraction.h"
 #import "VLCLegacyMenu.h"
+#import "VLCLegacyMain.h"
+#import "VLCLegacyMainWindow.h"
 
 #include <vlc_playlist.h>
 #include <vlc_input_item.h>
+#include <vlc_modules.h>
 #include <vlc_url.h>
 
 #ifdef HAVE_SEQUENCE_GRABBER
@@ -53,8 +56,11 @@
 
 #define _NS(s) ((NSString *)[NSString stringWithUTF8String:vlc_gettext(s)])
 
+extern VLCLegacyMainWindow *VLCLegacyGetMainWindow(void);
+
 /* media kinds, as detected by -[VLCStringUtility getVolumeTypeFromMountPath:] */
 static NSString *const kVLCMediaAudioCD = @"AudioCD";
+static NSString *const kVLCMediaAudioDVD = @"AudioDVD";
 static NSString *const kVLCMediaDVD = @"DVD";
 static NSString *const kVLCMediaVCD = @"VCD";
 static NSString *const kVLCMediaSVCD = @"SVCD";
@@ -62,6 +68,27 @@ static NSString *const kVLCMediaBD = @"Blu-ray";
 static NSString *const kVLCMediaVideoTSFolder = @"VIDEO_TS";
 static NSString *const kVLCMediaBDMVFolder = @"BDMV";
 static NSString *const kVLCMediaUnknown = @"Unknown";
+static NSString *const kVLCConnectToServerRecents = @"VLCConnectToServerRecents";
+
+static BOOL mountContainsDVDAudio(NSString *mountPath)
+{
+    NSFileManager *fm = [[NSFileManager alloc] init];
+    NSString *audioTS = [mountPath stringByAppendingPathComponent:@"AUDIO_TS"];
+    NSArray *entries = [fm directoryContentsAtPath:audioTS];
+    BOOL found = NO;
+    unsigned i;
+
+    for (i = 0; i < [entries count]; i++) {
+        NSString *extension = [[entries objectAtIndex:i] pathExtension];
+        if ([extension caseInsensitiveCompare:@"aob"] == NSOrderedSame ||
+            [extension caseInsensitiveCompare:@"ifo"] == NSOrderedSame) {
+            found = YES;
+            break;
+        }
+    }
+    [fm release];
+    return found;
+}
 
 /* Capture device discovery without a compile-time dependency on either
  * framework.  The legacy interface is built with SDKs from 10.4 through the
@@ -407,7 +434,8 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
             if (IOObjectConformsTo(service, kIOCDMediaClass))
                 result = kVLCMediaAudioCD;
             else if (IOObjectConformsTo(service, kIODVDMediaClass))
-                result = kVLCMediaDVD;
+                result = mountContainsDVDAudio(mountPath)
+                       ? kVLCMediaAudioDVD : kVLCMediaDVD;
 #ifdef kIOBDMediaClass
             else if (IOObjectConformsTo(service, kIOBDMediaClass))
                 result = kVLCMediaBD;
@@ -477,6 +505,8 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
     [window release];
     [netUDPPanel release];
     [fileSubSheet release];
+    [connectServerAddress release];
+    [connectServerPanel release];
     [discNoDiscView release];
     [discAudioCDView release];
     [discDVDView release];
@@ -628,6 +658,140 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
                     VLC_INPUT_OPTION_TRUSTED, true);
     free(ppsz_options);
     VLCLegacyNoteRecentItem(theMrl);
+}
+
+/*****************************************************************************
+ * Connect to Server (VLC 4-style address entry and protocol discovery)
+ *****************************************************************************/
+
+- (NSArray *)connectServerSchemes
+{
+    NSMutableArray *schemes = [NSMutableArray array];
+    if (module_exists("webdav"))
+        [schemes addObjectsFromArray:[NSArray arrayWithObjects:
+            @"webdav", @"webdavs", nil]];
+    if (module_exists("smb2") || module_exists("dsm") || module_exists("smb"))
+        [schemes addObject:@"smb"];
+    if (module_exists("ftp"))
+        [schemes addObjectsFromArray:[NSArray arrayWithObjects:
+            @"ftp", @"ftps", @"ftpes", nil]];
+    if (module_exists("sftp"))
+        [schemes addObject:@"sftp"];
+    if (module_exists("nfs"))
+        [schemes addObject:@"nfs"];
+    if (module_exists("afp"))
+        [schemes addObject:@"afp"];
+    return schemes;
+}
+
+- (void)buildConnectServerPanel
+{
+    if (connectServerPanel)
+        return;
+
+    connectServerPanel = [[NSPanel alloc]
+        initWithContentRect:NSMakeRect(0, 0, 540, 176)
+                  styleMask:NSTitledWindowMask
+                    backing:NSBackingStoreBuffered defer:NO];
+    [connectServerPanel setTitle:_NS("Connect to Server")];
+    NSView *content = [connectServerPanel contentView];
+    [self label:_NS("Enter a server address to browse.")
+          frame:NSMakeRect(20, 132, 500, 20) in:content];
+
+    connectServerAddress = [[NSComboBox alloc]
+        initWithFrame:NSMakeRect(20, 98, 500, 26)];
+    NSArray *stored = [[NSUserDefaults standardUserDefaults]
+        stringArrayForKey:kVLCConnectToServerRecents];
+    if (stored)
+        [connectServerAddress addItemsWithObjectValues:stored];
+    [connectServerAddress setCompletes:YES];
+    [content addSubview:connectServerAddress];
+
+    NSString *protocols = [[self connectServerSchemes]
+        componentsJoinedByString:@", "];
+    [self label:[NSString stringWithFormat:_NS("Supported protocols: %@"),
+                                              protocols]
+          frame:NSMakeRect(20, 70, 500, 18) in:content];
+
+    NSButton *cancel = [self button:_NS("Cancel")
+                              action:@selector(cancelConnectToServer:)
+                               frame:NSMakeRect(344, 20, 82, 30)
+                                  in:content];
+    [cancel setKeyEquivalent:[NSString stringWithFormat:@"%c", 0x1b]];
+    NSButton *connect = [self button:_NS("Connect")
+                               action:@selector(confirmConnectToServer:)
+                                frame:NSMakeRect(432, 20, 88, 30)
+                                   in:content];
+    [connect setKeyEquivalent:@"\r"];
+    [connectServerPanel setDefaultButtonCell:[connect cell]];
+}
+
+- (NSString *)validatedConnectServerMRL
+{
+    NSString *input = [[connectServerAddress stringValue]
+        stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSURL *url = [NSURL URLWithString:input];
+    NSString *scheme = [[url scheme] lowercaseString];
+    if (![input length] || ![scheme length] || ![[url host] length]
+        || ![[self connectServerSchemes] containsObject:scheme])
+        return nil;
+    return input;
+}
+
+- (void)confirmConnectToServer:(id)sender
+{
+    if (![self validatedConnectServerMRL]) {
+        NSBeep();
+        return;
+    }
+    [NSApp stopModalWithCode:NSOKButton];
+}
+
+- (void)cancelConnectToServer:(id)sender
+{
+    [NSApp stopModalWithCode:NSCancelButton];
+}
+
+- (void)connectToServer
+{
+    [self buildConnectServerPanel];
+    [connectServerPanel center];
+    [connectServerPanel makeKeyAndOrderFront:nil];
+    NSInteger result = [NSApp runModalForWindow:connectServerPanel];
+    [connectServerPanel orderOut:nil];
+    if (result != NSOKButton)
+        return;
+
+    NSString *mrlValue = [self validatedConnectServerMRL];
+    if (!mrlValue)
+        return;
+
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSArray *stored = [defaults stringArrayForKey:kVLCConnectToServerRecents];
+    NSMutableArray *recents = stored
+        ? [NSMutableArray arrayWithArray:stored] : [NSMutableArray array];
+    [recents removeObject:mrlValue];
+    [recents insertObject:mrlValue atIndex:0];
+    while ([recents count] > 8)
+        [recents removeLastObject];
+    [defaults setObject:recents forKey:kVLCConnectToServerRecents];
+    [connectServerAddress removeAllItems];
+    [connectServerAddress addItemsWithObjectValues:recents];
+
+    /* A missing-login prompt can be requested as soon as preparsing starts.
+     * Defer that work until the connection panel's modal session has fully
+     * unwound, otherwise old AppKit versions can swallow the new dialog. */
+    [self performSelector:@selector(addNetworkLocationAfterConnectPanel:)
+               withObject:mrlValue
+               afterDelay:0.0];
+}
+
+- (void)addNetworkLocationAfterConnectPanel:(NSString *)mrlValue
+{
+    VLCLegacyMainWindow *mainWindow = VLCLegacyGetMainWindow();
+    if (mainWindow && [mainWindow addNetworkLocation:mrlValue])
+        VLCLegacyNoteRecentItem(mrlValue);
 }
 
 /*****************************************************************************
@@ -1314,6 +1478,12 @@ static NSString *volumeTypeForMountPath(NSString *mountPath)
                 [discDVDwomenusChapterField intValue]]];
             [self showOpticalMediaView:discDVDwomenusView withIcon:image];
         }
+    } else if ([diskType isEqualToString:kVLCMediaAudioDVD]) {
+        [discAudioCDLabel setStringValue:[[NSFileManager defaultManager]
+            displayNameAtPath:opticalDevicePath]];
+        [discAudioCDTrackCountLabel setStringValue:@""];
+        [self showOpticalMediaView:discAudioCDView withIcon:image];
+        [self setMRL:[NSString stringWithFormat:@"dvda://%@", devicePath]];
     } else if ([diskType isEqualToString:kVLCMediaAudioCD]) {
         [discAudioCDLabel setStringValue:[[NSFileManager defaultManager]
             displayNameAtPath:opticalDevicePath]];

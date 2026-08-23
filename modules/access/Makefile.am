@@ -350,13 +350,24 @@ endif
 
 ### Network streams ###
 
+libdata_plugin_la_SOURCES = access/data.c
+access_LTLIBRARIES += libdata_plugin.la
+
 libftp_plugin_la_SOURCES = access/ftp.c
 libftp_plugin_la_LIBADD = $(SOCKET_LIBS)
 access_LTLIBRARIES += libftp_plugin.la
 
+libgopher_plugin_la_SOURCES = access/gopher.c
+libgopher_plugin_la_LIBADD = $(SOCKET_LIBS)
+access_LTLIBRARIES += libgopher_plugin.la
+
 libhttp_plugin_la_SOURCES = access/http.c
 libhttp_plugin_la_LIBADD = $(SOCKET_LIBS)
 access_LTLIBRARIES += libhttp_plugin.la
+
+libwebdav_plugin_la_SOURCES = access/webdav.c
+libwebdav_plugin_la_LIBADD = libvlc_http.la
+access_LTLIBRARIES += libwebdav_plugin.la
 
 liblive555_plugin_la_SOURCES = access/live555.cpp access/mms/asf.c access/mms/buffer.c \
                                access/live555_dtsgen.h codec/opus_header.c codec/opus_header.h
@@ -427,6 +438,17 @@ libnfs_plugin_la_LIBADD = $(NFS_LIBS) $(SOCKET_LIBS)
 libnfs_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(accessdir)'
 access_LTLIBRARIES += $(LTLIBnfs)
 EXTRA_LTLIBRARIES += libnfs_plugin.la
+
+libafp_plugin_la_SOURCES = access/afp.c
+libafp_plugin_la_CFLAGS = $(AM_CFLAGS) $(AFP_CFLAGS) $(GCRYPT_CFLAGS)
+# libafpclient is a static contrib.  Meson 0.45 does not propagate its private
+# dependencies through the generated .pc file, so keep the module link
+# deterministic on older Linux builders as well as current macOS/Windows ones.
+libafp_plugin_la_LIBADD = $(AFP_LIBS) $(GCRYPT_LIBS) ../compat/libcompat.la \
+	$(LIBPTHREAD) $(SOCKET_LIBS)
+libafp_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(accessdir)'
+access_LTLIBRARIES += $(LTLIBafp)
+EXTRA_LTLIBRARIES += libafp_plugin.la
 
 libaccess_realrtsp_plugin_la_SOURCES = \
 	access/rtsp/access.c \

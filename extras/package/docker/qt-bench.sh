@@ -54,7 +54,18 @@ case "${1:-}" in
     docker run --rm --platform "$PLATFORM" -v "$VOL":/work "$IMAGE" sh -eu -c '
       cd /work
       [ -f configure ] || ./bootstrap
-      [ -f config.status ] || ./configure --disable-wayland --disable-update-check \
+      mkdir -p contrib/qtbench-native
+      ( cd contrib/qtbench-native
+        [ -f Makefile ] || ../bootstrap --prefix=/work/qtbench-afp-prefix
+        if pkg-config --exists libbsd \
+           && [ -f afpclient/build/build.ninja ] \
+           && ! grep -q HAVE_LIBBSD afpclient/build/build.ninja; then
+          rm -f .afpclient
+          rm -rf afpclient/build
+        fi
+        make -j"$(nproc)" .afpclient )
+      export PKG_CONFIG_PATH=/work/qtbench-afp-prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}
+      ./configure --disable-wayland --disable-update-check \
           --prefix=/usr --disable-lua --enable-qt
       make -j"$(nproc)"
       echo "bench build done: $(ls -la bin/.libs/powervlc | head -1)"'

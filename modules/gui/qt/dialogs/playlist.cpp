@@ -68,6 +68,11 @@ bool PlaylistDialog::hasPlaylistWidget()
     return ( !! playlistWidget );
 }
 
+bool PlaylistDialog::addNetworkLocation( const QString& mrl )
+{
+    return playlistWidget && playlistWidget->addNetworkLocation( mrl );
+}
+
 void PlaylistDialog::hideEvent( QHideEvent * event )
 {
     QWidget::hideEvent( event );
@@ -95,4 +100,3 @@ void PlaylistDialog::dragLeaveEvent( QDragLeaveEvent *event )
 {
      event->accept();
 }
-

@@ -99,6 +99,7 @@ public:
     bool isInterfaceFullScreen() { return b_interfaceFullScreen; }
     bool isInterfaceAlwaysOnTop() { return b_interfaceOnTop; }
     StandardPLPanel* getPlaylistView();
+    bool addNetworkLocation( const QString& mrl );
 
 protected:
     void dropEventPlay( QDropEvent* event, bool b_play ) { dropEventPlay(event, b_play, true); }

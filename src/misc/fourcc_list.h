@@ -496,6 +496,10 @@ static const staticentry_t p_list_video[] = {
         A("VP31"),
         A("vp31"),
 
+    /* On2 VP4 Video Codec */
+    B(VLC_CODEC_VP4, "On2's VP4 Video"),
+        A("VP40"),
+
     /* On2  VP5, VP6 codecs */
     B(VLC_CODEC_VP5, "On2's VP5 Video"),
         A("VP5 "),
@@ -1004,6 +1008,9 @@ static const staticentry_t p_list_video[] = {
     B(VLC_CODEC_BMP, "BMP Image"),
         A("bmp "),
 
+    B(VLC_CODEC_FARBFELD, "Farbfeld Image"),
+        A("farb"),
+
     B(VLC_CODEC_TIFF, "TIFF Image"),
         A("tiff"),
 
@@ -1170,6 +1177,19 @@ static const staticentry_t p_list_video[] = {
 
     B(VLC_CODEC_PIXLET, "Apple Pixlet" ),
         A("pxlt"),
+
+    B(VLC_CODEC_IMM4, "Infinity IMM4"),
+        A("IMM4"),
+
+    B(VLC_CODEC_AGM, "AmuseGraphics Movie"),
+        A("AGM0"),
+        A("AGM1"),
+        A("AGM2"),
+        A("AGM3"),
+        A("AGM4"),
+        A("AGM5"),
+        A("AGM6"),
+        A("AGM7"),
 
     B(VLC_CODEC_APV, "Advanced Professional Video (APV)"),
 };
@@ -1386,6 +1406,9 @@ static const staticentry_t p_list_audio[] = {
     B(VLC_CODEC_QDMC, "QDMC Audio"),
         A("QDMC"),
 
+    B(VLC_CODEC_QOA, "Quite OK Audio Format"),
+        A("qoaf"),
+
     /* COOK */
     B(VLC_CODEC_COOK, "Cook Audio"),
         A("cook"),
@@ -1455,6 +1478,8 @@ static const staticentry_t p_list_audio[] = {
     B(VLC_CODEC_SPEEX, "Speex Audio"),
         A("spx "),
         A("spxr"),
+
+    B(VLC_CODEC_CODEC2, "Codec 2 Audio"),
 
     B(VLC_CODEC_VORBIS, "Vorbis Audio"),
         A("vorb"),
@@ -1593,6 +1618,8 @@ static const staticentry_t p_list_audio[] = {
     B(VLC_CODEC_ADPCM_EA_R1, "ADPCM Electronic Arts R1"),
 
     B(VLC_CODEC_ADPCM_IMA_APC, "ADPCM APC"),
+
+    B(VLC_CODEC_DFPWM, "DFPWM1a audio"),
 };
 
 static const staticentry_t p_list_spu[] = {

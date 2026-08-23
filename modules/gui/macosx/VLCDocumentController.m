@@ -22,6 +22,7 @@
 #import "VLCDocumentController.h"
 
 #import "VLCMain.h"
+#import "VLCMainMenu.h"
 
 @implementation VLCDocumentController
 
@@ -36,13 +37,38 @@
 
 - (IBAction)clearRecentDocuments:(id)sender
 {
-    msg_Dbg(getIntf(), "Clear recent items list and resume points");
+    msg_Dbg(getIntf(), "Clear recent files list and resume points");
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults setObject:[NSDictionary dictionary] forKey:@"recentlyPlayedMedia"];
     [defaults setObject:[NSArray array] forKey:@"recentlyPlayedMediaList"];
     [defaults synchronize];
 
     [super clearRecentDocuments:sender];
+}
+
+- (void)migrateRecentStreamsFromDocumentHistory
+{
+    NSArray *recentURLs = [self recentDocumentURLs];
+    NSMutableArray *files = [NSMutableArray array];
+    BOOL needsMigration = NO;
+
+    for (NSURL *url in recentURLs) {
+        if ([url isFileURL])
+            [files addObject:url];
+        else {
+            VLCNoteRecentStream([url absoluteString]);
+            needsMigration = YES;
+        }
+    }
+    if (!needsMigration)
+        return;
+
+    /* Bypass our public clearing action here: migration must not erase the
+     * independent resume-position database. Reinsert oldest first so AppKit
+     * restores the original most-recent-first order. */
+    [super clearRecentDocuments:nil];
+    for (NSURL *url in [files reverseObjectEnumerator])
+        [self noteNewRecentDocumentURL:url];
 }
 
 @end

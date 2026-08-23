@@ -55,6 +55,9 @@ enum {
     NSButton *outputSettingsButton;
     NSString *mrl;
 
+    NSPanel *connectServerPanel;
+    NSComboBox *connectServerAddress;
+
     /* --- file pane --- */
     NSImageView *fileIconWell;
     NSTextField *fileNameLabel;
@@ -168,6 +171,7 @@ enum {
 - (id)initWithCore:(VLCLegacyCoreInteraction *)interaction;
 
 - (void)openFile;              /* plain panel, like 3.0 "Open File..." */
+- (void)connectToServer;
 - (void)openSubtitleFile;
 
 /* the tabbed window (Advanced Open File / Disc / Network / Capture) */

@@ -1,0 +1,123 @@
+diff --git a/lib/compat.h b/lib/compat.h
+index d29eab1..c4c09d9 100644
+--- a/lib/compat.h
++++ b/lib/compat.h
+@@ -113,8 +113,11 @@ typedef unsigned int uintptr_t;
+ #define EBADF WSAENOTSOCK
+ #endif
+ 
+-#if defined(_XBOX) || defined(__MINGW32__)
++#if defined(_XBOX) || defined(__MINGW32__)
+ #define snprintf _snprintf
++#endif
++#if defined(_XBOX)
++/* MinGW's Winsock headers already declare this with an int length. */
+ int gethostname(char* name, size_t len);
+ #endif
+ 
+@@ -199,7 +202,18 @@ struct addrinfo {
+ 
+ #endif
+ 
++#if defined(__MINGW32__) && defined(NEED_POLL)
++struct smb2_pollfd {
++        t_socket fd;
++        short events;
++        short revents;
++};
++#define pollfd smb2_pollfd
++#endif
++
++#ifndef _SSIZE_T_DEFINED
+ typedef SSIZE_T ssize_t;
++#endif
+ 
+ struct iovec
+ {
+@@ -223,7 +237,10 @@ void smb2_freeaddrinfo(struct addrinfo *res);
+ #define getaddrinfo smb2_getaddrinfo
+ #define freeaddrinfo smb2_freeaddrinfo
+ 
++#elif defined(__MINGW32__) && defined(NEED_POLL)
++int smb2_poll(struct pollfd *fds, unsigned int nfds, int timo);
++#define poll smb2_poll
+ #else
+ 
+ #undef poll
+ #define poll WSAPoll
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 81ab1ad..2849dd7 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -111,6 +111,9 @@ if(NOT ESP_PLATFORM)
+     endif()
+ 
+     if(CMAKE_SYSTEM_NAME MATCHES Windows)
++      if(MINGW)
++        add_definitions(-D_WINDOWS -DNEED_POLL)
++      endif()
+       list(APPEND CORE_LIBRARIES ws2_32.lib)
+      add_definitions(-DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -DHAVE_LINGER -DNEED_GETLOGIN_R -DNEED_GETPID -DNEED_RANDOM -DNEED_SRANDOM)
+    elseif(CMAKE_SYSTEM_NAME MATCHES NintendoSwitch)
+diff --git a/lib/compat.c b/lib/compat.c
+index 9d7a91c..b77247d 100644
+--- a/lib/compat.c
++++ b/lib/compat.c
+@@ -459,7 +459,11 @@ ssize_t readv(int fd, const struct iovec *iov, int iovcnt)
+ #endif
+ 
+ #ifdef NEED_POLL
++#if defined(__MINGW32__)
++int smb2_poll(struct pollfd *fds, unsigned int nfds, int timo)
++#else
+ int poll(struct pollfd *fds, unsigned int nfds, int timo)
++#endif
+ {
+         struct timeval timeout, *toptr;
+         fd_set ifds, ofds, efds, *ip, *op;
+diff --git a/lib/socket.c b/lib/socket.c
+index b6b7ee9..6edb566 100644
+--- a/lib/socket.c
++++ b/lib/socket.c
+@@ -1078,13 +1078,20 @@ connect_async_ai(struct smb2_context *smb2, const struct addrinfo *ai, int *fd_o
+ #endif
+ 
+         if (connect(fd, (struct sockaddr *)&ss, socksize) != 0
+-#ifndef _MSC_VER
++#if !defined(_MSC_VER) && !defined(__MINGW32__)
+                   && errno != EINPROGRESS) {
+ #else
+-                  && WSAGetLastError() != WSAEWOULDBLOCK) {
++                  && WSAGetLastError() != WSAEWOULDBLOCK
++                  && WSAGetLastError() != WSAEINPROGRESS
++                  && WSAGetLastError() != WSAEALREADY) {
+ #endif
++#if defined(_MSC_VER) || defined(__MINGW32__)
++                int const err = WSAGetLastError();
++                smb2_set_error(smb2, "Connect failed with WSA error: %d", err);
++#else
+                 smb2_set_error(smb2, "Connect failed with errno : "
+                         "%s(%d)", strerror(errno), errno);
++#endif
+                 close(fd);
+                 return -EIO;
+         }
+diff --git a/include/asprintf.h b/include/asprintf.h
+index 6888546..506e81f 100644
+--- a/include/asprintf.h
++++ b/include/asprintf.h
+@@ -28,6 +28,7 @@ static inline int _vscprintf_so(const char * format, va_list pargs) {
+ #endif /* _vscprintf */
+ #endif
+ 
++#ifndef __MINGW32__
+ #ifndef vasprintf
+ static inline int vasprintf(char **strp, const char *fmt, va_list ap) {
+ #ifdef _XBOX
+@@ -61,5 +62,6 @@ static inline int asprintf(char *strp[], const char *fmt, ...) {
+   return r;
+ }
+ #endif /* asprintf */
++#endif /* !__MINGW32__ */
+ 
+ #endif /* ! _ASPRINTF_H_ */

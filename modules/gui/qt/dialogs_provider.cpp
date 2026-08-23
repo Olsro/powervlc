@@ -29,6 +29,7 @@
 #include <vlc_intf_strings.h>
 
 #include "qt.hpp"
+#include <vlc_modules.h>
 #include "dialogs_provider.hpp"
 #include "input_manager.hpp" /* Load Subtitles */
 #include "menus.hpp"
@@ -62,6 +63,11 @@
 #include <QApplication>
 #include <QSignalMapper>
 #include <QFileDialog>
+#include <QInputDialog>
+#include <QTimer>
+#include <QMessageBox>
+#include <QSettings>
+#include <QDesktopServices>
 #include <QUrl>
 
 #define I_OP_DIR_WINTITLE I_DIR_OR_FOLDER( N_("Open Directory"), \
@@ -224,10 +230,8 @@ void DialogsProvider::customEvent( QEvent *event )
         case INTF_DIALOG_WIZARD:
         case INTF_DIALOG_STREAMWIZARD:
             openAndStreamingDialogs(); break;
-#ifdef UPDATE_CHECK
         case INTF_DIALOG_UPDATEVLC:
             updateDialog(); break;
-#endif
         case INTF_DIALOG_EXIT:
             quit(); break;
         default:
@@ -297,12 +301,11 @@ void DialogsProvider::helpDialog()
     HelpDialog::getInstance( p_intf )->toggleVisible();
 }
 
-#ifdef UPDATE_CHECK
 void DialogsProvider::updateDialog()
 {
-    UpdateDialog::getInstance( p_intf )->toggleVisible();
+    QDesktopServices::openUrl(
+        QUrl( QString::fromUtf8( POWERVLC_RELEASES_URL ) ) );
 }
-#endif
 
 void DialogsProvider::aboutDialog()
 {
@@ -461,6 +464,69 @@ void DialogsProvider::openNetDialog()
 void DialogsProvider::openCaptureDialog()
 {
     openDialog( OPEN_CAPTURE_TAB );
+}
+
+void DialogsProvider::connectToServerDialog()
+{
+    QStringList schemes;
+    if( module_exists( "webdav" ) )
+        schemes << "webdav" << "webdavs";
+    if( module_exists( "smb2" ) || module_exists( "dsm" )
+     || module_exists( "smb" ) )
+        schemes << "smb";
+    if( module_exists( "ftp" ) )
+        schemes << "ftp" << "ftps" << "ftpes";
+    if( module_exists( "sftp" ) )
+        schemes << "sftp";
+    if( module_exists( "nfs" ) )
+        schemes << "nfs";
+    if( module_exists( "afp" ) )
+        schemes << "afp";
+
+    QSettings *settings = getSettings();
+    QStringList recents = settings->value(
+        "ConnectToServer/recents" ).toStringList();
+    QString mrl;
+
+    for( ;; )
+    {
+        QInputDialog dialog( p_intf->p_sys->p_mi );
+        dialog.setWindowTitle( qtr( "Connect to Server" ) );
+        dialog.setLabelText( qtr( "Enter a server address to browse." )
+            + "\n" + qtr( "Supported protocols: %1" ).arg(
+                schemes.join( ", " ) ) );
+        dialog.setComboBoxItems( recents );
+        dialog.setComboBoxEditable( true );
+        if( !recents.isEmpty() )
+            dialog.setTextValue( recents.first() );
+        if( dialog.exec() != QDialog::Accepted )
+            return;
+
+        mrl = dialog.textValue().trimmed();
+        const QUrl url( mrl );
+        if( url.isValid() && !url.host().isEmpty()
+         && schemes.contains( url.scheme().toLower() ) )
+            break;
+
+        QMessageBox::warning( p_intf->p_sys->p_mi,
+            qtr( "Connect to Server" ),
+            qtr( "Enter a valid server address using a supported protocol." ) );
+    }
+
+    recents.removeAll( mrl );
+    recents.prepend( mrl );
+    while( recents.count() > 8 )
+        recents.removeLast();
+    settings->setValue( "ConnectToServer/recents", recents );
+
+    /* A server without userinfo may request credentials immediately.  Queue
+     * preparsing so the address dialog's modal event loop is completely gone
+     * before the core asks Qt to present the login dialog. */
+    MainInterface *mi = p_intf->p_sys->p_mi;
+    QTimer::singleShot( 0, mi, [this, mi, mrl]() {
+        if( mi->addNetworkLocation( mrl ) )
+            RecentsMRL::getInstance( p_intf )->addRecent( mrl );
+    } );
 }
 
 /* Same as the open one, but force the enqueue */

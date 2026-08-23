@@ -1,0 +1,30 @@
+diff --git a/lib/md4.h b/lib/md4.h
+index 4197446..8051463 100644
+--- a/lib/md4.h
++++ b/lib/md4.h
+@@ -35,6 +35,10 @@ typedef struct {
+   unsigned char buffer[64];                         /* input buffer */
+ } MD4_CTX;
+ 
++#define MD4Init smb2_MD4Init
++#define MD4Update smb2_MD4Update
++#define MD4Final smb2_MD4Final
++
+ void MD4Init(MD4_CTX *);
+ void MD4Update(MD4_CTX *, unsigned char *, unsigned int);
+ void MD4Final(unsigned char [16], MD4_CTX *);
+diff --git a/lib/md5.h b/lib/md5.h
+index 4743b2f..275bbf6 100644
+--- a/lib/md5.h
++++ b/lib/md5.h
+@@ -59,6 +59,10 @@ struct MD5Context {
+     md5byte in[64];
+ };
+ 
++#define MD5Init smb2_MD5Init
++#define MD5Update smb2_MD5Update
++#define MD5Final smb2_MD5Final
++
+ void MD5Init(struct MD5Context *context);
+ void MD5Update(struct MD5Context *context, md5byte const *buf, unsigned len);
+ void MD5Final(unsigned char digest[16], struct MD5Context *context);

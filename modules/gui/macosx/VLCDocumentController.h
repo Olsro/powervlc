@@ -25,4 +25,6 @@
 
 @interface VLCDocumentController : NSDocumentController
 
+- (void)migrateRecentStreamsFromDocumentHistory;
+
 @end

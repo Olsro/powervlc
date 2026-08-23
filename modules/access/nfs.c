@@ -125,6 +125,37 @@ nfs_check_status(stream_t *p_access, int i_status, const char *psz_error,
 #define NFS_CHECK_STATUS(p_access, i_status, p_data) \
     nfs_check_status(p_access, i_status, (const char *)p_data, __func__)
 
+#if defined(_WIN32) && _WIN32_WINNT < 0x0600
+/* libnfs uses the POSIX poll bit values from its private Win32 compatibility
+ * header (POLLIN=1, POLLOUT=4, ...) when targeting pre-Vista Windows. VLC's
+ * Win32 poll emulation deliberately uses the Winsock-style values from
+ * vlc_fixups.h instead. Passing one set to the other means no read/write event
+ * is ever requested, so NFS stalls at the first mount. Vista and later builds
+ * already use the same Winsock values on both sides. */
+static short
+nfs_events_to_vlc(int events)
+{
+    short vlc_events = 0;
+    if (events & 0x0001) vlc_events |= POLLIN;
+    if (events & 0x0002) vlc_events |= POLLPRI;
+    if (events & 0x0004) vlc_events |= POLLOUT;
+    return vlc_events;
+}
+
+static int
+nfs_events_from_vlc(short events)
+{
+    int nfs_events = 0;
+    if (events & POLLIN)  nfs_events |= 0x0001;
+    if (events & POLLPRI) nfs_events |= 0x0002;
+    if (events & POLLOUT) nfs_events |= 0x0004;
+    if (events & POLLERR) nfs_events |= 0x0008;
+    if (events & POLLHUP) nfs_events |= 0x0010;
+    if (events & POLLNVAL) nfs_events |= 0x0020;
+    return nfs_events;
+}
+#endif
+
 static int
 vlc_rpc_mainloop(stream_t *p_access, struct rpc_context *p_rpc_ctx,
                  bool (*pf_until_cb)(stream_t *))
@@ -136,7 +167,11 @@ vlc_rpc_mainloop(stream_t *p_access, struct rpc_context *p_rpc_ctx,
         struct pollfd p_fds[1];
         int i_ret;
         p_fds[0].fd = rpc_get_fd(p_rpc_ctx);
+#if defined(_WIN32) && _WIN32_WINNT < 0x0600
+        p_fds[0].events = nfs_events_to_vlc(rpc_which_events(p_rpc_ctx));
+#else
         p_fds[0].events = rpc_which_events(p_rpc_ctx);
+#endif
 
         if ((i_ret = vlc_poll_i11e(p_fds, 1, -1)) < 0)
         {
@@ -147,9 +182,16 @@ vlc_rpc_mainloop(stream_t *p_access, struct rpc_context *p_rpc_ctx,
             p_sys->b_error = true;
         }
         else if (i_ret > 0 && p_fds[0].revents
-             && rpc_service(p_rpc_ctx, p_fds[0].revents) < 0)
+             && rpc_service(p_rpc_ctx,
+#if defined(_WIN32) && _WIN32_WINNT < 0x0600
+                            nfs_events_from_vlc(p_fds[0].revents)
+#else
+                            p_fds[0].revents
+#endif
+                           ) < 0)
         {
-            msg_Err(p_access, "nfs_service failed");
+            msg_Err(p_access, "nfs_service failed: %s",
+                    rpc_get_error(p_rpc_ctx));
             p_sys->b_error = true;
         }
     }
@@ -615,6 +657,19 @@ NfsInit(stream_t *p_access, const char *psz_url_decoded)
         msg_Err(p_access, "nfs_init_context failed");
         return -1;
     }
+#ifdef _WIN32
+    /* libnfs' NFSv3 portmapper path is unreliable on Windows (the mount TCP
+     * socket can be reported readable before connect completes). NFSv4 uses
+     * the well-known NFS port directly and works on every maintained Windows
+     * target. An explicit ?version=3 remains available for v3-only servers. */
+    if (strstr(psz_url_decoded, "version=") == NULL
+     && nfs_set_version(p_sys->p_nfs, 4) != 0)
+    {
+        msg_Err(p_access, "failed to select NFSv4: '%s'",
+                nfs_get_error(p_sys->p_nfs));
+        return -1;
+    }
+#endif
 
     p_sys->p_nfs_url = nfs_parse_url_incomplete(p_sys->p_nfs, psz_url_decoded);
     if (p_sys->p_nfs_url == NULL || p_sys->p_nfs_url->server == NULL)
@@ -625,6 +680,33 @@ NfsInit(stream_t *p_access, const char *psz_url_decoded)
     }
     return 0;
 }
+
+#ifdef _WIN32
+static char *
+NfsWindowsBrowseUrl(const char *psz_url)
+{
+    vlc_url_t url;
+    if (vlc_UrlParseFixup(&url, psz_url) != 0)
+        return NULL;
+
+    const bool root = url.psz_path == NULL || url.psz_path[0] == '\0'
+                   || !strcmp(url.psz_path, "/");
+    const bool force_v3 = url.psz_option != NULL
+                       && strstr(url.psz_option, "version=3") != NULL;
+    char *normalized = NULL;
+
+    if (root && !force_v3)
+    {
+        free(url.psz_path);
+        url.psz_path = strdup("//");
+        if (url.psz_path != NULL)
+            normalized = vlc_uri_compose(&url);
+    }
+
+    vlc_UrlClean(&url);
+    return normalized;
+}
+#endif
 
 static int
 Open(vlc_object_t *p_obj)
@@ -638,14 +720,28 @@ Open(vlc_object_t *p_obj)
 
     p_sys->b_auto_guid = var_InheritBool(p_obj, "nfs-auto-guid");
 
+    const char *psz_input_url = p_access->psz_url;
+    char *psz_browse_url = NULL;
+#ifdef _WIN32
+    psz_browse_url = NfsWindowsBrowseUrl(psz_input_url);
+    if (psz_browse_url != NULL)
+        psz_input_url = psz_browse_url;
+#endif
+
     /* nfs_* functions need a decoded url */
-    p_sys->psz_url_decoded = vlc_uri_decode_duplicate(p_access->psz_url);
+    p_sys->psz_url_decoded = vlc_uri_decode_duplicate(psz_input_url);
     if (p_sys->psz_url_decoded == NULL)
+    {
+        free(psz_browse_url);
         goto error;
+    }
 
     /* Parse the encoded URL */
-    if (vlc_UrlParseFixup(&p_sys->encoded_url, p_access->psz_url) != 0)
+    if (vlc_UrlParseFixup(&p_sys->encoded_url, psz_input_url) != 0)
+    {
+        free(psz_browse_url);
         goto error;
+    }
     if (p_sys->encoded_url.psz_option)
     {
         if (strstr(p_sys->encoded_url.psz_option, "uid")
@@ -654,7 +750,11 @@ Open(vlc_object_t *p_obj)
     }
 
     if (NfsInit(p_access, p_sys->psz_url_decoded) == -1)
+    {
+        free(psz_browse_url);
         goto error;
+    }
+    free(psz_browse_url);
 
     if (p_sys->p_nfs_url->path != NULL && p_sys->p_nfs_url->file != NULL)
     {

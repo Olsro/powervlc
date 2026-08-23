@@ -28,6 +28,8 @@
 #import "VLCSidebarDataSource.h"
 
 #import <vlc_services_discovery.h>
+#import <vlc_input_item.h>
+#import <vlc_playlist.h>
 
 #import "PXSourceList/PXSourceList.h"
 #import "PXSourceList/PXSourceListDataSource.h"
@@ -43,11 +45,20 @@
 @interface VLCSidebarDataSource() <PXSourceListDataSource, PXSourceListDelegate>
 {
     NSMutableArray *o_sidebaritems;
+    NSMutableArray *_networkItems;
 }
 
 @end
 
 @implementation VLCSidebarDataSource
+
+- (id)init
+{
+    self = [super init];
+    if (self)
+        _networkItems = [[NSMutableArray alloc] init];
+    return self;
+}
 
 - (void)reloadSidebar
 {
@@ -125,6 +136,7 @@
         free(*ppsz_name);
         free(*ppsz_longname);
     }
+    [mycompItems addObjectsFromArray:_networkItems];
     [mycompItem setChildren: [NSArray arrayWithArray: mycompItems]];
     [devicesItem setChildren: [NSArray arrayWithArray: devicesItems]];
     [lanItem setChildren: [NSArray arrayWithArray: lanItems]];
@@ -156,6 +168,88 @@
     if (isAReload) {
         [_sidebarView expandItem:nil expandChildren:YES];
     }
+}
+
+- (BOOL)addNetworkLocation:(NSString *)mrl
+{
+    for (VLCSourceListItem *item in _networkItems) {
+        if ([item.networkMRL isEqualToString:mrl]) {
+            [self reloadSidebar];
+            [_sidebarView expandItem:nil expandChildren:YES];
+            NSInteger row = [_sidebarView rowForItem:item];
+            if (row >= 0)
+                [_sidebarView selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row]
+                          byExtendingSelection:NO];
+            return YES;
+        }
+    }
+
+    NSURL *url = [NSURL URLWithString:mrl];
+    NSString *title = [url host];
+    NSString *pathName = [[url path] lastPathComponent];
+    if ([pathName length] > 0)
+        title = [NSString stringWithFormat:@"%@ — %@", title, pathName];
+    if (![title length])
+        title = mrl;
+
+    input_item_t *input = input_item_NewDirectory([mrl UTF8String],
+                                                   [title UTF8String], ITEM_NET);
+    if (!input)
+        return NO;
+
+    playlist_t *p_playlist = pl_Get(getIntf());
+    PL_LOCK;
+    playlist_item_t *playlistItem = playlist_NodeAddInput(p_playlist, input,
+                                                           &p_playlist->root,
+                                                           PLAYLIST_END);
+    NSInteger itemId = playlistItem ? playlistItem->i_id : -1;
+    if (playlistItem)
+        libvlc_MetadataRequest(getIntf()->obj.libvlc, input,
+                               META_REQUEST_OPTION_SCOPE_ANY |
+                               META_REQUEST_OPTION_DO_INTERACT, 120000,
+                               playlistItem);
+    PL_UNLOCK;
+    input_item_Release(input);
+    if (itemId < 0)
+        return NO;
+
+    VLCSourceListItem *sidebarItem = [VLCSourceListItem
+        itemWithTitle:title identifier:[NSString stringWithFormat:@"network-%ld",
+                                        (long)itemId]];
+    sidebarItem.icon = sidebarImageFromRes(@"sidebar-local", NO);
+    sidebarItem.playlistItemId = itemId;
+    sidebarItem.networkMRL = mrl;
+    [_networkItems addObject:sidebarItem];
+
+    [self reloadSidebar];
+    [_sidebarView expandItem:nil expandChildren:YES];
+    NSInteger row = [_sidebarView rowForItem:sidebarItem];
+    if (row >= 0)
+        [_sidebarView selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row]
+                  byExtendingSelection:NO];
+    [[_sidebarView window] makeKeyAndOrderFront:nil];
+    return YES;
+}
+
+- (IBAction)ejectNetworkLocation:(id)sender
+{
+    VLCSourceListItem *item = [sender representedObject];
+    if (![item isKindOfClass:[VLCSourceListItem class]] || item.playlistItemId < 0)
+        return;
+
+    playlist_t *p_playlist = pl_Get(getIntf());
+    PL_LOCK;
+    [[[[VLCMain sharedInstance] playlist] model] changeRootItem:p_playlist->p_playing];
+    playlist_item_t *playlistItem = playlist_ItemGetById(p_playlist,
+                                                          (int)item.playlistItemId);
+    if (playlistItem)
+        playlist_NodeDelete(p_playlist, playlistItem);
+    PL_UNLOCK;
+
+    [_networkItems removeObjectIdenticalTo:item];
+    [self reloadSidebar];
+    [_sidebarView selectRowIndexes:[NSIndexSet indexSetWithIndex:1]
+              byExtendingSelection:NO];
 }
 
 #pragma mark -
@@ -200,6 +294,16 @@
 {
     if ([theEvent type] == NSRightMouseDown || ([theEvent type] == NSLeftMouseDown && ([theEvent modifierFlags] & NSControlKeyMask) == NSControlKeyMask)) {
         if (item != nil) {
+            if ([item playlistItemId] >= 0)
+            {
+                NSMenu *m = [[NSMenu alloc] init];
+                NSMenuItem *eject = [m addItemWithTitle:_NS("Eject")
+                                                  action:@selector(ejectNetworkLocation:)
+                                           keyEquivalent:@""];
+                [eject setTarget:self];
+                [eject setRepresentedObject:item];
+                return m;
+            }
             if ([item sdtype] > 0)
             {
                 NSMenu *m = [[NSMenu alloc] init];

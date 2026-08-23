@@ -28,6 +28,8 @@ NS_ASSUME_NONNULL_BEGIN
 @interface VLCSourceListItem : PXSourceListItem
 
 @property NSInteger sdtype;
+@property NSInteger playlistItemId;
+@property (readwrite, copy, nullable) NSString *networkMRL;
 
 @end
 

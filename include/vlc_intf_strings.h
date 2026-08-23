@@ -29,6 +29,10 @@
  * This file defines a number of strings used in user interfaces
  */
 
+/* PowerVLC project links shared by every graphical interface. */
+#define POWERVLC_RELEASES_URL \
+    "https://github.com/Olsro/powervlc/releases/latest"
+
 /* A helper macro that will expand to either of the arguments
    depanding on platform. The arguments are supposed to be:
    1. dir: a string containing "directory"

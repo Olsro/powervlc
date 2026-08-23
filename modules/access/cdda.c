@@ -759,9 +759,14 @@ static int ReadDir(stream_t *access, input_item_node_t *node)
 
         const char *title = NULL;
         const char *artist = NULL;
+        const char *album_artist = NULL;
         const char *album = NULL;
         const char *genre = NULL;
         const char *description = NULL;
+        const char *author = NULL;
+        const char *composer = NULL;
+        const char *arranger = NULL;
+        const char *isrc = NULL;
         int year = 0;
 
 #ifdef HAVE_LIBCDDB
@@ -794,8 +799,14 @@ static int ReadDir(stream_t *access, input_item_node_t *node)
         {
             ON_EMPTY(title,       vlc_meta_Get(m, vlc_meta_Title));
             ON_EMPTY(artist,      vlc_meta_Get(m, vlc_meta_Artist));
+            ON_EMPTY(album_artist,vlc_meta_Get(m, vlc_meta_AlbumArtist));
+            ON_EMPTY(album,       vlc_meta_Get(m, vlc_meta_Album));
             ON_EMPTY(genre,       vlc_meta_Get(m, vlc_meta_Genre));
             ON_EMPTY(description, vlc_meta_Get(m, vlc_meta_Description));
+            author =   vlc_meta_GetExtra(m, "AUTHOR");
+            composer = vlc_meta_GetExtra(m, "COMPOSER");
+            arranger = vlc_meta_GetExtra(m, "ARRANGER");
+            isrc =     vlc_meta_GetExtra(m, "ISRC");
         }
 
         if(sys->mbrecord && sys->mbrecord->i_release)
@@ -838,6 +849,9 @@ static int ReadDir(stream_t *access, input_item_node_t *node)
         if (NONEMPTY(artist))
             input_item_SetArtist(item, artist);
 
+        if (NONEMPTY(album_artist))
+            input_item_SetAlbumArtist(item, album_artist);
+
         if (NONEMPTY(genre))
             input_item_SetGenre(item, genre);
 
@@ -846,6 +860,15 @@ static int ReadDir(stream_t *access, input_item_node_t *node)
 
         if (NONEMPTY(album))
             input_item_SetAlbum(item, album);
+
+        if (NONEMPTY(author))
+            vlc_meta_AddExtra(item->p_meta, "AUTHOR", author);
+        if (NONEMPTY(composer))
+            vlc_meta_AddExtra(item->p_meta, "COMPOSER", composer);
+        if (NONEMPTY(arranger))
+            vlc_meta_AddExtra(item->p_meta, "ARRANGER", arranger);
+        if (NONEMPTY(isrc))
+            vlc_meta_AddExtra(item->p_meta, "ISRC", isrc);
 
         if (year != 0)
         {

@@ -1160,6 +1160,25 @@ void MainInterface::createPlaylist()
     connect( dialog, &PlaylistDialog::visibilityChanged, this, &MainInterface::setPlaylistVisibility );
 }
 
+bool MainInterface::addNetworkLocation( const QString& mrl )
+{
+    PlaylistDialog *dialog = PlaylistDialog::getInstance( p_intf );
+    bool added;
+    if( b_plDocked )
+    {
+        if( !playlistWidget ) createPlaylist();
+        added = playlistWidget && playlistWidget->addNetworkLocation( mrl );
+        if( added && stackCentralW->currentWidget() != playlistWidget )
+            showTab( playlistWidget );
+    }
+    else
+    {
+        added = dialog->addNetworkLocation( mrl );
+        if( added ) dialog->show();
+    }
+    return added;
+}
+
 void MainInterface::togglePlaylist()
 {
     if( !playlistWidget ) createPlaylist();

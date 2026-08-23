@@ -117,6 +117,7 @@
 #define VLC_CODEC_CDG             VLC_FOURCC('C','D','G',' ')
 #define VLC_CODEC_FRWU            VLC_FOURCC('F','R','W','U')
 #define VLC_CODEC_AMV             VLC_FOURCC('A','M','V',' ')
+#define VLC_CODEC_VP4             VLC_FOURCC('V','P','4','0')
 #define VLC_CODEC_VP7             VLC_FOURCC('V','P','7','0')
 #define VLC_CODEC_VP8             VLC_FOURCC('V','P','8','0')
 #define VLC_CODEC_VP9             VLC_FOURCC('V','P','9','0')
@@ -186,6 +187,8 @@
 #define VLC_CODEC_CINEFORM        VLC_FOURCC('C','F','H','D')
 #define VLC_CODEC_SPEEDHQ         VLC_FOURCC('S','H','Q','2')
 #define VLC_CODEC_PIXLET          VLC_FOURCC('p','x','l','t')
+#define VLC_CODEC_IMM4            VLC_FOURCC('I','M','M','4')
+#define VLC_CODEC_AGM             VLC_FOURCC('A','G','M','0')
 #define VLC_CODEC_APV             VLC_FOURCC('a','p','v','1')
 
 /***********
@@ -408,6 +411,7 @@
 #define VLC_CODEC_BPG             VLC_FOURCC('B','P','G',0xFB)
 #define VLC_CODEC_JPEGLS          VLC_FOURCC('M','J','L','S')
 #define VLC_CODEC_BMP             VLC_FOURCC('b','m','p',' ')
+#define VLC_CODEC_FARBFELD        VLC_FOURCC('f','a','r','b')
 #define VLC_CODEC_TIFF            VLC_FOURCC('t','i','f','f')
 #define VLC_CODEC_GIF             VLC_FOURCC('g','i','f',' ')
 #define VLC_CODEC_TARGA           VLC_FOURCC('t','g','a',' ')
@@ -437,6 +441,7 @@
 #define VLC_CODEC_TRUEHD                     VLC_FOURCC('t','r','h','d')
 #define VLC_CODEC_DVAUDIO                    VLC_FOURCC('d','v','a','u')
 #define VLC_CODEC_SPEEX                      VLC_FOURCC('s','p','x',' ')
+#define VLC_CODEC_CODEC2                     VLC_FOURCC('C','0','D','E')
 #define VLC_CODEC_OPUS                       VLC_FOURCC('O','p','u','s')
 #define VLC_CODEC_VORBIS                     VLC_FOURCC('v','o','r','b')
 #define VLC_CODEC_MACE3                      VLC_FOURCC('M','A','C','3')
@@ -477,6 +482,7 @@
 #define VLC_CODEC_ALAC                       VLC_FOURCC('a','l','a','c')
 #define VLC_CODEC_QDM2                       VLC_FOURCC('Q','D','M','2')
 #define VLC_CODEC_QDMC                       VLC_FOURCC('Q','D','M','C')
+#define VLC_CODEC_QOA                        VLC_FOURCC('q','o','a','f')
 #define VLC_CODEC_COOK                       VLC_FOURCC('c','o','o','k')
 #define VLC_CODEC_SIPR                       VLC_FOURCC('s','i','p','r')
 #define VLC_CODEC_TTA                        VLC_FOURCC('T','T','A','1')
@@ -543,6 +549,7 @@
 #define VLC_CODEC_ADPCM_IMA_EA_SEAD          VLC_FOURCC('S','E','A','D')
 #define VLC_CODEC_ADPCM_EA_R1                VLC_FOURCC('E','A','R','1')
 #define VLC_CODEC_ADPCM_IMA_APC              VLC_FOURCC('A','I','P','C')
+#define VLC_CODEC_DFPWM                      VLC_FOURCC('D','F','P','W')
 
 /* Subtitle */
 #define VLC_CODEC_SPU       VLC_FOURCC('s','p','u',' ')
@@ -710,4 +717,3 @@ typedef struct {
 VLC_API const vlc_chroma_description_t * vlc_fourcc_GetChromaDescription( vlc_fourcc_t fourcc ) VLC_USED;
 
 #endif /* _VLC_FOURCC_H */
-

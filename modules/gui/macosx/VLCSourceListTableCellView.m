@@ -37,4 +37,25 @@
     }
 }
 
+- (void)layout
+{
+    [super layout];
+
+    /* PXSourceList adjusts row indentation after Auto Layout has positioned
+     * the prototype cell.  On dynamically-added network rows this can leave
+     * the label at the icon's origin, most visibly with an IP address.  Keep
+     * a deterministic gap even after the source-list indentation pass. */
+    if (self.imageView.image && self.textField) {
+        NSRect imageFrame = self.imageView.frame;
+        NSRect textFrame = self.textField.frame;
+        CGFloat minimumTextX = NSMaxX(imageFrame) + 7.0;
+        if (NSMinX(textFrame) < minimumTextX) {
+            CGFloat rightEdge = NSMaxX(textFrame);
+            textFrame.origin.x = minimumTextX;
+            textFrame.size.width = MAX(0.0, rightEdge - minimumTextX);
+            self.textField.frame = textFrame;
+        }
+    }
+}
+
 @end

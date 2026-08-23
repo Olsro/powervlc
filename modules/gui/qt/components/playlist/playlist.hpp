@@ -57,6 +57,7 @@ public:
     void forceHide();
     void forceShow();
     void setSearchFieldFocus();
+    bool addNetworkLocation( const QString& mrl );
     QStackedWidget *artContainer;
     StandardPLPanel      *mainView;
 

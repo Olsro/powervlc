@@ -535,6 +535,8 @@
 
         if ([diskType isEqualToString: kVLCMediaDVD])
             uri = [NSString stringWithFormat: @"dvdnav://%@", [[VLCStringUtility sharedInstance] getBSDNodeFromMountPath: path]];
+        else if ([diskType isEqualToString: kVLCMediaAudioDVD])
+            uri = [NSString stringWithFormat: @"dvda://%@", [[VLCStringUtility sharedInstance] getBSDNodeFromMountPath: path]];
         else if ([diskType isEqualToString: kVLCMediaVideoTSFolder])
             uri = [NSString stringWithFormat: @"dvdnav://%@", path];
         else if ([diskType isEqualToString: kVLCMediaAudioCD])
@@ -562,9 +564,16 @@
             input_item_AddOption(p_input, [[optionsArray objectAtIndex:i] UTF8String], VLC_INPUT_OPTION_TRUSTED);
     }
 
-    /* Recent documents menu */
-    if (url != nil && var_InheritBool(getIntf(), "macosx-recentitems"))
-        [[NSDocumentController sharedDocumentController] noteNewRecentDocumentURL:url];
+    /* Keep local files and streams in two distinct recent menus. Use the
+     * possibly rewritten URI (optical media can start as a file URL). */
+    if (var_InheritBool(getIntf(), "macosx-recentitems")) {
+        NSURL *recentURL = [NSURL URLWithString:uri];
+        if ([recentURL isFileURL])
+            [[NSDocumentController sharedDocumentController]
+                noteNewRecentDocumentURL:recentURL];
+        else if (recentURL != nil)
+            VLCNoteRecentStream(uri);
+    }
 
     return p_input;
 }

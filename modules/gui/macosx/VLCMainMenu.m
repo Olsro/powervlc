@@ -29,6 +29,7 @@
 #import <vlc_input.h>
 #import <vlc_intf_strings.h>
 #import <vlc_modules.h>
+#import <vlc_url.h>
 
 #import "VLCAboutWindowController.h"
 #import "VLCOpenWindowController.h"
@@ -47,19 +48,18 @@
 #import "VLCCoreDialogProvider.h"
 #import "VLCCoreInteraction.h"
 #import "VLCMainWindow.h"
+#import "VLCSidebarDataSource.h"
 #import "VLCMainWindowControlsBar.h"
+#import "VLCDocumentController.h"
 #import "VLCExtensionsManager.h"
 #import "VLCConvertAndSaveWindowController.h"
+#import "VLCConnectToServerDialog.h"
 #import "VLCLogWindowController.h"
 #import "VLCAddonsWindowController.h"
 #import "VLCTimeSelectionPanelController.h"
 #import "NSScreen+VLCAdditions.h"
 #import "VLCRendererMenuController.h"
 #import "VLCCustomCropArWindowController.h"
-
-#ifdef HAVE_SPARKLE
-#import <Sparkle/Sparkle.h>
-#endif
 
 @interface VLCMainMenu() <NSMenuDelegate>
 {
@@ -70,6 +70,10 @@
     NSTimer *_cancelRendererDiscoveryTimer;
 
     NSMenu *_playlistTableColumnsContextMenu;
+
+    NSMenuItem *_recentStreamsMenuItem;
+    NSMenu *_recentStreamsMenu;
+    NSMenuItem *_connectToServerMenuItem;
 
     /* Blu-ray Pop-Up Menu, built in -awakeFromNib rather than carried by
      * MainMenu.xib. Two items, one per menu: an NSMenuItem cannot live in two
@@ -91,7 +95,59 @@
 
     __strong VLCTimeSelectionPanelController *_timeSelectionPanel;
 }
+
+- (void)rebuildRecentStreamsMenu;
+- (void)openRecentStream:(id)sender;
+- (void)clearRecentStreams:(id)sender;
+- (void)openPowerVLCReleases:(id)sender;
 @end
+
+#define VLC_RECENT_STREAMS_KEY @"VLCRecentStreams"
+#define VLC_RECENT_STREAMS_MAX 30
+
+static BOOL VLCVariableMenuShowsCurrentChoice(const char *name, int type)
+{
+    /* Most command variables describe one-shot actions. Crop and aspect ratio
+     * are commands only so their changes propagate immediately to the vout;
+     * they still represent persistent selections in their menus. */
+    return !(type & VLC_VAR_ISCOMMAND)
+        || !strcmp(name, "crop")
+        || !strcmp(name, "aspect-ratio");
+}
+
+static NSString *VLCMRLWithoutPassword(NSString *mrl)
+{
+    vlc_url_t url;
+    if (vlc_UrlParseFixup(&url, [mrl UTF8String]) != 0)
+        return mrl;
+    /* Components returned by vlc_UrlParseFixup() point into psz_buffer.
+     * Hiding the password only requires omitting that component while
+     * composing the display URI; vlc_UrlClean() owns and frees the buffer. */
+    url.psz_password = NULL;
+    char *composed = vlc_uri_compose(&url);
+    vlc_UrlClean(&url);
+    if (!composed)
+        return mrl;
+    NSString *result = [NSString stringWithUTF8String:composed];
+    free(composed);
+    return result ?: mrl;
+}
+
+void VLCNoteRecentStream(NSString *mrl)
+{
+    if (![mrl length])
+        return;
+
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSArray *stored = [defaults stringArrayForKey:VLC_RECENT_STREAMS_KEY];
+    NSMutableArray *streams = stored
+        ? [NSMutableArray arrayWithArray:stored] : [NSMutableArray array];
+    [streams removeObject:mrl];
+    [streams insertObject:mrl atIndex:0];
+    while ([streams count] > VLC_RECENT_STREAMS_MAX)
+        [streams removeLastObject];
+    [defaults setObject:streams forKey:VLC_RECENT_STREAMS_KEY];
+}
 
 @implementation VLCMainMenu
 
@@ -120,12 +176,9 @@
 
     [self setRateControlsEnabled:NO];
 
-#ifdef HAVE_SPARKLE
-    [_checkForUpdate setAction:@selector(checkForUpdates:)];
-    [_checkForUpdate setTarget:[SUUpdater sharedUpdater]];
-#else
-    [_checkForUpdate setEnabled:NO];
-#endif
+    [_checkForUpdate setAction:@selector(openPowerVLCReleases:)];
+    [_checkForUpdate setTarget:self];
+    [_checkForUpdate setEnabled:YES];
 
     NSString* keyString;
     vlc_value_t val;
@@ -136,6 +189,39 @@
     intf_thread_t *p_intf = getIntf();
 
     [self initStrings];
+
+    [(VLCDocumentController *)[NSDocumentController sharedDocumentController]
+        migrateRecentStreamsFromDocumentHistory];
+
+    NSMenu *openMenu = [_open_capture menu];
+    if (openMenu) {
+        _connectToServerMenuItem = [[NSMenuItem alloc]
+            initWithTitle:_NS("Connect to Server...")
+                   action:@selector(connectToServer:)
+            keyEquivalent:@"k"];
+        [_connectToServerMenuItem setTarget:self];
+        [openMenu insertItem:_connectToServerMenuItem
+                     atIndex:[openMenu indexOfItem:_open_capture] + 1];
+    }
+
+    /* AppKit owns the local-file history. Streams need a distinct list: a
+     * network MRL in NSDocumentController is presented as if it were a file
+     * and cannot be opened reliably by the recent-documents machinery. */
+    NSMenu *fileMenu = [_open_recent menu];
+    if (fileMenu) {
+        _recentStreamsMenu = [[NSMenu alloc]
+            initWithTitle:_NS("Open Recent Stream")];
+        [_recentStreamsMenu setDelegate:self];
+        [_recentStreamsMenu setAutoenablesItems:NO];
+        _recentStreamsMenuItem = [[NSMenuItem alloc]
+            initWithTitle:_NS("Open Recent Stream")
+                   action:nil
+            keyEquivalent:@""];
+        [_recentStreamsMenuItem setSubmenu:_recentStreamsMenu];
+        [fileMenu insertItem:_recentStreamsMenuItem
+                     atIndex:[fileMenu indexOfItem:_open_recent] + 1];
+        [self rebuildRecentStreamsMenu];
+    }
 
     /* Blu-ray pop-up menu, at the end of the Playback menu right below
      * Chapter, and in the video contextual menu -- the only menu within reach
@@ -520,7 +606,18 @@
         NSMenuItem *menuItem = [_subtitle_sizeMenu addItemWithTitle: _NS(scaleValues[i].name) action:@selector(switchSubtitleSize:) keyEquivalent:@""];
         [menuItem setTag:scaleValues[i].scaleValue];
         [menuItem setTarget: self];
+        [menuItem setState:
+            var_GetInteger(p_playlist, "sub-text-scale") == scaleValues[i].scaleValue
+                ? NSOnState : NSOffState];
     }
+}
+
+- (void)openPowerVLCReleases:(id)sender
+{
+    (void)sender;
+    [[NSWorkspace sharedWorkspace]
+        openURL:[NSURL URLWithString:
+            [NSString stringWithUTF8String:POWERVLC_RELEASES_URL]]];
 }
 
 - (void)setupMenu: (NSMenu*)menu withIntList: (char *)psz_name andSelector:(SEL)selector
@@ -580,7 +677,8 @@
     [_open_disc setTitle: _NS("Open Disc...")];
     [_open_net setTitle: _NS("Open Network...")];
     [_open_capture setTitle: _NS("Open Capture Device...")];
-    [_open_recent setTitle: _NS("Open Recent")];
+    [_open_recent setTitle: _NS("Open Recent File")];
+    [[_open_recent submenu] setTitle:_NS("Open Recent File")];
     [_close_window setTitle: _NS("Close Window")];
     [_convertandsave setTitle: _NS("Convert / Stream...")];
     [_save_playlist setTitle: _NS("Save Playlist...")];
@@ -1340,6 +1438,9 @@
 {
     int intValue = [sender tag];
     var_SetInteger(pl_Get(getIntf()), "sub-text-scale", intValue);
+
+    for (NSMenuItem *item in [[sender menu] itemArray])
+        [item setState:item == sender ? NSOnState : NSOffState];
 }
 
 
@@ -2022,6 +2123,9 @@
     /* make (un)sensitive */
     [parent setEnabled: (val_list.p_list->i_count > 1)];
 
+    BOOL markCurrentChoice =
+        VLCVariableMenuShowsCurrentChoice(psz_variable, i_type);
+
     for (i = 0; i < val_list.p_list->i_count; i++) {
         NSMenuItem *lmi;
         NSString *title = @"";
@@ -2038,7 +2142,9 @@
                 [lmi setRepresentedObject:data];
                 [lmi setTarget: self];
 
-                if (!strcmp(val.psz_string, val_list.p_list->p_values[i].psz_string) && !(i_type & VLC_VAR_ISCOMMAND))
+                if (markCurrentChoice
+                 && !strcmp(val.psz_string,
+                            val_list.p_list->p_values[i].psz_string))
                     [lmi setState: TRUE ];
 
                 break;
@@ -2054,7 +2160,8 @@
                 [lmi setRepresentedObject:data];
                 [lmi setTarget: self];
 
-                if (val_list.p_list->p_values[i].i_int == val.i_int && !(i_type & VLC_VAR_ISCOMMAND))
+                if (markCurrentChoice
+                 && val_list.p_list->p_values[i].i_int == val.i_int)
                     [lmi setState: TRUE ];
                 break;
 
@@ -2072,6 +2179,24 @@
 {
     NSMenuItem *mi = (NSMenuItem *)sender;
     VLCAutoGeneratedMenuContent *data = [mi representedObject];
+
+    /* Rebuilding from the core value keeps every menu correct when it opens,
+     * but the value is applied on a detached thread. Reflect a stateful choice
+     * immediately as well, so quality, tracks, crop, aspect ratio and the
+     * other selectors do not keep showing the previous check mark meanwhile. */
+    if (([data type] & VLC_VAR_HASCHOICE)
+     && VLCVariableMenuShowsCurrentChoice([data name], [data type])) {
+        for (NSMenuItem *item in [[mi menu] itemArray]) {
+            id siblingData = [item representedObject];
+            if (![siblingData isKindOfClass:[VLCAutoGeneratedMenuContent class]])
+                continue;
+            VLCAutoGeneratedMenuContent *siblingContent = siblingData;
+            if (!strcmp([siblingContent name], [data name]))
+                [item setState:NSOffState];
+        }
+        [mi setState:NSOnState];
+    }
+
     [NSThread detachNewThreadSelector: @selector(toggleVarThread:)
                              toTarget: self withObject: data];
 
@@ -2099,14 +2224,89 @@
 
 #pragma mark - menu delegation
 
+- (void)rebuildRecentStreamsMenu
+{
+    [_recentStreamsMenu removeAllItems];
+    NSArray *streams = [[NSUserDefaults standardUserDefaults]
+        stringArrayForKey:VLC_RECENT_STREAMS_KEY];
+
+    NSUInteger count = [streams count];
+    for (NSUInteger i = 0; i < count; i++) {
+        NSString *mrl = [streams objectAtIndex:i];
+        NSString *safeMRL = VLCMRLWithoutPassword(mrl);
+        char *decoded = vlc_uri_decode_duplicate([safeMRL UTF8String]);
+        NSString *title = decoded ? toNSStr(decoded) : safeMRL;
+        free(decoded);
+
+        NSMenuItem *item = [[NSMenuItem alloc]
+            initWithTitle:title
+                   action:@selector(openRecentStream:)
+            keyEquivalent:@""];
+        [item setTarget:self];
+        [item setRepresentedObject:mrl];
+        [item setToolTip:safeMRL];
+        [_recentStreamsMenu addItem:item];
+    }
+
+    if (count)
+        [_recentStreamsMenu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *clearItem = [[NSMenuItem alloc]
+        initWithTitle:_NS("Clear")
+               action:@selector(clearRecentStreams:)
+        keyEquivalent:@""];
+    [clearItem setTarget:self];
+    [clearItem setEnabled:count > 0];
+    [_recentStreamsMenu addItem:clearItem];
+    /* Keep the parent enabled so a stream opened after application startup
+     * is immediately visible without rebuilding the whole menu bar. */
+    [_recentStreamsMenuItem setEnabled:YES];
+}
+
+- (void)openRecentStream:(id)sender
+{
+    NSString *mrl = [sender representedObject];
+    if (![mrl length])
+        return;
+    NSArray *serverRecents = [[NSUserDefaults standardUserDefaults]
+        stringArrayForKey:VLCConnectToServerRecentsKey];
+    if ([serverRecents containsObject:mrl]) {
+        if ([[[[VLCMain sharedInstance] mainWindow] sidebarDataSource]
+                addNetworkLocation:mrl])
+            VLCNoteRecentStream(mrl);
+    } else if (playlist_Add(pl_Get(getIntf()), [mrl UTF8String], true)
+               == VLC_SUCCESS) {
+        VLCNoteRecentStream(mrl);
+    }
+}
+
+- (void)clearRecentStreams:(id)sender
+{
+    [[NSUserDefaults standardUserDefaults]
+        removeObjectForKey:VLC_RECENT_STREAMS_KEY];
+    [self rebuildRecentStreamsMenu];
+}
+
+- (void)connectToServer:(id)sender
+{
+    VLCConnectToServerDialog *dialog = [[VLCConnectToServerDialog alloc] init];
+    [dialog show];
+}
+
 - (void)menuWillOpen:(NSMenu *)menu
 {
+    if (menu == _recentStreamsMenu) {
+        [self rebuildRecentStreamsMenu];
+        return;
+    }
     [_cancelRendererDiscoveryTimer invalidate];
     [_rendererMenuController startRendererDiscoveries];
 }
 
 - (void)menuDidClose:(NSMenu *)menu
 {
+    if (menu == _recentStreamsMenu)
+        return;
     _cancelRendererDiscoveryTimer = [NSTimer scheduledTimerWithTimeInterval:20.
                                                                      target:self
                                                                    selector:@selector(cancelRendererDiscovery)
@@ -2223,6 +2423,11 @@
     } else if (mi == _discPopupMenuItem || mi == _voutDiscPopupMenuItem) {
         /* only the Blu-ray titles that carry a pop-up menu offer one */
         enabled = [[VLCCoreInteraction sharedInstance] hasDiscPopupMenu];
+    } else if ([mi action] == @selector(switchSubtitleSize:)) {
+        [mi setState:
+            var_GetInteger(p_playlist, "sub-text-scale") == [mi tag]
+                ? NSOnState : NSOffState];
+        enabled = _openSubtitleFile.isEnabled;
     } else {
         NSMenuItem *_parent = [mi parentItem];
         if (_parent == _subtitle_size || mi == _subtitle_size           ||

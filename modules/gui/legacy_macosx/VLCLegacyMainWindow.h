@@ -155,6 +155,7 @@ typedef float CGFloat;
     /* sidebar model: dictionaries {kind: header|playlist|ml|sd, title,
      * sd (module name), longname} */
     NSMutableArray *sidebarItems;
+    NSMutableArray *networkLocations;   /* dictionaries for live network roots */
     NSMutableSet *activatedServices;     /* sd names already added */
     int sidebarSelection;                /* selected row in sidebarItems */
     NSTimer *updateTimer;
@@ -231,6 +232,7 @@ typedef float CGFloat;
 - (void)shutdown;
 
 - (void)addPaths:(NSArray *)paths playFirst:(BOOL)play;
+- (BOOL)addNetworkLocation:(NSString *)mrl;
 
 /* time field behaviors (single click / double click, like VLCTimeField) */
 - (void)toggleTimeDisplay;
