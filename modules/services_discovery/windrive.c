@@ -28,6 +28,67 @@
 #include <vlc_services_discovery.h>
 #include <vlc_plugin.h>
 
+#include <windows.h>
+#include <winioctl.h>
+
+/* Keep this probe independent from the CDDA access module: service discovery
+ * only needs the control nibble from the standard READ TOC response. */
+#define DISC_MAX_TRACKS 100
+typedef struct
+{
+    UCHAR reserved;
+    UCHAR control_and_adr;
+    UCHAR track_number;
+    UCHAR reserved1;
+    UCHAR address[4];
+} disc_track_data_t;
+
+typedef struct
+{
+    UCHAR length[2];
+    UCHAR first_track;
+    UCHAR last_track;
+    disc_track_data_t tracks[DISC_MAX_TRACKS];
+} disc_toc_t;
+
+#ifndef IOCTL_CDROM_BASE
+# define IOCTL_CDROM_BASE FILE_DEVICE_CD_ROM
+#endif
+#ifndef IOCTL_CDROM_READ_TOC
+# define IOCTL_CDROM_READ_TOC CTL_CODE(IOCTL_CDROM_BASE, 0x0000, \
+                                       METHOD_BUFFERED, FILE_READ_ACCESS)
+#endif
+
+static bool IsAudioCD( char letter )
+{
+    char device[] = "\\\\.\\A:";
+    device[4] = letter;
+
+    HANDLE handle = CreateFileA( device, GENERIC_READ,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                                 OPEN_EXISTING, 0, NULL );
+    if( handle == INVALID_HANDLE_VALUE )
+        return false;
+
+    disc_toc_t toc;
+    DWORD read;
+    const BOOL ok = DeviceIoControl( handle, IOCTL_CDROM_READ_TOC, NULL, 0,
+                                     &toc, sizeof(toc), &read, NULL );
+    CloseHandle( handle );
+    if( !ok || read < offsetof(disc_toc_t, tracks) )
+        return false;
+
+    const unsigned tracks = toc.last_track - toc.first_track + 1;
+    if( tracks == 0 || tracks > DISC_MAX_TRACKS
+     || read < offsetof(disc_toc_t, tracks) + tracks * sizeof(toc.tracks[0]) )
+        return false;
+
+    for( unsigned i = 0; i < tracks; ++i )
+        if( (toc.tracks[i].control_and_adr & 0x04) == 0 )
+            return true;
+    return false;
+}
+
 static int Open (vlc_object_t *);
 
 VLC_SD_PROBE_HELPER("disc", N_("Discs"), SD_CAT_DEVICES)
@@ -75,7 +136,14 @@ static int Open (vlc_object_t *obj)
         if (GetDriveTypeA (path) != DRIVE_CDROM)
             continue;
 
-        mrl[8] = name[0] = letter;
+        name[0] = letter;
+        if( IsAudioCD( letter ) )
+            snprintf( mrl, sizeof(mrl), "cdda:///%c:", letter );
+        else
+        {
+            strcpy( mrl, "file:///A:/" );
+            mrl[8] = letter;
+        }
         item = input_item_NewDisc (mrl, name, -1);
         msg_Dbg (sd, "adding %s (%s)", mrl, name);
         if (item == NULL)

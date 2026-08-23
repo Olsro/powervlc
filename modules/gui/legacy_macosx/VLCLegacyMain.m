@@ -41,12 +41,19 @@
 #import "VLCLegacyAbout.h"
 #import "VLCLegacyExtensionsDialogProvider.h"
 
+#import <ApplicationServices/ApplicationServices.h>
+
 #include <vlc_dialog.h>
 #include <vlc_configuration.h>
 #include <vlc_playlist.h>
 #include <vlc_aout.h>
 
 #define _NS(s) ((NSString *)[NSString stringWithUTF8String:vlc_gettext(s)])
+
+enum {
+    VLCLegacyAppleScriptSuite = 'ascr',
+    VLCLegacyGetAETEEvent = 'gdte',
+};
 
 
 /*****************************************************************************
@@ -517,6 +524,37 @@ static const vlc_dialog_cbs dialog_callbacks = {
                afterDelay:0.5];
 
     msg_Dbg(p_intf, "setup: done");
+
+    /* Jaguar's Cocoa Scripting handler crashes in readableNameArray while
+     * generating an AETE.  It is registered lazily, so initialize it first
+     * and then remove only the broken dictionary event.  Basic application
+     * targeting such as "activate" still uses its built-in definition;
+     * Panther and later keep VLC's complete custom dictionary.  Use dynamic
+     * lookup because this Foundation class is private and the workaround is
+     * strictly 10.2-only. */
+    if (NSAppKitVersionNumber < NSAppKitVersionNumber10_3) {
+        id handlerClass = NSClassFromString(@"NSScriptingAppleEventHandler");
+        SEL sharedHandler =
+            NSSelectorFromString(@"sharedScriptingAppleEventHandler");
+        if ([handlerClass respondsToSelector:sharedHandler]) {
+            id scriptingHandler = [handlerClass performSelector:sharedHandler];
+            SEL registerHandlers = NSSelectorFromString(@"registerGlobalHandlers");
+            if ([scriptingHandler respondsToSelector:registerHandlers])
+                [scriptingHandler performSelector:registerHandlers];
+
+            [[NSAppleEventManager sharedAppleEventManager]
+                removeEventHandlerForEventClass:VLCLegacyAppleScriptSuite
+                                      andEventID:VLCLegacyGetAETEEvent];
+
+            AEEventHandlerUPP handler = NULL;
+            long refcon = 0;
+            if (AEGetEventHandler(VLCLegacyAppleScriptSuite,
+                                  VLCLegacyGetAETEEvent, &handler,
+                                  &refcon, false) == noErr && handler != NULL)
+                AERemoveEventHandler(VLCLegacyAppleScriptSuite,
+                                     VLCLegacyGetAETEEvent, handler, false);
+        }
+    }
 }
 
 - (void)promptForCrystalHDDriver

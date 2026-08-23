@@ -1,0 +1,15 @@
+--- a/lib/lowlevel.c
++++ b/lib/lowlevel.c
+@@ -496,12 +496,8 @@
+             break;
+         }
+ 
+         totalsize += buffer.size;
+ 
+-        if ((size_t)buffer.size < chunksize) {
+-            *eof = 1;
+-            break;
+-        }
+     }
+ 
+ done:

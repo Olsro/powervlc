@@ -8362,9 +8362,8 @@ msgstr ""
 "1.2.3."
 
 #: modules/access/webdav.c:105
-#, fuzzy
 msgid "WebDAV input"
-msgstr "Ingresso UDP"
+msgstr "Ingresso WebDAV"
 
 #: modules/access/idummy.c:41 modules/access_output/dummy.c:44
 #: modules/audio_output/adummy.c:36 modules/codec/ddummy.c:46
@@ -8822,9 +8821,8 @@ msgid "NFS operation failed"
 msgstr "Operazione NFS non riuscita"
 
 #: modules/access/afp.c:42
-#, fuzzy
 msgid "Apple Filing Protocol input"
-msgstr "Ingresso Real-Time Protocol (RTP)"
+msgstr "Ingresso Apple Filing Protocol"
 
 #: modules/access/afp.c:43
 msgid "Browse and play files on AFP servers with Netatalk Client"
@@ -8841,9 +8839,8 @@ msgstr ""
 "Inserisci un nome utente e una password validi per la connessione AFP a %s."
 
 #: modules/access/afp.c:362
-#, fuzzy
 msgid "AFP connection failed"
-msgstr "Connessione RTSP non riuscita"
+msgstr "Connessione AFP non riuscita"
 
 #: modules/access/afp.c:363
 msgid ""
@@ -18922,9 +18919,8 @@ msgstr "INTERNET"
 #: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4242
 #: modules/gui/macosx/VLCSidebarDataSource.m:299
 #: modules/gui/qt/components/playlist/selector.cpp:460
-#, fuzzy
 msgid "Eject"
-msgstr " Oggetto"
+msgstr "Espelli"
 
 #: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4345
 #: modules/gui/macosx/VLCMainWindow.m:421
@@ -19160,16 +19156,14 @@ msgstr "Connetti al server..."
 #: modules/gui/legacy_macosx/VLCLegacyMenu.m:500
 #: modules/gui/legacy_macosx/VLCLegacyMenu.m:504
 #: modules/gui/macosx/VLCMainMenu.m:680 modules/gui/macosx/VLCMainMenu.m:681
-#, fuzzy
 msgid "Open Recent File"
-msgstr "Apri recenti"
+msgstr "Apri file recente"
 
 #: modules/gui/legacy_macosx/VLCLegacyMenu.m:507
 #: modules/gui/legacy_macosx/VLCLegacyMenu.m:511
 #: modules/gui/macosx/VLCMainMenu.m:213 modules/gui/macosx/VLCMainMenu.m:217
-#, fuzzy
 msgid "Open Recent Stream"
-msgstr "Ap&ri media recenti"
+msgstr "Apri flusso recente"
 
 #: modules/gui/legacy_macosx/VLCLegacyMenu.m:514
 #: modules/gui/macosx/VLCMainMenu.m:682
@@ -19645,15 +19639,13 @@ msgstr "Connetti al server"
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:698
 #: modules/gui/macosx/VLCConnectToServerDialog.m:93
 #: modules/gui/qt/dialogs_provider.cpp:494
-#, fuzzy
 msgid "Enter a server address to browse."
-msgstr "Indirizzo IP del server principale"
+msgstr "Inserisci un indirizzo server da sfogliare."
 
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:712
 #: modules/gui/macosx/VLCConnectToServerDialog.m:83
-#, fuzzy
 msgid "Supported protocols: %@"
-msgstr "Protocollo di trasporto"
+msgstr "Protocolli supportati: %@"
 
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:721
 #: modules/gui/macosx/VLCConnectToServerDialog.m:94
@@ -23832,9 +23824,8 @@ msgid "Open Folder"
 msgstr "Apri cartella"
 
 #: modules/gui/qt/dialogs_provider.cpp:495
-#, fuzzy
 msgid "Supported protocols: %1"
-msgstr "Protocollo di trasporto"
+msgstr "Protocolli supportati: %1"
 
 #: modules/gui/qt/dialogs_provider.cpp:512
 msgid "Enter a valid server address using a supported protocol."
@@ -23955,14 +23946,12 @@ msgid "Open &Location from clipboard"
 msgstr "Apri posizione dag&li appunti"
 
 #: modules/gui/qt/menus.cpp:393
-#, fuzzy
 msgid "Open &Recent File"
-msgstr "Ap&ri media recenti"
+msgstr "Apri file &recente"
 
 #: modules/gui/qt/menus.cpp:394
-#, fuzzy
 msgid "Open Recent &Stream"
-msgstr "Ap&ri media recenti"
+msgstr "Apri &flusso recente"
 
 #: modules/gui/qt/menus.cpp:409
 msgid "Conve&rt / Save..."

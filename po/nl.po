@@ -8287,9 +8287,8 @@ msgstr ""
 "door een schuine streep, bijvoorbeeld \"FooBar/1.2.3\"."
 
 #: modules/access/webdav.c:105
-#, fuzzy
 msgid "WebDAV input"
-msgstr "UDP-invoer"
+msgstr "WebDAV-invoer"
 
 #: modules/access/idummy.c:41 modules/access_output/dummy.c:44
 #: modules/audio_output/adummy.c:36 modules/codec/ddummy.c:46
@@ -8743,9 +8742,8 @@ msgid "NFS operation failed"
 msgstr "NFS-bewerking mislukt"
 
 #: modules/access/afp.c:42
-#, fuzzy
 msgid "Apple Filing Protocol input"
-msgstr "Real-Time Protocol (RTP) invoer"
+msgstr "Apple Filing Protocol-invoer"
 
 #: modules/access/afp.c:43
 msgid "Browse and play files on AFP servers with Netatalk Client"
@@ -8763,9 +8761,8 @@ msgstr ""
 "verbinding met %s."
 
 #: modules/access/afp.c:362
-#, fuzzy
 msgid "AFP connection failed"
-msgstr "RTSP-verbinding mislukt"
+msgstr "AFP-verbinding mislukt"
 
 #: modules/access/afp.c:363
 msgid ""
@@ -18791,9 +18788,8 @@ msgstr "INTERNET"
 #: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4242
 #: modules/gui/macosx/VLCSidebarDataSource.m:299
 #: modules/gui/qt/components/playlist/selector.cpp:460
-#, fuzzy
 msgid "Eject"
-msgstr "Onderwerp"
+msgstr "Uitwerpen"
 
 #: modules/gui/legacy_macosx/VLCLegacyMainWindow.m:4345
 #: modules/gui/macosx/VLCMainWindow.m:421
@@ -19029,16 +19025,14 @@ msgstr "Verbinden met server..."
 #: modules/gui/legacy_macosx/VLCLegacyMenu.m:500
 #: modules/gui/legacy_macosx/VLCLegacyMenu.m:504
 #: modules/gui/macosx/VLCMainMenu.m:680 modules/gui/macosx/VLCMainMenu.m:681
-#, fuzzy
 msgid "Open Recent File"
-msgstr "Recente media openen"
+msgstr "Recent bestand openen"
 
 #: modules/gui/legacy_macosx/VLCLegacyMenu.m:507
 #: modules/gui/legacy_macosx/VLCLegacyMenu.m:511
 #: modules/gui/macosx/VLCMainMenu.m:213 modules/gui/macosx/VLCMainMenu.m:217
-#, fuzzy
 msgid "Open Recent Stream"
-msgstr "Recente media openen"
+msgstr "Recente stream openen"
 
 #: modules/gui/legacy_macosx/VLCLegacyMenu.m:514
 #: modules/gui/macosx/VLCMainMenu.m:682
@@ -19515,15 +19509,13 @@ msgstr "Verbinden met server"
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:698
 #: modules/gui/macosx/VLCConnectToServerDialog.m:93
 #: modules/gui/qt/dialogs_provider.cpp:494
-#, fuzzy
 msgid "Enter a server address to browse."
-msgstr "IP-adres van master-server"
+msgstr "Voer een serveradres in om te verkennen."
 
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:712
 #: modules/gui/macosx/VLCConnectToServerDialog.m:83
-#, fuzzy
 msgid "Supported protocols: %@"
-msgstr "Transportprotocol"
+msgstr "Ondersteunde protocollen: %@"
 
 #: modules/gui/legacy_macosx/VLCLegacyOpen.m:721
 #: modules/gui/macosx/VLCConnectToServerDialog.m:94
@@ -23680,9 +23672,8 @@ msgid "Open Folder"
 msgstr "Map openen"
 
 #: modules/gui/qt/dialogs_provider.cpp:495
-#, fuzzy
 msgid "Supported protocols: %1"
-msgstr "Transportprotocol"
+msgstr "Ondersteunde protocollen: %1"
 
 #: modules/gui/qt/dialogs_provider.cpp:512
 msgid "Enter a valid server address using a supported protocol."
@@ -23803,14 +23794,12 @@ msgid "Open &Location from clipboard"
 msgstr "Locatie van klembord openen"
 
 #: modules/gui/qt/menus.cpp:393
-#, fuzzy
 msgid "Open &Recent File"
-msgstr "Recente media openen"
+msgstr "Recent &bestand openen"
 
 #: modules/gui/qt/menus.cpp:394
-#, fuzzy
 msgid "Open Recent &Stream"
-msgstr "Recente media openen"
+msgstr "Recente &stream openen"
 
 #: modules/gui/qt/menus.cpp:409
 msgid "Conve&rt / Save..."

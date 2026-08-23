@@ -21,6 +21,7 @@ AFPCLIENT_PATCHES := \
 	$(SRC)/afpclient/0003-signal-loop-startup.patch \
 	$(SRC)/afpclient/0004-jaguar-compat.patch \
 	$(SRC)/afpclient/0005-meson-045-compat.patch \
+	$(SRC)/afpclient/0006-short-reads-are-not-eof.patch \
 	$(SRC)/afpclient/win32_compat.h
 
 $(TARBALLS)/netatalk-client-$(AFPCLIENT_VERSION).tar.gz:
@@ -36,6 +37,7 @@ afpclient: netatalk-client-$(AFPCLIENT_VERSION).tar.gz .sum-afpclient \
 	$(APPLY) $(SRC)/afpclient/0003-signal-loop-startup.patch
 	$(APPLY) $(SRC)/afpclient/0004-jaguar-compat.patch
 	$(APPLY) $(SRC)/afpclient/0005-meson-045-compat.patch
+	$(APPLY) $(SRC)/afpclient/0006-short-reads-are-not-eof.patch
 	cp $(SRC)/afpclient/win32_compat.h $(UNPACK_DIR)/include/
 	$(MOVE)
 

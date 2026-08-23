@@ -84,7 +84,7 @@ class PLSelItem : public QWidget
 {
     Q_OBJECT
 public:
-    PLSelItem( QTreeWidgetItem*, const QString& );
+    PLSelItem( QTreeWidgetItem*, const QString&, bool category = false );
 
     void setText( const QString& text ) { lbl->setText( text ); }
     QString text() const { return lbl->text(); }

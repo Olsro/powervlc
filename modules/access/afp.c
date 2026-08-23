@@ -15,6 +15,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdint.h>
@@ -443,6 +444,8 @@ static int Open(vlc_object_t *obj)
             goto error;
         }
         sys->size = st.st_size;
+        msg_Dbg(access, "opened AFP file '%s' with size=%" PRIu64,
+                path, sys->size);
         access->pf_read = AFPRead;
         access->pf_seek = AFPSeek;
         access->pf_control = AFPControl;

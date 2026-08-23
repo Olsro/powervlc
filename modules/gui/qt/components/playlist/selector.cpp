@@ -86,7 +86,7 @@ void SelectorActionButton::paintEvent( QPaintEvent *event )
     QFramelessButton::paintEvent( event );
 }
 
-PLSelItem::PLSelItem ( QTreeWidgetItem *i, const QString& text )
+PLSelItem::PLSelItem ( QTreeWidgetItem *i, const QString& text, bool category )
     : qitem(i), lblAction( NULL), lblIcon( NULL )
 {
     layout = new QHBoxLayout( this );
@@ -96,8 +96,13 @@ PLSelItem::PLSelItem ( QTreeWidgetItem *i, const QString& text )
     lbl = new QElidingLabel( text );
     layout->addWidget(lbl, 1);
 
-    int height = qMax( 22, fontMetrics().height() + 8 );
+    /* Index widgets do not automatically contribute their minimum height to
+     * QTreeWidget rows with every native style (notably Windows XP).  Keep
+     * the item hint in sync, and give category headings a little breathing
+     * room from the final child in the preceding section. */
+    int height = qMax( category ? 28 : 22, fontMetrics().height() + 8 );
     setMinimumHeight( height );
+    qitem->setSizeHint( 0, QSize( 0, height ) );
 }
 
 void PLSelItem::setIcon( const QIcon& icon, const QSize& size )
@@ -111,6 +116,10 @@ void PLSelItem::setIcon( const QIcon& icon, const QSize& size )
 
     lblIcon->setFixedSize( size );
     lblIcon->setPixmap( icon.pixmap( size ) );
+
+    const int height = qMax( minimumHeight(), size.height() + 4 );
+    setMinimumHeight( height );
+    qitem->setSizeHint( 0, QSize( 0, height ) );
 }
 
 void PLSelItem::addAction( ItemAction act, const QString& tooltip )
@@ -615,7 +624,8 @@ PLSelItem * PLSelector::addItem (
   QTreeWidgetItem *item = parentItem ?
       new QTreeWidgetItem( parentItem ) : new QTreeWidgetItem( this );
 
-  PLSelItem *selItem = new PLSelItem( item, qtr( str ) );
+  PLSelItem *selItem = new PLSelItem( item, qtr( str ),
+                                      type == CATEGORY_TYPE );
 
 
   if ( bold ) {

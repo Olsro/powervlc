@@ -82,7 +82,7 @@
 					<key>ReadOnly</key>
 					<string>NO</string>
 					<key>Type</key>
-					<string>NSNumber&lt;float&gt;</string>
+					<string>NSNumber</string>
 				</dict>
 				<key>playbackShowsMenu</key>
 				<dict>

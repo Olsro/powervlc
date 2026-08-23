@@ -57,6 +57,10 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   libsmb2 event masks used by both XP and Windows 7+ Winsock toolchains,
   avoids MD4/MD5 symbol collisions during NTLM authentication, and retries
   rejected explicit Guest sessions anonymously.
+- Restore NFS browsing and playback on Windows, including XP, by translating
+  libnfs' legacy poll masks at the library boundary. Windows now defaults to
+  NFSv4 and normalizes a bare server address to its browsable v4 root, while
+  still honoring an explicit `?version=3` request for v3-only servers.
 - Add `data:` URI and Gopher inputs, plus on-the-fly Zstandard decompression
   through `zstdcat` where it is installed.
 - Add a Twitch extension to discover and play live channels, videos and clips.
@@ -70,12 +74,23 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   set after a connection closes on Windows.
 - Fix a 32-bit Windows CD table-of-contents allocation that could corrupt the
   heap and crash PowerVLC as soon as an audio CD was opened, notably on XP.
+- Make optical drives in the Qt sidebar identify audio CDs as `cdda:` sources
+  on Windows, listing real tracks instead of the shell's placeholder `.cda`
+  files while leaving data discs on the normal filesystem path.
+- Fix AFP 64-bit network byte order on Windows and stop treating short network
+  reads as end-of-file, which made remote audio tracks stop after roughly one
+  second and skip through the playlist.
+- Give Qt sidebar rows their actual widget height on older Windows styles and
+  restore visual spacing between network locations and the next section.
 - Fix a Darwin CD table-of-contents buffer over-read which could abort the
   application while optical drives were enumerated, notably in arm64 builds.
 - Avoid linking macOS 10.10/10.12-only POSIX file APIs into binaries whose
   deployment target is Snow Leopard or older when building with a current SDK.
 - Keep the G3 post-processing plug-in on its scalar PowerPC path, preventing an
   accidental AltiVec CPU subtype from making the plug-in unloadable on G3 Macs.
+- Avoid Jaguar's broken AETE generator when AppleScript addresses PowerVLC,
+  allowing basic application targeting such as `activate` without a crash;
+  Panther and later retain the complete custom scripting dictionary.
 - Regenerate and rerun the macOS configure step for every architecture build,
   preventing stale cache values and core version strings from surviving a
   nominally clean release rebuild.
@@ -92,9 +107,9 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
 - Regenerate the AppImage plug-in cache after the final ELF/RUNPATH changes and
   invoke AppImageTool directly for the final packing pass, preventing every
   plug-in from being reported stale on first launch.
-- Refresh all 105 translation catalogs and provide the new interface strings
-  in the maintained French, English, German, Spanish, Italian, Portuguese,
-  Dutch, Polish and Russian translations.
+- Refresh all 105 translation catalogs and provide the new networking and
+  recent-menu interface strings in the maintained French, English, German,
+  Spanish, Italian, Portuguese, Dutch, Polish and Russian translations.
 
 ## 1.3.2 (2026-08-22)
 

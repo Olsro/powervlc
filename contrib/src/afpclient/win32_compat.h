@@ -16,8 +16,22 @@
 #include <string.h>
 #include <sys/types.h>
 
+/* MinGW does not expose the BSD endian macros used by utils.h.  Leaving
+ * these undefined makes `BYTE_ORDER == BIG_ENDIAN` evaluate as `0 == 0`,
+ * silently disabling every 64-bit host/network conversion. */
+#ifndef LITTLE_ENDIAN
+# define LITTLE_ENDIAN 1234
+#endif
+#ifndef BIG_ENDIAN
+# define BIG_ENDIAN 4321
+#endif
+#ifndef BYTE_ORDER
+# define BYTE_ORDER LITTLE_ENDIAN
+#endif
+
 typedef unsigned int uid_t;
 typedef unsigned int gid_t;
+typedef uint64_t u_int64_t;
 
 #ifndef O_SYNC
 # define O_SYNC 0
