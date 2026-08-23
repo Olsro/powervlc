@@ -35,6 +35,7 @@
 #import <IOKit/storage/IOBDMedia.h>
 
 NSString *const kVLCMediaAudioCD = @"AudioCD";
+NSString *const kVLCMediaAudioDVD = @"AudioDVD";
 NSString *const kVLCMediaDVD = @"DVD";
 NSString *const kVLCMediaVCD = @"VCD";
 NSString *const kVLCMediaSVCD = @"SVCD";
@@ -42,6 +43,24 @@ NSString *const kVLCMediaBD = @"Blu-ray";
 NSString *const kVLCMediaVideoTSFolder = @"VIDEO_TS";
 NSString *const kVLCMediaBDMVFolder = @"BDMV";
 NSString *const kVLCMediaUnknown = @"Unknown";
+
+static BOOL mountContainsDVDAudio(NSString *mountPath)
+{
+    NSFileManager *fileManager = [[NSFileManager alloc] init];
+    NSString *audioTS = [mountPath stringByAppendingPathComponent:@"AUDIO_TS"];
+    NSArray *entries = [fileManager contentsOfDirectoryAtPath:audioTS error:nil];
+    BOOL found = NO;
+
+    for (NSString *entry in entries) {
+        NSString *extension = [entry pathExtension];
+        if ([extension caseInsensitiveCompare:@"aob"] == NSOrderedSame ||
+            [extension caseInsensitiveCompare:@"ifo"] == NSOrderedSame) {
+            found = YES;
+            break;
+        }
+    }
+    return found;
+}
 
 #import <vlc_actions.h>
 #import <vlc_strings.h>
@@ -458,7 +477,8 @@ NSString *toNSStr(const char *str) {
         if (IOObjectConformsTo(service, kIOCDMediaClass))
             returnValue = kVLCMediaAudioCD;
         else if (IOObjectConformsTo(service, kIODVDMediaClass))
-            returnValue = kVLCMediaDVD;
+            returnValue = mountContainsDVDAudio(mountPath)
+                        ? kVLCMediaAudioDVD : kVLCMediaDVD;
         else if (IOObjectConformsTo(service, kIOBDMediaClass))
             returnValue = kVLCMediaBD;
         IOObjectRelease(service);

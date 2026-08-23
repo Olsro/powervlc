@@ -41,6 +41,7 @@ libmacosx_plugin_la_SOURCES = \
 	gui/macosx/CompatibilityFixes.h gui/macosx/CompatibilityFixes.m \
 	gui/macosx/VLCControlsBarCommon.m gui/macosx/VLCControlsBarCommon.h \
 	gui/macosx/VLCDocumentController.m gui/macosx/VLCDocumentController.h \
+	gui/macosx/VLCConnectToServerDialog.m gui/macosx/VLCConnectToServerDialog.h \
 	gui/macosx/VLCMainWindowControlsBar.m gui/macosx/VLCMainWindowControlsBar.h \
 	gui/macosx/VLCConvertAndSaveWindowController.h gui/macosx/VLCConvertAndSaveWindowController.m \
 	gui/macosx/VLCCoreInteraction.h gui/macosx/VLCCoreInteraction.m \

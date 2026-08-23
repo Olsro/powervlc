@@ -508,7 +508,9 @@ fi
 # xcodebuild only allows to set a build-in sdk, not a custom one. Therefore use the default included SDK here
 export XCODE_FLAGS="MACOSX_DEPLOYMENT_TARGET=$MINIMAL_OSX_VERSION -sdk macosx WARNING_CFLAGS=-Werror=partial-availability"
 
-CONTRIBFLAGS=
+# VLC 3 keeps libsmb2 opt-in. PowerVLC exposes SMB in Connect to Server, so
+# ensure every packaged architecture has the corresponding client library.
+CONTRIBFLAGS="--enable-smb2"
 if [ "$PACKAGETYPE" = "u" ]; then
     # release package should have sparkle, breakpad, growl
     CONTRIBFLAGS="$CONTRIBFLAGS --enable-sparkle --enable-breakpad --enable-growl"
@@ -639,6 +641,27 @@ make .bdplus
 info "Making sure the DVD contribs are current"
 make .dvdnav
 
+# Keep the native AFP client current as well.  In particular, the PowerPC
+# builds carry a select()-based fallback because pselect() is declared by the
+# 10.4 SDK but is absent from Jaguar's libSystem.  The VLC module links the
+# client statically, so Automake cannot see that libafpclient.a changed through
+# the pkg-config -l flag; remove only its link product when the archive is
+# newer so the normal VLC make below relinks it.
+make .afpclient
+AFPCLIENT_ARCHIVE="${vlcroot}/contrib/${HOST_TRIPLET}${LEGACY_CONTRIB_SUFFIX}/lib/libafpclient.a"
+if [ -n "$VLCBUILDDIR" ]; then
+    case "$VLCBUILDDIR" in
+        /*) AFPCLIENT_VLC_BUILD="$VLCBUILDDIR" ;;
+        *)  AFPCLIENT_VLC_BUILD="${vlcroot}/${VLCBUILDDIR}" ;;
+    esac
+    AFPCLIENT_PLUGIN="$AFPCLIENT_VLC_BUILD/modules/.libs/libafp_plugin.dylib"
+    if [ -f "$AFPCLIENT_ARCHIVE" ] && [ -f "$AFPCLIENT_PLUGIN" ] &&
+       [ "$AFPCLIENT_ARCHIVE" -nt "$AFPCLIENT_PLUGIN" ]; then
+        rm -f "$AFPCLIENT_VLC_BUILD/modules/libafp_plugin.la" \
+              "$AFPCLIENT_VLC_BUILD/modules/.libs/libafp_plugin.dylib"
+    fi
+fi
+
 # libcrystalhd for the same reason, and with a sharper failure mode than the
 # rest. Its patches do not merely build the library: they define the ioctl
 # layout it uses to talk to the BroadcomCrystalHD kext, which is installed
@@ -679,6 +702,41 @@ make .ass
 # contrib/<triple>/lib/pkgconfig/{libav*,libswscale,libpostproc}.pc.
 # A no-op (one stat) once the stamp is current.
 make .ffmpeg
+
+# libpostproc is maintained as a separate contrib in this branch. Its own
+# configure script enables AltiVec whenever the compiler merely accepts the
+# flag, even when the G3 target is explicitly -mcpu=750. Older G3 prefixes can
+# therefore contain a ppc7400 archive that dyld rejects outright on Panther
+# and Jaguar. Rebuild those prefixes once with the scalar rule above, remember
+# the migration, and relink the static consumer when its archive changes.
+POSTPROC_PREFIX="${vlcroot}/contrib/${HOST_TRIPLET}${LEGACY_CONTRIB_SUFFIX}"
+POSTPROC_BUILD="${vlcroot}/contrib/contrib-${HOST_TRIPLET}${LEGACY_CONTRIB_SUFFIX}"
+if [ "$ARCH" = "ppc" ] &&
+   [ ! -f "$POSTPROC_PREFIX/.powervlc-postproc-g3-scalar" ]; then
+    info "Rebuilding scalar libpostproc for the G3"
+    rm -f "$POSTPROC_BUILD/.postproc"
+    rm -rf "$POSTPROC_BUILD/postproc"
+    find "$POSTPROC_PREFIX/lib/pkgconfig" -maxdepth 1 \
+         -name 'libpostproc*.pc' -delete 2>/dev/null || true
+    make .postproc
+    touch "$POSTPROC_PREFIX/.powervlc-postproc-g3-scalar"
+else
+    make .postproc
+fi
+
+POSTPROC_ARCHIVE="$POSTPROC_PREFIX/lib/libpostproc.a"
+if [ -n "$VLCBUILDDIR" ]; then
+    case "$VLCBUILDDIR" in
+        /*) POSTPROC_VLC_BUILD="$VLCBUILDDIR" ;;
+        *)  POSTPROC_VLC_BUILD="${vlcroot}/${VLCBUILDDIR}" ;;
+    esac
+    POSTPROC_PLUGIN="$POSTPROC_VLC_BUILD/modules/.libs/libpostproc_plugin.dylib"
+    if [ -f "$POSTPROC_ARCHIVE" ] && [ -f "$POSTPROC_PLUGIN" ] &&
+       [ "$POSTPROC_ARCHIVE" -nt "$POSTPROC_PLUGIN" ]; then
+        rm -f "$POSTPROC_VLC_BUILD/modules/libpostproc_plugin.la" \
+              "$POSTPROC_PLUGIN"
+    fi
+fi
 
 # Record the deployment target this prefix was built for (see the guard above).
 mkdir -p "${vlcroot}/contrib/${HOST_TRIPLET}${LEGACY_CONTRIB_SUFFIX}"
@@ -774,7 +832,9 @@ fi
 
 info "Bootstrap-ing configure"
 spushd "${vlcroot}"
-if ! [ -e "${vlcroot}/configure" ]; then
+if ! [ -e "${vlcroot}/configure" ] \
+   || [ "${vlcroot}/configure.ac" -nt "${vlcroot}/configure" ] \
+   || [ "${vlcroot}/aclocal.m4" -nt "${vlcroot}/configure" ]; then
     ${vlcroot}/bootstrap > $out
 fi
 spopd
@@ -788,7 +848,7 @@ fi
 # vlc/configure
 #
 
-CONFIGFLAGS=""
+CONFIGFLAGS="--enable-smb2"
 
 # VLC's configure turns AltiVec on for every host_cpu matching powerpc*, which
 # is wrong for the G3 (750): it has no vector unit, and this target is built
@@ -827,21 +887,23 @@ else
     CONFIGFLAGS="$CONFIGFLAGS --disable-sparkle"
 fi
 
-if [ "${vlcroot}/configure" -nt Makefile ]; then
-
-  WITH_CONTRIB_FLAG=""
-  if [ -n "$LEGACY_CONTRIB_SUFFIX" ]; then
-      WITH_CONTRIB_FLAG="--with-contrib=${vlcroot}/contrib/${HOST_TRIPLET}${LEGACY_CONTRIB_SUFFIX}"
-  fi
-  ${vlcroot}/extras/package/macosx/configure.sh \
-      --build=$BUILD_TRIPLET \
-      --host=$HOST_TRIPLET \
-      --with-macosx-version-min=$MINIMAL_OSX_VERSION \
-      --with-macosx-sdk=$SDKROOT \
-      $WITH_CONTRIB_FLAG \
-      $CONFIGFLAGS \
-      $VLC_CONFIGURE_ARGS > $out
+WITH_CONTRIB_FLAG=""
+if [ -n "$LEGACY_CONTRIB_SUFFIX" ]; then
+    WITH_CONTRIB_FLAG="--with-contrib=${vlcroot}/contrib/${HOST_TRIPLET}${LEGACY_CONTRIB_SUFFIX}"
 fi
+# Reconfigure on every invocation.  config.status --recheck restores the cache
+# variables captured by the original configure run, which can silently defeat
+# the deployment-target overrides above (and retain an old product version)
+# even after a full `make clean`.  Configure is cheap compared with the build
+# and is the only reliable boundary between architecture release artifacts.
+${vlcroot}/extras/package/macosx/configure.sh \
+    --build=$BUILD_TRIPLET \
+    --host=$HOST_TRIPLET \
+    --with-macosx-version-min=$MINIMAL_OSX_VERSION \
+    --with-macosx-sdk=$SDKROOT \
+    $WITH_CONTRIB_FLAG \
+    $CONFIGFLAGS \
+    $VLC_CONFIGURE_ARGS > $out
 
 # Mac OS X 10.2 cannot load an Objective-C plugin that is a dylib. VLC's
 # plugins are MH_DYLIB here because libtool's Darwin module_cmds link them

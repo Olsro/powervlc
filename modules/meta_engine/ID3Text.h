@@ -35,8 +35,25 @@ static const char * ID3TextConv( const uint8_t *p_buf, size_t i_buf,
                 psz = p_alloc = FromCharset( "ISO_8859-1", p_buf, i_buf );
                 break;
             case 0x01:
-                psz = p_alloc = FromCharset( "UTF-16LE", p_buf, i_buf );
+            {
+                const char *psz_charset = "UTF-16LE";
+                if( i_buf >= 2 )
+                {
+                    if( p_buf[0] == 0xff && p_buf[1] == 0xfe )
+                    {
+                        p_buf += 2;
+                        i_buf -= 2;
+                    }
+                    else if( p_buf[0] == 0xfe && p_buf[1] == 0xff )
+                    {
+                        psz_charset = "UTF-16BE";
+                        p_buf += 2;
+                        i_buf -= 2;
+                    }
+                }
+                psz = p_alloc = FromCharset( psz_charset, p_buf, i_buf );
                 break;
+            }
             case 0x02:
                 psz = p_alloc = FromCharset( "UTF-16BE", p_buf, i_buf );
                 break;

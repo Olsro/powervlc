@@ -76,6 +76,7 @@ static const struct
     { ".ogv",   "video/ogg" },
     { ".ogx",   "application/ogg" },
     { ".opus",  "audio/ogg; codecs=opus" },
+    { ".qoa",   "audio/qoa" },
     { ".spx",   "audio/ogg" },
     { ".wav",   "audio/wav" },
     { ".wma",   "audio/x-ms-wma" },
@@ -106,4 +107,3 @@ const char *vlc_mime_Ext2Mime( const char *psz_url )
     }
     return "application/octet-stream";
 }
-

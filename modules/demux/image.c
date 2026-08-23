@@ -649,6 +649,10 @@ static const image_format_t formats[] = {
     { .codec = VLC_CODEC_WEBP,
       .detect = IsWebP,
     },
+    { .codec = VLC_CODEC_FARBFELD,
+      .marker_size = 8,
+      .marker = { 'f', 'a', 'r', 'b', 'f', 'e', 'l', 'd' },
+    },
     { .codec = VLC_CODEC_BPG,
       .marker_size = 4,
       .marker = { 'B', 'P', 'G', 0xFB },
@@ -661,6 +665,25 @@ static const image_format_t formats[] = {
     },
     { .codec = 0 }
 };
+
+static int ParseFarbfeldHeader(demux_t *demux, es_format_t *fmt)
+{
+    const uint8_t *peek;
+    if (vlc_stream_Peek(demux->s, &peek, 16) < 16)
+        return VLC_EGENERIC;
+
+    uint32_t width = GetDWBE(peek + 8);
+    uint32_t height = GetDWBE(peek + 12);
+    if (width == 0 || height == 0)
+        return VLC_EGENERIC;
+
+    fmt->video.i_width = width;
+    fmt->video.i_height = height;
+    fmt->video.i_chroma = fmt->i_codec = VLC_CODEC_RGBA64;
+
+    return vlc_stream_Read(demux->s, NULL, 16) == 16
+         ? VLC_SUCCESS : VLC_EGENERIC;
+}
 
 static int Open(vlc_object_t *object)
 {
@@ -705,6 +728,13 @@ static int Open(vlc_object_t *object)
     es_format_t fmt;
     es_format_Init(&fmt, VIDEO_ES, img->codec);
     fmt.video.i_chroma = fmt.i_codec;
+
+    if (img->codec == VLC_CODEC_FARBFELD &&
+        ParseFarbfeldHeader(demux, &fmt) != VLC_SUCCESS)
+    {
+        es_format_Clean(&fmt);
+        return VLC_EGENERIC;
+    }
 
     block_t *data = Load(demux);
     if (data && var_InheritBool(demux, "image-decode")) {

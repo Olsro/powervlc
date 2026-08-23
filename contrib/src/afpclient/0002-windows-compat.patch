@@ -1,0 +1,673 @@
+--- a/include/afp.h
++++ b/include/afp.h
+@@ -2,15 +2,36 @@
+ #ifndef _AFP_H_
+ #define _AFP_H_
+
++#ifdef _WIN32
++#include "win32_compat.h"
++#else
+ #include <arpa/inet.h>
+-#include <pthread.h>
+ #include <netdb.h>
+ #include <sys/statvfs.h>
+ #include <pwd.h>
+-#include <sys/types.h>
+-#include <sys/stat.h>
+ #include <unistd.h>
+ #include <netinet/in.h>
++#endif
++#ifdef HAVE_LIBBSD
++#include <bsd/string.h>
++#endif
++#include <pthread.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#ifdef __APPLE__
++#include <AvailabilityMacros.h>
++#include <string.h>
++/* strnlen() was added after the Tiger SDK.  Keep the client library usable
++ * by PowerVLC's 10.2/10.4 PowerPC and i386 slices. */
++static inline size_t afpclient_strnlen(const char *text, size_t maximum)
++{
++    const char *end = memchr(text, '\0', maximum);
++    return end != NULL ? (size_t)(end - text) : maximum;
++}
++#ifndef strnlen
++#define strnlen afpclient_strnlen
++#endif
++#endif
+
+ #include "afp_protocol.h"
+ #include "afp_xattr.h"
+--- a/include/afp_protocol.h
++++ b/include/afp_protocol.h
+@@ -4,7 +4,9 @@
+
+ #include <sys/types.h>
+ #include <stddef.h>
++#ifndef _WIN32
+ #include <unistd.h>
++#endif
+ #include <stdint.h>
+
+ /* This file defines constants for the Apple Filing Protocol.
+--- a/include/libafpclient.h
++++ b/include/libafpclient.h
+@@ -2,9 +2,13 @@
+ #ifndef __CLIENT_H_
+ #define __CLIENT_H_
+
++#ifdef _WIN32
++#include "win32_compat.h"
++#else
+ #include <unistd.h>
+ #include <syslog.h>
+ #include <sys/select.h>
++#endif
+
+ #ifdef AFPCLIENT_INTERNAL
+ #include <stdarg.h>
+--- a/include/midlevel.h
++++ b/include/midlevel.h
+@@ -1,7 +1,11 @@
+ #ifndef __MIDLEVEL_H_
+ #define __MIDLEVEL_H_
+
++#ifdef _WIN32
++#include "win32_compat.h"
++#else
+ #include <sys/time.h>
++#endif
+ #include <sys/types.h>
+ #include <stdint.h>
+ #include <utime.h>
+--- a/include/meson.build
++++ b/include/meson.build
+@@ -1,4 +1,5 @@
+ public_headers = files(
++    'win32_compat.h',
+     'afp.h',
+     'afp_ipc.h',
+     'afp_protocol.h',
+--- a/lib/afp.c
++++ b/lib/afp.c
+@@ -11,11 +11,16 @@
+ #include "config.h"
+ #endif
+
++#ifdef _WIN32
++#include "win32_compat.h"
++#define close afp_socket_close
++#else
+ #include <sys/socket.h>
+ #include <sys/time.h>
+ #include <sys/types.h>
+ #include <netinet/in.h>
+ #include <netinet/tcp.h>
++#endif
+
+ #include <errno.h>
+ #include <fcntl.h>
+@@ -153,6 +158,65 @@
+ static int connect_with_timeout(int fd, const struct sockaddr *addr,
+                                 socklen_t addrlen, int timeout)
+ {
++#ifdef _WIN32
++    u_long nonblocking = 1;
++    int ret;
++    int error = 0;
++    int error_len = sizeof(error);
++    fd_set writefds;
++    struct timeval tv;
++
++    if (ioctlsocket((SOCKET)fd, FIONBIO, &nonblocking) != 0)
++        return connect(fd, addr, addrlen);
++
++    ret = connect(fd, addr, addrlen);
++    if (ret == SOCKET_ERROR) {
++        afp_set_wsa_errno();
++        if (errno != EINPROGRESS && errno != EAGAIN)
++            goto error;
++    }
++
++    if (ret != 0) {
++        FD_ZERO(&writefds);
++        FD_SET((SOCKET)fd, &writefds);
++        tv.tv_sec = timeout;
++        tv.tv_usec = 0;
++        ret = select(0, NULL, &writefds, NULL, &tv);
++        if (ret == SOCKET_ERROR) {
++            afp_set_wsa_errno();
++            goto error;
++        }
++        if (ret == 0) {
++            errno = ETIMEDOUT;
++            goto error;
++        }
++        if (getsockopt((SOCKET)fd, SOL_SOCKET, SO_ERROR,
++                       (char *)&error, &error_len) != 0) {
++            afp_set_wsa_errno();
++            goto error;
++        }
++        if (error != 0) {
++            errno = afp_wsa_errno(error);
++            goto error;
++        }
++    }
++
++    nonblocking = 0;
++    if (ioctlsocket((SOCKET)fd, FIONBIO, &nonblocking) != 0) {
++        afp_set_wsa_errno();
++        return -1;
++    }
++    return 0;
++
++error:
++    {
++        int saved_errno = errno;
++        nonblocking = 0;
++        ioctlsocket((SOCKET)fd, FIONBIO, &nonblocking);
++        errno = saved_errno;
++        return -1;
++    }
++#else
+     int flags;
+     int ret;
+     int error = 0;
+@@ -218,6 +282,7 @@
+     }
+
+     return 0;
++#endif
+ }
+
+ /* Handle a reply packet */
+@@ -624,7 +689,9 @@
+ struct afp_server *afp_server_init(struct addrinfo * address)
+ {
+     struct afp_server * s;
++#ifndef _WIN32
+     struct passwd *pw;
++#endif
+
+     if ((s = malloc(sizeof(*s))) == NULL) {
+         return NULL;
+@@ -655,8 +722,15 @@
+     s->replay_cache_size = 0;
+     s->supports_replay_cache = 0;
+     /* FIXME this shouldn't be set here */
++#ifdef _WIN32
++    s->passwd.pw_name = "windows";
++    s->passwd.pw_uid = 0;
++    s->passwd.pw_gid = 0;
++#else
+     pw = getpwuid(geteuid());
+-    memcpy(&s->passwd, pw, sizeof(struct passwd));
++    if (pw != NULL)
++        memcpy(&s->passwd, pw, sizeof(struct passwd));
++#endif
+     return s;
+ }
+
+@@ -1061,7 +1135,12 @@
+                 int nodelay = 1;
+
+                 if (setsockopt(server->fd, IPPROTO_TCP, TCP_NODELAY,
+-                               &nodelay, sizeof(nodelay)) < 0) {
++#ifdef _WIN32
++                               (const char *)&nodelay,
++#else
++                               &nodelay,
++#endif
++                               sizeof(nodelay)) < 0) {
+                     log_for_client(NULL, AFPFSD, LOG_WARNING,
+                                    "Could not set TCP_NODELAY on fd=%d: %s",
+                                    server->fd, strerror(errno));
+--- a/lib/connect.c
++++ b/lib/connect.c
+@@ -6,9 +6,13 @@
+  *
+  */
+
++#ifdef _WIN32
++#include "win32_compat.h"
++#else
+ #include <sys/socket.h>
+-#include <errno.h>
+ #include <netdb.h>
++#endif
++#include <errno.h>
+ #include <signal.h>
+ #include <string.h>
+
+--- a/lib/dsi.c
++++ b/lib/dsi.c
+@@ -7,7 +7,13 @@
+  */
+
+ #include <sys/stat.h>
++#ifdef _WIN32
++#include "win32_compat.h"
++#define read afp_socket_read
++#define write afp_socket_write
++#else
+ #include <sys/time.h>
++#endif
+ #include <sys/types.h>
+
+ #include <errno.h>
+--- a/lib/loop.c
++++ b/lib/loop.c
+@@ -14,15 +14,22 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <time.h>
++#ifdef _WIN32
++#include "win32_compat.h"
++#define close afp_socket_close
++#else
+ #include <unistd.h>
+ #include <sys/time.h>
++#endif
+
+ #include "afp.h"
+ #include "compat.h"
+ #include "dsi.h"
+ #include "utils.h"
+
++#ifndef _WIN32
+ #define SIGNAL_TO_USE SIGUSR2
++#endif
+ /* Define DEBUG_AFP_LOOP explicitly for verbose pselect/event-loop tracing. */
+
+ static unsigned char exit_program = 0;
+@@ -52,7 +59,9 @@
+         break;
+     }
+
++#ifndef _WIN32
+     signal(SIGNAL_TO_USE, termination_handler);
++#endif
+ }
+
+ #define max(a,b) (((a)>(b)) ? (a) : (b))
+@@ -77,8 +86,22 @@ static void rm_fd(int fd)
+-    for (i = max_fd; i >= 0; i--)
+-        if (FD_ISSET(i, &rds)) {
+-            max_fd = i;
+-            break;
+-        }
+-
+-    max_fd++;
++#ifdef _WIN32
++    /* max_fd is the select() nfds value, one past the highest descriptor.
++     * Reset it to zero when the set becomes empty.  Leaving the old value
++     * makes Winsock select() reject the empty fd_sets with WSAEINVAL and the
++     * event thread spin indefinitely. */
++    for (i = max_fd - 1; i >= 0; i--)
++        if (FD_ISSET(i, &rds)) {
++            max_fd = i + 1;
++            return;
++        }
++
++    max_fd = 0;
++#else
++    for (i = max_fd; i >= 0; i--)
++        if (FD_ISSET(i, &rds)) {
++            max_fd = i;
++            break;
++        }
++
++    max_fd++;
++#endif
+ }
+@@ -93,7 +116,15 @@
+             continue;
+         }
+
++#ifdef _WIN32
++        int socket_type;
++        int socket_type_len = sizeof(socket_type);
++        if (getsockopt((SOCKET)fd, SOL_SOCKET, SO_TYPE,
++                       (char *)&socket_type, &socket_type_len) != 0 &&
++            WSAGetLastError() == WSAENOTSOCK) {
++#else
+         if (fcntl(fd, F_GETFD) == -1 && errno == EBADF) {
++#endif
+             log_for_client(NULL, AFPFSD, LOG_WARNING,
+                            "afp_main_loop -- removing invalid fd %d from poll set",
+                            fd);
+@@ -107,6 +124,9 @@
+
+ void signal_main_thread(void)
+ {
++#ifdef _WIN32
++    return;
++#else
+     /* Don't signal if we're already in the main thread - we're already awake! */
+     if (main_thread && pthread_equal(pthread_self(), main_thread)) {
+ #ifdef DEBUG_AFP_LOOP
+@@ -130,6 +150,7 @@
+         (void) ret;
+ #endif
+     }
++#endif
+ }
+
+ static int ending = 0;
+@@ -266,11 +287,10 @@
+
+ void afp_wait_for_started_loop(void)
+ {
+-    if (loop_started) {
+-        return;
+-    }
+-
+-    pthread_cond_wait(&loop_started_condition, &loop_started_mutex);
++    pthread_mutex_lock(&loop_started_mutex);
++    while (!loop_started)
++        pthread_cond_wait(&loop_started_condition, &loop_started_mutex);
++    pthread_mutex_unlock(&loop_started_mutex);
+ }
+
+ static void *afp_main_quick_startup_thread(void * other _U_)
+@@ -282,6 +302,10 @@
+
+ int afp_main_quick_startup(pthread_t * thread)
+ {
++#ifdef _WIN32
++    if (afp_socket_startup() != 0)
++        return -1;
++#endif
+     pthread_t loop_thread;
+     pthread_create(&loop_thread, NULL, afp_main_quick_startup_thread, NULL);
+
+@@ -296,10 +320,19 @@
+ int afp_main_loop(int command_fd)
+ {
+     fd_set ords, oeds;
++#ifdef _WIN32
++    struct timeval tv;
++#else
+     struct timespec tv;
++#endif
+     int ret;
+     int fderrors = 0;
++#ifdef _WIN32
++    time_t last_tickle = 0;
++#endif
++#ifndef _WIN32
+     sigset_t sigmask, orig_sigmask;
++#endif
+     main_thread = pthread_self();
+     FD_ZERO(&rds);
+
+@@ -307,12 +340,14 @@
+         add_fd(command_fd);
+     }
+
++#ifndef _WIN32
+     sigemptyset(&sigmask);
+     sigaddset(&sigmask, SIGNAL_TO_USE);
+     sigprocmask(SIG_BLOCK, &sigmask, &orig_sigmask);
+     signal(SIGNAL_TO_USE, termination_handler);
+     signal(SIGTERM, termination_handler);
+     signal(SIGINT, termination_handler);
++#endif
+ #ifdef DEBUG_AFP_LOOP
+     log_for_client(NULL, AFPFSD, LOG_DEBUG,
+                    "afp_main_loop -- Starting main loop (command_fd=%d, max_fd=%d, loop_started=%d)",
+@@ -348,11 +383,20 @@
+         oeds = rds;
+
+         if (loop_started) {
++#ifdef _WIN32
++            tv.tv_sec = 0;
++            tv.tv_usec = 100000;
++#else
+             tv.tv_sec = 30;
+             tv.tv_nsec = 0;
++#endif
+         } else {
+             tv.tv_sec = 0;
++#ifdef _WIN32
++            tv.tv_usec = 0;
++#else
+             tv.tv_nsec = 0;
++#endif
+         }
+
+ #ifdef DEBUG_AFP_LOOP
+@@ -391,7 +435,43 @@
+ #endif
+         /* pselect atomically unblocks signals (using orig_sigmask) only while waiting.
+          * Do NOT unblock signals before pselect - that creates a race window! */
++#ifdef _WIN32
++        if (max_fd == 0) {
++            Sleep((DWORD)(tv.tv_sec * 1000 + tv.tv_usec / 1000));
++            ret = 0;
++        } else {
++            ret = select(0, &ords, NULL, &oeds, &tv);
++            if (ret == SOCKET_ERROR) {
++                afp_set_wsa_errno();
++                ret = -1;
++            }
++        }
++#else
++#if defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED < 1040
++        /* pselect() is declared by the 10.4 SDK used for PowerVLC's legacy
++         * builds, but the symbol does not exist on Jaguar.  Approximate it
++         * with select() while preserving the caller's signal mask.  There is
++         * an unavoidable signal race between sigprocmask() and select(), but
++         * the short wake-up signal is only an optimisation: the loop also
++         * observes exit_program and the regular timeout. */
++        struct timeval legacy_tv;
++        sigset_t blocked_mask;
++        int saved_errno;
++
++        legacy_tv.tv_sec = tv.tv_sec;
++        legacy_tv.tv_usec = tv.tv_nsec / 1000;
++        if (sigprocmask(SIG_SETMASK, &orig_sigmask, &blocked_mask) < 0) {
++            ret = -1;
++        } else {
++            ret = select(max_fd, &ords, NULL, &oeds, &legacy_tv);
++            saved_errno = errno;
++            sigprocmask(SIG_SETMASK, &blocked_mask, NULL);
++            errno = saved_errno;
++        }
++#else
+         ret = pselect(max_fd, &ords, NULL, &oeds, &tv, &orig_sigmask);
++#endif
++#endif
+ #ifdef DEBUG_AFP_LOOP
+         log_for_client(NULL, AFPFSD, LOG_DEBUG,
+                        "afp_main_loop -- pselect returned ret=%d, errno=%d", ret, errno);
+@@ -478,6 +535,12 @@
+                 }
+             } else {
+                 /* Select timeout - send tickles to keep connections alive */
++#ifdef _WIN32
++                time_t now = time(NULL);
++                if (now - last_tickle < 30)
++                    continue;
++                last_tickle = now;
++#endif
+                 afp_lock_server_list();
+
+                 for (struct afp_server *s = get_server_base(); s; s = s->next) {
+--- a/lib/lowlevel.c
++++ b/lib/lowlevel.c
+@@ -752,25 +752,38 @@
+     }
+
+     stbuf->st_ino = fp.fileid;
++#ifdef _WIN32
++    unsigned int client_uid = fp.unixprivs.uid;
++    unsigned int client_gid = fp.unixprivs.gid;
++    if (translate_uidgid_to_client(volume, &client_uid, &client_gid)) {
++        return -EIO;
++    }
++    stbuf->st_uid = client_uid;
++    stbuf->st_gid = client_gid;
++#else
+     stbuf->st_uid = fp.unixprivs.uid;
+     stbuf->st_gid = fp.unixprivs.gid;
+-
+     if (translate_uidgid_to_client(volume,
+                                    &stbuf->st_uid, &stbuf->st_gid)) {
+         return -EIO;
+     }
++#endif
+
+     if (stbuf->st_mode & S_IFDIR) {
+         stbuf->st_nlink = fp.offspring + 2;
+         stbuf->st_size = resource ? 0 : (fp.offspring * 34) + 24;
++#ifndef _WIN32
+         stbuf->st_blksize = 4096;
+         stbuf->st_blocks = (stbuf->st_size + 511) / 512;
++#endif
+         /* This slight voodoo was taken from Mac OS X 10.2 */
+     } else {
+         stbuf->st_nlink = 1;
+         stbuf->st_size = (resource ? fp.resourcesize : fp.size);
++#ifndef _WIN32
+         stbuf->st_blksize = 4096;
+         stbuf->st_blocks = (stbuf->st_size + 511) / 512;
++#endif
+     }
+
+     if ((volume->server->using_version->av_number < 30) &&
+@@ -805,7 +818,8 @@
+     stbuf->st_mtime = modification_date;
+ #endif
+-#ifdef __APPLE__
++#if defined(__APPLE__) && (!defined(MAC_OS_X_VERSION_MAX_ALLOWED) || \
++                           MAC_OS_X_VERSION_MAX_ALLOWED >= 1050)
+     /* On macOS, set birthtimespec for Finder display (handled by stat_to_darwin_attr) */
+     stbuf->st_birthtimespec.tv_sec = creation_date;
+     stbuf->st_birthtimespec.tv_nsec = 0;
+ #endif
+--- a/lib/meson.build
++++ b/lib/meson.build
+@@ -13,8 +13,6 @@
+     'client.c',
+     'codepage.c',
+     'connect.c',
+-    'daemon_signals.c',
+-    'daemon_socket.c',
+     'debug.c',
+     'did.c',
+     'dsi.c',
+@@ -48,6 +46,13 @@
+     'utils.c',
+ )
+
++if with_tools
++    libafpclient_sources += files(
++        'daemon_signals.c',
++        'daemon_socket.c',
++    )
++endif
++
+ if gcrypt_dep.found()
+     libafpclient_sources += files(
+         'uams_dhx.c',
+--- a/lib/status.c
++++ b/lib/status.c
+@@ -9,7 +9,11 @@
+ #include <string.h>
+ #include <stdio.h>
+ #include <inttypes.h>
++#ifdef _WIN32
++#include "win32_compat.h"
++#else
+ #include <sys/socket.h>
++#endif
+ #include "map_def.h"
+ #include "dsi.h"
+ #include "afp.h"
+--- a/lib/users.c
++++ b/lib/users.c
+@@ -8,8 +8,10 @@
+
+ #include <stdio.h>
+ #include <stdlib.h>
++#ifndef _WIN32
+ #include <pwd.h>
+ #include <grp.h>
++#endif
+ #include <string.h>
+
+ #include "afp.h"
+@@ -167,4 +169,3 @@
+     return 0;
+ }
+
+-
+--- a/meson.build
++++ b/meson.build
+@@ -55,6 +55,10 @@
+ root_dependencies = []
+ cmdline_dependencies = [readline_dep]
+
++if host_os == 'windows'
++    root_dependencies += cc.find_library('ws2_32', required: true)
++endif
++
+ if editline_dep.found()
+     cmdline_dependencies += editline_dep
+     cflags += '-DHAVE_LIBEDIT'
+@@ -67,7 +71,9 @@
+     cflags += '-DHAVE_LIBBSD'
+ endif
+
+-if cc.has_function('explicit_bzero')
++if host_os == 'windows'
++    # Use the bundled implementation: UCRT advertises memset_explicit without declaring it.
++elif cc.has_function('explicit_bzero')
+     cflags += '-DHAVE_EXPLICIT_BZERO'
+ elif cc.has_function('memset_explicit')
+     cflags += '-DHAVE_MEMSET_EXPLICIT'
+--- a/lib/dsi.c
++++ b/lib/dsi.c
+@@ -650,7 +650,7 @@
+     }
+
+     server->flags = ntohs(reply1->flags);
+-    p = (void *)((unsigned long) server->incoming_buffer + sizeof(*reply1));
++    p = server->incoming_buffer + sizeof(*reply1);
+     p += copy_from_pascal(server->server_name, p, sizeof(server->server_name)) + 1;
+
+     /* Now work our way through the variable bits */
+@@ -1048,8 +1048,7 @@
+
+         do {
+             ret = read(server->fd, (void *)
+-                       (((unsigned long) server->incoming_buffer) + server->data_read),
+-                       amount_to_read);
++                       (server->incoming_buffer + server->data_read), amount_to_read);
+         } while (ret < 0 && errno == EINTR);
+
+         if (ret < 0) {
+--- a/lib/proto_session.c
++++ b/lib/proto_session.c
+@@ -35,8 +35,7 @@
+     switch (type) {
+     case kLoginWithTimeAndID:
+     case kReconnWithTimeAndID: {
+-        uint32_t *p = (void *)(((unsigned long) request) +
+-                               sizeof(*request));
++        uint32_t *p = (void *)((char *)request + sizeof(*request));
+         offset = sizeof(timestamp);
+         *p = timestamp;
+         timelen = sizeof(timestamp);
+@@ -61,7 +60,7 @@
+         goto error;
+     }
+
+-    data = (void *)(((unsigned long) request) + sizeof(*request) + offset);
++    data = (char *)request + sizeof(*request) + offset;
+     request->idlength = htonl(datalen);
+     request->pad = 0;
+     request->type = htons(type);

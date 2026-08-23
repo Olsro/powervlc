@@ -1654,6 +1654,16 @@ static int RevealControlsCallback(vlc_object_t *p_this, const char *psz_var,
     vlc_object_release(p_input_thread);
 }
 
+- (void)showDiscRootMenu
+{
+    input_thread_t *p_input_thread = pl_CurrentInput(getIntf());
+    if (p_input_thread == NULL)
+        return;
+
+    input_Control(p_input_thread, INPUT_NAV_MENU, NULL);
+    vlc_object_release(p_input_thread);
+}
+
 - (void)moveMenuFocusLeft
 {
     input_thread_t *p_input_thread = pl_CurrentInput(getIntf());

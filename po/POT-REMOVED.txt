@@ -156,3 +156,7 @@ Enable DVD menus
 # bluray-menu's long description gained a sentence on the cost of BD-J menus:
 # some discs busy-wait on a whole core for as long as the disc plays.
 Use Blu-ray menus. If disabled, the movie will start directly
+
+# --- 2026-08-22: split the mixed recent-media menu into files and streams ---
+Open Recent
+Open &Recent Media

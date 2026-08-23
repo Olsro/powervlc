@@ -88,7 +88,8 @@
 
     /* contextual vout menu (right-click on the video) and its own dynamic
      * submenus (an NSMenu cannot live in two menus at once) */
-    NSMenu *recentMenu;             /* "Open Recent", user-defaults backed */
+    NSMenu *recentFilesMenu;        /* local files, user-defaults backed */
+    NSMenu *recentStreamsMenu;      /* non-file MRLs, shared with modern macOS */
     NSMenu *voutMenu;
     NSMenu *voutAudioTrackMenu;
     NSMenu *voutSubtitleTrackMenu;
@@ -115,6 +116,6 @@
 - (NSMenu *)voutMenu;
 @end
 
-/* Records an opened MRL in the "Open Recent" list (NSUserDefaults);
+/* Records an opened MRL in the matching file/stream recent list;
  * called from every open path. */
 void VLCLegacyNoteRecentItem(NSString *mrl);

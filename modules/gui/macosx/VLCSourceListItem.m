@@ -30,6 +30,7 @@
     self = [super init];
     if (self) {
         _sdtype = -1; // No SD type set
+        _playlistItemId = -1;
     }
 
     return self;

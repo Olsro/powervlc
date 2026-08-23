@@ -2,6 +2,98 @@
 
 PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more legacy systems, not affiliated with VideoLAN.
 
+## 1.4.0 (2026-08-23)
+
+### Interfaces
+
+- Split recent local files and recent network streams into independent,
+  persistent menus in the modern macOS, legacy macOS, and Qt interfaces,
+  including migration of the former mixed history and password-free labels.
+- Add a VLC 4-style **Connect to Server...** dialog for WebDAV, SMB, FTP,
+  FTPS, FTPES, SFTP, NFS, and AFP. Connected servers appear under
+  **My Computer**, browse like local folders, and can be ejected from their
+  context menu.
+- Allow network preparsing to present authentication dialogs in all three
+  interfaces, and defer it until the address dialog has fully closed so an
+  immediate missing-credential prompt cannot remain invisible. Keep dynamic
+  server labels clear of their globe icon in both the modern macOS sidebar
+  and the Qt sidebar, including with the Windows XP widget style.
+- Make **Check for Updates...** open the centralized PowerVLC latest-release
+  page from every graphical interface.
+- Keep the modern macOS menu check marks synchronized for adaptive quality,
+  maximum resolution, tracks, crop, aspect ratio, deinterlacing and subtitle
+  text size, including immediately after a selection.
+- Recognize DVD-Audio volumes in both macOS open-disc interfaces.
+- Extend AppleScript with shuffle/repeat modes, recording state, playback-rate
+  control, and disc root/popup menu commands.
+
+### Playback and formats
+
+- Preserve DVD and Blu-ray detection when an ISO is opened through a seekable
+  network input such as AFP, SMB or NFS, so disc titles, menus and overlays
+  work instead of exposing the image as one extremely long movie.
+- Open Blu-ray folder structures directly from `BDMV/index.bdmv`.
+- Read ID3 `CHAP` chapters in MPEG audio, including named chapter navigation,
+  seeking and correct big- or little-endian UTF-16 text.
+- Rewrite CD-Text reading and parsing, including mounted macOS audio CDs,
+  Latin-1 and Shift-JIS text, and disc/track album artist, songwriter,
+  composer, arranger, EAN and ISRC metadata.
+- Read native AIFF title, artist, copyright and annotation chunks, and harden
+  AIFF chunk bounds, sound-data offsets and metadata handling.
+- Add Farbfeld images and `.re4` CCTV MPEG-4 elementary streams.
+- Add FFmpeg-backed VP4, IMM4, AGM, Codec 2, QOA, and DFPWM decoding mappings.
+
+### Network
+
+- Add a native, cross-platform AFP (Apple Filing Protocol, used by Time
+  Capsules) input based on Netatalk Client. It browses and reads shares
+  directly without Finder, a FUSE mount or a helper daemon, prompts again for
+  missing or rejected credentials, and avoids retaining passwords in recent
+  menu labels.
+- Backport WebDAV/WebDAVS directory browsing and enable SMB2 in every macOS
+  architecture. SMB2 gains compatibility with both old and new libsmb2 event
+  APIs, a level-triggered select event path on Windows (including XP and
+  ARM64), preserves native-width Winsock handles, follows the target-specific
+  libsmb2 event masks used by both XP and Windows 7+ Winsock toolchains,
+  avoids MD4/MD5 symbol collisions during NTLM authentication, and retries
+  rejected explicit Guest sessions anonymously.
+- Add `data:` URI and Gopher inputs, plus on-the-fly Zstandard decompression
+  through `zstdcat` where it is installed.
+- Add a Twitch extension to discover and play live channels, videos and clips.
+
+### Compatibility, packaging and translations
+
+- Make the AFP client build and run on Windows, Linux and macOS from Jaguar
+  onward, including 32-bit, big-endian PowerPC and legacy resolver, threading,
+  authentication and random-number APIs.
+- Prevent the AFP event thread from busy-looping on an empty Winsock descriptor
+  set after a connection closes on Windows.
+- Fix a Darwin CD table-of-contents buffer over-read which could abort the
+  application while optical drives were enumerated, notably in arm64 builds.
+- Avoid linking macOS 10.10/10.12-only POSIX file APIs into binaries whose
+  deployment target is Snow Leopard or older when building with a current SDK.
+- Keep the G3 post-processing plug-in on its scalar PowerPC path, preventing an
+  accidental AltiVec CPU subtype from making the plug-in unloadable on G3 Macs.
+- Regenerate and rerun the macOS configure step for every architecture build,
+  preventing stale cache values and core version strings from surviving a
+  nominally clean release rebuild.
+- Make both macOS About windows report the values compiled into the running
+  architecture again instead of masking stale slices with bundle plist values.
+- Teach the Qt and AppImage Docker harnesses to build the AFP dependency,
+  carry the 1.4.0 product version into AppImage names, and package AFP and SMB2
+  consistently in Windows, Linux, all six macOS architecture builds, and the
+  universal bundle.
+- Keep the AFP dependency buildable with the Meson 0.45 toolchain shipped by
+  the oldest supported Linux build images as well as current Meson releases,
+  and link its private cryptography, compatibility and threading dependencies
+  into the static Linux plug-in.
+- Regenerate the AppImage plug-in cache after the final ELF/RUNPATH changes and
+  invoke AppImageTool directly for the final packing pass, preventing every
+  plug-in from being reported stale on first launch.
+- Refresh all 105 translation catalogs and provide the new interface strings
+  in the maintained French, English, German, Spanish, Italian, Portuguese,
+  Dutch, Polish and Russian translations.
+
 ## 1.3.2 (2026-08-22)
 
 ### PowerPC performance

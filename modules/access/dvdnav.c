@@ -604,6 +604,16 @@ static int stream_cb_read( void *demux, void* buffer, int size )
     return vlc_stream_Read( ((demux_t *)demux)->s, buffer, size );
 }
 
+static bool IsIsoLocation( const char *location )
+{
+    if( location == NULL )
+        return false;
+
+    size_t length = strcspn( location, "?#" );
+    return length >= 4
+        && !strncasecmp( location + length - 4, ".iso", 4 );
+}
+
 /*****************************************************************************
  * DemuxOpen:
  *****************************************************************************/
@@ -616,11 +626,19 @@ static int DemuxOpen ( vlc_object_t *p_this )
     if( p_demux->psz_demux != NULL
      && !strncmp(p_demux->psz_demux, "dvd", 3) )
         forced = true;
+    if( ( p_demux->psz_demux != NULL
+       && !strcmp(p_demux->psz_demux, "iso") )
+     || IsIsoLocation( p_demux->psz_location ) )
+        forced = true;
 
-    /* StreamProbeDVD need FASTSEEK, but if dvd is forced, we don't probe thus
-     * don't need fastseek */
-    vlc_stream_Control( p_demux->s, forced ? STREAM_CAN_SEEK : STREAM_CAN_FASTSEEK,
-                    &b_seekable );
+    /* StreamProbeDVD needs FASTSEEK.  A file selected through the ISO shortcut
+     * (or carrying an .iso location) is already identified by its name, so
+     * only require ordinary seeks and let dvdnav validate the image itself.
+     * This enables seekable AFP/SMB/NFS/... ISO files without claiming that
+     * network seeks are fast.  dvdnav rejects Blu-ray images, which remain
+     * available to the libbluray demuxer that follows it. */
+    vlc_stream_Control( p_demux->s, forced ? STREAM_CAN_SEEK
+                                           : STREAM_CAN_FASTSEEK, &b_seekable );
     if( !b_seekable )
         return VLC_EGENERIC;
 

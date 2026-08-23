@@ -43,6 +43,7 @@
 #endif
 
 #include <sys/types.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -1053,10 +1054,11 @@ static CDTOC *darwin_getTOC( vlc_object_t * p_this, const vcddev_t *p_vcddev )
         CFRange range;
         CFIndex buf_len;
 
-        buf_len = CFDataGetLength( data ) + 1;
+        buf_len = CFDataGetLength( data );
         range = CFRangeMake( 0, buf_len );
 
-        if( ( pTOC = malloc( buf_len ) ) != NULL )
+        if( buf_len >= (CFIndex)sizeof(*pTOC)
+         && ( pTOC = malloc( buf_len ) ) != NULL )
         {
             CFDataGetBytes( data, range, (u_char *)pTOC );
         }
@@ -1176,75 +1178,251 @@ static int os2_vcd_open( vlc_object_t * p_this, const char *psz_dev,
 
 #endif
 
-/* */
-static void astrcat( char **ppsz_dst, char *psz_src )
-{
-    char *psz_old = *ppsz_dst;
+#define CDTEXT_MAX_TRACKS 0x7f
+#define CDTEXT_PACK_SIZE 18
+#define CDTEXT_PACK_HEADER 4
+#define CDTEXT_PACK_PAYLOAD 12
+#define CDTEXT_TEXT_BUFFER 160
 
-    if( !psz_old )
+enum cdtext_charset_e
+{
+    CDTEXT_CHARSET_ISO88591 = 0x00,
+    CDTEXT_CHARSET_ASCII7BIT = 0x01,
+    CDTEXT_CHARSET_MSJIS = 0x80,
+};
+
+typedef enum
+{
+    cd_text_title       = 0x80,
+    cd_text_performer   = 0x81,
+    cd_text_songwriter  = 0x82,
+    cd_text_composer    = 0x83,
+    cd_text_arrangers   = 0x84,
+    cd_text_message     = 0x85,
+    cd_text_discid      = 0x86,
+    cd_text_genre       = 0x87,
+    cd_text_TOC         = 0x88,
+    cd_text_TOC2        = 0x89,
+    cd_text_closed_info = 0x8d,
+    cd_text_ean_isrc    = 0x8e,
+    cd_text_block_size  = 0x8f,
+
+    cd_text_meta_invalid = 0x00,
+} cd_text_pack_type;
+
+static void CdTextAppendPayload( const char *p_buffer, size_t i_length,
+                                 enum cdtext_charset_e charset,
+                                 char **ppsz_text )
+{
+    size_t i_allocated = *ppsz_text ? strlen( *ppsz_text ) : 0;
+    size_t i_extended;
+    const char *psz_charset;
+
+    switch( charset )
     {
-        *ppsz_dst = strdup( psz_src );
+        case CDTEXT_CHARSET_ASCII7BIT:
+            i_extended = i_length;
+            psz_charset = NULL;
+            break;
+        case CDTEXT_CHARSET_ISO88591:
+            i_extended = i_length * 2;
+            psz_charset = "ISO-8859-1";
+            break;
+        case CDTEXT_CHARSET_MSJIS:
+            i_extended = i_length * 4;
+            psz_charset = "SHIFT-JIS";
+            break;
+        default:
+            return;
     }
-    else if( psz_src )
+
+    if( i_extended > SIZE_MAX - i_allocated - 1 )
+        return;
+    char *psz_reallocated = realloc( *ppsz_text,
+                                     i_allocated + i_extended + 1 );
+    if( psz_reallocated == NULL )
+        return;
+    *ppsz_text = psz_reallocated;
+    psz_reallocated[i_allocated] = '\0';
+
+    if( psz_charset == NULL )
     {
-        if( asprintf( ppsz_dst, "%s%s", psz_old, psz_src ) < 0 )
-            *ppsz_dst = psz_old;
+        memcpy( psz_reallocated + i_allocated, p_buffer, i_length );
+        psz_reallocated[i_allocated + i_length] = '\0';
+        EnsureUTF8( psz_reallocated );
+        return;
+    }
+
+    vlc_iconv_t converter = vlc_iconv_open( "UTF-8", psz_charset );
+    if( converter == (vlc_iconv_t)-1 )
+        return;
+
+    const char *p_input = p_buffer;
+    size_t i_input = i_length;
+    char *p_output = psz_reallocated + i_allocated;
+    size_t i_output = i_extended;
+    if( vlc_iconv( converter, &p_input, &i_input, &p_output, &i_output )
+        != VLC_ICONV_ERR )
+        *p_output = '\0';
+    vlc_iconv_close( converter );
+}
+
+static size_t CdTextPayloadLength( const uint8_t *p_buffer, size_t i_buffer,
+                                   bool b_double_byte )
+{
+    if( !b_double_byte )
+        return strnlen( (const char *)p_buffer, i_buffer );
+
+    size_t i_length = 0;
+    while( i_length + 1 < i_buffer )
+    {
+        if( p_buffer[i_length] == 0 && p_buffer[i_length + 1] == 0 )
+            break;
+        i_length += 2;
+    }
+    return i_length;
+}
+
+static void CdTextParsePackText(
+    const uint8_t *p_pack, enum cdtext_charset_e charset,
+    size_t *pi_textbuffer, size_t *pi_repeatbuffer, char *p_textbuffer,
+    int *pi_last_track,
+    char *pppsz_info[CDTEXT_MAX_TRACKS + 1][0x10] )
+{
+    const uint8_t i_pack_type = p_pack[0];
+    uint8_t i_track = p_pack[1] & 0x7f;
+    const bool b_double_byte = (p_pack[3] & 0x80) != 0;
+
+    if( (p_pack[3] & 0x0f) == 0 )
+        *pi_textbuffer = 0;
+
+    const uint8_t *p_read = p_pack + CDTEXT_PACK_HEADER;
+    const uint8_t *p_end = p_read + CDTEXT_PACK_PAYLOAD;
+    while( p_read < p_end )
+    {
+        size_t i_payload = CdTextPayloadLength( p_read, p_end - p_read,
+                                                b_double_byte );
+        if( i_payload > 0 )
+            *pi_last_track = __MAX( *pi_last_track, i_track );
+
+        if( i_payload == 1 && p_read[0] == '\t' && *pi_repeatbuffer > 0
+         && *pi_textbuffer == 0 )
+            *pi_textbuffer = *pi_repeatbuffer;
         else
-            free( psz_old );
+        {
+            size_t i_space = CDTEXT_TEXT_BUFFER - *pi_textbuffer;
+            size_t i_append = __MIN( i_payload, i_space );
+            memcpy( p_textbuffer + *pi_textbuffer, p_read, i_append );
+            *pi_textbuffer += i_append;
+            *pi_repeatbuffer = 0;
+        }
+
+        if( p_read + i_payload < p_end )
+        {
+            if( *pi_textbuffer > 0 )
+            {
+                CdTextAppendPayload(
+                    p_textbuffer, *pi_textbuffer, charset,
+                    &pppsz_info[i_track][i_pack_type - cd_text_title] );
+                *pi_repeatbuffer = *pi_textbuffer;
+                *pi_textbuffer = 0;
+                if( ++i_track > CDTEXT_MAX_TRACKS )
+                    break;
+            }
+            p_read += i_payload + (b_double_byte ? 2 : 1);
+        }
+        else
+            p_read = p_end;
     }
+}
+
+static bool CdTextValueIsEmpty( const char *psz_value )
+{
+    return psz_value == NULL || psz_value[0] == '\0'
+        || (psz_value[0] == ' ' && psz_value[1] == '\0');
 }
 
 /* */
 static int CdTextParse( vlc_meta_t ***ppp_tracks, int *pi_tracks,
                         const uint8_t *p_buffer, int i_buffer )
 {
-    char *pppsz_info[128][0x10];
+    char *pppsz_info[CDTEXT_MAX_TRACKS + 1][0x10];
     int i_track_last = -1;
-    if( i_buffer < 4 )
+    if( i_buffer <= 4 )
+        return -1;
+
+    p_buffer += 4;
+    i_buffer -= 4;
+
+    /* The block size information is split over three packs. */
+    const uint8_t *pp_block_size[3] = { NULL, NULL, NULL };
+    for( int i = 0; i < i_buffer / CDTEXT_PACK_SIZE; i++ )
+    {
+        const uint8_t *p_pack = p_buffer + CDTEXT_PACK_SIZE * i;
+        const uint8_t i_block_number = (p_pack[3] >> 4) & 0x07;
+        if( i_block_number > 0 || p_pack[0] != cd_text_block_size )
+            continue;
+
+        const uint8_t i_part = p_pack[1] & 0x7f;
+        if( i_part > 2 || pp_block_size[i_part] != NULL )
+            return -1;
+        pp_block_size[i_part] = p_pack + CDTEXT_PACK_HEADER;
+    }
+    if( (!pp_block_size[0] ^ !pp_block_size[1]) ||
+        (!pp_block_size[1] ^ !pp_block_size[2]) )
         return -1;
 
     memset( pppsz_info, 0, sizeof(pppsz_info) );
 
-    for( int i = 0; i < (i_buffer-4)/18; i++ )
+    enum cdtext_charset_e charset = CDTEXT_CHARSET_ASCII7BIT;
+    if( pp_block_size[0] != NULL )
     {
-        const uint8_t *p_block = &p_buffer[4 + 18*i];
-        char psz_text[12+1];
+        charset = pp_block_size[0][0];
+        /* ISO-8859-1 is a safe superset for incorrectly declared ASCII. */
+        if( charset == CDTEXT_CHARSET_ASCII7BIT )
+            charset = CDTEXT_CHARSET_ISO88591;
+    }
 
-        const int i_pack_type = p_block[0];
-        if( i_pack_type < 0x80 || i_pack_type > 0x8f )
-            continue;
+    char textbuffer[CDTEXT_TEXT_BUFFER];
+    size_t i_textbuffer = 0;
+    size_t i_repeatbuffer = 0;
+    cd_text_pack_type i_previous_type = cd_text_meta_invalid;
 
-        const int i_track_number = (p_block[1] >> 0)&0x7f;
-        const int i_extension_flag = ( p_block[1] >> 7)& 0x01;
-        if( i_extension_flag )
-            continue;
+    for( int i = 0; i < i_buffer / CDTEXT_PACK_SIZE; i++ )
+    {
+        const uint8_t *p_pack = p_buffer + CDTEXT_PACK_SIZE * i;
+        const cd_text_pack_type i_pack_type = p_pack[0];
+        const uint8_t i_block_number = (p_pack[3] >> 4) & 0x07;
 
-        //const int i_sequence_number = p_block[2];
-        //const int i_charater_position = (p_block[3] >> 0) &0x0f;
-        //const int i_block_number = (p_block[3] >> 4) &0x07;
-        /* TODO unicode support
-         * I need a sample */
-        //const int i_unicode = ( p_block[3] >> 7)&0x01;
-        //const int i_crc = (p_block[4+12] << 8) | (p_block[4+13] << 0);
-
-        /* */
-        memcpy( psz_text, &p_block[4], 12 );
-        psz_text[12] = '\0';
-
-        /* */
-        int i_track =  i_track_number;
-        char *psz_track = &psz_text[0];
-        while( i_track <= 127 && psz_track < &psz_text[12] )
+        if( i_textbuffer > 0 && i_pack_type != i_previous_type )
         {
-            //fprintf( stderr, "t=%d psz_track=%p end=%p", i_track, (void *)psz_track, (void *)&psz_text[12] );
-            if( *psz_track )
-            {
-                astrcat( &pppsz_info[i_track][i_pack_type-0x80], psz_track );
-                i_track_last = __MAX( i_track_last, i_track );
-            }
+            i_textbuffer = 0;
+            i_repeatbuffer = 0;
+        }
+        i_previous_type = i_pack_type;
 
-            i_track++;
-            psz_track += 1 + strlen(psz_track);
+        if( (p_pack[1] & 0x80) || i_block_number > 0 )
+        {
+            i_previous_type = cd_text_meta_invalid;
+            continue;
+        }
+
+        switch( i_pack_type )
+        {
+            case cd_text_title:
+            case cd_text_performer:
+            case cd_text_songwriter:
+            case cd_text_composer:
+            case cd_text_arrangers:
+            case cd_text_message:
+            case cd_text_genre:
+            case cd_text_ean_isrc:
+                CdTextParsePackText( p_pack, charset, &i_textbuffer,
+                                     &i_repeatbuffer, textbuffer,
+                                     &i_track_last, pppsz_info );
+                break;
+            default:
+                break;
         }
     }
 
@@ -1259,13 +1437,13 @@ static int CdTextParse( vlc_meta_t ***ppp_tracks, int *pi_tracks,
     {
         for( int i = 0; i <= i_track_last; i++ )
         {
-            /* */
-            if( pppsz_info[i][j] )
-                EnsureUTF8( pppsz_info[i][j] );
-
-            /* */
             const char *psz_default = pppsz_info[0][j];
             const char *psz_value = pppsz_info[i][j];
+
+            if( CdTextValueIsEmpty( psz_value ) )
+                psz_value = NULL;
+            if( CdTextValueIsEmpty( psz_default ) )
+                psz_default = NULL;
 
             if( !psz_value && !psz_default )
                 continue;
@@ -1276,9 +1454,9 @@ static int CdTextParse( vlc_meta_t ***ppp_tracks, int *pi_tracks,
                 if( !p_track )
                     continue;
             }
-            switch( j )
+            switch( cd_text_title + j )
             {
-            case 0x00: /* Album/Title */
+            case cd_text_title:
                 if( i == 0 )
                 {
                     vlc_meta_SetAlbum( p_track, psz_value );
@@ -1291,23 +1469,40 @@ static int CdTextParse( vlc_meta_t ***ppp_tracks, int *pi_tracks,
                         vlc_meta_SetAlbum( p_track, psz_default );
                 }
                 break;
-            case 0x01: /* Performer */
+            case cd_text_performer:
                 vlc_meta_SetArtist( p_track,
                                     psz_value ? psz_value : psz_default );
+                if( i != 0 && psz_value && psz_default )
+                    vlc_meta_SetAlbumArtist( p_track, psz_default );
                 break;
-            case 0x05: /* Messages */
+            case cd_text_songwriter:
+                vlc_meta_AddExtra( p_track, "AUTHOR",
+                                   psz_value ? psz_value : psz_default );
+                break;
+            case cd_text_composer:
+                vlc_meta_AddExtra( p_track, "COMPOSER",
+                                   psz_value ? psz_value : psz_default );
+                break;
+            case cd_text_arrangers:
+                vlc_meta_AddExtra( p_track, "ARRANGER",
+                                   psz_value ? psz_value : psz_default );
+                break;
+            case cd_text_message:
                 vlc_meta_SetDescription( p_track,
                                          psz_value ? psz_value : psz_default );
                 break;
-            case 0x07: /* Genre */
+            case cd_text_genre:
                 vlc_meta_SetGenre( p_track,
                                    psz_value ? psz_value : psz_default );
                 break;
-            /* FIXME unsupported:
-             * 0x02: songwriter
-             * 0x03: composer
-             * 0x04: arrenger
-             * 0x06: disc id */
+            case cd_text_ean_isrc:
+                if( i == 0 )
+                    vlc_meta_AddExtra( p_track, "EAN/UPN", psz_default );
+                else if( psz_value )
+                    vlc_meta_AddExtra( p_track, "ISRC", psz_value );
+                break;
+            default:
+                break;
             }
         }
     }
@@ -1322,8 +1517,64 @@ exit:
     return pp_tracks ? 0 : -1;
 }
 
-#if defined( __APPLE__ ) || \
-    defined( __OS2__ ) || \
+#if defined( __APPLE__ )
+/* IOCDMedia's BSD client forwards READ TOC format 5 to the drive. This works
+ * while the audio CD is mounted and does not claim exclusive device access. */
+static int CdTextRead( vlc_object_t *p_object, const vcddev_t *p_vcddev,
+                       uint8_t **pp_buffer, int *pi_buffer )
+{
+    if( p_vcddev->i_device_handle == -1 )
+        return -1;
+
+    uint8_t header[4] = { 0, 0, 0, 0 };
+    dk_cd_read_toc_t read_toc;
+    memset( &read_toc, 0, sizeof(read_toc) );
+    read_toc.format = kCDTOCFormatTEXT;
+    read_toc.bufferLength = sizeof(header);
+    read_toc.buffer = header;
+
+    if( ioctl( p_vcddev->i_device_handle, DKIOCCDREADTOC, &read_toc ) == -1 )
+    {
+        msg_Dbg( p_object, "DKIOCCDREADTOC could not read CD-TEXT: %s",
+                 vlc_strerror_c( errno ) );
+        return -1;
+    }
+
+    const int i_text = 2 + (header[0] << 8) + header[1];
+    if( i_text <= 4 || i_text > 0xffff )
+        return -1;
+
+    uint8_t *p_text = calloc( 1, i_text );
+    if( p_text == NULL )
+        return VLC_ENOMEM;
+
+    memset( &read_toc, 0, sizeof(read_toc) );
+    read_toc.format = kCDTOCFormatTEXT;
+    read_toc.bufferLength = i_text;
+    read_toc.buffer = p_text;
+
+    if( ioctl( p_vcddev->i_device_handle, DKIOCCDREADTOC, &read_toc ) == -1 )
+    {
+        msg_Dbg( p_object, "DKIOCCDREADTOC could not read complete CD-TEXT: %s",
+                 vlc_strerror_c( errno ) );
+        free( p_text );
+        return -1;
+    }
+    if( read_toc.bufferLength < i_text )
+    {
+        msg_Dbg( p_object, "short CD-TEXT response (%u of %d bytes)",
+                 read_toc.bufferLength, i_text );
+        free( p_text );
+        return -1;
+    }
+
+    msg_Dbg( p_object, "read %d bytes of CD-TEXT with DKIOCCDREADTOC",
+             i_text );
+    *pp_buffer = p_text;
+    *pi_buffer = i_text;
+    return VLC_SUCCESS;
+}
+#elif defined( __OS2__ ) || \
     defined( HAVE_IOC_TOC_HEADER_IN_SYS_CDIO_H ) || \
     defined( HAVE_SCSIREQ_IN_SYS_SCSIIO_H )
 static int CdTextRead( vlc_object_t *p_object, const vcddev_t *p_vcddev,
@@ -1450,8 +1701,7 @@ int ioctl_GetCdText( vlc_object_t *p_object, const vcddev_t *p_vcddev,
     if( CdTextRead( p_object, p_vcddev, &p_text, &i_text ) )
         return -1;
 
-    CdTextParse( ppp_tracks, pi_tracks, p_text, i_text );
+    int i_ret = CdTextParse( ppp_tracks, pi_tracks, p_text, i_text );
     free( p_text );
-    return 0;
+    return i_ret;
 }
-

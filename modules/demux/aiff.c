@@ -32,6 +32,7 @@
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_demux.h>
+#include <vlc_meta.h>
 #include <limits.h>
 
 /* TODO:
@@ -64,8 +65,8 @@ struct demux_sys_t
 
     int64_t     i_ssnd_pos;
     int64_t     i_ssnd_size;
-    int         i_ssnd_offset;
-    int         i_ssnd_blocksize;
+    uint32_t    i_ssnd_offset;
+    uint32_t    i_ssnd_blocksize;
 
     /* real data start */
     int64_t     i_ssnd_start;
@@ -74,6 +75,8 @@ struct demux_sys_t
     int         i_ssnd_fsize;
 
     int64_t     i_time;
+
+    vlc_meta_t *p_meta;
 };
 
 static int Demux  ( demux_t *p_demux );
@@ -98,6 +101,66 @@ static unsigned int GetF80BE( const uint8_t p[10] )
     return i_mantissa;
 }
 
+static int ReadTextChunk( demux_t *p_demux, uint64_t i_chunk_size,
+                          uint32_t i_data_size )
+{
+    static const struct
+    {
+        char chunk_id[4];
+        vlc_meta_type_t meta_type;
+    } text_chunks[] = {
+        { { 'N', 'A', 'M', 'E' }, vlc_meta_Title },
+        { { 'A', 'U', 'T', 'H' }, vlc_meta_Artist },
+        { { '(', 'c', ')', ' ' }, vlc_meta_Copyright },
+        { { 'A', 'N', 'N', 'O' }, vlc_meta_Description },
+    };
+
+    const uint8_t *p_peek;
+    if( vlc_stream_Peek( p_demux->s, &p_peek, 8 ) < 8 )
+        return VLC_EGENERIC;
+
+    size_t i_text_chunk = ARRAY_SIZE( text_chunks );
+    for( size_t i = 0; i < ARRAY_SIZE( text_chunks ); ++i )
+    {
+        if( !memcmp( p_peek, text_chunks[i].chunk_id, 4 ) )
+        {
+            i_text_chunk = i;
+            break;
+        }
+    }
+    if( i_text_chunk == ARRAY_SIZE( text_chunks ) )
+        return VLC_EGENERIC;
+
+    /* Text metadata is expected to be tiny. Avoid asking the stream cache to
+     * materialize a maliciously large chunk just to read a tag. */
+    if( i_data_size > 16 * 1024 * 1024 )
+        return VLC_EGENERIC;
+    ssize_t i_peek = vlc_stream_Peek( p_demux->s, &p_peek, i_chunk_size );
+    if( i_peek < 0 || (uint64_t)i_peek != i_chunk_size )
+        return VLC_EGENERIC;
+
+    char *psz_value = malloc( (size_t)i_data_size + 1 );
+    if( psz_value == NULL )
+        return VLC_ENOMEM;
+
+    memcpy( psz_value, p_peek + 8, i_data_size );
+    psz_value[i_data_size] = '\0';
+
+    demux_sys_t *p_sys = p_demux->p_sys;
+    if( p_sys->p_meta == NULL )
+        p_sys->p_meta = vlc_meta_New();
+    if( p_sys->p_meta == NULL )
+    {
+        free( psz_value );
+        return VLC_ENOMEM;
+    }
+
+    vlc_meta_Set( p_sys->p_meta, text_chunks[i_text_chunk].meta_type,
+                  psz_value );
+    free( psz_value );
+    return VLC_SUCCESS;
+}
+
 /*****************************************************************************
  * Open
  *****************************************************************************/
@@ -108,9 +171,18 @@ static int Open( vlc_object_t *p_this )
 
     const uint8_t *p_peek;
 
+    bool b_can_seek = false;
+    if( vlc_stream_Control( p_demux->s, STREAM_CAN_SEEK, &b_can_seek ) ||
+        !b_can_seek )
+        return VLC_EGENERIC;
+
     if( vlc_stream_Peek( p_demux->s, &p_peek, 12 ) < 12 )
         return VLC_EGENERIC;
     if( memcmp( p_peek, "FORM", 4 ) || memcmp( &p_peek[8], "AIFF", 4 ) )
+        return VLC_EGENERIC;
+
+    uint64_t i_form_end = UINT64_C(8) + GetDWBE( &p_peek[4] );
+    if( i_form_end < 12 )
         return VLC_EGENERIC;
 
     /* skip aiff header */
@@ -125,8 +197,12 @@ static int Open( vlc_object_t *p_this )
 
     for( ;; )
     {
+        int64_t i_chunk_pos = vlc_stream_Tell( p_demux->s );
+        if( i_chunk_pos < 0 || (uint64_t)i_chunk_pos + 8 > i_form_end )
+            break;
+
         if( vlc_stream_Peek( p_demux->s, &p_peek, 8 ) < 8 )
-            goto error;
+            break;
 
         uint32_t i_data_size = GetDWBE( &p_peek[4] );
         uint64_t i_chunk_size = UINT64_C( 8 ) + i_data_size + ( i_data_size & 1 );
@@ -136,6 +212,8 @@ static int Open( vlc_object_t *p_this )
 
         if( !memcmp( p_peek, "COMM", 4 ) )
         {
+            if( i_data_size < 18 )
+                goto error;
             if( vlc_stream_Peek( p_demux->s, &p_peek, 18+8 ) < 18+8 )
                 goto error;
 
@@ -149,6 +227,8 @@ static int Open( vlc_object_t *p_this )
         }
         else if( !memcmp( p_peek, "SSND", 4 ) )
         {
+            if( i_data_size < 8 )
+                goto error;
             if( vlc_stream_Peek( p_demux->s, &p_peek, 8+8 ) < 8+8 )
                 goto error;
 
@@ -157,47 +237,40 @@ static int Open( vlc_object_t *p_this )
             p_sys->i_ssnd_offset = GetDWBE( &p_peek[8] );
             p_sys->i_ssnd_blocksize = GetDWBE( &p_peek[12] );
 
-            msg_Dbg( p_demux, "SSND: (offset=%d blocksize=%d)",
+            if( p_sys->i_ssnd_offset > i_data_size - 8 )
+                goto error;
+
+            msg_Dbg( p_demux, "SSND: (offset=%" PRIu32 " blocksize=%" PRIu32 ")",
                      p_sys->i_ssnd_offset, p_sys->i_ssnd_blocksize );
         }
-        if( p_sys->i_ssnd_pos >= 12 && p_sys->fmt.audio.i_channels != 0 )
+        else
         {
-            /* We have found the 2 needed chunks */
-            break;
+            int i_ret = ReadTextChunk( p_demux, i_chunk_size, i_data_size );
+            if( i_ret == VLC_ENOMEM )
+                goto error;
         }
 
-        /* consume chunk data */
-        for( ssize_t i_req; i_chunk_size; i_chunk_size -= i_req )
+        uint64_t i_next_chunk = (uint64_t)i_chunk_pos + i_chunk_size;
+        if( i_next_chunk > i_form_end ||
+            vlc_stream_Seek( p_demux->s, i_next_chunk ) != VLC_SUCCESS )
         {
-#if SSIZE_MAX < UINT64_MAX
-            i_req = __MIN( SSIZE_MAX, i_chunk_size );
-#else
-            i_req = i_chunk_size;
-#endif
-            if( vlc_stream_Read( p_demux->s, NULL, i_req ) != i_req )
-            {
-                msg_Warn( p_demux, "incomplete file" );
-                goto error;
-            }
+            msg_Warn( p_demux, "incomplete file" );
+            goto error;
         }
     }
 
     p_sys->i_ssnd_start = p_sys->i_ssnd_pos + 16 + p_sys->i_ssnd_offset;
-    p_sys->i_ssnd_end   = p_sys->i_ssnd_start + p_sys->i_ssnd_size;
+    p_sys->i_ssnd_end = p_sys->i_ssnd_start + p_sys->i_ssnd_size
+                      - 8 - p_sys->i_ssnd_offset;
 
     p_sys->i_ssnd_fsize = p_sys->fmt.audio.i_channels *
                           ((p_sys->fmt.audio.i_bitspersample + 7) / 8);
 
-    if( p_sys->i_ssnd_fsize <= 0 || p_sys->fmt.audio.i_rate == 0 )
+    if( p_sys->i_ssnd_pos < 12 || p_sys->i_ssnd_fsize <= 0 ||
+        p_sys->fmt.audio.i_rate == 0 )
     {
         msg_Err( p_demux, "invalid audio parameters" );
         goto error;
-    }
-
-    if( p_sys->i_ssnd_size <= 0 )
-    {
-        /* unknown */
-        p_sys->i_ssnd_end = 0;
     }
 
     /* seek into SSND chunk */
@@ -213,6 +286,8 @@ static int Open( vlc_object_t *p_this )
     return VLC_SUCCESS;
 
 error:
+    if( p_sys->p_meta )
+        vlc_meta_Delete( p_sys->p_meta );
     free( p_sys );
     return VLC_EGENERIC;
 }
@@ -225,6 +300,8 @@ static void Close( vlc_object_t *p_this )
     demux_t     *p_demux = (demux_t*)p_this;
     demux_sys_t *p_sys = p_demux->p_sys;
 
+    if( p_sys->p_meta )
+        vlc_meta_Delete( p_sys->p_meta );
     free( p_sys );
 }
 
@@ -342,6 +419,12 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
             }
             return VLC_EGENERIC;
         }
+        case DEMUX_GET_META:
+            if( p_sys->p_meta == NULL )
+                return VLC_EGENERIC;
+            vlc_meta_Merge( va_arg( args, vlc_meta_t * ), p_sys->p_meta );
+            return VLC_SUCCESS;
+
         case DEMUX_SET_TIME:
         case DEMUX_GET_FPS:
         default:

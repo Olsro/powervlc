@@ -16,11 +16,13 @@ smb2: libsmb2-$(SMB2_VERSION).tar.gz .sum-smb2
 	$(UNPACK)
 	$(APPLY) $(SRC)/smb2/0001-cmake-add-ENABLE_LIBKRB5-and-ENABLE_GSSAPI-options.patch
 	$(APPLY) $(SRC)/smb2/0001-fix-Fixed-undeclared-identifier-ENXIO-in-android.patch
+	$(APPLY) $(SRC)/smb2/0002-mingw-avoid-system-type-redefinitions.patch
+	$(APPLY) $(SRC)/smb2/0003-namespace-md4-md5-symbols.patch
 	$(MOVE)
 
 SMB2_CONF := -DENABLE_LIBKRB5=OFF
 
-.smb2: smb2
+.smb2: smb2 toolchain.cmake
 	$(CMAKECLEAN)
 	$(HOSTVARS_CMAKE) $(CMAKE) $(SMB2_CONF)
 	+$(CMAKEBUILD)

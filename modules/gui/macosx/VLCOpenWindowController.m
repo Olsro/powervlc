@@ -792,6 +792,11 @@ static NSString *kCaptureTabViewId  = @"capture";
             [self setMRL: [NSString stringWithFormat: @"dvdread://%@#%i:%i-", devicePath, [_discDVDwomenusTitleTextField intValue], [_discDVDwomenusChapterTextField intValue]]];
             [self showOpticalMediaView: _discDVDwomenusView withIcon:image];
         }
+    } else if ([diskType isEqualToString: kVLCMediaAudioDVD]) {
+        [_discAudioCDLabel setStringValue: [[NSFileManager defaultManager] displayNameAtPath: opticalDevicePath]];
+        [_discAudioCDTrackCountLabel setStringValue: @""];
+        [self showOpticalMediaView: _discAudioCDView withIcon: image];
+        [self setMRL: [NSString stringWithFormat: @"dvda://%@", devicePath]];
     } else if ([diskType isEqualToString: kVLCMediaAudioCD]) {
         [_discAudioCDLabel setStringValue: [[NSFileManager defaultManager] displayNameAtPath: opticalDevicePath]];
         [_discAudioCDTrackCountLabel setStringValue: [NSString stringWithFormat:_NS("%i tracks"), [[[NSFileManager defaultManager] subpathsOfDirectoryAtPath: opticalDevicePath error:NULL] count] - 1]]; // minus .TOC.plist

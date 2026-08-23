@@ -27,9 +27,9 @@ RUN if [ -f /etc/apt/sources.list ]; then \
     fi
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential git ca-certificates curl wget file rsync xz-utils \
+      build-essential git ca-certificates curl wget file rsync xz-utils cmake \
       autoconf automake libtool libtool-bin pkg-config gettext autopoint \
-      flex bison \
+      flex bison meson ninja-build libbsd-dev \
       patchelf \
     && ( apt-get build-dep -y vlc || echo "WARN: build-dep vlc failed; some modules may be disabled" ) \
     && apt-get install -y --no-install-recommends \

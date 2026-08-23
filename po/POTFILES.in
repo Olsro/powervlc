@@ -177,6 +177,7 @@ modules/access/cdda.c
 modules/access/concat.c
 modules/access/dc1394.c
 modules/access/dcp/dcp.cpp
+modules/access/data.c
 modules/access/decklink.cpp
 modules/access/disc_helper.h
 modules/access/dvd_description.h
@@ -191,8 +192,10 @@ modules/access/dvdnav.c
 modules/access/dvdread.c
 modules/access/fs.c
 modules/access/ftp.c
+modules/access/gopher.c
 modules/access/http.c
 modules/access/http/access.c
+modules/access/webdav.c
 modules/access/idummy.c
 modules/access/imem.c
 modules/access/imem-access.c
@@ -203,6 +206,7 @@ modules/access/live555.cpp
 modules/access/mms/mms.c
 modules/access/mtp.c
 modules/access/nfs.c
+modules/access/afp.c
 modules/access/oss.c
 modules/access/pulse.c
 modules/access/qtcapture.m
@@ -436,6 +440,7 @@ modules/demux/nuv.c
 modules/demux/ogg.c
 modules/demux/playlist/asx.c
 modules/demux/playlist/b4s.c
+modules/demux/playlist/bdmv.c
 modules/demux/playlist/dvb.c
 modules/demux/playlist/ifo.c
 modules/demux/playlist/itml.c
@@ -555,6 +560,8 @@ modules/gui/macosx/VLCControlsBarCommon.h
 modules/gui/macosx/VLCControlsBarCommon.m
 modules/gui/macosx/VLCConvertAndSaveWindowController.h
 modules/gui/macosx/VLCConvertAndSaveWindowController.m
+modules/gui/macosx/VLCConnectToServerDialog.h
+modules/gui/macosx/VLCConnectToServerDialog.m
 modules/gui/macosx/VLCCoreDialogProvider.h
 modules/gui/macosx/VLCCoreDialogProvider.m
 modules/gui/macosx/VLCCoreInteraction.h

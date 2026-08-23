@@ -451,6 +451,13 @@ if ! ls ../$CONTRIB_PREFIX/bin/libbdplus*.dll >/dev/null 2>&1; then
     info "Building libbdplus contrib"
     make .bdplus
 fi
+
+# The Qt "Connect to Server" dialog exposes SMB on Windows as well as on
+# macOS and Linux. libsmb2 is optional in upstream's contrib selection and is
+# therefore not pulled in automatically for MinGW targets; build it explicitly
+# so the advertised protocol always has a matching access plug-in.
+rm -rf smb2 .smb2
+make .smb2
 cd ../..
 
 info "Bootstrapping"
@@ -515,7 +522,7 @@ else
     # that have nothing to do with PowerVLC. The Linux and macOS targets have
     # always been built without it. It is also what dragged libgcrypt (and so
     # libgpg-error) into libvlccore.
-    CONFIGFLAGS="$CONFIGFLAGS --enable-qt --enable-skins2"
+    CONFIGFLAGS="$CONFIGFLAGS --enable-qt --enable-skins2 --enable-smb2"
 fi
 if [ -n "$WINSTORE" ]; then
     CONFIGFLAGS="$CONFIGFLAGS --enable-winstore-app"

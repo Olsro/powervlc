@@ -501,10 +501,10 @@ MAKECONFIGURE = rm -f $</config.status && $(MAKECONFDIR)/configure $(HOSTCONF)
 # itself instead of relying on a shell, but a bug in gnulib ends up
 # trying to execute a cmake folder when one is found in the PATH
 CMAKEBUILD = env cmake --build $(BUILD_DIR)
-CMAKEINSTALL = env cmake --install $(BUILD_DIR) --prefix $(PREFIX)
+CMAKEINSTALL = env cmake --build $(BUILD_DIR) --target install
 CMAKECLEAN = rm -f $(BUILD_DIR)/CMakeCache.txt
-CMAKE = cmake -S $< -DCMAKE_TOOLCHAIN_FILE=$(abspath toolchain.cmake) \
-		-B $(BUILD_DIR) \
+CMAKE = cmake -H$< -DCMAKE_TOOLCHAIN_FILE=$(abspath toolchain.cmake) \
+		-B$(BUILD_DIR) \
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
 		-DCMAKE_INSTALL_PREFIX:STRING=$(PREFIX) \
 		-DBUILD_SHARED_LIBS:BOOL=OFF \
@@ -533,7 +533,7 @@ CMAKE += -DCMAKE_LINK_LIBRARY_SUFFIX:STRING=.a
 endif
 
 MESONFLAGS = $</build $< --default-library static --prefix "$(PREFIX)" \
-	--backend ninja -Dlibdir=lib
+	--backend ninja --libdir=lib
 ifndef WITH_OPTIMIZATION
 MESONFLAGS += --buildtype debug
 else

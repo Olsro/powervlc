@@ -42,6 +42,8 @@
 #include <QPalette>
 #include <QScrollBar>
 #include <QResource>
+#include <QMenu>
+#include <QUrl>
 #include <assert.h>
 
 #include <vlc_playlist.h>
@@ -85,7 +87,7 @@ void SelectorActionButton::paintEvent( QPaintEvent *event )
 }
 
 PLSelItem::PLSelItem ( QTreeWidgetItem *i, const QString& text )
-    : qitem(i), lblAction( NULL)
+    : qitem(i), lblAction( NULL), lblIcon( NULL )
 {
     layout = new QHBoxLayout( this );
     layout->setContentsMargins(0,0,0,0);
@@ -96,6 +98,19 @@ PLSelItem::PLSelItem ( QTreeWidgetItem *i, const QString& text )
 
     int height = qMax( 22, fontMetrics().height() + 8 );
     setMinimumHeight( height );
+}
+
+void PLSelItem::setIcon( const QIcon& icon, const QSize& size )
+{
+    if( lblIcon == NULL )
+    {
+        lblIcon = new QLabel( this );
+        layout->insertWidget( 1, lblIcon, 0, Qt::AlignVCenter );
+        layout->insertSpacing( 2, 3 );
+    }
+
+    lblIcon->setFixedSize( size );
+    lblIcon->setPixmap( icon.pixmap( size ) );
 }
 
 void PLSelItem::addAction( ItemAction act, const QString& tooltip )
@@ -141,6 +156,7 @@ PLSelector::PLSelector( QWidget *p, intf_thread_t *_p_intf )
     setHeaderHidden( true );
     setRootIsDecorated( true );
     setAlternatingRowColors( false );
+    setContextMenuPolicy( Qt::CustomContextMenu );
 
     /* drops */
     viewport()->setAcceptDrops(true);
@@ -179,6 +195,8 @@ PLSelector::PLSelector( QWidget *p, intf_thread_t *_p_intf )
              this, &PLSelector::setSource );
     connect( this, &PLSelector::itemClicked,
              this, &PLSelector::setSource );
+    connect( this, &QTreeWidget::customContextMenuRequested,
+             this, &PLSelector::showContextMenu );
 }
 
 PLSelector::~PLSelector()
@@ -263,13 +281,13 @@ void PLSelector::createItems()
     }
 
     /* SD nodes */
-    QTreeWidgetItem *mycomp = addItem( CATEGORY_TYPE, N_("My Computer"), false, true )->treeItem();
+    myComputerItem = addItem( CATEGORY_TYPE, N_("My Computer"), false, true )->treeItem();
     QTreeWidgetItem *devices = addItem( CATEGORY_TYPE, N_("Devices"), false, true )->treeItem();
     QTreeWidgetItem *lan = addItem( CATEGORY_TYPE, N_("Local Network"), false, true )->treeItem();
     QTreeWidgetItem *internet = addItem( CATEGORY_TYPE, N_("Internet"), false, true )->treeItem();
 
 #define NOT_SELECTABLE(w) w->setFlags( w->flags() ^ Qt::ItemIsSelectable );
-    NOT_SELECTABLE( mycomp );
+    NOT_SELECTABLE( myComputerItem );
     NOT_SELECTABLE( devices );
     NOT_SELECTABLE( lan );
     NOT_SELECTABLE( internet );
@@ -335,7 +353,7 @@ void PLSelector::createItems()
             break;
         case SD_CAT_MYCOMPUTER:
             name = name.mid( 0, name.indexOf( '{' ) );
-            selItem = addItem( SD_TYPE, *ppsz_longname, false, false, mycomp );
+            selItem = addItem( SD_TYPE, *ppsz_longname, false, false, myComputerItem );
             if ( name == "video_dir" )
                 icon = QIcon( ":/sidebar/movie.svg" );
             else if ( name == "audio_dir" )
@@ -361,10 +379,104 @@ void PLSelector::createItems()
     free( ppsz_longnames );
     free( p_categories );
 
-    if( mycomp->childCount() == 0 ) delete mycomp;
+    /* Keep My Computer even when no local SD is available: live network
+     * locations are attached here by Connect to Server. */
     if( devices->childCount() == 0 ) delete devices;
     if( lan->childCount() == 0 ) delete lan;
     if( internet->childCount() == 0 ) delete internet;
+}
+
+bool PLSelector::addNetworkLocation( const QString& mrl )
+{
+    for( int i = 0; i < myComputerItem->childCount(); ++i )
+    {
+        QTreeWidgetItem *existing = myComputerItem->child( i );
+        if( existing->data( 0, NETWORK_MRL_ROLE ).toString() == mrl )
+        {
+            myComputerItem->setExpanded( true );
+            setCurrentItem( existing );
+            curItem = NULL;
+            setSource( existing );
+            return true;
+        }
+    }
+
+    const QUrl url( mrl );
+    QString title = url.host();
+    QString path = url.path();
+    while( path.endsWith( '/' ) ) path.chop( 1 );
+    const QString leaf = path.section( '/', -1 );
+    if( !leaf.isEmpty() ) title += QStringLiteral( " — " ) + leaf;
+    if( title.isEmpty() ) title = mrl;
+
+    input_item_t *input = input_item_NewDirectory( qtu( mrl ), qtu( title ),
+                                                   ITEM_NET );
+    if( input == NULL )
+        return false;
+
+    playlist_Lock( THEPL );
+    playlist_item_t *plItem = playlist_NodeAddInput( THEPL, input,
+                                                      &THEPL->root,
+                                                      PLAYLIST_END );
+    const int itemId = plItem ? plItem->i_id : -1;
+    if( plItem )
+        libvlc_MetadataRequest( p_intf->obj.libvlc, input,
+                                static_cast<input_item_meta_request_option_t>(
+                                    META_REQUEST_OPTION_SCOPE_ANY |
+                                    META_REQUEST_OPTION_DO_INTERACT ), 120000,
+                                plItem );
+    playlist_Unlock( THEPL );
+    input_item_Release( input );
+    if( itemId < 0 )
+        return false;
+
+    PLSelItem *network = addItem( PL_ITEM_TYPE, qtu( title ), false, false,
+                                  myComputerItem );
+    network->treeItem()->setData( 0, PL_ITEM_ROLE,
+                                  QVariant::fromValue( plItem ) );
+    network->treeItem()->setData( 0, PL_ITEM_ID_ROLE, itemId );
+    network->treeItem()->setData( 0, NETWORK_MRL_ROLE, mrl );
+    network->treeItem()->setData( 0, SPECIAL_ROLE, QVariant( IS_NETWORK ) );
+    /* Keep the server icon and its text in the same layout.  QTreeWidget's
+     * native decoration rectangle can overlap an index widget on older
+     * Windows styles (notably the XP style once several siblings exist). */
+    network->setIcon( QIcon( ":/sidebar/network.svg" ), iconSize() );
+    network->addAction( RM_ACTION, qtr( "Eject this network location" ) );
+    connect( network, &PLSelItem::action, this, &PLSelector::networkRemove );
+
+    myComputerItem->setExpanded( true );
+    setCurrentItem( network->treeItem() );
+    curItem = NULL;
+    setSource( network->treeItem() );
+    return true;
+}
+
+void PLSelector::networkRemove( PLSelItem *network )
+{
+    if( network == NULL ) return;
+    QTreeWidgetItem *item = network->treeItem();
+    const int id = item->data( 0, PL_ITEM_ID_ROLE ).toInt();
+
+    setCurrentItem( playlistItem->treeItem() );
+    curItem = NULL;
+    setSource( playlistItem->treeItem() );
+
+    playlist_Lock( THEPL );
+    playlist_item_t *plItem = playlist_ItemGetById( THEPL, id );
+    if( plItem ) playlist_NodeDelete( THEPL, plItem );
+    playlist_Unlock( THEPL );
+    delete item;
+}
+
+void PLSelector::showContextMenu( const QPoint& point )
+{
+    QTreeWidgetItem *item = itemAt( point );
+    if( item == NULL || item->data( 0, SPECIAL_ROLE ).toInt() != IS_NETWORK )
+        return;
+    QMenu menu( this );
+    QAction *eject = menu.addAction( qtr( "Eject" ) );
+    if( menu.exec( viewport()->mapToGlobal( point ) ) == eject )
+        networkRemove( itemWidget( item ) );
 }
 
 void PLSelector::setSource( QTreeWidgetItem *item )

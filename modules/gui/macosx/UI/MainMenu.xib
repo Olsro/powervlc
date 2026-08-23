@@ -283,9 +283,9 @@
                             <menuItem isSeparatorItem="YES" id="2307">
                                 <modifierMask key="keyEquivalentModifierMask" command="YES"/>
                             </menuItem>
-                            <menuItem title="Open Recent" id="4815">
+                            <menuItem title="Open Recent File" id="4815">
                                 <modifierMask key="keyEquivalentModifierMask"/>
-                                <menu key="submenu" title="Open Recent" systemMenu="recentDocuments" id="4824">
+                                <menu key="submenu" title="Open Recent File" systemMenu="recentDocuments" id="4824">
                                     <items>
                                         <menuItem title="Clear Menu" state="on" id="4825">
                                             <connections>

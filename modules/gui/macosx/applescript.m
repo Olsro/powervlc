@@ -30,6 +30,7 @@
 #import "VLCCoreInteraction.h"
 #import "VLCPlaylist.h"
 #import <vlc_url.h>
+#include <math.h>
 
 /*****************************************************************************
  * VLGetURLScriptCommand implementation
@@ -94,6 +95,14 @@
         [[VLCCoreInteraction sharedInstance] moveMenuFocusRight];
     else if ([o_command isEqualToString:@"menuFocusActivate"])
         [[VLCCoreInteraction sharedInstance] menuFocusActivate];
+    else if ([o_command isEqualToString:@"menuActivatePopupMenu"])
+        [[VLCCoreInteraction sharedInstance] showDiscPopupMenu];
+    else if ([o_command isEqualToString:@"menuActivateDiscRootMenu"])
+        [[VLCCoreInteraction sharedInstance] showDiscRootMenu];
+    else if ([o_command isEqualToString:@"incrementPlaybackRate"])
+        [[VLCCoreInteraction sharedInstance] faster];
+    else if ([o_command isEqualToString:@"decrementPlaybackRate"])
+        [[VLCCoreInteraction sharedInstance] slower];
     else if ([o_command isEqualToString:@"stepForward"]) {
         //default: forwardShort
         if (o_parameter) {
@@ -292,6 +301,107 @@
     free(p_input_title);
 
     return ret;
+}
+
+- (float)playbackRate
+{
+    float rate = [[VLCCoreInteraction sharedInstance] internalPlaybackRate];
+    return rate > 0.f ? rate : var_GetFloat(pl_Get(getIntf()), "rate");
+}
+
+- (void)setPlaybackRate:(float)rate
+{
+    const float minimum = (float)INPUT_RATE_DEFAULT / INPUT_RATE_MAX;
+    const float maximum = (float)INPUT_RATE_DEFAULT / INPUT_RATE_MIN;
+    if (isfinite(rate) && rate >= minimum && rate <= maximum)
+        var_SetFloat(pl_Get(getIntf()), "rate", rate);
+}
+
+- (BOOL)recordable
+{
+    input_thread_t *input = pl_CurrentInput(getIntf());
+    if (input == NULL)
+        return NO;
+
+    BOOL result = var_GetBool(input, "can-record") ? YES : NO;
+    vlc_object_release(input);
+    return result;
+}
+
+- (BOOL)recordingEnabled
+{
+    input_thread_t *input = pl_CurrentInput(getIntf());
+    if (input == NULL)
+        return NO;
+
+    bool enabled = false;
+    if (input_Control(input, INPUT_GET_RECORD_STATE, &enabled) != VLC_SUCCESS)
+        enabled = var_GetBool(input, "record");
+    vlc_object_release(input);
+    return enabled ? YES : NO;
+}
+
+- (void)setRecordingEnabled:(BOOL)enabled
+{
+    input_thread_t *input = pl_CurrentInput(getIntf());
+    if (input == NULL)
+        return;
+
+    if (var_GetBool(input, "can-record"))
+    {
+        bool current = false;
+        if (input_Control(input, INPUT_GET_RECORD_STATE, &current) != VLC_SUCCESS)
+            current = var_GetBool(input, "record");
+        if (current != (enabled == YES))
+            var_SetBool(input, "record", enabled == YES);
+    }
+    vlc_object_release(input);
+}
+
+- (BOOL)shuffledPlayback
+{
+    return var_GetBool(pl_Get(getIntf()), "random") ? YES : NO;
+}
+
+- (void)setShuffledPlayback:(BOOL)enabled
+{
+    playlist_t *playlist = pl_Get(getIntf());
+    var_SetBool(playlist, "random", enabled == YES);
+    config_PutInt(playlist, "random", enabled == YES);
+}
+
+- (BOOL)repeatOne
+{
+    return var_GetBool(pl_Get(getIntf()), "repeat") ? YES : NO;
+}
+
+- (void)setRepeatOne:(BOOL)enabled
+{
+    playlist_t *playlist = pl_Get(getIntf());
+    var_SetBool(playlist, "repeat", enabled == YES);
+    config_PutInt(playlist, "repeat", enabled == YES);
+    if (enabled)
+    {
+        var_SetBool(playlist, "loop", false);
+        config_PutInt(playlist, "loop", false);
+    }
+}
+
+- (BOOL)repeatAll
+{
+    return var_GetBool(pl_Get(getIntf()), "loop") ? YES : NO;
+}
+
+- (void)setRepeatAll:(BOOL)enabled
+{
+    playlist_t *playlist = pl_Get(getIntf());
+    var_SetBool(playlist, "loop", enabled == YES);
+    config_PutInt(playlist, "loop", enabled == YES);
+    if (enabled)
+    {
+        var_SetBool(playlist, "repeat", false);
+        config_PutInt(playlist, "repeat", false);
+    }
 }
 
 @end

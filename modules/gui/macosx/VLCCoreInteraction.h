@@ -119,6 +119,7 @@ extern NSString *VLCClipCreationModeChangedNotification;
  * -hasDiscPopupMenu tells whether the disc offers one at this very moment. */
 - (BOOL)hasDiscPopupMenu;
 - (void)showDiscPopupMenu;
+- (void)showDiscRootMenu;
 - (void)moveMenuFocusLeft;
 - (void)moveMenuFocusRight;
 - (void)moveMenuFocusUp;

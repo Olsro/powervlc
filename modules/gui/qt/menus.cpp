@@ -62,6 +62,7 @@
 #include <QSpinBox>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+#include <QUrl>
 
 #ifndef QT_NO_STATUSBAR
 # include <QStatusBar>
@@ -90,7 +91,8 @@ enum
 
 static QActionGroup *currentGroup;
 
-QMenu *VLCMenuBar::recentsMenu = NULL;
+QMenu *VLCMenuBar::recentFilesMenu = NULL;
+QMenu *VLCMenuBar::recentStreamsMenu = NULL;
 QMenu *VLCMenuBar::audioDeviceMenu = NULL;
 QMenu *VLCMenuBar::rendererMenu = NULL;
 QActionGroup *VLCMenuBar::rendererGroup = NULL;
@@ -380,16 +382,23 @@ QMenu *VLCMenuBar::FileMenu( intf_thread_t *p_intf, QWidget *parent, MainInterfa
     addDPStaticEntry( menu, qtr( "Open &Capture Device..." ),
         ":/type/capture-card.svg", SLOT( openCaptureDialog() ), "Ctrl+C" );
 
+    addDPStaticEntry( menu, qtr( "Connect to Server..." ),
+        ":/type/network.svg", SLOT( connectToServerDialog() ), "Ctrl+K" );
+
     addDPStaticEntry( menu, qtr( "Open &Location from clipboard" ),
                       NULL, SLOT( openUrlDialog() ), "Ctrl+V" );
 
-    if( !recentsMenu && var_InheritBool( p_intf, "qt-recentplay" ) )
-        recentsMenu = new QMenu( qtr( "Open &Recent Media" ) );
+    if( !recentFilesMenu && var_InheritBool( p_intf, "qt-recentplay" ) )
+    {
+        recentFilesMenu = new QMenu( qtr( "Open &Recent File" ) );
+        recentStreamsMenu = new QMenu( qtr( "Open Recent &Stream" ) );
+    }
 
-    if( recentsMenu )
+    if( recentFilesMenu )
     {
         updateRecents( p_intf );
-        menu->addMenu( recentsMenu );
+        menu->addMenu( recentFilesMenu );
+        menu->addMenu( recentStreamsMenu );
     }
     menu->addSeparator();
 
@@ -892,10 +901,8 @@ QMenu *VLCMenuBar::HelpMenu( QWidget *parent )
     QMenu *menu = new QMenu( parent );
     addDPStaticEntry( menu, qtr( "&Help" ) ,
         ":/menu/help.svg", SLOT( helpDialog() ), "F1" );
-#ifdef UPDATE_CHECK
     addDPStaticEntry( menu, qtr( "Check for &Updates..." ) , "",
                       SLOT( updateDialog() ) );
-#endif
 
     /* The browser half of PowerVLC: it hands what the browser is playing over
      * to the player, and lets the player read pages the user has opened --
@@ -1901,53 +1908,64 @@ void VLCMenuBar::updateAudioDevice( intf_thread_t * p_intf, audio_output_t *p_ao
     free( selected );
 }
 
-void VLCMenuBar::updateRecents( intf_thread_t *p_intf )
+static void populateRecentsMenu( QMenu *menu, const QStringList &list,
+                                 RecentsMRL *rmrl, const char *clearSlot,
+                                 bool shortcuts )
 {
-    if( recentsMenu )
+    menu->clear();
+
+    if( list.isEmpty() )
     {
-        QAction* action;
-        RecentsMRL* rmrl = RecentsMRL::getInstance( p_intf );
-        QStringList l = rmrl->recentList();
+        menu->setEnabled( false );
+        return;
+    }
 
-        recentsMenu->clear();
+    for( int i = 0; i < __MIN( list.count(), 10) ; ++i )
+    {
+        const QString &mrl = list.at( i );
+        QUrl displayUrl( mrl );
+        if( !displayUrl.password().isEmpty() )
+            displayUrl.setPassword( QString() );
+        const QString safeMrl = displayUrl.isValid()
+                              ? displayUrl.toString( QUrl::FullyEncoded ) : mrl;
+        char *psz = vlc_uri_decode_duplicate( qtu( safeMrl ) );
+        QString displayText = qfu( psz );
+        free( psz );
 
-        if( !l.count() )
-        {
-            recentsMenu->setEnabled( false );
-        }
-        else
-        {
-            for( int i = 0; i < __MIN( l.count(), 10) ; ++i )
-            {
-                QString mrl = l.at( i );
-                char *psz = vlc_uri_decode_duplicate( qtu( mrl ) );
-                QString text = qfu( psz );
-
-                text.replace("&", "&&");
+        displayText.replace("&", "&&");
 #ifdef _WIN32
 # define FILE_SCHEME "file:///"
 #else
 # define FILE_SCHEME "file://"
 #endif
-                if ( text.startsWith( FILE_SCHEME ) )
-                    text.remove( 0, strlen( FILE_SCHEME ) );
+        if ( displayText.startsWith( FILE_SCHEME ) )
+            displayText.remove( 0, strlen( FILE_SCHEME ) );
 #undef FILE_SCHEME
 
-                free( psz );
-                action = recentsMenu->addAction(
-                        QString( i < 9 ? "&%1: ": "%1: " ).arg( i + 1 ) +
-                            QApplication::fontMetrics().elidedText( text,
-                                                          Qt::ElideLeft, 400 ),
-                        rmrl->signalMapper, SLOT( map() ),
-                        i < 9 ? QString( "Ctrl+%1" ).arg( i + 1 ) : "" );
-                rmrl->signalMapper->setMapping( action, l.at( i ) );
-            }
-
-            recentsMenu->addSeparator();
-            recentsMenu->addAction( qtr("&Clear"), rmrl, SLOT( clear() ) );
-            recentsMenu->setEnabled( true );
-        }
+        QAction *action = menu->addAction(
+            QString( i < 9 ? "&%1: ": "%1: " ).arg( i + 1 ) +
+                QApplication::fontMetrics().elidedText( displayText,
+                                              Qt::ElideLeft, 400 ),
+            rmrl->signalMapper, SLOT( map() ),
+            shortcuts && i < 9 ? QString( "Ctrl+%1" ).arg( i + 1 ) : "" );
+        rmrl->signalMapper->setMapping( action, mrl );
     }
+
+    menu->addSeparator();
+    menu->addAction( qtr("&Clear"), rmrl, clearSlot );
+    menu->setEnabled( true );
+}
+
+void VLCMenuBar::updateRecents( intf_thread_t *p_intf )
+{
+    if( !recentFilesMenu )
+        return;
+
+    RecentsMRL *rmrl = RecentsMRL::getInstance( p_intf );
+    populateRecentsMenu( recentFilesMenu, rmrl->recentFileList(), rmrl,
+                         SLOT( clearFiles() ), true );
+    populateRecentsMenu( recentStreamsMenu, rmrl->recentStreamList(), rmrl,
+                         SLOT( clearStreams() ), false );
 }
 
 QMenu *VLCMenuBar::RendererMenu(intf_thread_t *p_intf, QMenu *menu )

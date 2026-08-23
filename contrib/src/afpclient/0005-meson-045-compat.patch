@@ -1,0 +1,97 @@
+--- a/meson.build
++++ b/meson.build
+@@ -4,7 +4,7 @@ project(
+     version: '0.9.5',
+     license: 'GPLv2',
+     default_options: ['warning_level=3', 'c_std=c11'],
+-    meson_version: '>=0.61',
++    meson_version: '>=0.45',
+ )
+ 
+ cc = meson.get_compiler('c')
+@@ -13,10 +13,10 @@ pkg = import('pkgconfig')
+ 
+ install_prefix = get_option('prefix')
+-bindir = install_prefix / get_option('bindir')
+-libdir = install_prefix / get_option('libdir')
+-mandir = install_prefix / get_option('mandir')
+-datadir = install_prefix / get_option('datadir')
+-includedir = install_prefix / get_option('includedir')
++bindir = join_paths(install_prefix, get_option('bindir'))
++libdir = join_paths(install_prefix, get_option('libdir'))
++mandir = join_paths(install_prefix, get_option('mandir'))
++datadir = join_paths(install_prefix, get_option('datadir'))
++includedir = join_paths(install_prefix, get_option('includedir'))
+ 
+ libsearch_dirs = []
+ include_dirs = []
+@@ -27,17 +27,17 @@ cflags = [
+     '-DAFPCLIENT_INTERNAL',
+ ]
+ 
+-if 'afp' in get_option('enable-debugging')
++if get_option('enable-debugging').contains('afp')
+     cflags += '-DDEBUG_AFP_LOOP'
+ endif
+ 
+-if 'dsi' in get_option('enable-debugging')
++if get_option('enable-debugging').contains('dsi')
+     cflags += '-DDEBUG_DSI'
+ endif
+ 
+ if host_os == 'linux'
+     cflags += '-D_GNU_SOURCE'
+-elif host_os in ['dragonfly', 'freebsd', 'openbsd']
++elif host_os == 'dragonfly' or host_os == 'freebsd' or host_os == 'openbsd'
+     libsearch_dirs += '/usr/local/lib'
+     include_dirs += ['/usr/local/include']
+     cflags += '-DLIBICONV_PLUG'
+@@ -209,36 +209,6 @@ if get_option('enable-docs')
+ 
+     install_data(
+         ['AUTHORS', 'COPYING', 'NEWS.md', 'README.md'],
+-        install_dir: datadir / 'doc' / 'netatalk-client',
++        install_dir: join_paths(datadir, 'doc', 'netatalk-client'),
+     )
+ endif
+-
+-summary_info = {
+-    'Build directory': meson.current_build_dir(),
+-    'Source path': meson.current_source_dir(),
+-}
+-summary(summary_info, bool_yn: true, section: 'Build environment:')
+-
+-summary_info = {
+-    'Installation prefix': install_prefix,
+-    'Executable directory': bindir,
+-    'Library directory': libdir,
+-    'Manual page directory': mandir,
+-}
+-summary(summary_info, bool_yn: true, section: 'Directories:')
+-
+-summary_info = {
+-    'Host CPU': host_machine.cpu_family(),
+-    'Host endianness': build_machine.endian(),
+-    'C compiler': cc.get_id(),
+-    'Build type': get_option('buildtype'),
+-    'Shared or static libraries': get_option('default_library'),
+-}
+-summary(summary_info, bool_yn: true, section: 'Compilation:')
+-
+-summary_info = {
+-    'AFP command line client': with_afpcmd,
+-    'AFP FUSE client': with_fuse,
+-    'Encrypted UAMs': with_crypt,
+-}
+-summary(summary_info, bool_yn: true, section: 'Options:')
+--- a/lib/meson.build
++++ b/lib/meson.build
+@@ -72,7 +72,7 @@ libafpclient = library(
+ )
+ 
+ pkg.generate(
+-    libafpclient,
++    libraries: libafpclient,
+     description: 'AFP client library',
+     name: 'libafpclient',
+     version: libafpclient_version,

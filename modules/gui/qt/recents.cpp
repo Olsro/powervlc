@@ -31,6 +31,9 @@
 #include <QStringList>
 #include <QRegularExpression>
 #include <QSignalMapper>
+#include <QSettings>
+
+#include "main_interface.hpp"
 
 #ifdef _WIN32
     #include <shlobj.h>
@@ -50,11 +53,23 @@
 #endif
 
 #include <vlc_input_item.h>
+#include <vlc_url.h>
+
+static bool isFileMRL( const QString &mrl )
+{
+    char *path = vlc_uri2path( qtu( mrl ) );
+    if( !path )
+        return false;
+    free( path );
+    return true;
+}
 
 RecentsMRL::RecentsMRL( intf_thread_t *_p_intf ) : p_intf( _p_intf )
 {
-    recents = QStringList();
-    times = QStringList();
+    recentFiles = QStringList();
+    recentStreams = QStringList();
+    fileTimes = QStringList();
+    streamTimes = QStringList();
 
     signalMapper = new QSignalMapper( this );
     connect( signalMapper,
@@ -86,11 +101,15 @@ void RecentsMRL::addRecent( const QString &mrl )
     if ( !isActive || ( filter && filter->match( mrl ).hasMatch() ) )
         return;
 
+    const bool file = isFileMRL( mrl );
+    QStringList &list = file ? recentFiles : recentStreams;
+    QStringList &times = file ? fileTimes : streamTimes;
+
 #ifdef _WIN32
-    /* Add to the Windows 7 default list in taskbar */
-    char* path = vlc_uri2path( qtu( mrl ) );
-    if( path )
+    /* Add local files to the Windows 7 default list in taskbar. */
+    if( file )
     {
+        char* path = vlc_uri2path( qtu( mrl ) );
         wchar_t *wmrl = ToWide( path );
         SHAddToRecentDocs( SHARD_PATHW, wmrl );
         free( wmrl );
@@ -98,19 +117,19 @@ void RecentsMRL::addRecent( const QString &mrl )
     }
 #endif
 
-    int i_index = recents.indexOf( mrl );
+    int i_index = list.indexOf( mrl );
     if( 0 <= i_index )
     {
         /* move to the front */
-        recents.move( i_index, 0 );
+        list.move( i_index, 0 );
         times.move( i_index, 0 );
     }
     else
     {
-        recents.prepend( mrl );
+        list.prepend( mrl );
         times.prepend( "-1" );
-        if( recents.count() > RECENTS_LIST_SIZE ) {
-            recents.takeLast();
+        if( list.count() > RECENTS_LIST_SIZE ) {
+            list.takeLast();
             times.takeLast();
         }
     }
@@ -120,44 +139,123 @@ void RecentsMRL::addRecent( const QString &mrl )
 
 void RecentsMRL::clear()
 {
-    if ( recents.isEmpty() )
+    if ( recentFiles.isEmpty() && recentStreams.isEmpty() )
         return;
 
-    recents.clear();
-    times.clear();
+    recentFiles.clear();
+    recentStreams.clear();
+    fileTimes.clear();
+    streamTimes.clear();
     if( isActive ) VLCMenuBar::updateRecents( p_intf );
     save();
 }
 
-QStringList RecentsMRL::recentList()
+void RecentsMRL::clearFiles()
 {
-    return recents;
+    if( recentFiles.isEmpty() )
+        return;
+    recentFiles.clear();
+    fileTimes.clear();
+    if( isActive ) VLCMenuBar::updateRecents( p_intf );
+    save();
+}
+
+void RecentsMRL::clearStreams()
+{
+    if( recentStreams.isEmpty() )
+        return;
+    recentStreams.clear();
+    streamTimes.clear();
+    if( isActive ) VLCMenuBar::updateRecents( p_intf );
+    save();
+}
+
+QStringList RecentsMRL::recentFileList()
+{
+    return recentFiles;
+}
+
+QStringList RecentsMRL::recentStreamList()
+{
+    return recentStreams;
 }
 
 void RecentsMRL::load()
 {
-    /* Load from the settings */
-    QStringList list = getSettings()->value( "RecentsMRL/list" ).toStringList();
-    QStringList list2 = getSettings()->value( "RecentsMRL/times" ).toStringList();
+    QSettings *settings = getSettings();
+    const bool hasSplitHistory = settings->contains( "RecentsMRL/fileList" )
+                              || settings->contains( "RecentsMRL/streamList" );
+    QStringList files;
+    QStringList streams;
+    QStringList times;
+    QStringList streamResumeTimes;
 
-    /* And filter the regexp on the list */
-    for( int i = 0; i < list.count(); ++i )
+    if( hasSplitHistory )
     {
-        if ( !filter || !filter->match( list.at(i) ).hasMatch() ) {
-            recents.append( list.at(i) );
-            times.append( list2.value(i, "-1" ) );
+        files = settings->value( "RecentsMRL/fileList" ).toStringList();
+        streams = settings->value( "RecentsMRL/streamList" ).toStringList();
+        times = settings->value( "RecentsMRL/fileTimes" ).toStringList();
+        streamResumeTimes = settings->value(
+            "RecentsMRL/streamTimes" ).toStringList();
+    }
+    else
+    {
+        /* Migrate the mixed list used by earlier PowerVLC releases. */
+        const QStringList oldList = settings->value( "RecentsMRL/list" ).toStringList();
+        const QStringList oldTimes = settings->value( "RecentsMRL/times" ).toStringList();
+        for( int i = 0; i < oldList.count(); ++i )
+        {
+            if( isFileMRL( oldList.at(i) ) )
+            {
+                files.append( oldList.at(i) );
+                times.append( oldTimes.value(i, "-1") );
+            }
+            else
+            {
+                streams.append( oldList.at(i) );
+                streamResumeTimes.append( oldTimes.value(i, "-1") );
+            }
+        }
+    }
+
+    /* Apply the configured privacy filter to both lists. */
+    for( int i = 0; i < files.count(); ++i )
+    {
+        if ( !filter || !filter->match( files.at(i) ).hasMatch() ) {
+            recentFiles.append( files.at(i) );
+            fileTimes.append( times.value(i, "-1" ) );
+        }
+    }
+    for( int i = 0; i < streams.count(); ++i )
+    {
+        if( !filter || !filter->match( streams.at(i) ).hasMatch() ) {
+            recentStreams.append( streams.at(i) );
+            streamTimes.append( streamResumeTimes.value(i, "-1" ) );
         }
     }
 }
 
 void RecentsMRL::save()
 {
-    getSettings()->setValue( "RecentsMRL/list", recents );
-    getSettings()->setValue( "RecentsMRL/times", times );
+    QSettings *settings = getSettings();
+    settings->setValue( "RecentsMRL/fileList", recentFiles );
+    settings->setValue( "RecentsMRL/streamList", recentStreams );
+    settings->setValue( "RecentsMRL/fileTimes", fileTimes );
+    settings->setValue( "RecentsMRL/streamTimes", streamTimes );
+    settings->remove( "RecentsMRL/list" );
+    settings->remove( "RecentsMRL/times" );
 }
 
 void RecentsMRL::playMRL( const QString &mrl )
 {
+    /* Entries created by Connect to Server reopen in the browser.  Other
+     * network MRLs remain ordinary recent streams and start playback. */
+    if( getSettings()->value( "ConnectToServer/recents" ).toStringList()
+            .contains( mrl ) )
+    {
+        if( p_intf->p_sys->p_mi->addNetworkLocation( mrl ) )
+            return;
+    }
     Open::openMRL( p_intf, mrl );
 }
 
@@ -166,18 +264,25 @@ int RecentsMRL::time( const QString &mrl )
     if( !isActive )
         return -1;
 
-    int i_index = recents.indexOf( mrl );
+    int i_index = recentFiles.indexOf( mrl );
     if( i_index != -1 )
-        return times.value(i_index, "-1").toInt();
-    else
-        return -1;
+        return fileTimes.value(i_index, "-1").toInt();
+
+    i_index = recentStreams.indexOf( mrl );
+    return i_index != -1 ? streamTimes.value(i_index, "-1").toInt() : -1;
 }
 
 void RecentsMRL::setTime( const QString &mrl, const int64_t time )
 {
-    int i_index = recents.indexOf( mrl );
+    int i_index = recentFiles.indexOf( mrl );
     if( i_index != -1 )
-        times[i_index] = QString::number( time / 1000 );
+        fileTimes[i_index] = QString::number( time / 1000 );
+    else
+    {
+        i_index = recentStreams.indexOf( mrl );
+        if( i_index != -1 )
+            streamTimes[i_index] = QString::number( time / 1000 );
+    }
 }
 
 int Open::openMRL( intf_thread_t *p_intf,
@@ -229,4 +334,3 @@ int Open::openMRLwithOptions( intf_thread_t* p_intf,
     }
     return i_ret;
 }
-

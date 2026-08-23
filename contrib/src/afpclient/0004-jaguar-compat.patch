@@ -1,0 +1,327 @@
+--- a/lib/connect.c
++++ b/lib/connect.c
+@@ -9,11 +9,13 @@
+ #ifdef _WIN32
+ #include "win32_compat.h"
+ #else
++#include <arpa/inet.h>
+ #include <sys/socket.h>
+ #include <netdb.h>
+ #endif
+ #include <errno.h>
+ #include <signal.h>
++#include <stdlib.h>
+ #include <string.h>
+
+ #include "afp.h"
+@@ -29,6 +31,39 @@
+ struct addrinfo *afp_get_address(void * priv, const char * hostname,
+                                  unsigned int port)
+ {
++#if defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED < 1040
++    struct in_addr ipv4;
++    struct hostent *host = NULL;
++
++    if (inet_aton(hostname, &ipv4) == 0) {
++        host = gethostbyname(hostname);
++        if (host == NULL || host->h_addrtype != AF_INET || host->h_length != sizeof(ipv4)) {
++            log_for_client(priv, AFPFSD, LOG_ERR,
++                           "Could not resolve %s.", hostname);
++            return NULL;
++        }
++        memcpy(&ipv4, host->h_addr_list[0], sizeof(ipv4));
++    }
++
++    struct addrinfo *numeric = calloc(1, sizeof(*numeric));
++    struct sockaddr_in *socket_address = calloc(1, sizeof(*socket_address));
++    if (numeric == NULL || socket_address == NULL) {
++        free(numeric);
++        free(socket_address);
++        errno = ENOMEM;
++        return NULL;
++    }
++
++    socket_address->sin_family = AF_INET;
++    socket_address->sin_port = htons(port);
++    socket_address->sin_addr = ipv4;
++    numeric->ai_family = AF_INET;
++    numeric->ai_socktype = SOCK_STREAM;
++    numeric->ai_protocol = IPPROTO_TCP;
++    numeric->ai_addrlen = sizeof(*socket_address);
++    numeric->ai_addr = (struct sockaddr *)socket_address;
++    return numeric;
++#else
+     char port_string[6];
+     struct addrinfo hints;
+     struct addrinfo * addresses;
+@@ -45,6 +80,7 @@
+     }
+
+     return addresses;
++#endif
+ }
+
+
+--- a/lib/loop.c
++++ b/lib/loop.c
+@@ -327,9 +327,7 @@
+ #endif
+     int ret;
+     int fderrors = 0;
+-#ifdef _WIN32
+     time_t last_tickle = 0;
+-#endif
+ #ifndef _WIN32
+     sigset_t sigmask, orig_sigmask;
+ #endif
+@@ -398,9 +396,14 @@
+             tv.tv_sec = 0;
+             tv.tv_usec = 100000;
+ #else
++#if defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED < 1040
++            tv.tv_sec = 0;
++            tv.tv_nsec = 100000000;
++#else
+             tv.tv_sec = 30;
+             tv.tv_nsec = 0;
+ #endif
++#endif
+         } else {
+             tv.tv_sec = 0;
+ #ifdef _WIN32
+@@ -559,12 +562,10 @@
+
+         if (ret == 0) {
+             /* Select timeout - send tickles to keep connections alive */
+-#ifdef _WIN32
+             time_t now = time(NULL);
+             if (now - last_tickle < 30)
+                 continue;
+             last_tickle = now;
+-#endif
+             afp_lock_server_list();
+
+                 for (struct afp_server *s = get_server_base(); s; s = s->next) {
+--- a/lib/unicode.c
++++ b/lib/unicode.c
+@@ -1301,7 +1301,6 @@
+                size_t dest_len)
+ {
+     char *p8;
+-    const char *p;
+     const char16 *p16;
+     const char16 *end;
+     size_t chars_processed = 0;
+@@ -1334,22 +1333,20 @@ int UCS2toUTF8(const char16 *str16, size_t max_chars, char *dest,
+             return -1;  /* Buffer too small */
+         }
+
+-        p = (const char*)p16;
+-
+         if (*p16 < 0x0080) {
+-            *p8 = p[0];
++            *p8 = (char)*p16;
+             p8++;
+         } else if (*p16 < 0x0800) {
+-            *p8 = 0xc0 | ((p[1] & 0x7) << 2) | ((p[0] & 0xc0) >> 6);
++            *p8 = 0xc0 | ((*p16 >> 6) & 0x1f);
+             p8++;
+-            *p8 = 0x80 | (p[0] & 0x3f);
++            *p8 = 0x80 | (*p16 & 0x3f);
+             p8++;
+         } else {
+-            *p8 = 0xe0 | ((p[1] & 0xf0) >> 4);
++            *p8 = 0xe0 | ((*p16 >> 12) & 0x0f);
+             p8++;
+-            *p8 = 0x80 | ((p[1] & 0xf) << 2) | ((p[0] & 0xc0) >> 6);
++            *p8 = 0x80 | ((*p16 >> 6) & 0x3f);
+             p8++;
+-            *p8 = 0x80 | (p[0] & 0x3f);
++            *p8 = 0x80 | (*p16 & 0x3f);
+             p8++;
+         }
+
+--- a/lib/uams.c
++++ b/lib/uams.c
+@@ -13,6 +13,11 @@
+
+ #include <string.h>
+ #include <stdlib.h>
++#include <errno.h>
++#if defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED < 1040
++#include <fcntl.h>
++#include <unistd.h>
++#endif
+
+ #ifdef HAVE_LIBGCRYPT
+ #include <gcrypt.h>
+@@ -64,6 +69,35 @@
+ {UAM_SRP, "SRP", &srp_login, NULL, NULL};
+
+ #endif /* HAVE_LIBGCRYPT */
++
++#ifdef HAVE_LIBGCRYPT
++int afp_random_bytes(void *buffer, size_t length)
++{
++#if defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED < 1040
++    int fd = open("/dev/urandom", O_RDONLY);
++    if (fd < 0)
++        return -1;
++
++    unsigned char *cursor = buffer;
++    size_t remaining = length;
++    while (remaining > 0) {
++        ssize_t count = read(fd, cursor, remaining);
++        if (count < 0 && errno == EINTR)
++            continue;
++        if (count <= 0) {
++            close(fd);
++            return -1;
++        }
++        cursor += count;
++        remaining -= (size_t)count;
++    }
++    close(fd);
++#else
++    gcry_randomize(buffer, length, GCRY_STRONG_RANDOM);
++#endif
++    return 0;
++}
++#endif
+
+ unsigned int default_uams_mask(void)
+ {
+--- a/lib/uams.h
++++ b/lib/uams.h
+@@ -15,6 +15,8 @@
+                     char *passwd, char *newpasswd);
+
+ #ifdef HAVE_LIBGCRYPT
++int afp_random_bytes(void *buffer, size_t length);
++
+ /* Randnum UAMs (uams_randnum.c) */
+ int randnum_login(struct afp_server *server, char *username, char *passwd);
+ int randnum2_login(struct afp_server *server, char *username, char *passwd);
+--- a/lib/uams_dhx.c
++++ b/lib/uams_dhx.c
+@@ -94,7 +94,8 @@
+     gcry_mpi_scan(&p, GCRYMPI_FMT_USG, p_binary, sizeof(p_binary), NULL);
+     gcry_mpi_scan(&g, GCRYMPI_FMT_USG, g_binary, sizeof(g_binary), NULL);
+     /* Get random bytes for Ra. */
+-    gcry_randomize(Ra_binary, sizeof(Ra_binary), GCRY_STRONG_RANDOM);
++    if (afp_random_bytes(Ra_binary, sizeof(Ra_binary)) != 0)
++        goto dhx_noctx_fail;
+     /* Translate the binary form of Ra into libgcrypt's preferred form */
+     gcry_mpi_scan(&Ra, GCRYMPI_FMT_USG, Ra_binary, sizeof(Ra_binary), NULL);
+     /* Ma = g^Ra mod p <- This is our "public" key, which we exchange
+@@ -365,7 +366,8 @@
+     gcry_mpi_scan(&p, GCRYMPI_FMT_USG, p_binary, sizeof(p_binary), NULL);
+     gcry_mpi_scan(&g, GCRYMPI_FMT_USG, g_binary, sizeof(g_binary), NULL);
+     /* Get random bytes for Ra */
+-    gcry_randomize(Ra_binary, sizeof(Ra_binary), GCRY_STRONG_RANDOM);
++    if (afp_random_bytes(Ra_binary, sizeof(Ra_binary)) != 0)
++        goto dhx_pw_noctx_fail;
+     gcry_mpi_scan(&Ra, GCRYMPI_FMT_USG, Ra_binary, sizeof(Ra_binary), NULL);
+     /* Ma = g^Ra mod p -- our "public" key */
+     gcry_mpi_powm(Ma, g, Ra, p);
+--- a/lib/uams_dhx2.c
++++ b/lib/uams_dhx2.c
+@@ -113,17 +113,19 @@
+     gcry_mpi_scan(&Mb, GCRYMPI_FMT_USG, d, bignum_len, NULL);
+     free(rbuf.data);
+     rbuf.data = NULL;
+-    Ra_binary = calloc(1, bignum_len);
++    size_t exponent_len = bignum_len < 20 ? bignum_len : 20;
++    Ra_binary = calloc(1, exponent_len);
+
+     if (Ra_binary == NULL) {
+         goto dhx2_noctx_fail;
+     }
+
+     /* Get random bytes for Ra. */
+-    gcry_randomize(Ra_binary, bignum_len, GCRY_STRONG_RANDOM);
++    if (afp_random_bytes(Ra_binary, exponent_len) != 0)
++        goto dhx2_noctx_fail;
+     /* Pull the random value we just read into an gcry_mpi_t so we can do
+      * large-value exponentiation, and generate our Ma. */
+-    gcry_mpi_scan(&Ra, GCRYMPI_FMT_USG, Ra_binary, bignum_len, NULL);
++    gcry_mpi_scan(&Ra, GCRYMPI_FMT_USG, Ra_binary, exponent_len, NULL);
+     free(Ra_binary);
+     Ra_binary = NULL;
+     /* Ma = g^Ra mod p <- This is our "public" key, which we exchange
+@@ -160,7 +162,8 @@
+      * later, but this would be a prime spot to do that. */
+     /* Use an internal gcrypt function to create the random number, so
+      * we can do things (more) portably... */
+-    gcry_create_nonce(nonce_binary, sizeof(nonce_binary));
++    if (afp_random_bytes(nonce_binary, sizeof(nonce_binary)) != 0)
++        goto dhx2_noctx_fail;
+     /* Set up our encryption context. */
+     ctxerror = gcry_cipher_open(&ctx, GCRY_CIPHER_CAST5,
+                                 GCRY_CIPHER_MODE_CBC, 0);
+@@ -462,14 +465,16 @@
+     free(rbuf.data);
+     rbuf.data = NULL;
+     /* Generate our random Rb and compute Mb = g^Rb mod p */
+-    Rb_binary = calloc(1, bignum_len);
++    size_t exponent_len = bignum_len < 20 ? bignum_len : 20;
++    Rb_binary = calloc(1, exponent_len);
+
+     if (Rb_binary == NULL) {
+         goto dhx2_pw_noctx_fail;
+     }
+
+-    gcry_randomize(Rb_binary, bignum_len, GCRY_STRONG_RANDOM);
+-    gcry_mpi_scan(&Rb, GCRYMPI_FMT_USG, Rb_binary, bignum_len, NULL);
++    if (afp_random_bytes(Rb_binary, exponent_len) != 0)
++        goto dhx2_pw_noctx_fail;
++    gcry_mpi_scan(&Rb, GCRYMPI_FMT_USG, Rb_binary, exponent_len, NULL);
+     free(Rb_binary);
+     Rb_binary = NULL;
+     gcry_mpi_powm(Mb, g, Rb, p);
+@@ -499,7 +504,8 @@
+     free(K_binary);
+     K_binary = NULL;
+     /* Generate client nonce */
+-    gcry_create_nonce(nonce_binary, sizeof(nonce_binary));
++    if (afp_random_bytes(nonce_binary, sizeof(nonce_binary)) != 0)
++        goto dhx2_pw_noctx_fail;
+     /* Set up encryption context */
+     ctxerror = gcry_cipher_open(&ctx, GCRY_CIPHER_CAST5,
+                                 GCRY_CIPHER_MODE_CBC, 0);
+--- a/lib/uams_randnum.c
++++ b/lib/uams_randnum.c
+@@ -504,7 +504,8 @@
+     p = ai + crypted_len;
+     /* Use an internal gcrypt function to create the random number, so
+      * we can do things (more) portably... */
+-    gcry_create_nonce(p, randnum_len);
++    if (afp_random_bytes(p, randnum_len) != 0)
++        goto randnum2_noctx_fail;
+     /* Make a place for the server's hashing of our password. */
+     rbuf.maxsize = 8;
+     rbuf.data = calloc(1, rbuf.maxsize);
+--- a/lib/uams_srp.c
++++ b/lib/uams_srp.c
+@@ -303,7 +303,8 @@
+     v = gcry_mpi_new(0);
+     gcry_mpi_powm(v, g_mpi, x, N);
+     /* Generate client ephemeral: a random, A = g^a mod N */
+-    a_binary = calloc(1, nbytes);
++    size_t exponent_len = nbytes < 20 ? nbytes : 20;
++    a_binary = calloc(1, exponent_len);
+
+     if (a_binary == NULL) {
+         goto srp_fail;
+@@ -313,8 +314,9 @@
+     A = gcry_mpi_new(0);
+
+     do {
+-        gcry_randomize(a_binary, nbytes, GCRY_STRONG_RANDOM);
+-        gcry_mpi_scan(&a, GCRYMPI_FMT_USG, a_binary, nbytes, NULL);
++        if (afp_random_bytes(a_binary, exponent_len) != 0)
++            goto srp_fail;
++        gcry_mpi_scan(&a, GCRYMPI_FMT_USG, a_binary, exponent_len, NULL);
+         gcry_mpi_mod(a, a, N);
+         gcry_mpi_powm(A, g_mpi, a, N);
+     } while (gcry_mpi_cmp_ui(A, 0) == 0);

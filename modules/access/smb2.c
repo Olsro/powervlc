@@ -38,12 +38,19 @@
 #include <vlc_dialog.h>
 #include <vlc_input_item.h>
 #include <vlc_plugin.h>
+#include <vlc_strings.h>
 #include <vlc_url.h>
 #include <vlc_keystore.h>
 #include <vlc_interrupt.h>
 #include <vlc_network.h>
 #include <vlc_memstream.h>
 
+/* libsmb2 uses _WINDOWS (rather than the compiler-provided _WIN32) when it
+ * defines t_socket. Its CMake build sets that macro, so consumers must see it
+ * too or Win64/ARM64 disagree with the library about the public ABI. */
+#if defined(_WIN32) && !defined(_WINDOWS)
+# define _WINDOWS 1
+#endif
 #include <smb2/smb2.h>
 #include <smb2/libsmb2.h>
 #include <smb2/libsmb2-raw.h>
@@ -209,27 +216,106 @@ vlc_smb2_set_error(struct vlc_smb2_op *op, const char *psz_func, int err)
 /* There is no way to know if libsmb2 has these new symbols and we don't want
  * to increase the version requirement on VLC 3.0, therefore implement a weak
  * compat version. */
-const t_socket *
-smb2_get_fds(struct smb2_context *smb2, size_t *fd_count, int *timeout);
-int
-smb2_service_fd(struct smb2_context *smb2, int fd, int revents);
+extern const t_socket *smb2_get_fds(struct smb2_context *, size_t *, int *)
+    __attribute__((weak));
+extern int smb2_service_fd(struct smb2_context *, int, int)
+    __attribute__((weak));
+#endif
 
-__attribute__((weak)) const t_socket *
-smb2_get_fds(struct smb2_context *smb2, size_t *fd_count, int *timeout)
+static const t_socket *
+vlc_smb2_get_fds(struct smb2_context *smb2, size_t *fd_count, int *timeout,
+                 t_socket *fallback_fd)
 {
-    (void) timeout;
-    static thread_local t_socket fd;
+#if defined (__ELF__) || defined (__MACH__)
+    if (smb2_get_fds != NULL)
+        return smb2_get_fds(smb2, fd_count, timeout);
 
+    (void) timeout;
     *fd_count = 1;
-    fd = smb2_get_fd(smb2);
-    return &fd;
+    *fallback_fd = smb2_get_fd(smb2);
+    return fallback_fd;
+#else
+    (void) fallback_fd;
+    return smb2_get_fds(smb2, fd_count, timeout);
+#endif
 }
 
-__attribute__((weak)) int
-smb2_service_fd(struct smb2_context *smb2, int fd, int revents)
+static int
+vlc_smb2_service_fd(struct smb2_context *smb2, t_socket fd, int revents)
 {
+#if defined (__ELF__) || defined (__MACH__)
+    if (smb2_service_fd != NULL)
+        return smb2_service_fd(smb2, fd, revents);
+
     (void) fd;
     return smb2_service(smb2, revents);
+#else
+    return smb2_service_fd(smb2, fd, revents);
+#endif
+}
+
+#ifdef _WIN32
+/* VLC 3 stores pollfd descriptors as int, while a Windows SOCKET is
+ * pointer-sized. Use a level-triggered select loop so x64 and ARM64 keep the
+ * native handle width. A contrib and its consumer can see different POLL*
+ * definitions when their MinGW deployment targets differ: XP uses the POSIX
+ * values, while newer Winsock headers expose WSAPoll values. Preserve the
+ * exact event family returned by libsmb2 instead of relying on the values
+ * visible while compiling this module. Slice an infinite wait so VLC
+ * cancellation remains responsive. */
+enum
+{
+    SMB2_POSIX_POLLIN  = 0x0001,
+    SMB2_POSIX_POLLOUT = 0x0004,
+    SMB2_POSIX_POLLHUP = 0x0010,
+    SMB2_WSA_POLLHUP   = 0x0002,
+    SMB2_WSA_POLLOUT   = 0x0010,
+    SMB2_WSA_POLLIN    = 0x0300,
+};
+
+static int
+vlc_smb2_poll_windows(const t_socket *fds, size_t fd_count, int events,
+                      int timeout, short *revents)
+{
+    fd_set readfds, writefds, exceptfds;
+    FD_ZERO(&readfds);
+    FD_ZERO(&writefds);
+    FD_ZERO(&exceptfds);
+
+    for (size_t i = 0; i < fd_count; ++i)
+    {
+        revents[i] = 0;
+        if (events & (SMB2_POSIX_POLLIN | SMB2_WSA_POLLIN))
+            FD_SET(fds[i], &readfds);
+        if (events & (SMB2_POSIX_POLLOUT | SMB2_WSA_POLLOUT))
+            FD_SET(fds[i], &writefds);
+        FD_SET(fds[i], &exceptfds);
+    }
+
+    int wait = timeout < 0 ? 100 : timeout;
+    struct timeval tv = { wait / 1000, (wait % 1000) * 1000 };
+    int ret = select(0, &readfds, &writefds, &exceptfds, &tv);
+    if (ret < 0)
+    {
+        errno = EIO;
+        return ret;
+    }
+    if (ret == 0)
+        return 0;
+
+    int ready = 0;
+    for (size_t i = 0; i < fd_count; ++i)
+    {
+        if (FD_ISSET(fds[i], &readfds))
+            revents[i] |= events & (SMB2_POSIX_POLLIN | SMB2_WSA_POLLIN);
+        if (FD_ISSET(fds[i], &writefds))
+            revents[i] |= events & (SMB2_POSIX_POLLOUT | SMB2_WSA_POLLOUT);
+        if (FD_ISSET(fds[i], &exceptfds))
+            revents[i] |= events & (SMB2_WSA_POLLIN | SMB2_WSA_POLLOUT)
+                         ? SMB2_WSA_POLLHUP : SMB2_POSIX_POLLHUP;
+        ready += revents[i] != 0;
+    }
+    return ready;
 }
 #endif
 
@@ -240,17 +326,36 @@ vlc_smb2_mainloop(struct vlc_smb2_op *op)
     {
         int ret, smb2_timeout;
         size_t fd_count;
-        const t_socket *fds = smb2_get_fds(op->smb2, &fd_count, &smb2_timeout);
+        t_socket fallback_fd;
+        const t_socket *fds = vlc_smb2_get_fds(op->smb2, &fd_count,
+                                               &smb2_timeout, &fallback_fd);
         int events = smb2_which_events(op->smb2);
 
+#ifndef _WIN32
         struct pollfd p_fds[fd_count];
         for (size_t i = 0; i < fd_count; ++i)
         {
             p_fds[i].events = events;
             p_fds[i].fd = fds[i];
         }
+#endif
 
-        if (fds == NULL || (ret = vlc_poll_i11e(p_fds, fd_count, smb2_timeout)) < 0)
+#ifdef _WIN32
+        short win_revents[fd_count];
+        ret = fds == NULL ? -1 : vlc_smb2_poll_windows(fds, fd_count, events,
+                                                       smb2_timeout,
+                                                       win_revents);
+        if (ret == 0 && smb2_timeout < 0 && !vlc_killed())
+            continue;
+#else
+        ret = fds == NULL ? -1 : vlc_poll_i11e(p_fds, fd_count, smb2_timeout);
+#endif
+        if (vlc_killed())
+        {
+            errno = EINTR;
+            ret = -1;
+        }
+        if (ret < 0)
         {
             if (op->log && errno == EINTR)
                 msg_Warn(op->log, "vlc_poll_i11e interrupted");
@@ -258,16 +363,24 @@ vlc_smb2_mainloop(struct vlc_smb2_op *op)
         }
         else if (ret == 0)
         {
-            if (smb2_service_fd(op->smb2, -1, 0) < 0)
+            if (vlc_smb2_service_fd(op->smb2, -1, 0) < 0)
                 VLC_SMB2_SET_ERROR(op, "smb2_service", -EINVAL);
         }
         else
         {
             for (size_t i = 0; i < fd_count; ++i)
             {
-                if (p_fds[i].revents
-                 && smb2_service_fd(op->smb2, p_fds[i].fd, p_fds[i].revents) < 0)
-                    VLC_SMB2_SET_ERROR(op, "smb2_service", -EINVAL);
+#ifdef _WIN32
+                int const service_events = win_revents[i];
+#else
+                int const service_events = p_fds[i].revents;
+#endif
+                if (service_events)
+                {
+                    if (vlc_smb2_service_fd(op->smb2, fds[i],
+                                            service_events) < 0)
+                        VLC_SMB2_SET_ERROR(op, "smb2_service", -EINVAL);
+                }
             }
         }
     }
@@ -877,6 +990,7 @@ Open(vlc_object_t *p_obj)
 
     vlc_credential credential;
     vlc_credential_init(&credential, &sys->encoded_url);
+    bool anonymous_fallback = false;
     var_domain = var_InheritString(access, "smb-domain");
     credential.psz_realm = var_domain;
 
@@ -885,6 +999,20 @@ Open(vlc_object_t *p_obj)
     vlc_credential_get(&credential, access, "smb-user", "smb-pwd", NULL,
                        NULL);
     ret = vlc_smb2_connect_open_share(access, url, &credential, false);
+    if (VLC_SMB2_STATUS_DENIED(ret) && credential.psz_username != NULL
+     && !vlc_ascii_strcasecmp(credential.psz_username, "guest"))
+    {
+        /* Some servers expose a Guest account but reject an explicit NTLM
+         * password for it. Retry as a true anonymous Guest session, like the
+         * native macOS SMB client does. */
+        vlc_credential anonymous = credential;
+        anonymous.psz_username = NULL;
+        anonymous.psz_password = NULL;
+        ret = vlc_smb2_connect_open_share(access, url, &anonymous, false);
+        if (ret == -EINVAL)
+            ret = vlc_smb2_connect_open_share(access, url, &anonymous, true);
+        anonymous_fallback = ret == 0;
+    }
     if (ret == -EINVAL && credential.psz_username == NULL)
     {
         /* Since last Windows 11 update (KB5026436), Windows SMB servers need a
@@ -907,7 +1035,7 @@ Open(vlc_object_t *p_obj)
         ret = vlc_smb2_connect_open_share(access, url, &credential, false);
     free(resolved_host);
     free(url);
-    if (ret == 0)
+    if (ret == 0 && !anonymous_fallback)
         vlc_credential_store(&credential, access);
     vlc_credential_clean(&credential);
 

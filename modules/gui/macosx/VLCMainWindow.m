@@ -1153,6 +1153,19 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
 
     id item = [_sidebarView itemAtRow:[selectedIndexes firstIndex]];
 
+    if ([item playlistItemId] >= 0) {
+        [_categoryLabel setStringValue:[item title]];
+        PL_LOCK;
+        playlist_item_t *networkItem = playlist_ItemGetById(p_playlist,
+                                                             (int)[item playlistItemId]);
+        if (networkItem)
+            [[[[VLCMain sharedInstance] playlist] model] changeRootItem:networkItem];
+        PL_UNLOCK;
+        [self hidePodcastControls];
+        [self hideDropZone];
+        return;
+    }
+
     //Set the label text to represent the new selection
     if ([item sdtype] > -1 && [[item identifier] length] > 0) {
         BOOL sd_loaded = playlist_IsServicesDiscoveryLoaded(p_playlist, [[item identifier] UTF8String]);

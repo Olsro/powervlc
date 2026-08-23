@@ -14,6 +14,8 @@ set -u
 cd "$(dirname "$0")" || exit 1
 ROOT="$(pwd)"
 DEST="$ROOT/zips"
+VERSION="$(sed -n 's/^POWERVLC_VERSION="\([^"]*\)"/\1/p' "$ROOT/configure.ac" | head -1)"
+[ -n "$VERSION" ] || { echo "cannot read POWERVLC_VERSION from configure.ac" >&2; exit 1; }
 
 mkdir -p "$DEST" || exit 1
 
@@ -46,10 +48,13 @@ move_zip() {
 
 echo "Collecting zips into $DEST"
 
+# Only collect the current PowerVLC release. Build directories and docker/out
+# intentionally retain older releases (and macOS may also contain the
+# upstream vlc-*-release.zip), none of which belongs in the current round.
 # macOS bundles: build<target>/powervlc-<version>-mac-<target>.zip
 for d in "$ROOT"/build*/; do
     [ -d "$d" ] || continue
-    for z in "$d"*.zip; do
+    for z in "$d"powervlc-"$VERSION"-*.zip; do
         [ -f "$z" ] || continue
         move_zip "$z"
     done
@@ -58,7 +63,7 @@ done
 # Windows & Linux artifacts
 OUT="$ROOT/extras/package/docker/out"
 if [ -d "$OUT" ]; then
-    for z in "$OUT"/*.zip; do
+    for z in "$OUT"/powervlc-"$VERSION"-*.zip; do
         [ -f "$z" ] || continue
         move_zip "$z"
     done

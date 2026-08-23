@@ -40,6 +40,7 @@ public:
     PlaylistWidget *exportPlaylistWidget( );
     void importPlaylistWidget( PlaylistWidget * );
     bool hasPlaylistWidget();
+    bool addNetworkLocation( const QString& mrl );
 
 protected:
     void hideEvent( QHideEvent * ) Q_DECL_OVERRIDE;

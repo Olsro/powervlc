@@ -29,7 +29,7 @@ RUN if [ -f /etc/apt/sources.list ]; then \
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential git ca-certificates curl wget file rsync xz-utils \
       autoconf automake libtool libtool-bin pkg-config gettext autopoint \
-      flex bison zip unzip \
+      flex bison zip unzip meson ninja-build \
     && ( apt-get build-dep -y vlc || echo "WARN: build-dep vlc failed; some modules may be disabled" ) \
     && apt-get install -y --no-install-recommends \
       qtbase5-dev qtbase5-private-dev libqt5svg5-dev libqt5x11extras5-dev \
@@ -43,7 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN apt-get update && apt-get install -y --no-install-recommends \
       xvfb x11-utils x11-xserver-utils xdotool imagemagick \
       fonts-dejavu-core libgl1-mesa-dri mesa-utils \
-      openbox \
+      openbox libbsd-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # VLC refuses to run as root, and the bench has to run the real binary:

@@ -46,6 +46,22 @@
 # define O_TMPFILE 0
 #endif
 
+/* A current macOS SDK exposes these functions even when the deployment target
+ * predates them, so Autoconf's link checks report false positives. Use VLC's
+ * existing fallbacks for old targets instead of leaving weak, unguarded calls
+ * that either fail the build or jump to NULL at runtime. */
+#if defined(__APPLE__)
+# include <AvailabilityMacros.h>
+# if defined(MAC_OS_X_VERSION_10_10) \
+  && MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_10
+#  undef HAVE_OPENAT
+# endif
+# if defined(MAC_OS_X_VERSION_10_12) \
+  && MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_12
+#  undef HAVE_MKOSTEMP
+# endif
+#endif
+
 #include <vlc_common.h>
 #include <vlc_fs.h>
 

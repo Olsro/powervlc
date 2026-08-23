@@ -1,7 +1,7 @@
 # tremor (fixed-point Vorbis)
 
 TREMOR_URL := https://gitlab.xiph.org/xiph/tremor.git
-TREMOR_HASH := b56ffce0
+TREMOR_HASH := b56ffce0c0773ec5ca04c466bc00b1bbcaf65aef
 
 ifndef HAVE_FPU
 PKGS += tremor

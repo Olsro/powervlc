@@ -103,6 +103,13 @@ POSTPROC_CONF += --extra-cflags="-Dstatic_assert=_Static_assert"
 endif
 ifeq ($(ARCH),ppc)
 POSTPROC_CONF += --enable-pic
+# The configure probe accepts -maltivec even when the target flags say
+# -mcpu=750, then silently promotes every object to the ppc7400 subtype.  Such
+# a library is rejected by dyld on a real G3.  PowerVLC's G4/G5 builds export
+# VLC_PPC_ALTIVEC explicitly; all other PowerPC builds must stay scalar.
+ifndef VLC_PPC_ALTIVEC
+POSTPROC_CONF += --disable-altivec
+endif
 endif
 ifeq ($(ARCH),x86_64)
 POSTPROC_CONF += --cpu=core2

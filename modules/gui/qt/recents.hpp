@@ -58,7 +58,8 @@ class RecentsMRL : public QObject, public Singleton<RecentsMRL>
 
 public:
     void addRecent( const QString & );
-    QStringList recentList();
+    QStringList recentFileList();
+    QStringList recentStreamList();
     QSignalMapper *signalMapper;
 
     int time( const QString &mrl );
@@ -70,8 +71,10 @@ private:
 
     intf_thread_t *p_intf;
 
-    QStringList   recents;
-    QStringList   times;
+    QStringList   recentFiles;
+    QStringList   recentStreams;
+    QStringList   fileTimes;
+    QStringList   streamTimes;
     QRegularExpression *filter;
     bool          isActive;
 
@@ -79,7 +82,11 @@ private:
     void save();
 
 public slots:
+    /* clear() remains the all-history operation used when recents are
+     * disabled in the preferences. */
     void clear();
+    void clearFiles();
+    void clearStreams();
     void playMRL( const QString & );
 };
 

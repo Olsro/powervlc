@@ -25,6 +25,9 @@
 #import <vlc_common.h>
 #import <vlc_interface.h>
 
+/* Shared by the playlist and the File menu. */
+void VLCNoteRecentStream(NSString *mrl);
+
 @interface VLCMainMenu : NSObject
 
 /* main menu */
