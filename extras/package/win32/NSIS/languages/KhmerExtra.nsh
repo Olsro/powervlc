@@ -57,6 +57,7 @@ ${LangFileString} Action_OnArrivalSVCDMovie "ចាក់​ភាព​យន�
 ${LangFileString} Action_OnArrivalVideoFiles "ចាក់​ឯកសារ​វីដេអូ"
 ${LangFileString} Action_OnArrivalMusicFiles "ចាក់​ឯកសារ​ស្វ័យប្រវត្តិ"
 ${LangFileString} Action_OnArrivalDVDAudio "ចាក់​ឌីវីឌី​ស្វ័យប្រវត្តិ"
+${LangFileString} Action_OnArrivalBluray "ចាក់ Blu-ray"
 ${LangFileString} License_NextText "ឥឡូវ​អ្នក​ស្គាល់​សិទ្ធិ​របស់​អ្នក​។ ចុច​បន្ទាប់​ដើម្បី​បន្ត។"
 
 ${LangFileString} Detail_CheckProcesses "កំពុង​ពិនិត្យមើល​ការ​ចូល​ដំណើរការ..."

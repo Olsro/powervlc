@@ -91,6 +91,12 @@ struct picture_t
     bool            b_top_field_first;             /**< which field is first */
     unsigned int    i_nb_fields;                  /**< # of displayed fields */
     picture_context_t *context;      /**< video format-specific data pointer */
+    /** Parsed dynamic Dolby Vision metadata for this picture, if present. */
+    vlc_video_dovi_metadata_t *p_dovi;
+    /** Raw Dolby Vision RPU NAL, retained for native/pass-through outputs. */
+    block_t *p_dovi_rpu;
+    /** Decoded Profile 7 enhancement layer paired with this base picture. */
+    struct picture_t *p_enhancement_layer;
     /**@}*/
 
     /** Private data - the video output plugin might want to put stuff here to

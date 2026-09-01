@@ -158,6 +158,12 @@ int vlc_stream_fifo_Queue(stream_t *s, block_t *block)
     return 0;
 }
 
+size_t vlc_stream_fifo_GetBytes(stream_t *s)
+{
+    stream_sys_t *sys = s->p_sys;
+    return block_FifoSize(sys->fifo);
+}
+
 ssize_t vlc_stream_fifo_Write(stream_t *s, const void *buf, size_t len)
 {
     block_t *block = block_Alloc(len);

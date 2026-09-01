@@ -56,6 +56,24 @@
 
 @implementation VLCDialogWindow
 
+- (void)cancelOperation:(id)sender
+{
+    [self performClose:sender];
+}
+
+- (void)sendEvent:(NSEvent *)event
+{
+    if ([event type] == NSKeyDown) {
+        NSString *characters = [event charactersIgnoringModifiers];
+        if ([characters length] == 1
+            && [characters characterAtIndex:0] == 0x1b) {
+            [self performClose:self];
+            return;
+        }
+    }
+    [super sendEvent:event];
+}
+
 @end
 
 @implementation VLCDialogImageView
@@ -137,28 +155,42 @@
     NSScrollView *scrollView = [self enclosingScrollView];
     CGFloat available = scrollView ? [[scrollView contentView] bounds].size.width
                                    : [self bounds].size.width;
+
+    /* AppKit can report the clip-view width before it has taken the vertical
+     * scroller into account (notably while the extension dialog is growing).
+     * The table then lays out right up to that stale edge and its last column
+     * ends underneath the scroller.  Keep a permanent trailing gutter when a
+     * vertical scroller is present; double-reserving it with a legacy,
+     * non-overlay scroller only leaves harmless breathing room. */
+    if (scrollView && [scrollView hasVerticalScroller])
+        available -= [NSScroller scrollerWidthForControlSize:NSRegularControlSize
+                                               scrollerStyle:NSScrollerStyleLegacy] + 2.0;
+
     available -= [self intercellSpacing].width * [columns count];
     if (available < 120)
         return; /* not laid out yet: keep whatever we have */
 
-    double total = 0;
-    NSUInteger widest = 0;
-    for (NSUInteger i = 0; i < [_columnWeights count]; i++) {
-        double weight = [[_columnWeights objectAtIndex:i] doubleValue];
-        total += weight;
-        if (weight > [[_columnWeights objectAtIndex:widest] doubleValue])
-            widest = i;
-    }
-    if (total <= 0)
-        return;
-
-    /* Start from what each column actually needs. */
+    /* Start from what each column actually needs. The 48-point readability
+     * floor must be part of the total, not applied only after distributing
+     * the width: otherwise every short column silently made the table wider
+     * than its clip view and the final column (typically Queue or Duration)
+     * was cut off on the right. */
     NSUInteger count = [columns count];
     CGFloat want[64];
     if (count > 64)
         count = 64;
-    for (NSUInteger i = 0; i < count; i++)
+    double total = 0;
+    NSUInteger widest = 0;
+    for (NSUInteger i = 0; i < count; i++) {
         want[i] = [[_columnWeights objectAtIndex:i] doubleValue];
+        if (want[i] < 48)
+            want[i] = 48;
+        total += want[i];
+        if (want[i] > want[widest])
+            widest = i;
+    }
+    if (total <= 0)
+        return;
 
     if (total <= available) {
         /* everything fits: give each column what it needs and hand the
@@ -244,8 +276,13 @@
     CGFloat header = [self headerView] ? [[self headerView] frame].size.height
                                        : 0;
     NSRect bounds = [clip bounds];
-    if ([clip isFlipped])
-        bounds.origin.y = -header;
+    if ([clip isFlipped]) {
+        /* Lion lays the header above the clip view, unlike later AppKit
+         * releases where it floats over the first row.  Applying the modern
+         * negative header offset there leaves an apparent blank first row in
+         * extension lists (Soulseek, eMule, etc.). */
+        bounds.origin.y = (NSAppKitVersionNumber < 1244.) ? 0. : -header;
+    }
     else {
         bounds.origin.y = NSMaxY([self frame]) - bounds.size.height;
         if (bounds.origin.y < 0)

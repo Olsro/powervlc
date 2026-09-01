@@ -170,6 +170,7 @@ struct es_out_sys_t
     vlc_tick_t  i_pts_jitter;
     int         i_cr_average;
     int         i_rate;
+    bool        b_next_pcr_seamless;
 
     /* */
     bool        b_paused;
@@ -273,6 +274,11 @@ static int          EsOutSetRecord(  es_out_t *, bool b_record );
 
 static bool EsIsSelected( es_out_id_t *es );
 static void EsSelect( es_out_t *out, es_out_id_t *es );
+
+static bool EsOutKeepDiscVout( const es_out_sys_t *p_sys )
+{
+    return var_GetBool( p_sys->p_input, "bluray-disc-session" );
+}
 static void EsDeleteInfo( es_out_t *, es_out_id_t *es );
 static void EsUnselect( es_out_t *out, es_out_id_t *es, bool b_update );
 static void EsOutDecoderChangeDelay( es_out_t *out, es_out_id_t *p_es );
@@ -419,8 +425,10 @@ es_out_t *input_EsOutNew( input_thread_t *p_input, int i_rate )
     var_SetBool( p_input, "gapless-eligible", true );
 
     p_sys->i_pause_date = -1;
+    p_sys->b_paused = false;
 
     p_sys->i_rate = i_rate;
+    p_sys->b_next_pcr_seamless = false;
 
     int64_t i_cache_mb = var_InheritInteger( p_input, "video-cache-mb" );
     p_sys->i_video_cache_bytes =
@@ -1107,6 +1115,10 @@ static double EsOutVideoCacheFillRatio( es_out_t *out )
         else
             p_sys->i_video_cache_starved_since = VLC_TICK_INVALID;
 
+        vlc_tick_t now = mdate();
+        if( p_sys->i_video_cache_episode_start == VLC_TICK_INVALID )
+            p_sys->i_video_cache_episode_start = now;
+
         /* A decoder whose picture size cannot be measured (opaque
          * hardware pictures: no planes to sum) never gets a target; once
          * it has produced a picture it parks on the buffering gate like
@@ -1115,17 +1127,15 @@ static double EsOutVideoCacheFillRatio( es_out_t *out )
          * start right away (the look-ahead cache effectively cannot
          * apply to such decoders). */
         if( i_target_count == 0 && i_pic_count == 0
-         && input_DecoderIsReadyWaiting( p_es->p_dec ) )
+         && input_DecoderIsReadyWaiting( p_es->p_dec )
+         && now - p_sys->i_video_cache_episode_start >= 100000 )
         {
             msg_Dbg( p_sys->p_input, "video cache fill: picture size "
                      "unmeasurable and decoder ready, starting" );
             return 1.0;
         }
 
-        vlc_tick_t now = mdate();
-        if( p_sys->i_video_cache_episode_start == VLC_TICK_INVALID )
-            p_sys->i_video_cache_episode_start = now;
-        else if( i_pic_count > 0
+        if( i_pic_count > 0
               && now - p_sys->i_video_cache_episode_start
                  > VIDEO_CACHE_FILL_WALL_TIMEOUT
                  /* The healthy-rate exemption needs a sizeable target:
@@ -1526,6 +1536,34 @@ static void EsOutDecodersStopBuffering( es_out_t *out, bool b_forced )
             return;
         }
     }
+
+    /* An MVC picture is assembled from two independently demuxed Blu-ray
+     * views.  The normal compressed-stream threshold can be reached after
+     * only one primary block, before the paired decoder has a complete
+     * picture.  Do not enter input_DecoderWait() in that state: it holds the
+     * es_out lock and prevents the demuxer from supplying the missing blocks,
+     * turning every 3D clip boundary into the five-second safety timeout.
+     * Staying in buffering lets both chained demuxers continue.  Pace that
+     * continuation: on a fast local ISO, running flat-out can enqueue and
+     * finish a 22-second play item while macOS is still spending four seconds
+     * switching the HDMI scanout to frame packing.  The PLAYITEM event then
+     * tears down the decoder before its first decoded picture is presented.
+     * One 60-KiB demux block every 10 ms is still over 6 MB/s (well above the
+     * Blu-ray maximum) while preventing that destructive look-ahead. Keep a
+     * two-second wall-clock escape for damaged streams that never form a pair. */
+    for( int i = 0; i < p_sys->i_es; i++ )
+    {
+        es_out_id_t *p_es = p_sys->es[i];
+        if( p_es->p_dec && p_es->fmt.i_cat == VIDEO_ES &&
+            p_es->fmt.i_codec == VLC_CODEC_H264_MVC &&
+            !input_DecoderIsReadyWaiting( p_es->p_dec ) &&
+            i_system_duration < 2 * CLOCK_FREQ )
+        {
+            msleep( VLC_TICK_FROM_MS(10) );
+            return;
+        }
+    }
+
     input_SendEventCache( p_sys->p_input, 1.0 );
 
     msg_Dbg( p_sys->p_input, "Stream buffering done (%d ms in %d ms)",
@@ -1547,6 +1585,7 @@ static void EsOutDecodersStopBuffering( es_out_t *out, bool b_forced )
 
         if( !p_es->p_dec || p_es->fmt.i_cat == SPU_ES )
             continue;
+
         input_DecoderWait( p_es->p_dec );
         if( p_es->p_dec_record )
             input_DecoderWait( p_es->p_dec_record );
@@ -1588,11 +1627,12 @@ static void EsOutDecodersStopBuffering( es_out_t *out, bool b_forced )
             b_video_pending = true;
     }
 
-    if( !b_video_pending )
+    if( !b_video_pending && !EsOutKeepDiscVout( p_sys ) )
         input_resource_TerminateVout( input_priv(p_sys->p_input)->p_resource );
     else
         msg_Dbg( p_sys->p_input, "keeping the free vout: a selected video "
-                 "track has not requested one yet" );
+                 "track has not requested one yet or a Blu-ray session is "
+                 "between clips" );
 
     /* */
     const vlc_tick_t i_wakeup_delay = 10*1000; /* FIXME CLEANUP thread wake up time*/
@@ -1673,8 +1713,63 @@ static void EsOutDecodersStopBuffering( es_out_t *out, bool b_forced )
     }
     else
     {
-        input_clock_ChangeSystemOrigin( p_sys->p_pgrm->p_clock, true,
-                                        i_current_date + i_wakeup_delay - i_buffering_duration );
+        /* A live IEC 61937 carrier can retain a driver-reported HDMI output
+         * horizon after its software queue was flushed. The first post-seek
+         * programme block cannot reach the wire before that date. Rebase the
+         * common clock by this measured value; cold starts and ordinary PCM
+         * flushes report no usable horizon and keep the historical path. */
+        vlc_tick_t i_audio_output_delay = 0;
+        for( int i = 0; i < p_sys->i_es; i++ )
+        {
+            es_out_id_t *p_es = p_sys->es[i];
+            vlc_tick_t i_delay;
+            if( p_es->fmt.i_cat == AUDIO_ES && p_es->p_dec != NULL
+             && input_DecoderGetAudioOutputDelay( p_es->p_dec, &i_delay )
+             && i_delay > i_audio_output_delay
+             && i_delay < 5 * CLOCK_FREQ )
+                i_audio_output_delay = i_delay;
+        }
+        if( i_audio_output_delay > 0 )
+            msg_Dbg( p_sys->p_input, "delaying seek A/V gate by measured "
+                     "audio output horizon: %"PRId64" us",
+                     i_audio_output_delay );
+
+        msg_Warn( p_sys->p_input,
+                  "clock release anchor: paused=%d pause_date=%"PRId64
+                  " now=%"PRId64" buffering=%"PRId64
+                  " wakeup=%"PRId64" audio_horizon=%"PRId64,
+                  p_sys->b_paused, p_sys->i_pause_date, i_current_date,
+                  i_buffering_duration, i_wakeup_delay,
+                  i_audio_output_delay );
+
+        const vlc_tick_t i_release_origin = i_current_date + i_wakeup_delay
+                                          + i_audio_output_delay
+                                          - i_buffering_duration;
+        /* MVC Blu-ray can expose the base and dependent views through
+         * distinct ES programs.  Releasing only the currently selected
+         * program leaves the sibling clock on its pre-buffering system grid;
+         * when that PCR becomes active at the menu junction it overwrites the
+         * good mapping and stalls both views.  Anchor every initialized
+         * program clock to the same presentation origin. */
+        for( int i = 0; i < p_sys->i_pgrm; i++ )
+        {
+            vlc_tick_t rs, rsy, ds, dsy;
+            if( input_clock_GetState( p_sys->pgrm[i]->p_clock,
+                                      &rs, &rsy, &ds, &dsy ) == VLC_SUCCESS )
+                input_clock_ChangeSystemOrigin( p_sys->pgrm[i]->p_clock,
+                                                true, i_release_origin );
+        }
+        {
+            vlc_tick_t rs, rsy, ds, dsy;
+            if( input_clock_GetState( p_sys->p_pgrm->p_clock,
+                                      &rs, &rsy, &ds, &dsy ) == VLC_SUCCESS )
+                msg_Warn( p_sys->p_input,
+                          "clock release result: rate=%d ref_stream=%"PRId64
+                          " ref_system=%"PRId64" stream_duration=%"PRId64
+                          " system_duration=%"PRId64,
+                          input_clock_GetRate(p_sys->p_pgrm->p_clock),
+                          rs, rsy, ds, dsy );
+        }
 
         /* Look-ahead cache: re-base the held pictures onto the fresh
          * origin and let the vout consume them. The shift is measured as
@@ -1799,11 +1894,28 @@ static void EsOutDecoderChangeDelay( es_out_t *out, es_out_id_t *p_es )
 {
     es_out_sys_t *p_sys = out->p_sys;
 
-    vlc_tick_t i_delay = 0;
+    /* Decoder timestamps must not be moved before the clock origin.  Apart
+     * from being needlessly fragile at startup, a negative audio timestamp
+     * cannot survive a seek: the decoder gate opens only once video preroll
+     * is complete, at which point the audio output correctly rejects the
+     * leading samples as late.
+     *
+     * Translate every ES by the opposite of the earliest requested delay.
+     * This preserves all relative A/V/subtitle timing exactly.  In the HDMI
+     * projector case, audio=-D becomes audio=0 and video/subtitles=+D, so the
+     * audio queue never receives a timestamp in the past and the same
+     * compensation remains valid across start, seek and resume. */
+    vlc_tick_t i_earliest = __MIN( p_sys->i_audio_delay,
+                                  p_sys->i_spu_delay );
+    vlc_tick_t i_offset = i_earliest < 0 ? -i_earliest : 0;
+    vlc_tick_t i_delay;
+
     if( p_es->fmt.i_cat == AUDIO_ES )
-        i_delay = p_sys->i_audio_delay;
+        i_delay = p_sys->i_audio_delay + i_offset;
     else if( p_es->fmt.i_cat == SPU_ES )
-        i_delay = p_sys->i_spu_delay;
+        i_delay = p_sys->i_spu_delay + i_offset;
+    else if( p_es->fmt.i_cat == VIDEO_ES )
+        i_delay = i_offset;
     else
         return;
 
@@ -2102,7 +2214,8 @@ static es_out_pgrm_t *EsOutProgramAdd( es_out_t *out, int i_group )
     p_pgrm->b_scrambled = false;
     p_pgrm->i_last_pcr = VLC_TICK_INVALID;
     p_pgrm->p_meta = NULL;
-    p_pgrm->p_clock = input_clock_New( p_sys->i_rate );
+    p_pgrm->p_clock = input_clock_New( VLC_OBJECT(p_sys->p_input),
+                                      p_sys->i_rate );
     if( !p_pgrm->p_clock )
     {
         free( p_pgrm );
@@ -3393,7 +3506,7 @@ static int EsOutControlLocked( es_out_t *out, int i_query, va_list args )
                 if( p_es->fmt.i_cat == VIDEO_ES )
                     break;
             }
-            if( i >= p_sys->i_es )
+            if( i >= p_sys->i_es && !EsOutKeepDiscVout( p_sys ) )
                 input_resource_TerminateVout( input_priv(p_sys->p_input)->p_resource );
         }
         p_sys->b_active = i_mode != ES_OUT_MODE_NONE;
@@ -3575,6 +3688,14 @@ static int EsOutControlLocked( es_out_t *out, int i_query, va_list args )
             return VLC_EGENERIC;
         }
 
+        const vlc_tick_t i_previous_pcr = p_pgrm->i_last_pcr;
+        if( i_previous_pcr > VLC_TICK_INVALID &&
+            llabs( i_pcr - i_previous_pcr ) > VLC_TICK_FROM_SEC(10) )
+            msg_Warn( p_sys->p_input,
+                      "large PCR step: previous=%"PRId64" incoming=%"PRId64
+                      " delta=%"PRId64" ms",
+                      i_previous_pcr, i_pcr,
+                      MS_FROM_VLC_TICK(i_pcr - i_previous_pcr) );
         p_pgrm->i_last_pcr = i_pcr;
 
         /* TODO do not use mdate() but proper stream acquisition date */
@@ -3584,6 +3705,33 @@ static int EsOutControlLocked( es_out_t *out, int i_query, va_list args )
                             input_priv(p_sys->p_input)->b_can_pace_control || p_sys->b_buffering,
                             EsOutIsExtraBufferingAllowed( out ),
                             i_pcr, mdate() );
+
+        if( b_late )
+        {
+            vlc_tick_t stream_start, system_start;
+            vlc_tick_t stream_duration, system_duration;
+            if( input_clock_GetState( p_pgrm->p_clock, &stream_start,
+                                      &system_start, &stream_duration,
+                                      &system_duration ) == VLC_SUCCESS )
+                msg_Warn( p_sys->p_input,
+                          "late PCR state: PCR=%"PRId64" previous=%"PRId64
+                          " ref_stream=%"PRId64" ref_system=%"PRId64
+                          " stream_duration=%"PRId64" system_duration=%"PRId64,
+                          i_pcr, i_previous_pcr, stream_start, system_start,
+                          stream_duration, system_duration );
+        }
+
+        /* A continuity filter has already rebased this PCR onto the current
+         * stream timeline.  input_clock_Update() must still consume it, but
+         * treating the resulting one-shot lateness as starvation would flush
+         * decoders and visibly stall a seamless Blu-ray clip/menu junction. */
+        if( p_sys->b_next_pcr_seamless )
+        {
+            msg_Dbg( p_sys->p_input,
+                     "late-PCR recovery inhibited for rebased seamless PCR" );
+            b_late = false;
+            p_sys->b_next_pcr_seamless = false;
+        }
 
         if( !p_sys->p_pgrm )
             return VLC_SUCCESS;
@@ -3654,6 +3802,7 @@ static int EsOutControlLocked( es_out_t *out, int i_query, va_list args )
     }
 
     case ES_OUT_RESET_PCR:
+        p_sys->b_next_pcr_seamless = false;
         msg_Dbg( p_sys->p_input, "ES_OUT_RESET_PCR called" );
         EsOutChangePosition( out );
         return VLC_SUCCESS;
@@ -3855,7 +4004,7 @@ static int EsOutControlLocked( es_out_t *out, int i_query, va_list args )
 
         /* Clean up vout after user action (in active mode only).
          * FIXME it does not work well with multiple video windows */
-        if( p_sys->b_active )
+        if( p_sys->b_active && !EsOutKeepDiscVout( p_sys ) )
             input_resource_TerminateVout( input_priv(p_sys->p_input)->p_resource );
         return i_ret;
     }
@@ -4092,6 +4241,27 @@ static int EsOutControlLocked( es_out_t *out, int i_query, va_list args )
         input_clock_GetSystemOrigin( p_pgrm->p_clock, pi_system, pi_delay );
         return VLC_SUCCESS;
     }
+
+    case ES_OUT_GET_CURRENT_PCR:
+    {
+        if( p_sys->b_buffering )
+            return VLC_EGENERIC;
+
+        es_out_pgrm_t *p_pgrm = p_sys->p_pgrm;
+        if( !p_pgrm )
+            return VLC_EGENERIC;
+
+        vlc_tick_t current = input_clock_GetCurrentStream( p_pgrm->p_clock,
+                                                           mdate() );
+        if( current == VLC_TICK_INVALID )
+            return VLC_EGENERIC;
+        *va_arg( args, vlc_tick_t * ) = current;
+        return VLC_SUCCESS;
+    }
+
+    case ES_OUT_SET_NEXT_PCR_SEAMLESS:
+        p_sys->b_next_pcr_seamless = true;
+        return VLC_SUCCESS;
 
     case ES_OUT_MODIFY_PCR_SYSTEM:
     {

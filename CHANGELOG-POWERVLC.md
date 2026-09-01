@@ -2,6 +2,142 @@
 
 PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more legacy systems, not affiliated with VideoLAN.
 
+## 2.0.0 (2026-09-02)
+
+### New features — all platforms (modern machines included)
+
+- **A new lightweight Media Library** organizes music, movies, shows,
+  podcasts and playlists from managed or monitored folders. It includes
+  ratings, recently added items, random playback and smart views.
+- **Portable-player synchronization** supports ordinary USB storage, Rockbox
+  players and Apple iPods. Music, podcasts and playlists can be copied,
+  converted when needed and backed up from PowerVLC.
+- **Persistent bookmarks** are now saved separately for every file and disc
+  title. They can be shared or restored as JSON, and two bookmarks can define
+  a clip to create.
+- **Blu-ray 3D and MVC video playback** supports 3D discs and MVC MKV/MK3D
+  files. Side-by-side and top/bottom videos can also use native stereoscopic
+  display modes with correctly placed menus, subtitles and controls.
+- **Dolby Vision playback** now uses dynamic metadata and, when present, the
+  enhancement layer. Compatible displays receive extended-range output while
+  other screens get automatic tone mapping.
+- **HDMI and S/PDIF passthrough controls** let users declare support for AC-3,
+  E-AC-3, TrueHD, DTS and DTS-HD. Unsupported formats continue to play as
+  decoded audio.
+- **PeerTube** can browse instances, channels and playlists or search across
+  the federation with SepiaSearch. Quality, audio, subtitles, playback and
+  downloads are selectable inside PowerVLC.
+- **Internet Archive** can search and browse movies and audio, then play or
+  download the selected files. **yt-dlp** adds a separate search, playback and
+  download interface for sites supported by the installed tool.
+- **Audiobookshelf** can browse audiobook and podcast libraries, search them,
+  resume listening and synchronize progress with the server.
+- **eMule/eD2k/Kad** search and downloads are available through a small
+  background engine. Downloads remain queued when the extension closes and
+  sufficiently complete files can start playing before they finish.
+- **Soulseek** can search, inspect public shares, download and progressively
+  play files. It deliberately provides no chat or upload feature.
+- **UPnP AV and DLNA media servers** can again be discovered and browsed on the
+  local network, now through PowerVLC's lightweight network stack.
+- **CRT Filters** to show your content with old TV filters. If your GPU is modern enough, you can use RetroArch CRT GLSL filters (like the famous CRT Royale).
+
+### Improvements — all platforms (modern machines included)
+
+- The Media Library is integrated into the macOS and Qt sidebars, with direct
+  import, rescan, rating and random-play actions. Audio CDs can be imported
+  into the managed library from the same interfaces.
+- Stereoscopic videos are detected from container information and common file
+  names, with a manual layout override when needed. PowerVLC can ask before
+  changing display mode and reliably restores the previous desktop afterward.
+- The resume question is displayed over the video instead of blocking it with
+  a separate window. Its timeout pauses while the user is interacting with it.
+- Extensions now share the same native folder chooser on macOS, Linux and
+  Windows. Download locations therefore behave consistently without each
+  extension maintaining its own system-specific implementation.
+- eMule and Soulseek automatically request their incoming ports through
+  PowerVLC's UPnP support. Manual or indirect connections remain available
+  when the router refuses a mapping.
+  Soulseek uses a dedicated `Downloads/PowerVLC Soulseek` folder by default.
+- Encoded HDMI audio is cleanly restarted after a seek, improving sound and
+  picture synchronization without imposing a fixed delay.
+
+### Fixes — all platforms (modern machines included)
+
+- Repeatedly opening and stopping Blu-rays with Java menus no longer leaves
+  old menu threads behind or causes late-session crashes.
+- Several Blu-ray 3D discs that incorrectly reached an “incompatible player”
+  screen now recognize PowerVLC's 3D profile and display correctly.
+- Blu-ray Java menus can load their resources reliably from ISO images on
+  current Java versions, including when BD-Live network access is disabled.
+- Several rendering fixes on Blu-Rays menus
+- MVC view pairing now survives seeks, playlist changes and interrupted 3D
+  intros. Returning to a menu no longer leaves a frozen or damaged frame.
+- 3D subtitles, disc menus, on-screen controls and seek previews no longer use
+  the wrong eye or lose their intended depth.
+
+### New features — legacy Macs
+
+- The new Media Library, portable-player support and bundled content
+  extensions are available in the legacy macOS interface as well.
+- Legacy Macs can play stereoscopic sources through the new 3D compositor when
+  their display connection and graphics hardware support the requested mode.
+
+### Improvements — legacy Macs
+
+- The new network extensions keep search results, decompression and streaming
+  buffers bounded so they remain practical on low-memory PowerPC systems.
+- Extension scripts are shipped in a portable form, preventing bytecode made
+  for a newer processor from becoming unreadable on PowerPC or 32-bit Macs.
+- Native folder selection and the expanded preferences are available in both
+  modern and legacy macOS interfaces.
+
+### Fixes — legacy Macs
+
+- Blu-ray Java menu shutdown and resource loading are safer on the older Java
+  environments used by supported legacy systems.
+- Blu-ray clip transitions no longer display a volume OSD when the audio
+  output republishes its volume or mute state; feedback is now driven only by
+  explicit user volume commands.
+- Seek previews and stereoscopic overlays avoid unsupported rendering paths on
+  older graphics hardware instead of producing black or corrupted output.
+- Crash on startup with Lion (reproduced on 10.7.5)
+
+### Fixes — Windows
+
+- Direct3D 11 now keeps both MVC views synchronized through seeks and Blu-ray
+  menu transitions. Subtitles and full-screen controls are composed correctly
+  in the Windows stereo output.
+- Windows keeps the selected HDMI 3D output and external-only display topology
+  across decoder-format changes, so a 2D language menu following an MVC intro
+  remains full-screen on the projector and is duplicated into both eyes.
+- Blu-ray arrow navigation remains owned by the disc while an interactive page
+  is changing, preventing stray volume/seek OSDs. Synthetic pointer events
+  caused by an HDMI mode transition no longer resurrect the stereoscopic
+  full-screen controller or leave its bottom-right control in one eye.
+- The media title OSD is displayed once when playback starts instead of being
+  recreated at every internal Blu-ray video-format transition, preventing the
+  title and a residual black quad from appearing in one stereo eye on menus.
+- Native 3D display switching is restored cleanly when playback or PowerVLC
+  closes, including after an error or interrupted video.
+- Folder selection, portable-player configuration and the new Media Library
+  use native Windows paths and dialogs in both installed and portable builds.
+- Closing PowerVLC on XP after a portable plug-in scan no longer ends with a
+  DW2 unwinder “memory could not be read” error while Windows detaches DLLs.
+
+### Build & packaging
+
+- PowerVLC now builds its own minimal eMule engine for every shipped macOS,
+  Linux and Windows architecture. The legacy aMule UPnP libraries and the
+  official application's unused components are no longer bundled.
+- The old VLC UPnP media-server dependency has been replaced by PowerVLC's
+  smaller built-in discovery and browsing support.
+- Linux packages locate private helpers correctly on multiarch systems, while
+  Windows installers and portable archives keep them in a dedicated folder.
+- The MVC decoder, stereoscopic outputs and new media features build across
+  PowerPC, Intel, Apple Silicon, Linux AArch64 and Windows ARM64 targets.
+- New 2.0.0 interface text is available in English, French, German, Spanish,
+  Italian, Brazilian and European Portuguese, Dutch and Catalan.
+
 ## 1.4.0 (2026-08-23)
 
 ### Interfaces

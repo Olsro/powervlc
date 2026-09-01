@@ -110,6 +110,10 @@ struct vout_thread_sys_t
      * loop, but kept separate so it never collides with the real pause
      * state machine (ThreadChangePause asserts on double pause). */
     bool            cache_hold;
+    /* A still-image disc menu needs the last filtered picture to survive
+     * decoder recycling so its changing interactive plane can be recomposed
+     * without another video frame. */
+    bool            static_frame_hold;
     /* How many pictures the decoder may pile up in decoder_fifo without
      * starving the pool (would deadlock in picture_pool_Wait otherwise).
      * Computed by vout_InitWrapper from the actual pool size, 0 when
@@ -183,6 +187,8 @@ struct vout_thread_sys_t
         unsigned src_width, src_height;
         /* crop=auto: the border above is then decided by the detector. */
         bool             automatic;
+        /* Disc-menu graphics use uncropped source coordinates. */
+        bool             interactive_overlay;
         vout_autocrop_t *detector;
     } crop;
 

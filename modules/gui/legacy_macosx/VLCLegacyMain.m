@@ -36,6 +36,7 @@
 #import "VLCLegacyMessages.h"
 #import "VLCLegacyConvertAndSave.h"
 #import "VLCLegacyMediaInfo.h"
+#import "VLCLegacyHUDWindow.h"
 #import "VLCLegacyBookmarks.h"
 #import "VLCLegacyFSPanel.h"
 #import "VLCLegacyAbout.h"
@@ -58,9 +59,8 @@ enum {
 
 /*****************************************************************************
  * Core dialog provider: errors are collected in the Errors and Warnings
- * panel; questions are asked with a modal alert; the remaining interactive
- * dialogs are dismissed (the same net behavior as having no provider, which
- * rejects them, but errors become visible).
+ * panel; credentials and questions are asked with app-modal panels. Progress
+ * dialogs remain silent, but errors become visible.
  * The callbacks run on core threads: marshal everything.
  *****************************************************************************/
 
@@ -85,24 +85,24 @@ static void dialogDisplayError(void *p_data, const char *psz_title,
     [pool release];
 }
 
-static void dialogDismissId(void *p_data, vlc_dialog_id *p_id)
-{
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-    [(VLCLegacyMain *)p_data
-        performSelectorOnMainThread:@selector(dismissDialog:)
-                         withObject:[NSValue valueWithPointer:p_id]
-                      waitUntilDone:NO];
-    [pool release];
-}
-
 static void dialogDisplayLogin(void *p_data, vlc_dialog_id *p_id,
                                const char *psz_title, const char *psz_text,
                                const char *psz_default_username,
                                bool b_ask_store)
 {
-    (void)psz_title; (void)psz_text; (void)psz_default_username;
-    (void)b_ask_store;
-    dialogDismissId(p_data, p_id);
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    NSArray *data = [NSArray arrayWithObjects:
+        [NSValue valueWithPointer:p_id],
+        legacyStr(psz_title),
+        legacyStr(psz_text),
+        legacyStr(psz_default_username),
+        [NSNumber numberWithBool:b_ask_store],
+        nil];
+    [(VLCLegacyMain *)p_data
+        performSelectorOnMainThread:@selector(displayLogin:)
+                         withObject:data
+                      waitUntilDone:NO];
+    [pool release];
 }
 
 static void dialogDisplayQuestion(void *p_data, vlc_dialog_id *p_id,
@@ -163,6 +163,29 @@ static const vlc_dialog_cbs dialog_callbacks = {
     dialogCancel,
     dialogUpdateProgress,
 };
+
+static char *dialogSelectDirectory(void *p_data, const char *psz_title,
+                                   const char *psz_initial)
+{
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    NSMutableDictionary *request = [[NSMutableDictionary alloc] init];
+    [request setObject:legacyStr(psz_title) forKey:@"title"];
+    [request setObject:legacyStr(psz_initial) forKey:@"initial"];
+
+    VLCLegacyMain *main = (VLCLegacyMain *)p_data;
+    /* This callback is exposed only to Lua extensions, whose widget actions
+     * run on their worker thread. +[NSThread isMainThread] did not exist on
+     * Jaguar and was the unrecognised selector behind the folder-button
+     * crash, so marshal unconditionally using the API available since 10.2. */
+    [main performSelectorOnMainThread:@selector(selectDirectory:)
+                           withObject:request waitUntilDone:YES];
+
+    NSString *selected = [request objectForKey:@"selected"];
+    char *result = selected ? strdup([selected UTF8String]) : NULL;
+    [request release];
+    [pool release];
+    return result;
+}
 
 @implementation VLCLegacyMain
 
@@ -262,6 +285,25 @@ static const vlc_dialog_cbs dialog_callbacks = {
 - (void)dismissDialog:(NSValue *)idValue
 {
     vlc_dialog_id_dismiss((vlc_dialog_id *)[idValue pointerValue]);
+}
+
+- (void)displayLogin:(NSArray *)dialogData
+{
+    vlc_dialog_id *p_id =
+        (vlc_dialog_id *)[[dialogData objectAtIndex:0] pointerValue];
+    NSString *username = nil;
+    NSString *password = nil;
+    BOOL store = NO;
+    BOOL accepted = VLCLegacyRunLoginPrompt(
+        [dialogData objectAtIndex:1], [dialogData objectAtIndex:2],
+        [dialogData objectAtIndex:3],
+        [[dialogData objectAtIndex:4] boolValue],
+        &username, &password, &store);
+    if (accepted && [username length] > 0)
+        vlc_dialog_id_post_login(p_id, [username UTF8String],
+                                 [password UTF8String], store);
+    else
+        vlc_dialog_id_dismiss(p_id);
 }
 
 - (void)displayQuestion:(NSArray *)dialogData
@@ -408,6 +450,8 @@ static const vlc_dialog_cbs dialog_callbacks = {
     }
     /* error dialogs land in the Errors and Warnings panel */
     vlc_dialog_provider_set_callbacks(p_intf, &dialog_callbacks, self);
+    vlc_dialog_provider_set_directory_callback(p_intf,
+                                                dialogSelectDirectory, self);
     /* debug helper: open a window at startup, e.g. VLC_LEGACY_SHOW=prefs.
      * The "legacy-macosx-show" option does the same through vlcrc, which is
      * the only way in when the application is started by the Finder: an app
@@ -597,12 +641,38 @@ static const vlc_dialog_cbs dialog_callbacks = {
     [core shutdownClipExport];
     [core shutdownRemoteAndMediaKeys];
     vlc_dialog_provider_set_callbacks(p_intf, NULL, NULL);
+    vlc_dialog_provider_set_directory_callback(p_intf, NULL, NULL);
     [messages shutdown];
     /* 3.0 persists the effect profiles on quit */
     [audioEffects saveCurrentProfileAtTerminate];
     [videoEffects saveCurrentProfileAtTerminate];
     [fsPanel shutdown];
     [mainWindow shutdown];
+}
+
+- (void)selectDirectory:(NSMutableDictionary *)request
+{
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    [panel setCanChooseFiles:NO];
+    [panel setCanChooseDirectories:YES];
+    [panel setAllowsMultipleSelection:NO];
+    NSString *title = [request objectForKey:@"title"];
+    if ([title length])
+        [panel setTitle:title];
+
+    NSString *initial = [request objectForKey:@"initial"];
+    BOOL isDirectory = NO;
+    if (![initial length]
+     || ![[NSFileManager defaultManager] fileExistsAtPath:initial
+                                              isDirectory:&isDirectory]
+     || !isDirectory)
+        initial = NSHomeDirectory();
+
+    if ([panel runModalForDirectory:initial file:nil types:nil] == NSOKButton) {
+        NSArray *paths = [panel filenames];
+        if ([paths count])
+            [request setObject:[paths objectAtIndex:0] forKey:@"selected"];
+    }
 }
 
 /* debug: recursive menu dump (snapshots cannot capture the menu bar) */

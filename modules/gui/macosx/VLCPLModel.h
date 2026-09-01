@@ -59,6 +59,7 @@ typedef enum {
 - (BOOL)hasChildren;
 
 - (PLRootType)currentRootType;
+- (BOOL)isPowerVLCLibraryRoot;
 
 - (BOOL)editAllowed;
 - (void)deleteSelectedItem;
@@ -78,5 +79,6 @@ typedef enum {
 - (void)sortForColumn:(NSString *)o_column withMode:(int)i_mode;
 
 - (void)searchUpdate:(NSString *)o_search;
+- (void)searchUpdate:(NSString *)o_search withinItemIds:(NSSet *)itemIds;
 
 @end

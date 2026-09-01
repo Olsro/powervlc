@@ -721,6 +721,7 @@ static int ControlLocked( es_out_t *p_out, int i_query, va_list args )
     }
 
     case ES_OUT_GET_PCR_SYSTEM:
+    case ES_OUT_GET_CURRENT_PCR:
         if( p_sys->b_delayed )
             return VLC_EGENERIC;
         /* fall through */
@@ -738,6 +739,15 @@ static int ControlLocked( es_out_t *p_out, int i_query, va_list args )
 
         return es_out_ControlModifyPcrSystem( p_sys->p_out, b_absolute, i_system );
     }
+
+    case ES_OUT_SET_NEXT_PCR_SEAMLESS:
+        /* This marker is ordered against the very next PCR. Forwarding it
+         * while the timeshift layer owns a delayed command queue would let it
+         * overtake that PCR, so only the direct path is safe. */
+        if( p_sys->b_delayed )
+            return VLC_EGENERIC;
+        return es_out_Control( p_sys->p_out,
+                               ES_OUT_SET_NEXT_PCR_SEAMLESS );
 
     /* Invalid queries for this es_out level */
     case ES_OUT_SET_ES_BY_ID:

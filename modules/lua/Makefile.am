@@ -34,7 +34,8 @@ liblua_plugin_la_SOURCES = \
 	lua/libs/clipboard.c \
 	lua/libs/http.c \
 	lua/libs/browser.c \
-	lua/libs/keystore.c
+	lua/libs/keystore.c \
+	lua/libs/process.c
 
 if HAVE_WIN32
 liblua_plugin_la_SOURCES += lua/libs/win.c
@@ -60,7 +61,8 @@ liblua_plugin_la_LDFLAGS += -Wl,-framework,CoreFoundation
 endif
 if HAVE_WIN32
 # lua/libs/clipboard.c uses the Win32 clipboard
-liblua_plugin_la_LIBADD += -luser32
+# configuration.c uses the XP-compatible shell folder picker.
+liblua_plugin_la_LIBADD += -luser32 -lshell32 $(LIBCOM)
 endif
 if BUILD_LUA
 lua_LTLIBRARIES = liblua_plugin.la

@@ -74,5 +74,8 @@
 
 // Constrain frame to window. Used by VLCFSPanelDraggableView.
 - (NSRect)contrainFrameToAssociatedVoutWindow:(NSRect)frame;
+- (void)dragFullscreenPanelWithEvent:(NSEvent *)event
+                      trackingWindow:(NSWindow *)trackingWindow;
+- (void)forwardStereoMirrorMouseDown:(NSEvent *)event;
 
 @end

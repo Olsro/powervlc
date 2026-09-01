@@ -1,0 +1,38 @@
+# PowerVLC — native arm64 Linux cross-compilation environment.
+#
+# The image itself is always linux/arm64.  GCC and binutils run natively on an
+# Apple-Silicon host and emit either x86_64 or i686 ELF; no binfmt/QEMU is
+# involved.  It deliberately contains only the toolchain/sysroots: AppImage
+# packaging still needs target-native linuxdeploy helpers and must not be
+# mistaken for a native cross operation.
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      autoconf automake autopoint bison build-essential ca-certificates cmake \
+      curl file flex gettext git gperf libtool m4 make meson ninja-build pkg-config \
+      python3 rsync squashfs-tools unzip wget xz-utils qtbase5-dev-tools lua5.2 protobuf-compiler \
+      gcc-x86-64-linux-gnu g++-x86-64-linux-gnu \
+      binutils-x86-64-linux-gnu libc6-dev-amd64-cross \
+      gcc-i686-linux-gnu g++-i686-linux-gnu \
+      binutils-i686-linux-gnu libc6-dev-i386-cross \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY check-linux-cross.sh /work/check-linux-cross.sh
+COPY package-cross-appimage.sh /usr/local/bin/package-cross-appimage
+COPY build-cross-qt.sh /usr/local/bin/build-cross-qt
+COPY make-bionic-sysroot.sh /usr/local/sbin/make-bionic-sysroot
+RUN chmod 0755 /work/check-linux-cross.sh /usr/local/bin/package-cross-appimage /usr/local/bin/build-cross-qt /usr/local/sbin/make-bionic-sysroot \
+    && mkdir -p /opt/qt-host/bin \
+    && ln -s /usr/lib/qt5/bin/moc /opt/qt-host/bin/moc \
+    && ln -s /usr/lib/qt5/bin/rcc /opt/qt-host/bin/rcc \
+    && ln -s /usr/lib/qt5/bin/uic /opt/qt-host/bin/uic \
+    && ln -s /usr/lib/qt5/bin/qmake /opt/qt-host/bin/qmake \
+    && ln -s /usr/bin/luac5.2 /opt/qt-host/bin/luac5.2 \
+    && ln -s /usr/bin/luac5.2 /opt/qt-host/bin/luac \
+    && make-bionic-sysroot amd64 \
+    && make-bionic-sysroot i386
+
+WORKDIR /work

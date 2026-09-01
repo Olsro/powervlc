@@ -93,6 +93,23 @@ static NSString *const VLCMainArtHeightKey = @"VLCMainWindowSidebarArtHeight";
 #define VLC_ART_MIN_HEIGHT        40.0
 #define VLC_ART_MIN_LIST_HEIGHT   80.0
 
+#define PVLC_ML_SCAN_ACTIVE   "powervlc-ml-scan-active"
+#define PVLC_ML_SCAN_DONE     "powervlc-ml-scan-done"
+#define PVLC_ML_SCAN_TOTAL    "powervlc-ml-scan-total"
+#define PVLC_ML_SCAN_REVISION "powervlc-ml-scan-revision"
+
+static int PowerVLCMediaLibraryScanChanged(vlc_object_t *object,
+                                            const char *name,
+                                            vlc_value_t oldValue,
+                                            vlc_value_t newValue,
+                                            void *opaque)
+{
+    (void)object; (void)name; (void)oldValue; (void)newValue;
+    [(__bridge id)opaque performSelectorOnMainThread:
+        @selector(_updatePlaylistTitle) withObject:nil waitUntilDone:NO];
+    return VLC_SUCCESS;
+}
+
 /* A thin draggable handle between the sidebar list and the cover art at
  * the bottom of it; dragging it resizes the art panel, and the height is
  * remembered across sessions (see the controller's persistence). */
@@ -278,6 +295,8 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
     msg_Dbg(getIntf(), "Deinitializing VLCMainWindow object");
 
     [[NSNotificationCenter defaultCenter] removeObserver: self];
+    var_DelCallback(getIntf()->obj.libvlc, PVLC_ML_SCAN_REVISION,
+                    PowerVLCMediaLibraryScanChanged, (__bridge void *)self);
     if (@available(macOS 10_14, *)) {
         [[NSApplication sharedApplication] removeObserver:self forKeyPath:@"effectiveAppearance"];
     }
@@ -310,6 +329,12 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
     b_dropzone_active = YES;
 
     // Playlist setup
+    var_Create(getIntf()->obj.libvlc, PVLC_ML_SCAN_ACTIVE, VLC_VAR_BOOL);
+    var_Create(getIntf()->obj.libvlc, PVLC_ML_SCAN_DONE, VLC_VAR_INTEGER);
+    var_Create(getIntf()->obj.libvlc, PVLC_ML_SCAN_TOTAL, VLC_VAR_INTEGER);
+    var_Create(getIntf()->obj.libvlc, PVLC_ML_SCAN_REVISION, VLC_VAR_INTEGER);
+    var_AddCallback(getIntf()->obj.libvlc, PVLC_ML_SCAN_REVISION,
+                    PowerVLCMediaLibraryScanChanged, (__bridge void *)self);
     VLCPlaylist *playlist = [[VLCMain sharedInstance] playlist];
     [playlist setOutlineView:(VLCPlaylistView *)_outlineView];
     [playlist setPlaylistHeaderView:_outlineView.headerView];
@@ -802,7 +827,16 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
         char *uri = input_item_GetURI(input_GetItem(p_input));
 
         NSURL * o_url = [NSURL URLWithString:toNSStr(uri)];
-        if ([o_url isFileURL]) {
+        NSString *filePath = [o_url isFileURL] ? [o_url path] : nil;
+        /* setRepresentedURL: asks LaunchServices for the localized file name
+         * and its ancestor chain.  On an iPod or another slow/removable
+         * volume that turns a harmless title update into synchronous disk
+         * I/O on AppKit's main thread, freezing the whole interface while the
+         * device retries.  A represented URL is only a Finder convenience;
+         * playback must never depend on resolving it. */
+        BOOL slowExternalFile = filePath != nil
+                             && [filePath hasPrefix:@"/Volumes/"];
+        if ([o_url isFileURL] && !slowExternalFile) {
             [self setRepresentedURL: o_url];
             [[[VLCMain sharedInstance] voutController] updateWindowsUsingBlock:^(VLCVideoWindowCommon *o_window) {
                 [o_window setRepresentedURL:o_url];
@@ -817,7 +851,10 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
 
         if ([aString isEqualToString:@""]) {
             if ([o_url isFileURL])
-                aString = [[NSFileManager defaultManager] displayNameAtPath: [o_url path]];
+                /* lastPathComponent is purely lexical.  displayNameAtPath:
+                 * performs filesystem/LaunchServices queries and can block
+                 * for minutes when a portable player responds poorly. */
+                aString = [filePath lastPathComponent];
             else
                 aString = [o_url absoluteString];
         }
@@ -1072,14 +1109,45 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
 #pragma mark private playlist magic
 - (void)_updatePlaylistTitle
 {
-    PLRootType root = [[[[VLCMain sharedInstance] playlist] model] currentRootType];
+    VLCPLModel *model = [[[VLCMain sharedInstance] playlist] model];
+    PLRootType root = [model currentRootType];
+    BOOL powerLibrary = [model isPowerVLCLibraryRoot];
     playlist_t *p_playlist = pl_Get(getIntf());
+
+    BOOL scanActive = var_GetBool(getIntf()->obj.libvlc,
+                                  PVLC_ML_SCAN_ACTIVE);
+    uint64_t done = (uint64_t)var_GetInteger(getIntf()->obj.libvlc,
+                                             PVLC_ML_SCAN_DONE);
+    uint64_t total = (uint64_t)var_GetInteger(getIntf()->obj.libvlc,
+                                              PVLC_ML_SCAN_TOTAL);
+    if ((root == ROOT_TYPE_MEDIALIBRARY || powerLibrary) && scanActive) {
+        if (total == 0) {
+            NSString *format = done == 1
+                ? _NS("Media Library — scanning… · %llu file indexed")
+                : _NS("Media Library — scanning… · %llu files indexed");
+            [_categoryLabel setStringValue:
+                [NSString stringWithFormat:format,
+                                           (unsigned long long)done]];
+            return;
+        }
+        unsigned percent = done >= total ? 100 : (unsigned)
+            ((double)done * 100.0 / (double)total);
+        unsigned long long remaining = done < total ? total - done : 0;
+        NSString *format = remaining == 1
+            ? _NS("Media Library — scanning %u%% · %llu file remaining")
+            : _NS("Media Library — scanning %u%% · %llu files remaining");
+        [_categoryLabel setStringValue:
+            [NSString stringWithFormat:format, percent, remaining]];
+        return;
+    }
 
     PL_LOCK;
     if (root == ROOT_TYPE_PLAYLIST)
         [_categoryLabel setStringValue: [_NS("Playlist") stringByAppendingString:[self _playbackDurationOfNode:p_playlist->p_playing]]];
     else if (root == ROOT_TYPE_MEDIALIBRARY)
         [_categoryLabel setStringValue: [_NS("Media Library") stringByAppendingString:[self _playbackDurationOfNode:p_playlist->p_media_library]]];
+    else if (powerLibrary)
+        [_categoryLabel setStringValue:_NS("Media Library")];
 
     PL_UNLOCK;
 }
@@ -1116,7 +1184,7 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
 
 - (IBAction)searchItem:(id)sender
 {
-    [[[[VLCMain sharedInstance] playlist] model] searchUpdate:[_searchField stringValue]];
+    [[[VLCMain sharedInstance] playlist] searchUpdate:[_searchField stringValue]];
 }
 
 - (IBAction)highlightSearchField:(id)sender
@@ -1195,7 +1263,10 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
                 }
             }
             PL_UNLOCK;
-            if (b_empty && !s_sdReloadInFlight) {
+            if (b_empty
+             && ![[item identifier] isEqualToString:@"powervlc_library"]
+             && ![[item identifier] hasPrefix:@"powervlc_device{"]
+             && !s_sdReloadInFlight) {
                 s_sdReloadInFlight = YES;
                 NSString *sdName = [item identifier];
                 NSString *sdTitle = [item title];
@@ -1238,7 +1309,10 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
         }
     } else {
         PL_LOCK;
-        const char *title = [[item title] UTF8String];
+        NSString *rootTitle = [item serviceRootTitle] ?: [item title];
+        const char *title = [[item identifier] isEqualToString:@"powervlc_library"]
+                          ? _("PowerVLC Media Library")
+                          : [rootTitle UTF8String];
         playlist_item_t *pl_item = playlist_ChildSearchName(&p_playlist->root, title);
         if (pl_item)
             [[[[VLCMain sharedInstance] playlist] model] changeRootItem:pl_item];

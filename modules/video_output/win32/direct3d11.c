@@ -27,12 +27,21 @@
 
 #if _WIN32_WINNT < 0x0601 // _WIN32_WINNT_WIN7
 # undef _WIN32_WINNT
-# define _WIN32_WINNT _WIN32_WINNT_WIN7
+# define _WIN32_WINNT 0x0601
+#endif
+#if WINVER < 0x0601
+# undef WINVER
+# define WINVER 0x0601
 #endif
 
 #include <vlc_common.h>
+#include <vlc_dialog.h>
 #include <vlc_plugin.h>
 #include <vlc_vout_display.h>
+#include <vlc_vout_osd.h>
+#include <vlc_actions.h>
+#include <vlc_input.h>
+#include <vlc_playlist.h>
 
 #include <assert.h>
 #include <math.h>
@@ -142,6 +151,7 @@ struct vout_display_sys_t
     d3d11_handle_t           hd3d;
     IDXGISwapChain1          *dxgiswapChain;   /* DXGI 1.2 swap chain */
     IDXGISwapChain4          *dxgiswapChain4;  /* DXGI 1.5 for HDR */
+    IDXGIOutput              *stereo_present_output;
     DXGI_HDR_METADATA_HDR10  hdr10;
     d3d11_device_t           d3d_dev;
     d3d_quad_t               picQuad;
@@ -158,7 +168,43 @@ struct vout_display_sys_t
     HANDLE                   sharedHandle;
 
     ID3D11RenderTargetView   *d3drenderTargetView;
+    ID3D11RenderTargetView   *d3drenderTargetViewRight;
     ID3D11DepthStencilView   *d3ddepthStencilView;
+
+    bool                     stereo_requested;
+    bool                     stereo_active;
+    bool                     stereo_adopted;
+    vlc_tick_t               stereo_adopted_fullscreen_guard_until;
+    bool                     stereo_windowed;
+    bool                     stereo_mode_changed;
+    bool                     stereo_fullscreen_forced;
+    bool                     stereo_display_was_enabled;
+    unsigned                 stereo_eye_width;
+    unsigned                 stereo_eye_height;
+    WCHAR                    stereo_device[CCHDEVICENAME];
+    DEVMODEW                 stereo_saved_mode;
+    IDXGIDisplayControl      *stereo_display_control;
+    DISPLAYCONFIG_PATH_INFO  *stereo_saved_paths;
+    DISPLAYCONFIG_MODE_INFO  *stereo_saved_modes;
+    UINT32                   stereo_saved_path_count;
+    UINT32                   stereo_saved_mode_count;
+    bool                     stereo_topology_changed;
+    bool                     stereo_mouse_callbacks;
+    vlc_tick_t               stereo_controls_until;
+    vlc_tick_t               stereo_controls_last_draw;
+    vlc_tick_t               stereo_controls_osd_until;
+    bool                     stereo_controls_hovered;
+    vlc_tick_t               stereo_cursor_last_draw;
+    int                      stereo_cursor_channel;
+    int                      stereo_feedback_channel;
+    int                      stereo_back_channel;
+    int                      stereo_pause_channel;
+    int                      stereo_forward_channel;
+    volatile LONG            stereo_cursor_x;
+    volatile LONG            stereo_cursor_y;
+    POINT                    stereo_cursor_screen;
+    bool                     stereo_cursor_screen_valid;
+    vlc_tick_t               stereo_mouse_accept_after;
 
     ID3D11InputLayout         *pVertexLayout;
     ID3D11VertexShader        *flatVSShader;
@@ -174,6 +220,13 @@ struct vout_display_sys_t
     const d3d_format_t       *d3dregion_format;
     int                      d3dregion_count;
     picture_t                **d3dregions;
+    int64_t                  d3dregion_order;
+    int                      d3dregion_original_width;
+    int                      d3dregion_original_height;
+    bool                     d3dregion_order_valid;
+    bool                     stereo_geometry_reported;
+    int64_t                  stereo_spu_reported_order;
+    unsigned                 stereo_spu_report_count;
 
     // upscaling
     enum d3d11_upscale       upscaleMode;
@@ -183,6 +236,28 @@ struct vout_display_sys_t
     enum d3d11_hdr           hdrMode;
     struct d3d11_tonemapper  *tonemapProc;
 };
+
+/* The vout core retains its vout_thread_t while reopening the display module
+ * for a decoder format change. A Blu-ray can therefore go from an MVC logo
+ * to an authored 2D language menu without ending the disc session. Keep the
+ * Windows display transaction on that persistent vout: restoring the saved
+ * topology from Close() would re-enable the laptop panel before the new D3D11
+ * swapchain exists, and Qt would consequently recreate the video there. */
+typedef struct
+{
+    bool mode_changed;
+    bool fullscreen_forced;
+    bool display_was_enabled;
+    bool topology_changed;
+    unsigned eye_width;
+    unsigned eye_height;
+    WCHAR device[CCHDEVICENAME];
+    DEVMODEW saved_mode;
+    DISPLAYCONFIG_PATH_INFO *saved_paths;
+    DISPLAYCONFIG_MODE_INFO *saved_modes;
+    UINT32 saved_path_count;
+    UINT32 saved_mode_count;
+} win32_stereo_handoff_t;
 
 #define RECTWidth(r)   (int)((r).right - (r).left)
 #define RECTHeight(r)  (int)((r).bottom - (r).top)
@@ -208,6 +283,7 @@ static int Direct3D11MapSubpicture(vout_display_t *, int *, picture_t ***, subpi
 
 static void SetQuadVSProjection(vout_display_t *, d3d_quad_t *, const vlc_viewpoint_t *);
 static void UpdatePicQuadPosition(vout_display_t *);
+static void CallUpdateRects(vout_display_t *);
 
 static int Control(vout_display_t *, int, va_list);
 static void Manage(vout_display_t *vd);
@@ -241,6 +317,51 @@ static void Direct3D11UnmapPoolTexture(picture_t *picture)
 {
     picture_sys_t *p_sys = picture->p_sys;
     ID3D11DeviceContext_Unmap(p_sys->context, p_sys->resource[KNOWN_DXGI_INDEX], 0);
+}
+
+static void StereoEyeTextureRect(video_multiview_mode_t mode,
+                                 const video_format_t *fmt,
+                                 unsigned output_eye, float *left, float *top,
+                                 float *right, float *bottom)
+{
+    bool right_first = mode == MULTIVIEW_STEREO_SBS_RIGHT_FIRST ||
+                       mode == MULTIVIEW_STEREO_TB_RIGHT_FIRST ||
+                       mode == MULTIVIEW_STEREO_FRAMEPACKED_RIGHT_BASE;
+    unsigned source_eye = output_eye ^ right_first;
+
+    float coded_width = fmt->i_width > 0 ? fmt->i_width : 1;
+    float coded_height = fmt->i_height > 0 ? fmt->i_height : 1;
+    *left = fmt->i_x_offset / coded_width;
+    *top = fmt->i_y_offset / coded_height;
+    *right = (fmt->i_x_offset + fmt->i_visible_width) / coded_width;
+    *bottom = (fmt->i_y_offset + fmt->i_visible_height) / coded_height;
+    switch (mode)
+    {
+        case MULTIVIEW_STEREO_SBS:
+        case MULTIVIEW_STEREO_SBS_RIGHT_FIRST:
+        {
+            float middle = (*left + *right) * .5f;
+            if (source_eye)
+                *left = middle;
+            else
+                *right = middle;
+            break;
+        }
+        case MULTIVIEW_STEREO_TB:
+        case MULTIVIEW_STEREO_TB_RIGHT_FIRST:
+        case MULTIVIEW_STEREO_FRAMEPACKED:
+        case MULTIVIEW_STEREO_FRAMEPACKED_RIGHT_BASE:
+        {
+            float middle = (*top + *bottom) * .5f;
+            if (source_eye)
+                *top = middle;
+            else
+                *bottom = middle;
+            break;
+        }
+        default:
+            break;
+    }
 }
 
 static bool GetWinRTSize(const vout_display_sys_win32_t *p_sys, UINT *w, UINT *h)
@@ -299,6 +420,871 @@ static unsigned int GetPictureHeight(const vout_display_t *vd)
     return vd->sys->picQuad.i_height;
 }
 
+static bool RefreshNear(double actual, double standard)
+{
+    double delta = actual - standard;
+    return delta >= -0.2 && delta <= 0.2;
+}
+
+static bool StereoEyeDimensions(const video_format_t *fmt,
+                                unsigned *width, unsigned *height)
+{
+    switch (fmt->multiview_mode)
+    {
+        case MULTIVIEW_STEREO_FRAMEPACKED:
+        case MULTIVIEW_STEREO_FRAMEPACKED_RIGHT_BASE:
+            *width = fmt->i_visible_width;
+            *height = fmt->i_visible_height / 2;
+            return true;
+        case MULTIVIEW_STEREO_SBS:
+        case MULTIVIEW_STEREO_SBS_RIGHT_FIRST:
+            *width = fmt->i_visible_width >= 2560
+                   ? fmt->i_visible_width / 2 : fmt->i_visible_width;
+            *height = fmt->i_visible_height;
+            return true;
+        case MULTIVIEW_STEREO_TB:
+        case MULTIVIEW_STEREO_TB_RIGHT_FIRST:
+            *width = fmt->i_visible_width;
+            *height = fmt->i_visible_height > fmt->i_visible_width
+                    ? fmt->i_visible_height / 2 : fmt->i_visible_height;
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool IsInternalDisplayPath(const DISPLAYCONFIG_PATH_INFO *path)
+{
+    switch (path->targetInfo.outputTechnology)
+    {
+        case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL:
+        case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED:
+        case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_UDI_EMBEDDED:
+        case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_LVDS:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static LONG QueryActiveDisplayTopology(DISPLAYCONFIG_PATH_INFO **paths,
+                                       UINT32 *path_count,
+                                       DISPLAYCONFIG_MODE_INFO **modes,
+                                       UINT32 *mode_count)
+{
+    *paths = NULL;
+    *modes = NULL;
+    for (unsigned attempt = 0; attempt < 4; ++attempt)
+    {
+        LONG result = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS,
+                                                  path_count, mode_count);
+        if (result != ERROR_SUCCESS)
+            return result;
+        *paths = calloc(*path_count, sizeof(**paths));
+        *modes = calloc(*mode_count, sizeof(**modes));
+        if ((*path_count != 0 && *paths == NULL) ||
+            (*mode_count != 0 && *modes == NULL))
+        {
+            free(*paths);
+            free(*modes);
+            *paths = NULL;
+            *modes = NULL;
+            return ERROR_NOT_ENOUGH_MEMORY;
+        }
+        result = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, path_count,
+                                    *paths, mode_count, *modes, NULL);
+        if (result != ERROR_INSUFFICIENT_BUFFER)
+            return result;
+        free(*paths);
+        free(*modes);
+        *paths = NULL;
+        *modes = NULL;
+    }
+    return ERROR_INSUFFICIENT_BUFFER;
+}
+
+static bool UseExternalDisplayOnly(vout_display_t *vd)
+{
+    vout_display_sys_t *sys = vd->sys;
+    DISPLAYCONFIG_PATH_INFO *paths;
+    DISPLAYCONFIG_MODE_INFO *modes;
+    UINT32 path_count = 0, mode_count = 0;
+    LONG result = QueryActiveDisplayTopology(&paths, &path_count, &modes,
+                                             &mode_count);
+    if (result != ERROR_SUCCESS)
+    {
+        msg_Warn(vd, "cannot read the active Windows display topology (%ld)",
+                 result);
+        return false;
+    }
+
+    bool needs_external_only = path_count != 1;
+    for (UINT32 i = 0; i < path_count; ++i)
+        needs_external_only |= IsInternalDisplayPath(&paths[i]);
+    if (!needs_external_only)
+    {
+        free(paths);
+        free(modes);
+        return true;
+    }
+
+    result = SetDisplayConfig(0, NULL, 0, NULL,
+                              SDC_APPLY | SDC_TOPOLOGY_EXTERNAL);
+    if (result != ERROR_SUCCESS)
+    {
+        msg_Warn(vd, "Windows rejected temporary external-display-only "
+                 "topology (%ld)", result);
+        free(paths);
+        free(modes);
+        return false;
+    }
+
+    sys->stereo_saved_paths = paths;
+    sys->stereo_saved_modes = modes;
+    sys->stereo_saved_path_count = path_count;
+    sys->stereo_saved_mode_count = mode_count;
+    sys->stereo_topology_changed = true;
+
+    /* SetDisplayConfig is synchronous for the topology database, but the
+     * graphics stack needs a short time to publish the projector's 3D modes.
+     * Poll the active paths instead of guessing a fixed multi-second delay. */
+    for (unsigned attempt = 0; attempt < 50; ++attempt)
+    {
+        DISPLAYCONFIG_PATH_INFO *current_paths;
+        DISPLAYCONFIG_MODE_INFO *current_modes;
+        UINT32 current_path_count = 0, current_mode_count = 0;
+        result = QueryActiveDisplayTopology(&current_paths,
+                                            &current_path_count,
+                                            &current_modes,
+                                            &current_mode_count);
+        bool ready = result == ERROR_SUCCESS && current_path_count > 0;
+        for (UINT32 i = 0; ready && i < current_path_count; ++i)
+            ready = !IsInternalDisplayPath(&current_paths[i]);
+        free(current_paths);
+        free(current_modes);
+        if (ready)
+        {
+            msg_Info(vd, "temporarily selected the external Windows display "
+                     "for HDMI 3D");
+            Sleep(250);
+            return true;
+        }
+        Sleep(100);
+    }
+    msg_Warn(vd, "external-display-only topology did not become active");
+    return false;
+}
+
+static unsigned StereoMouseLogicalWidth(const vout_display_t *vd)
+{
+    unsigned width = vd->fmt.i_visible_width;
+    if (vd->fmt.i_sar_num > 0 && vd->fmt.i_sar_den > 0)
+        width = (uint64_t)width * vd->fmt.i_sar_num /
+                vd->fmt.i_sar_den;
+    return width;
+}
+
+static LONG StereoMouseLogicalX(const vout_display_t *vd, LONG x)
+{
+    int64_t logical_x = x;
+    if (vd->fmt.i_sar_num > 0 && vd->fmt.i_sar_den > 0)
+        logical_x = logical_x * vd->fmt.i_sar_num / vd->fmt.i_sar_den;
+    return (LONG)VLC_CLIP(logical_x, 0,
+                          (int64_t)StereoMouseLogicalWidth(vd));
+}
+
+static int StereoMouseMoved(vlc_object_t *object, const char *name,
+                            vlc_value_t old_value, vlc_value_t new_value,
+                            void *opaque)
+{
+    VLC_UNUSED(old_value);
+    VLC_UNUSED(new_value);
+    vout_display_t *vd = opaque;
+    vout_display_sys_t *sys = vd->sys;
+    if (!sys->stereo_active)
+        return VLC_SUCCESS;
+
+    vlc_tick_t now = mdate();
+    bool periodic_refresh = name != NULL &&
+                            !strcmp(name, "stereo-periodic-refresh");
+    bool hover_changed = false;
+    vlc_tick_t visibility_duration;
+    if (!periodic_refresh)
+    {
+        /* The exclusive swapchain and the fullscreen child are both moved
+         * while Windows commits the external-only topology.  That produces
+         * one or more WM_MOUSEMOVE notifications with coordinates from the
+         * previous desktop.  They are not user input and, if accepted, can
+         * create the bottom-right "+10 seconds" SPU in only one DXGI eye. */
+        if (now < sys->stereo_mouse_accept_after)
+            return VLC_SUCCESS;
+
+        /* Resizing/repositioning the exclusive HDMI window generates a
+         * relative mouse-moved event although the physical pointer did not
+         * move. Blu-ray page transitions can therefore resurrect the
+         * fullscreen controller (and its bottom-right forward control) while
+         * the user navigates exclusively with the keyboard. Apart from being
+         * distracting, that stale quad may only be visible in one DXGI eye.
+         * Gate activation on the desktop cursor position, which changes only
+         * for genuine pointer motion. */
+        POINT screen_cursor;
+        if (GetCursorPos(&screen_cursor))
+        {
+            if (sys->stereo_cursor_screen_valid &&
+                screen_cursor.x == sys->stereo_cursor_screen.x &&
+                screen_cursor.y == sys->stereo_cursor_screen.y)
+                return VLC_SUCCESS;
+            sys->stereo_cursor_screen = screen_cursor;
+            sys->stereo_cursor_screen_valid = true;
+
+            /* A display-topology or fullscreen-window move can clamp the
+             * desktop cursor and post WM_MOUSEMOVE with stale client
+             * coordinates.  The screen position then really changes, so the
+             * equality guard above is insufficient: the stale Y coordinate
+             * can falsely place the pointer in the bottom controller and
+             * keep its right-hand OSD quad alive for a full day.  Validate
+             * the reported video coordinate against the physical pointer in
+             * the current child window before creating any SPU. */
+            POINT client_cursor = screen_cursor;
+            RECT client_rect;
+            if (sys->sys.hvideownd != NULL &&
+                ScreenToClient(sys->sys.hvideownd, &client_cursor) &&
+                GetClientRect(sys->sys.hvideownd, &client_rect))
+            {
+                int client_height = RECTHeight(client_rect);
+                int client_width = RECTWidth(client_rect);
+                if (client_width <= 0 || client_height <= 0 ||
+                    client_cursor.x < 0 || client_cursor.x >= client_width ||
+                    client_cursor.y < 0 || client_cursor.y >= client_height)
+                    return VLC_SUCCESS;
+                else
+                {
+                    int64_t expected_y = vd->source.i_y_offset +
+                        (int64_t)client_cursor.y * vd->source.i_height /
+                        client_height;
+                    int64_t delta_y = expected_y - new_value.coords.y;
+                    if (delta_y < 0)
+                        delta_y = -delta_y;
+                    if (delta_y > 4)
+                        return VLC_SUCCESS;
+                }
+            }
+        }
+
+        unsigned control_height = vd->fmt.i_visible_height;
+        bool controls_hovered = control_height > 0 &&
+            new_value.coords.y >= (int)(control_height * 3 / 4);
+        hover_changed = controls_hovered != sys->stereo_controls_hovered;
+        /* Hovering changes which row receives clicks, but it must not pin an
+         * OSD indefinitely.  A stationary pointer gets the same four-second
+         * inactivity timeout as the rest of the fullscreen UI. */
+        visibility_duration = 4 * CLOCK_FREQ;
+        sys->stereo_controls_hovered = controls_hovered;
+        sys->stereo_controls_until = now + visibility_duration;
+        InterlockedExchange(&sys->stereo_cursor_x,
+                            StereoMouseLogicalX(vd, new_value.coords.x));
+        InterlockedExchange(&sys->stereo_cursor_y, new_value.coords.y);
+    }
+    else
+    {
+        visibility_duration = sys->stereo_controls_until - now;
+        if (visibility_duration <= 0)
+            return VLC_SUCCESS;
+    }
+    bool refresh_osd = hover_changed ||
+                       now - sys->stereo_controls_last_draw >= CLOCK_FREQ ||
+                       now + CLOCK_FREQ / 4 >=
+                           sys->stereo_controls_osd_until;
+
+    /* DXGI exclusive mode cannot composite the Windows hardware pointer.
+     * Upload its tiny texture only when the controller is refreshed. Its
+     * position is changed directly on the cached D3D quad every frame. */
+    if (sys->stereo_cursor_channel >= VOUT_SPU_CHANNEL_AVAIL_FIRST &&
+        refresh_osd)
+    {
+        enum { CURSOR_WIDTH = 24, CURSOR_HEIGHT = 34 };
+        video_format_t fmt;
+        video_format_Init(&fmt, VLC_CODEC_RGBA);
+        fmt.i_width = fmt.i_visible_width = CURSOR_WIDTH;
+        fmt.i_height = fmt.i_visible_height = CURSOR_HEIGHT;
+        fmt.i_sar_num = fmt.i_sar_den = 1;
+        subpicture_region_t *region = subpicture_region_New(&fmt);
+        video_format_Clean(&fmt);
+        if (region != NULL)
+        {
+            picture_t *pic = region->p_picture;
+            for (int y = 0; y < CURSOR_HEIGHT; ++y)
+                memset(pic->p[0].p_pixels + y * pic->p[0].i_pitch, 0,
+                       CURSOR_WIDTH * 4);
+            for (int y = 0; y < 27; ++y)
+            {
+                int edge = y * 2 / 3;
+                for (int x = 0; x <= edge && x < CURSOR_WIDTH; ++x)
+                {
+                    uint8_t *pixel = pic->p[0].p_pixels +
+                                     y * pic->p[0].i_pitch + x * 4;
+                    bool border = x == 0 || x >= edge - 2 || y < 2;
+                    pixel[0] = border ? 0 : 255;
+                    pixel[1] = border ? 0 : 220;
+                    pixel[2] = 0;
+                    pixel[3] = 255;
+                }
+            }
+            /* Cursor stem. */
+            for (int y = 21; y < CURSOR_HEIGHT; ++y)
+                for (int x = 8; x < 13; ++x)
+                {
+                    uint8_t *pixel = pic->p[0].p_pixels +
+                                     y * pic->p[0].i_pitch + x * 4;
+                    bool border = x == 8 || x == 12 ||
+                                  y == CURSOR_HEIGHT - 1;
+                    pixel[0] = border ? 0 : 255;
+                    pixel[1] = border ? 0 : 220;
+                    pixel[2] = 0;
+                    pixel[3] = 255;
+            }
+            unsigned logical_width = StereoMouseLogicalWidth(vd);
+            region->i_x = VLC_CLIP(
+                StereoMouseLogicalX(vd, new_value.coords.x), 0,
+                (int)logical_width - CURSOR_WIDTH);
+            region->i_y = VLC_CLIP(new_value.coords.y, 0,
+                                   (int)vd->fmt.i_visible_height -
+                                   CURSOR_HEIGHT);
+            region->i_stereo_offset = INT16_MAX;
+
+            subpicture_t *cursor = subpicture_New(NULL);
+            if (cursor != NULL)
+            {
+                cursor->p_region = region;
+                cursor->i_original_picture_width = logical_width;
+                cursor->i_original_picture_height = vd->fmt.i_visible_height;
+                cursor->i_channel = sys->stereo_cursor_channel;
+                cursor->i_start = now;
+                cursor->i_stop = now + visibility_duration;
+                cursor->b_ephemer = true;
+                cursor->b_absolute = true;
+                cursor->b_fade = false;
+                vout_PutSubpicture((vout_thread_t *)object, cursor);
+            }
+            else
+                subpicture_region_Delete(region);
+        }
+        sys->stereo_cursor_last_draw = now;
+    }
+    /* Text rasterization and upload are expensive enough to disturb 23.976-Hz
+     * MVC on Ivy Bridge. Refresh shortly before the existing OSD expires,
+     * instead of rebuilding it for every mouse event. */
+    if (refresh_osd)
+    {
+        vlc_tick_t osd_duration = visibility_duration;
+        sys->stereo_controls_last_draw = now;
+        sys->stereo_controls_osd_until = now + osd_duration;
+        playlist_t *playlist = (playlist_t *)object->obj.parent;
+        input_thread_t *input = playlist != NULL
+                              ? playlist_CurrentInput(playlist) : NULL;
+        int64_t time = input != NULL ? var_GetInteger(input, "time") : 0;
+        int64_t length = input != NULL ? var_GetInteger(input, "length") : 0;
+        int state = input != NULL ? var_GetInteger(input, "state") : 0;
+        float position = length > 0 ? (float)time / length : 0.f;
+        if (position < 0.f)
+            position = 0.f;
+        else if (position > 1.f)
+            position = 1.f;
+
+        enum { PROGRESS_WIDTH = 36 };
+        char progress[PROGRESS_WIDTH + 1];
+        int cursor = (int)(position * (PROGRESS_WIDTH - 1) + .5f);
+        for (int i = 0; i < PROGRESS_WIDTH; ++i)
+            progress[i] = i == cursor ? '|' : (i < cursor ? '=' : '-');
+        progress[PROGRESS_WIDTH] = '\0';
+
+        char time_text[MSTRTIME_MAX_SIZE];
+        char length_text[MSTRTIME_MAX_SIZE];
+        secstotimestr(time_text, time / CLOCK_FREQ);
+        secstotimestr(length_text, length / CLOCK_FREQ);
+        char timeline[384];
+        /* A plain trailing space is discarded by the text renderer, which
+         * collapses the reserved second row and makes the buttons overwrite
+         * the timeline.  NBSP keeps that row's line box without drawing a
+         * visible marker. */
+        snprintf(timeline, sizeof(timeline),
+                 "%s  [%s]  %s\n\xC2\xA0",
+                 time_text, progress, length_text);
+        if (input != NULL)
+            vlc_object_release(input);
+        vout_OSDText((vout_thread_t *)object, VOUT_SPU_CHANNEL_OSD,
+                     SUBPICTURE_ALIGN_BOTTOM,
+                     osd_duration,
+                     timeline);
+        vout_OSDText((vout_thread_t *)object, sys->stereo_back_channel,
+                     SUBPICTURE_ALIGN_LEFT | SUBPICTURE_ALIGN_BOTTOM,
+                     osd_duration, "[ -10 seconds ]");
+        vout_OSDText((vout_thread_t *)object, sys->stereo_pause_channel,
+                     SUBPICTURE_ALIGN_BOTTOM, osd_duration,
+                     state == PAUSE_S ? "[ Play ]" : "[ Pause ]");
+        vout_OSDText((vout_thread_t *)object, sys->stereo_forward_channel,
+                     SUBPICTURE_ALIGN_RIGHT | SUBPICTURE_ALIGN_BOTTOM,
+                     osd_duration, "[ +10 seconds ]");
+    }
+    return VLC_SUCCESS;
+}
+
+static int StereoMouseClicked(vlc_object_t *object, const char *name,
+                              vlc_value_t old_value, vlc_value_t new_value,
+                              void *opaque)
+{
+    VLC_UNUSED(name);
+    VLC_UNUSED(old_value);
+    vout_display_t *vd = opaque;
+    vout_display_sys_t *sys = vd->sys;
+    if (!sys->stereo_active || mdate() > sys->stereo_controls_until)
+        return VLC_SUCCESS;
+
+    /* Contrary to the software-pointer quad, Win32 click coordinates arrive
+     * in the anamorphic source space for stacked MVC (3840 logical pixels
+     * for a 1920-wide surface with SAR 2:1).  Keep hit testing in that space;
+     * using the pointer texture's 1920-pixel width shifts Pause onto +10 s. */
+    unsigned width = StereoMouseLogicalWidth(vd);
+    LONG click_x = StereoMouseLogicalX(vd, new_value.coords.x);
+    unsigned height = vd->fmt.i_visible_height;
+    if (width == 0 || height == 0 ||
+        new_value.coords.y < (int)(height * 3 / 4))
+        return VLC_SUCCESS;
+
+    /* Repeated clicks are intentional on the seek buttons.  The Win32
+     * window will also synthesize a double-click after the second press;
+     * mark this OSD hit so the core does not interpret it as a fullscreen
+     * toggle. */
+    var_SetInteger(object, "stereo-controls-double-click-until",
+                   mdate() + VLC_TICK_FROM_MS(500));
+
+    playlist_t *playlist = (playlist_t *)object->obj.parent;
+    input_thread_t *input = playlist != NULL
+                          ? playlist_CurrentInput(playlist) : NULL;
+    if (new_value.coords.y < (int)(height * 7 / 8))
+    {
+        /* The progress row spans the middle 90% of the image. */
+        float position = ((float)click_x / width - .05f) / .90f;
+        if (position < 0.f)
+            position = 0.f;
+        else if (position > 1.f)
+            position = 1.f;
+        if (input != NULL)
+            var_SetFloat(input, "position", position);
+        if (sys->stereo_feedback_channel >=
+            VOUT_SPU_CHANNEL_AVAIL_FIRST)
+            vout_OSDText((vout_thread_t *)object,
+                         sys->stereo_feedback_channel,
+                         0,
+                         VLC_TICK_FROM_MS(1200), "Seek");
+        sys->stereo_controls_osd_until = 0;
+        StereoMouseMoved(object, "mouse-moved", old_value, new_value,
+                         opaque);
+        if (input != NULL)
+            vlc_object_release(input);
+        return VLC_SUCCESS;
+    }
+
+    int zone = (int)((int64_t)click_x * 3 / width);
+    int action = zone <= 0 ? ACTIONID_JUMP_BACKWARD_SHORT
+               : zone == 1 ? ACTIONID_PLAY_PAUSE
+                           : ACTIONID_JUMP_FORWARD_SHORT;
+    var_SetInteger(object->obj.libvlc, "key-action", action);
+    if (sys->stereo_feedback_channel >= VOUT_SPU_CHANNEL_AVAIL_FIRST)
+        vout_OSDText((vout_thread_t *)object,
+                     sys->stereo_feedback_channel,
+                     0,
+                     VLC_TICK_FROM_MS(1200),
+                     zone <= 0 ? "-10 s"
+                               : zone == 1 ? "Play / Pause" : "+10 s");
+    sys->stereo_controls_osd_until = 0;
+    StereoMouseMoved(object, "mouse-moved", old_value, new_value, opaque);
+    if (input != NULL)
+        vlc_object_release(input);
+    return VLC_SUCCESS;
+}
+
+static void RegisterStereoMouseControls(vout_display_t *vd)
+{
+    vout_display_sys_t *sys = vd->sys;
+    vout_thread_t *vout = (vout_thread_t *)vd->obj.parent;
+    if (!sys->stereo_active || vout == NULL)
+        return;
+    var_AddCallback(vout, "mouse-moved", StereoMouseMoved, vd);
+    var_AddCallback(vout, "mouse-clicked", StereoMouseClicked, vd);
+    var_Create(vout, "stereo-controls-double-click-until", VLC_VAR_INTEGER);
+    var_SetInteger(vout, "stereo-controls-double-click-until", 0);
+    sys->stereo_cursor_channel = vout_RegisterSubpictureChannel(vout);
+    sys->stereo_feedback_channel = vout_RegisterSubpictureChannel(vout);
+    sys->stereo_back_channel = vout_RegisterSubpictureChannel(vout);
+    sys->stereo_pause_channel = vout_RegisterSubpictureChannel(vout);
+    sys->stereo_forward_channel = vout_RegisterSubpictureChannel(vout);
+    sys->stereo_cursor_screen_valid =
+        GetCursorPos(&sys->stereo_cursor_screen) != FALSE;
+    sys->stereo_mouse_accept_after = mdate() + VLC_TICK_FROM_SEC(1);
+    /* During an MVC -> 2D-menu vout handoff Qt briefly reports the new video
+     * child as non-fullscreen while it reparents it, even though the adopted
+     * Blu-ray HDMI session is still intentionally fullscreen.  Do not let
+     * that transient notification tear down and immediately recreate the
+     * exclusive stereo swapchain: on Ivy Bridge the round trip can leave a
+     * stale black tile in one eye.  This guard begins only once the new vout
+     * is operational, and expires quickly so a real user request remains
+     * responsive. */
+    if (sys->stereo_adopted && sys->stereo_fullscreen_forced)
+        sys->stereo_adopted_fullscreen_guard_until =
+            mdate() + VLC_TICK_FROM_SEC(2);
+    sys->stereo_mouse_callbacks = true;
+}
+
+static void UnregisterStereoMouseControls(vout_display_t *vd)
+{
+    vout_display_sys_t *sys = vd->sys;
+    vout_thread_t *vout = (vout_thread_t *)vd->obj.parent;
+    if (!sys->stereo_mouse_callbacks || vout == NULL)
+        return;
+    var_DelCallback(vout, "mouse-moved", StereoMouseMoved, vd);
+    var_DelCallback(vout, "mouse-clicked", StereoMouseClicked, vd);
+    var_SetInteger(vout, "stereo-controls-double-click-until", 0);
+    if (sys->stereo_cursor_channel >= VOUT_SPU_CHANNEL_AVAIL_FIRST)
+        vout_FlushSubpictureChannel(vout, sys->stereo_cursor_channel);
+    if (sys->stereo_feedback_channel >= VOUT_SPU_CHANNEL_AVAIL_FIRST)
+        vout_FlushSubpictureChannel(vout, sys->stereo_feedback_channel);
+    if (sys->stereo_back_channel >= VOUT_SPU_CHANNEL_AVAIL_FIRST)
+        vout_FlushSubpictureChannel(vout, sys->stereo_back_channel);
+    if (sys->stereo_pause_channel >= VOUT_SPU_CHANNEL_AVAIL_FIRST)
+        vout_FlushSubpictureChannel(vout, sys->stereo_pause_channel);
+    if (sys->stereo_forward_channel >= VOUT_SPU_CHANNEL_AVAIL_FIRST)
+        vout_FlushSubpictureChannel(vout, sys->stereo_forward_channel);
+    sys->stereo_cursor_channel = VOUT_SPU_CHANNEL_INVALID;
+    sys->stereo_feedback_channel = VOUT_SPU_CHANNEL_INVALID;
+    sys->stereo_back_channel = VOUT_SPU_CHANNEL_INVALID;
+    sys->stereo_pause_channel = VOUT_SPU_CHANNEL_INVALID;
+    sys->stereo_forward_channel = VOUT_SPU_CHANNEL_INVALID;
+    sys->stereo_cursor_screen_valid = false;
+    sys->stereo_mouse_accept_after = VLC_TICK_INVALID;
+    sys->stereo_mouse_callbacks = false;
+}
+
+static void RestoreStereoOutput(vout_display_t *vd)
+{
+    vout_display_sys_t *sys = vd->sys;
+
+    if (sys->stereo_display_control != NULL)
+    {
+        IDXGIDisplayControl_SetStereoEnabled(
+            sys->stereo_display_control,
+            sys->stereo_display_was_enabled ? TRUE : FALSE);
+        IDXGIDisplayControl_Release(sys->stereo_display_control);
+        sys->stereo_display_control = NULL;
+    }
+    sys->stereo_active = false;
+
+    if (sys->stereo_fullscreen_forced)
+    {
+        vlc_object_t *vout = vd->obj.parent;
+        if (vout != NULL && var_GetBool(vout, "fullscreen"))
+            var_SetBool(vout, "fullscreen", false);
+        sys->stereo_fullscreen_forced = false;
+    }
+
+    if (sys->stereo_mode_changed)
+    {
+        LONG result = ChangeDisplaySettingsExW(sys->stereo_device,
+                                               &sys->stereo_saved_mode, NULL,
+                                               CDS_FULLSCREEN, NULL);
+        if (result != DISP_CHANGE_SUCCESSFUL)
+            msg_Warn(vd, "could not restore the previous Windows display "
+                     "mode (%ld)", result);
+        else
+            msg_Info(vd, "restored the previous Windows display mode");
+        sys->stereo_mode_changed = false;
+    }
+
+    if (sys->stereo_topology_changed)
+    {
+        LONG result = SetDisplayConfig(
+            sys->stereo_saved_path_count, sys->stereo_saved_paths,
+            sys->stereo_saved_mode_count, sys->stereo_saved_modes,
+            SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG |
+            SDC_ALLOW_CHANGES);
+        if (result == ERROR_SUCCESS)
+            msg_Info(vd, "restored the previous Windows display topology");
+        else
+            msg_Warn(vd, "could not restore the previous Windows display "
+                     "topology (%ld)", result);
+        sys->stereo_topology_changed = false;
+    }
+    free(sys->stereo_saved_paths);
+    free(sys->stereo_saved_modes);
+    sys->stereo_saved_paths = NULL;
+    sys->stereo_saved_modes = NULL;
+    sys->stereo_saved_path_count = 0;
+    sys->stereo_saved_mode_count = 0;
+}
+
+static bool AdoptStereoOutputHandoff(vout_display_t *vd)
+{
+    vlc_object_t *vout = vd->obj.parent;
+    if (vout == NULL)
+        return false;
+
+    win32_stereo_handoff_t *state =
+        var_GetAddress(vout, "win32-stereo-display-state");
+    if (state == NULL)
+        return false;
+
+    vout_display_sys_t *sys = vd->sys;
+    sys->stereo_requested = true;
+    sys->stereo_adopted = true;
+    sys->stereo_windowed = false;
+    sys->stereo_mode_changed = state->mode_changed;
+    sys->stereo_fullscreen_forced = state->fullscreen_forced;
+    sys->stereo_display_was_enabled = state->display_was_enabled;
+    sys->stereo_topology_changed = state->topology_changed;
+    sys->stereo_eye_width = state->eye_width;
+    sys->stereo_eye_height = state->eye_height;
+    memcpy(sys->stereo_device, state->device, sizeof(sys->stereo_device));
+    sys->stereo_saved_mode = state->saved_mode;
+    sys->stereo_saved_paths = state->saved_paths;
+    sys->stereo_saved_modes = state->saved_modes;
+    sys->stereo_saved_path_count = state->saved_path_count;
+    sys->stereo_saved_mode_count = state->saved_mode_count;
+
+    state->saved_paths = NULL;
+    state->saved_modes = NULL;
+    free(state);
+    var_SetAddress(vout, "win32-stereo-display-state", NULL);
+    /* If this Open later fails, its Close must restore the adopted topology
+     * instead of parking it again for a different display fallback. */
+    var_SetBool(vout, "stereo3d-vout-reinit", false);
+    msg_Info(vd, "adopted active Windows HDMI 3D session for the new video "
+                 "format");
+    return true;
+}
+
+static bool ParkStereoOutputHandoff(vout_display_t *vd)
+{
+    vout_display_sys_t *sys = vd->sys;
+    vlc_object_t *vout = vd->obj.parent;
+    if (!sys->stereo_requested || vout == NULL ||
+        !var_GetBool(vout, "stereo3d-vout-reinit"))
+        return false;
+
+    win32_stereo_handoff_t *state = calloc(1, sizeof(*state));
+    if (state == NULL)
+        return false;
+
+    state->mode_changed = sys->stereo_mode_changed;
+    state->fullscreen_forced = sys->stereo_fullscreen_forced;
+    state->display_was_enabled = sys->stereo_display_was_enabled;
+    state->topology_changed = sys->stereo_topology_changed;
+    state->eye_width = sys->stereo_eye_width;
+    state->eye_height = sys->stereo_eye_height;
+    memcpy(state->device, sys->stereo_device, sizeof(state->device));
+    state->saved_mode = sys->stereo_saved_mode;
+    state->saved_paths = sys->stereo_saved_paths;
+    state->saved_modes = sys->stereo_saved_modes;
+    state->saved_path_count = sys->stereo_saved_path_count;
+    state->saved_mode_count = sys->stereo_saved_mode_count;
+
+    sys->stereo_mode_changed = false;
+    sys->stereo_fullscreen_forced = false;
+    sys->stereo_topology_changed = false;
+    sys->stereo_saved_paths = NULL;
+    sys->stereo_saved_modes = NULL;
+    sys->stereo_saved_path_count = 0;
+    sys->stereo_saved_mode_count = 0;
+    if (sys->stereo_display_control != NULL)
+    {
+        /* Releasing the interface does not disable stereo. The replacement
+         * swapchain obtains its own interface while retaining the original
+         * pre-session enabled state stored above. */
+        IDXGIDisplayControl_Release(sys->stereo_display_control);
+        sys->stereo_display_control = NULL;
+    }
+
+    var_Create(vout, "win32-stereo-display-state", VLC_VAR_ADDRESS);
+    win32_stereo_handoff_t *stale =
+        var_GetAddress(vout, "win32-stereo-display-state");
+    if (stale != NULL)
+    {
+        free(stale->saved_paths);
+        free(stale->saved_modes);
+        free(stale);
+    }
+    var_SetAddress(vout, "win32-stereo-display-state", state);
+    msg_Info(vd, "keeping Windows HDMI 3D active across the video format "
+                 "change");
+    return true;
+}
+
+static bool PrepareStereoOutput(vout_display_t *vd)
+{
+    vout_display_sys_t *sys = vd->sys;
+    msg_Info(vd, "stereo probe: source mode %d, display mode %d, "
+             "source %ux%u visible %ux%u at %u/%u fps",
+             vd->source.multiview_mode, vd->fmt.multiview_mode,
+             vd->source.i_width, vd->source.i_height,
+             vd->source.i_visible_width, vd->source.i_visible_height,
+             vd->source.i_frame_rate, vd->source.i_frame_rate_base);
+    if (!Win32IsFramePackableStereo(vd->fmt.multiview_mode))
+    {
+        msg_Warn(vd, "stereo probe rejected multiview mode %d",
+                 vd->fmt.multiview_mode);
+        return false;
+    }
+
+    if (!CommonShouldSwitchToStereoDisplay(vd))
+        return false;
+
+    unsigned eye_width, eye_height;
+    if (!StereoEyeDimensions(&vd->fmt, &eye_width, &eye_height))
+        return false;
+
+    double content_rate = 24.0;
+    if (vd->fmt.i_frame_rate > 0 && vd->fmt.i_frame_rate_base > 0)
+        content_rate = (double)vd->fmt.i_frame_rate /
+                       vd->fmt.i_frame_rate_base;
+
+    if (!((eye_width == 1920 && eye_height == 1080 &&
+           (RefreshNear(content_rate, 24.0) ||
+            RefreshNear(content_rate, 24000.0 / 1001.0))) ||
+          (eye_width == 1280 && eye_height == 720 &&
+           (RefreshNear(content_rate, 50.0) ||
+            RefreshNear(content_rate, 60.0) ||
+            RefreshNear(content_rate, 60000.0 / 1001.0)))))
+    {
+        vlc_dialog_display_error(vd, _("HDMI 3D frame packing unavailable"),
+                                 _("PowerVLC cannot select a standardized "
+                                   "HDMI frame-packed mode for %ux%u per eye "
+                                   "at %.3f Hz."), eye_width, eye_height,
+                                 content_rate);
+        return false;
+    }
+
+    if (!UseExternalDisplayOnly(vd))
+    {
+        vlc_dialog_display_error(vd, _("HDMI 3D frame packing unavailable"),
+                                 _("Windows could not activate the external "
+                                   "display by itself."));
+        return false;
+    }
+
+    HWND window = sys->sys.hparent != NULL ? sys->sys.hparent : sys->sys.hwnd;
+    HMONITOR monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+    MONITORINFOEXW info;
+    memset(&info, 0, sizeof(info));
+    info.cbSize = sizeof(info);
+    if (monitor == NULL || !GetMonitorInfoW(monitor, (MONITORINFO *)&info))
+    {
+        msg_Warn(vd, "cannot identify the monitor hosting the video window");
+        return false;
+    }
+    lstrcpynW(sys->stereo_device, info.szDevice,
+              ARRAY_SIZE(sys->stereo_device));
+    msg_Info(vd, "stereo target is %ls, eye raster %ux%u at %.3f Hz",
+             sys->stereo_device, eye_width, eye_height, content_rate);
+
+    memset(&sys->stereo_saved_mode, 0, sizeof(sys->stereo_saved_mode));
+    sys->stereo_saved_mode.dmSize = sizeof(sys->stereo_saved_mode);
+    if (!EnumDisplaySettingsExW(sys->stereo_device, ENUM_CURRENT_SETTINGS,
+                                &sys->stereo_saved_mode, 0))
+    {
+        msg_Warn(vd, "cannot read the current mode for %ls",
+                 sys->stereo_device);
+        return false;
+    }
+
+    DWORD preferred_rate = (DWORD)content_rate;
+    DWORD alternate_rate = (DWORD)(content_rate + 0.5);
+    DEVMODEW best;
+    memset(&best, 0, sizeof(best));
+    bool found = false;
+    bool found_alternate = false;
+    for (DWORD index = 0;; ++index)
+    {
+        DEVMODEW candidate;
+        memset(&candidate, 0, sizeof(candidate));
+        candidate.dmSize = sizeof(candidate);
+        if (!EnumDisplaySettingsExW(sys->stereo_device, index, &candidate,
+                                    EDS_RAWMODE))
+            break;
+        if (candidate.dmPelsWidth == eye_width &&
+            candidate.dmPelsHeight == eye_height &&
+            !(candidate.dmDisplayFlags & DM_INTERLACED))
+        {
+            msg_Dbg(vd, "stereo candidate %lux%lu at %lu Hz flags 0x%lx",
+                    candidate.dmPelsWidth, candidate.dmPelsHeight,
+                    candidate.dmDisplayFrequency, candidate.dmDisplayFlags);
+            if (candidate.dmDisplayFrequency == preferred_rate)
+            {
+                best = candidate;
+                found = true;
+                break;
+            }
+            if (!found_alternate &&
+                candidate.dmDisplayFrequency == alternate_rate)
+            {
+                best = candidate;
+                found_alternate = true;
+            }
+        }
+    }
+    if (!found && found_alternate)
+        found = true;
+    if (!found)
+    {
+        msg_Warn(vd, "no %ux%u display mode near %.3f Hz is exposed by %ls",
+                 eye_width, eye_height, content_rate, sys->stereo_device);
+        /* Ivy Bridge's Windows 10 driver hides the HDMI 1.4 frame-packed
+         * timings from EnumDisplaySettings.  DXGI still exposes them after
+         * SetStereoEnabled(), and Kodi consequently creates the stereo swap
+         * chain first instead of rejecting the stream here.  Let DXGI make
+         * that authoritative capability check below. */
+        goto stereo_ready;
+    }
+    msg_Info(vd, "selected Windows stereo mode %lux%lu at %lu Hz",
+             best.dmPelsWidth, best.dmPelsHeight,
+             best.dmDisplayFrequency);
+
+    bool already_active =
+        sys->stereo_saved_mode.dmPelsWidth == eye_width &&
+        sys->stereo_saved_mode.dmPelsHeight == eye_height &&
+        sys->stereo_saved_mode.dmDisplayFrequency == best.dmDisplayFrequency;
+    if (!already_active)
+    {
+        LONG result = ChangeDisplaySettingsExW(sys->stereo_device, &best, NULL,
+                                               CDS_TEST, NULL);
+        if (result == DISP_CHANGE_SUCCESSFUL)
+            result = ChangeDisplaySettingsExW(sys->stereo_device, &best, NULL,
+                                              CDS_FULLSCREEN, NULL);
+        if (result != DISP_CHANGE_SUCCESSFUL)
+        {
+            vlc_dialog_display_error(
+                vd, _("HDMI 3D frame packing unavailable"),
+                _("Windows rejected the %ux%u stereoscopic mode at %lu Hz "
+                  "(error %ld)."), eye_width, eye_height,
+                best.dmDisplayFrequency, result);
+            return false;
+        }
+        sys->stereo_mode_changed = true;
+    }
+
+stereo_ready:
+    sys->stereo_eye_width = eye_width;
+    sys->stereo_eye_height = eye_height;
+    sys->stereo_requested = true;
+
+    vlc_object_t *vout = vd->obj.parent;
+    if (vout != NULL && !var_GetBool(vout, "fullscreen"))
+    {
+        sys->stereo_fullscreen_forced = true;
+        var_SetBool(vout, "fullscreen", true);
+    }
+    UpdateRects(vd, NULL, true);
+    return true;
+}
+
 static int Open(vlc_object_t *object)
 {
     vout_display_t *vd = (vout_display_t *)object;
@@ -319,6 +1305,7 @@ static int Open(vlc_object_t *object)
     vout_display_sys_t *sys = vd->sys = calloc(1, sizeof(vout_display_sys_t));
     if (unlikely(sys == NULL))
         return VLC_ENOMEM;
+    sys->stereo_spu_reported_order = INT64_MIN;
     int ret = D3D11_Create(vd, &sys->hd3d, true);
     if (unlikely(ret != VLC_SUCCESS))
         goto error;
@@ -335,6 +1322,13 @@ static int Open(vlc_object_t *object)
     else if (CommonInit(vd) != VLC_SUCCESS)
         goto error;
 
+#if !VLC_WINSTORE_APP
+    bool adopted_stereo = !external_device &&
+                          AdoptStereoOutputHandoff(vd);
+    if (!external_device && !adopted_stereo)
+        PrepareStereoOutput(vd);
+#endif
+
     vd->sys->sys.pf_GetPictureWidth  = GetPictureWidth;
     vd->sys->sys.pf_GetPictureHeight = GetPictureHeight;
 
@@ -342,6 +1336,11 @@ static int Open(vlc_object_t *object)
         msg_Err(vd, "Direct3D11 could not be opened");
         goto error;
     }
+
+#if !VLC_WINSTORE_APP
+    if (!external_device)
+        RegisterStereoMouseControls(vd);
+#endif
 
 #if !VLC_WINSTORE_APP
     if (!external_device)
@@ -382,7 +1381,12 @@ static void Close(vlc_object_t *object)
 {
     vout_display_t * vd = (vout_display_t *)object;
 
+    UnregisterStereoMouseControls(vd);
     Direct3D11Close(vd);
+#if !VLC_WINSTORE_APP
+    if (!ParkStereoOutputHandoff(vd))
+#endif
+        RestoreStereoOutput(vd);
     CommonClean(vd);
     Direct3D11Destroy(vd);
     free(vd->sys);
@@ -545,10 +1549,15 @@ static void FillSwapChainDesc(vout_display_t *vd, DXGI_SWAP_CHAIN_DESC1 *out)
     out->BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     out->SampleDesc.Count = 1;
     out->SampleDesc.Quality = 0;
-    out->Width = vd->source.i_visible_width;
-    out->Height = vd->source.i_visible_height;
+    out->Width = sys->stereo_requested ? sys->stereo_eye_width
+                                       : vd->source.i_visible_width;
+    out->Height = sys->stereo_requested ? sys->stereo_eye_height
+                                        : vd->source.i_visible_height;
     out->Format = DXGI_FORMAT_R8G8B8A8_UNORM; /* TODO: use DXGI_FORMAT_NV12 */
-    if (sys->hdrMode == hdr_Always || sys->hdrMode == hdr_Fake)
+    out->Stereo = sys->stereo_requested ? TRUE : FALSE;
+    if (sys->stereo_requested)
+        out->Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    else if (sys->hdrMode == hdr_Always || sys->hdrMode == hdr_Fake)
         out->Format = DXGI_FORMAT_R10G10B10A2_UNORM;
     else if (sys->hdrMode == hdr_Auto)
     {
@@ -566,7 +1575,9 @@ static void FillSwapChainDesc(vout_display_t *vd, DXGI_SWAP_CHAIN_DESC1 *out)
         isWin10OrGreater = GetProcAddress(hKernelBase, "VirtualAllocFromApp") != NULL;
         FreeLibrary(hKernelBase);
     }
-    if (isWin10OrGreater)
+    if (sys->stereo_requested)
+        out->SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    else if (isWin10OrGreater)
         out->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     else
     {
@@ -582,6 +1593,179 @@ static void FillSwapChainDesc(vout_display_t *vd, DXGI_SWAP_CHAIN_DESC1 *out)
             out->BufferCount = 1;
         }
     }
+}
+
+static DXGI_RATIONAL StereoRefreshRate(const video_format_t *fmt)
+{
+    double rate = 24.0;
+    if (fmt->i_frame_rate > 0 && fmt->i_frame_rate_base > 0)
+        rate = (double)fmt->i_frame_rate / fmt->i_frame_rate_base;
+
+    DXGI_RATIONAL refresh;
+    if (RefreshNear(rate, 24000.0 / 1001.0))
+    {
+        refresh.Numerator = 24000;
+        refresh.Denominator = 1001;
+    }
+    else if (RefreshNear(rate, 60000.0 / 1001.0))
+    {
+        refresh.Numerator = 60000;
+        refresh.Denominator = 1001;
+    }
+    else
+    {
+        refresh.Numerator = (UINT)(rate + 0.5) * 1000;
+        refresh.Denominator = 1000;
+    }
+    return refresh;
+}
+
+static HWND StereoSwapChainWindow(const vout_display_sys_t *sys)
+{
+    HWND root = GetAncestor(sys->sys.hvideownd, GA_ROOT);
+    return root != NULL ? root : sys->sys.hvideownd;
+}
+
+/* Intel's Ivy Bridge driver does not advertise the HDMI 1.4 3D timings to
+ * EnumDisplaySettings.  The MVC Kodi fork primes the driver with an ordinary
+ * swap chain in exclusive mode, calls ResizeTarget with the desired per-eye
+ * timing, tears it down, and only then enables DXGI stereo. */
+static HRESULT PrimeStereoDisplay(vout_display_t *vd,
+                                  IDXGIFactory2 *factory,
+                                  IDXGIOutput **output)
+{
+    vout_display_sys_t *sys = vd->sys;
+    DXGI_SWAP_CHAIN_DESC1 desc;
+    FillSwapChainDesc(vd, &desc);
+    desc.Stereo = FALSE;
+    desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+
+    DXGI_SWAP_CHAIN_FULLSCREEN_DESC fs_desc;
+    ZeroMemory(&fs_desc, sizeof(fs_desc));
+    fs_desc.RefreshRate = StereoRefreshRate(&vd->fmt);
+    fs_desc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_PROGRESSIVE;
+    fs_desc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
+    fs_desc.Windowed = TRUE;
+
+    IDXGISwapChain1 *bootstrap = NULL;
+    HWND swapchain_window = StereoSwapChainWindow(sys);
+    msg_Info(vd, "stereo window video=%p parent=%p fullscreen=%p root=%p",
+             sys->sys.hvideownd, sys->sys.hparent, sys->sys.hfswnd,
+             swapchain_window);
+    HRESULT hr = IDXGIFactory2_CreateSwapChainForHwnd(
+        factory, (IUnknown *)sys->d3d_dev.d3ddevice,
+        swapchain_window, &desc, &fs_desc, NULL, &bootstrap);
+    msg_Info(vd, "stereo bootstrap mono swapchain: hr=0x%lX", hr);
+    if (FAILED(hr))
+        return hr;
+
+    hr = IDXGISwapChain_GetContainingOutput(bootstrap, output);
+    msg_Info(vd, "stereo bootstrap containing output: hr=0x%lX", hr);
+    if (SUCCEEDED(hr))
+    {
+        hr = IDXGISwapChain_SetFullscreenState(bootstrap, TRUE, *output);
+        msg_Info(vd, "stereo bootstrap exclusive fullscreen: hr=0x%lX", hr);
+    }
+
+    if (SUCCEEDED(hr))
+    {
+        DXGI_MODE_DESC target;
+        ZeroMemory(&target, sizeof(target));
+        target.Width = sys->stereo_eye_width;
+        target.Height = sys->stereo_eye_height;
+        target.RefreshRate = fs_desc.RefreshRate;
+        target.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        target.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_PROGRESSIVE;
+        target.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
+        hr = IDXGISwapChain_ResizeTarget(bootstrap, &target);
+        msg_Info(vd, "stereo bootstrap ResizeTarget %ux%u at %u/%u: "
+                 "hr=0x%lX", target.Width, target.Height,
+                 target.RefreshRate.Numerator,
+                 target.RefreshRate.Denominator, hr);
+    }
+
+    BOOL fullscreen = FALSE;
+    if (SUCCEEDED(IDXGISwapChain_GetFullscreenState(bootstrap, &fullscreen,
+                                                    NULL)) && fullscreen)
+    {
+        HRESULT leave_hr = IDXGISwapChain_SetFullscreenState(bootstrap,
+                                                              FALSE, NULL);
+        msg_Info(vd, "stereo bootstrap leave exclusive fullscreen: "
+                 "hr=0x%lX", leave_hr);
+    }
+    IDXGISwapChain1_Release(bootstrap);
+    return hr;
+}
+
+static HRESULT EnterStereoFullscreen(vout_display_t *vd, const char *phase,
+                                     IDXGIOutput *known_output)
+{
+    vout_display_sys_t *sys = vd->sys;
+    IDXGIOutput *output = known_output;
+    HRESULT hr = S_OK;
+    if (output != NULL)
+        IDXGIOutput_AddRef(output);
+    else
+        hr = IDXGISwapChain_GetContainingOutput(sys->dxgiswapChain, &output);
+    if (SUCCEEDED(hr))
+        hr = IDXGISwapChain_SetFullscreenState(sys->dxgiswapChain, TRUE,
+                                               output);
+    if (SUCCEEDED(hr))
+    {
+        DXGI_MODE_DESC target;
+        ZeroMemory(&target, sizeof(target));
+        target.Width = sys->stereo_eye_width;
+        target.Height = sys->stereo_eye_height;
+        target.RefreshRate = StereoRefreshRate(&vd->fmt);
+        target.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        target.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_PROGRESSIVE;
+        target.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
+        hr = IDXGISwapChain_ResizeTarget(sys->dxgiswapChain, &target);
+    }
+    BOOL fullscreen = FALSE;
+    HRESULT state_hr = IDXGISwapChain_GetFullscreenState(sys->dxgiswapChain,
+                                                         &fullscreen, NULL);
+    msg_Info(vd, "DXGI stereo exclusive %s: fullscreen=%d, hr=0x%lX, "
+             "state_hr=0x%lX", phase, fullscreen != FALSE, hr, state_hr);
+    if (output != NULL)
+        IDXGIOutput_Release(output);
+    return FAILED(hr) ? hr : (fullscreen ? S_OK : E_FAIL);
+}
+
+static void LogStereoModes(vout_display_t *vd, IDXGIOutput *output,
+                           DXGI_FORMAT format)
+{
+    IDXGIOutput1 *output1 = NULL;
+    HRESULT hr = IDXGIOutput_QueryInterface(output, &IID_IDXGIOutput1,
+                                             (void **)&output1);
+    if (FAILED(hr))
+        return;
+    UINT count = 0;
+    hr = IDXGIOutput1_GetDisplayModeList1(output1, format,
+                                          DXGI_ENUM_MODES_STEREO,
+                                          &count, NULL);
+    msg_Info(vd, "DXGI stereo mode list format %d: count=%u hr=0x%lX",
+             format, count, hr);
+    if (SUCCEEDED(hr) && count > 0)
+    {
+        DXGI_MODE_DESC1 *modes = malloc(count * sizeof(*modes));
+        if (modes != NULL && SUCCEEDED(IDXGIOutput1_GetDisplayModeList1(
+                output1, format, DXGI_ENUM_MODES_STEREO, &count, modes)))
+        {
+            for (UINT i = 0; i < count; ++i)
+                if (modes[i].Stereo ||
+                    (modes[i].Width == vd->sys->stereo_eye_width &&
+                     modes[i].Height == vd->sys->stereo_eye_height))
+                    msg_Info(vd, "DXGI stereo candidate %ux%u %u/%u "
+                             "stereo=%d scan=%d scaling=%d", modes[i].Width,
+                             modes[i].Height, modes[i].RefreshRate.Numerator,
+                             modes[i].RefreshRate.Denominator,
+                             modes[i].Stereo != FALSE,
+                             modes[i].ScanlineOrdering, modes[i].Scaling);
+        }
+        free(modes);
+    }
+    IDXGIOutput1_Release(output1);
 }
 #endif
 
@@ -644,6 +1828,11 @@ static HRESULT UpdateBackBuffer(vout_display_t *vd)
         window_width  = RECTWidth(sys->sys.rect_dest_clipped);
         window_height = RECTHeight(sys->sys.rect_dest_clipped);
     }
+    if (sys->stereo_active)
+    {
+        window_width = sys->stereo_eye_width;
+        window_height = sys->stereo_eye_height;
+    }
 
     if (proc_upscale)
     {
@@ -670,12 +1859,17 @@ static HRESULT UpdateBackBuffer(vout_display_t *vd)
         }
     }
 
-    if (dsc.Width == window_width && dsc.Height == window_height)
+    if (dsc.Width == window_width && dsc.Height == window_height &&
+        (!sys->stereo_active || sys->d3drenderTargetViewRight != NULL))
         return S_OK; /* nothing changed */
 
     if (sys->d3drenderTargetView) {
         ID3D11RenderTargetView_Release(sys->d3drenderTargetView);
         sys->d3drenderTargetView = NULL;
+    }
+    if (sys->d3drenderTargetViewRight) {
+        ID3D11RenderTargetView_Release(sys->d3drenderTargetViewRight);
+        sys->d3drenderTargetViewRight = NULL;
     }
     if (sys->d3ddepthStencilView) {
         ID3D11DepthStencilView_Release(sys->d3ddepthStencilView);
@@ -696,10 +1890,46 @@ static HRESULT UpdateBackBuffer(vout_display_t *vd)
        return hr;
     }
 
-    hr = ID3D11Device_CreateRenderTargetView(sys->d3d_dev.d3ddevice, (ID3D11Resource *)pBackBuffer, NULL, &sys->d3drenderTargetView);
+    if (sys->stereo_active)
+    {
+        D3D11_TEXTURE2D_DESC backDesc;
+        ID3D11Texture2D_GetDesc(pBackBuffer, &backDesc);
+        if (backDesc.ArraySize < 2)
+        {
+            ID3D11Texture2D_Release(pBackBuffer);
+            msg_Err(vd, "DXGI stereo back buffer has only %u array slice",
+                    backDesc.ArraySize);
+            return E_FAIL;
+        }
+        D3D11_RENDER_TARGET_VIEW_DESC viewDesc;
+        memset(&viewDesc, 0, sizeof(viewDesc));
+        viewDesc.Format = backDesc.Format;
+        viewDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DARRAY;
+        viewDesc.Texture2DArray.MipSlice = 0;
+        viewDesc.Texture2DArray.ArraySize = 1;
+        viewDesc.Texture2DArray.FirstArraySlice = 0;
+        hr = ID3D11Device_CreateRenderTargetView(
+            sys->d3d_dev.d3ddevice, (ID3D11Resource *)pBackBuffer,
+            &viewDesc, &sys->d3drenderTargetView);
+        if (SUCCEEDED(hr))
+        {
+            viewDesc.Texture2DArray.FirstArraySlice = 1;
+            hr = ID3D11Device_CreateRenderTargetView(
+                sys->d3d_dev.d3ddevice, (ID3D11Resource *)pBackBuffer,
+                &viewDesc, &sys->d3drenderTargetViewRight);
+        }
+    }
+    else
+        hr = ID3D11Device_CreateRenderTargetView(
+            sys->d3d_dev.d3ddevice, (ID3D11Resource *)pBackBuffer, NULL,
+            &sys->d3drenderTargetView);
     ID3D11Texture2D_Release(pBackBuffer);
     if (FAILED(hr)) {
         msg_Err(vd, "Failed to create the target view. (hr=0x%lX)", hr);
+        if (sys->d3drenderTargetView) {
+            ID3D11RenderTargetView_Release(sys->d3drenderTargetView);
+            sys->d3drenderTargetView = NULL;
+        }
         return hr;
     }
 
@@ -740,6 +1970,176 @@ static HRESULT UpdateBackBuffer(vout_display_t *vd)
 
     return S_OK;
 }
+
+#if !VLC_WINSTORE_APP
+static void ReleaseSwapChainForStereoTransition(vout_display_t *vd)
+{
+    vout_display_sys_t *sys = vd->sys;
+
+    ID3D11DeviceContext_OMSetRenderTargets(sys->d3d_dev.d3dcontext,
+                                           0, NULL, NULL);
+    if (sys->stereo_present_output != NULL)
+    {
+        IDXGIOutput_Release(sys->stereo_present_output);
+        sys->stereo_present_output = NULL;
+    }
+    if (sys->d3drenderTargetView != NULL)
+    {
+        ID3D11RenderTargetView_Release(sys->d3drenderTargetView);
+        sys->d3drenderTargetView = NULL;
+    }
+    if (sys->d3drenderTargetViewRight != NULL)
+    {
+        ID3D11RenderTargetView_Release(sys->d3drenderTargetViewRight);
+        sys->d3drenderTargetViewRight = NULL;
+    }
+    if (sys->d3ddepthStencilView != NULL)
+    {
+        ID3D11DepthStencilView_Release(sys->d3ddepthStencilView);
+        sys->d3ddepthStencilView = NULL;
+    }
+    if (sys->dxgiswapChain4 != NULL)
+    {
+        IDXGISwapChain_Release(sys->dxgiswapChain4);
+        sys->dxgiswapChain4 = NULL;
+    }
+    if (sys->dxgiswapChain != NULL)
+    {
+        BOOL fullscreen = FALSE;
+        if (SUCCEEDED(IDXGISwapChain_GetFullscreenState(
+                          sys->dxgiswapChain, &fullscreen, NULL)) &&
+            fullscreen)
+            IDXGISwapChain_SetFullscreenState(sys->dxgiswapChain,
+                                              FALSE, NULL);
+        IDXGISwapChain1_Release(sys->dxgiswapChain);
+        sys->dxgiswapChain = NULL;
+    }
+    ID3D11DeviceContext_Flush(sys->d3d_dev.d3dcontext);
+}
+
+static HRESULT GetSwapChainFactory(vout_display_t *vd,
+                                   IDXGIFactory2 **factory)
+{
+    vout_display_sys_t *sys = vd->sys;
+    IDXGIAdapter *adapter = D3D11DeviceAdapter(sys->d3d_dev.d3ddevice);
+    if (adapter == NULL)
+        return E_FAIL;
+    HRESULT hr = IDXGIAdapter_GetParent(adapter, &IID_IDXGIFactory2,
+                                        (void **)factory);
+    IDXGIAdapter_Release(adapter);
+    return hr;
+}
+
+static HRESULT SwitchStereoStreamToWindowedMono(vout_display_t *vd)
+{
+    vout_display_sys_t *sys = vd->sys;
+    IDXGIFactory2 *factory = NULL;
+    HRESULT hr = GetSwapChainFactory(vd, &factory);
+    if (FAILED(hr))
+        return hr;
+
+    ReleaseSwapChainForStereoTransition(vd);
+    sys->stereo_active = false;
+
+    /* Keep stereo_requested as the stream capability flag, but build this
+     * replacement exactly like VLC's ordinary composited swapchain. */
+    bool requested = sys->stereo_requested;
+    sys->stereo_requested = false;
+    DXGI_SWAP_CHAIN_DESC1 desc;
+    FillSwapChainDesc(vd, &desc);
+    sys->stereo_requested = requested;
+
+    hr = IDXGIFactory2_CreateSwapChainForHwnd(
+        factory, (IUnknown *)sys->d3d_dev.d3ddevice,
+        sys->sys.hvideownd, &desc, NULL, NULL, &sys->dxgiswapChain);
+    IDXGIFactory2_Release(factory);
+    if (FAILED(hr))
+    {
+        msg_Err(vd, "could not create the mono windowed swapchain "
+                "(hr=0x%lX)", hr);
+        return hr;
+    }
+
+    IDXGISwapChain_QueryInterface(sys->dxgiswapChain,
+                                  &IID_IDXGISwapChain4,
+                                  (void **)&sys->dxgiswapChain4);
+    hr = UpdateBackBuffer(vd);
+    if (SUCCEEDED(hr))
+    {
+        CallUpdateRects(vd);
+        msg_Info(vd, "MVC playback switched to a composited mono window");
+    }
+    return hr;
+}
+
+static HRESULT SwitchStereoStreamToExclusive(vout_display_t *vd)
+{
+    vout_display_sys_t *sys = vd->sys;
+    IDXGIFactory2 *factory = NULL;
+    HRESULT hr = GetSwapChainFactory(vd, &factory);
+    if (FAILED(hr))
+        return hr;
+
+    ReleaseSwapChainForStereoTransition(vd);
+
+    IDXGIOutput *output = NULL;
+    hr = PrimeStereoDisplay(vd, factory, &output);
+    if (FAILED(hr))
+        goto done;
+
+    if (sys->stereo_display_control != NULL &&
+        !IDXGIDisplayControl_IsStereoEnabled(sys->stereo_display_control))
+        IDXGIDisplayControl_SetStereoEnabled(sys->stereo_display_control,
+                                             TRUE);
+
+    DXGI_SWAP_CHAIN_DESC1 desc;
+    FillSwapChainDesc(vd, &desc);
+    desc.Flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    DXGI_SWAP_CHAIN_FULLSCREEN_DESC fs_desc;
+    ZeroMemory(&fs_desc, sizeof(fs_desc));
+    fs_desc.RefreshRate = StereoRefreshRate(&vd->fmt);
+    fs_desc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
+    fs_desc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
+    fs_desc.Windowed = FALSE;
+
+    hr = IDXGIFactory2_CreateSwapChainForHwnd(
+        factory, (IUnknown *)sys->d3d_dev.d3ddevice,
+        StereoSwapChainWindow(sys), &desc, &fs_desc, NULL,
+        &sys->dxgiswapChain);
+    if (FAILED(hr))
+        goto done;
+
+    DXGI_SWAP_CHAIN_DESC1 created;
+    hr = IDXGISwapChain1_GetDesc1(sys->dxgiswapChain, &created);
+    if (FAILED(hr) || !created.Stereo)
+    {
+        hr = E_FAIL;
+        goto done;
+    }
+    hr = EnterStereoFullscreen(vd, "after windowed playback", output);
+    if (FAILED(hr))
+        goto done;
+
+    sys->stereo_active = true;
+    IDXGISwapChain_QueryInterface(sys->dxgiswapChain,
+                                  &IID_IDXGISwapChain4,
+                                  (void **)&sys->dxgiswapChain4);
+    hr = UpdateBackBuffer(vd);
+    if (SUCCEEDED(hr))
+    {
+        sys->stereo_present_output = output;
+        IDXGIOutput_AddRef(sys->stereo_present_output);
+        CallUpdateRects(vd);
+        msg_Info(vd, "MVC playback switched back to HDMI frame packing");
+    }
+
+done:
+    if (output != NULL)
+        IDXGIOutput_Release(output);
+    IDXGIFactory2_Release(factory);
+    return hr;
+}
+#endif
 
 /* rotation around the Z axis */
 static void getZRotMatrix(float theta, FLOAT matrix[static 16])
@@ -893,6 +2293,7 @@ static void SetQuadVSProjection(vout_display_t *vd, d3d_quad_t *quad, const vlc_
 static void UpdateSize(vout_display_t *vd)
 {
     vout_display_sys_t *sys = vd->sys;
+    sys->d3dregion_order_valid = false;
     msg_Dbg(vd, "Detected size change %dx%d", RECTWidth(sys->sys.rect_dest_clipped),
             RECTHeight(sys->sys.rect_dest_clipped));
 
@@ -920,6 +2321,39 @@ static int Control(vout_display_t *vd, int query, va_list args)
     RECT before_src_clipped  = sys->sys.rect_src_clipped;
     RECT before_dest_clipped = sys->sys.rect_dest_clipped;
     RECT before_dest         = sys->sys.rect_dest;
+#if !VLC_WINSTORE_APP
+    bool stereo_fullscreen_change = false;
+    bool stereo_wants_fullscreen = false;
+    if (query == VOUT_DISPLAY_CHANGE_FULLSCREEN &&
+        sys->stereo_active && !sys->stereo_windowed)
+    {
+        va_list peek;
+        va_copy(peek, args);
+        stereo_wants_fullscreen = va_arg(peek, int) != 0;
+        va_end(peek);
+        stereo_fullscreen_change = true;
+
+        if (!stereo_wants_fullscreen && sys->stereo_adopted &&
+            mdate() < sys->stereo_adopted_fullscreen_guard_until)
+        {
+            msg_Info(vd, "ignored transient fullscreen exit while adopting "
+                         "the Blu-ray HDMI 3D session");
+            return VLC_SUCCESS;
+        }
+
+        /* CommonControl only changes the Win32/Qt window.  DXGI exclusive
+         * state is independent, so explicitly release it before Qt reparents
+         * the video back into the normal application window. */
+        if (!stereo_wants_fullscreen)
+        {
+            HRESULT hr = IDXGISwapChain_SetFullscreenState(
+                sys->dxgiswapChain, FALSE, NULL);
+            msg_Info(vd, "left DXGI stereo exclusive mode for windowed "
+                     "playback (hr=0x%lX)", hr);
+            sys->stereo_fullscreen_forced = false;
+        }
+    }
+#endif
 
     if (sys->upscaleMode == upscale_VideoProcessor || sys->upscaleMode == upscale_SuperResolution)
         switch (query) {
@@ -950,6 +2384,14 @@ static int Control(vout_display_t *vd, int query, va_list args)
 
     int res = CommonControl( vd, query, args );
 
+#if !VLC_WINSTORE_APP
+    if (res == VLC_SUCCESS && stereo_fullscreen_change &&
+        stereo_wants_fullscreen)
+        res = SUCCEEDED(EnterStereoFullscreen(
+                            vd, "after VLC fullscreen request", NULL))
+                  ? VLC_SUCCESS : VLC_EGENERIC;
+#endif
+
     if (query == VOUT_DISPLAY_CHANGE_VIEWPOINT)
     {
         const vout_display_cfg_t *cfg = va_arg(args, const vout_display_cfg_t*);
@@ -978,6 +2420,39 @@ static void Manage(vout_display_t *vd)
     RECT before_dest         = sys->sys.rect_dest;
 
     CommonManage(vd);
+
+#if !VLC_WINSTORE_APP
+    if (sys->stereo_requested && !sys->stereo_windowed)
+    {
+        vout_thread_t *vout = (vout_thread_t *)vd->obj.parent;
+        bool wants_fullscreen = vout != NULL &&
+                                var_GetBool(vout, "fullscreen");
+        if (!wants_fullscreen && sys->stereo_active)
+        {
+            HRESULT hr = SwitchStereoStreamToWindowedMono(vd);
+            if (FAILED(hr))
+                msg_Err(vd, "could not switch MVC playback to a window "
+                        "(hr=0x%lX)", hr);
+            sys->stereo_fullscreen_forced = false;
+        }
+        else if (wants_fullscreen && !sys->stereo_active)
+        {
+            HRESULT hr = SwitchStereoStreamToExclusive(vd);
+            if (FAILED(hr))
+                msg_Err(vd, "could not restore HDMI frame packing "
+                        "(hr=0x%lX)", hr);
+        }
+        else if (wants_fullscreen && sys->stereo_active)
+        {
+            BOOL fullscreen = FALSE;
+            if (FAILED(IDXGISwapChain_GetFullscreenState(
+                           sys->dxgiswapChain, &fullscreen, NULL)) ||
+                !fullscreen)
+                EnterStereoFullscreen(vd, "recovery after window event",
+                                      NULL);
+        }
+    }
+#endif
 
     if (!RectEquals(&before_src_clipped, &sys->sys.rect_src_clipped) ||
         !RectEquals(&before_dest_clipped, &sys->sys.rect_dest_clipped) ||
@@ -1059,6 +2534,25 @@ static int CreateStaging(vout_display_t *vd, ID3D11DeviceContext *shared_context
 static void Prepare(vout_display_t *vd, picture_t *picture, subpicture_t *subpicture)
 {
     vout_display_sys_t *sys = vd->sys;
+
+    /* Mouse events stop when the pointer is stationary.  Keep the visible
+     * controller's time and progress current once per second without
+     * extending its non-hover timeout.  The resulting SPU is consumed by a
+     * following video frame and therefore never adds an extra Present(). */
+    vlc_tick_t controls_now = mdate();
+    if (sys->stereo_active &&
+        controls_now < sys->stereo_controls_until &&
+        controls_now - sys->stereo_controls_last_draw >= CLOCK_FREQ)
+    {
+        vlc_value_t old_value = { 0 };
+        vlc_value_t mouse;
+        mouse.coords.x = InterlockedCompareExchange(&sys->stereo_cursor_x,
+                                                     0, 0);
+        mouse.coords.y = InterlockedCompareExchange(&sys->stereo_cursor_y,
+                                                     0, 0);
+        StereoMouseMoved((vlc_object_t *)vd->obj.parent,
+                         "stereo-periodic-refresh", old_value, mouse, vd);
+    }
 
     if (sys->picQuad.formatInfo->formatTexture == DXGI_FORMAT_UNKNOWN)
     {
@@ -1207,13 +2701,43 @@ static void Prepare(vout_display_t *vd, picture_t *picture, subpicture_t *subpic
             ID3D11Resource_Release(newResource);
     }
 
-    if (subpicture) {
+    if (subpicture &&
+        (!sys->d3dregion_order_valid ||
+         sys->d3dregion_order != subpicture->i_order ||
+         sys->d3dregion_original_width !=
+             subpicture->i_original_picture_width ||
+         sys->d3dregion_original_height !=
+             subpicture->i_original_picture_height)) {
         int subpicture_region_count    = 0;
         picture_t **subpicture_regions = NULL;
         Direct3D11MapSubpicture(vd, &subpicture_region_count, &subpicture_regions, subpicture);
         Direct3D11DeleteRegions(sys->d3dregion_count, sys->d3dregions);
         sys->d3dregion_count = subpicture_region_count;
         sys->d3dregions      = subpicture_regions;
+        sys->d3dregion_order = subpicture->i_order;
+        sys->d3dregion_original_width =
+            subpicture->i_original_picture_width;
+        sys->d3dregion_original_height =
+            subpicture->i_original_picture_height;
+        sys->d3dregion_order_valid = true;
+
+        /* The software pointer must be the last blended quad so subtitle
+         * glyphs and the controller cannot cover it. */
+        for (int i = 0; i + 1 < sys->d3dregion_count; ++i)
+        {
+            d3d_quad_t *quad = sys->d3dregions[i] != NULL
+                             ? (d3d_quad_t *)sys->d3dregions[i]->p_sys
+                             : NULL;
+            if (quad != NULL && quad->stereoOffset == INT16_MAX)
+            {
+                picture_t *cursor = sys->d3dregions[i];
+                memmove(&sys->d3dregions[i], &sys->d3dregions[i + 1],
+                        (sys->d3dregion_count - i - 1) *
+                        sizeof(*sys->d3dregions));
+                sys->d3dregions[sys->d3dregion_count - 1] = cursor;
+                break;
+            }
+        }
     }
 
     if (picture->format.mastering.max_luminance)
@@ -1243,13 +2767,6 @@ static void Prepare(vout_display_t *vd, picture_t *picture, subpicture_t *subpic
         }
     }
 
-    FLOAT blackRGBA[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-    ID3D11DeviceContext_ClearRenderTargetView(sys->d3d_dev.d3dcontext, sys->d3drenderTargetView, blackRGBA);
-
-    /* no ID3D11Device operations should come here */
-
-    ID3D11DeviceContext_ClearDepthStencilView(sys->d3d_dev.d3dcontext, sys->d3ddepthStencilView, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
-
     ID3D11ShaderResourceView *SRV[D3D11_MAX_SHADER_VIEW];
     /* Render the quad using the last stage of processing */
     if (!is_d3d11_opaque(picture->format.i_chroma) || sys->legacy_shader)
@@ -1271,15 +2788,146 @@ static void Prepare(vout_display_t *vd, picture_t *picture, subpicture_t *subpic
         p_sys = ActivePictureSys(picture);
         memcpy(SRV, p_sys->resourceView, sizeof(SRV));
     }
-    D3D11_RenderQuad(&sys->d3d_dev, &sys->picQuad, SRV, sys->d3drenderTargetView);
 
-    if (subpicture) {
-        // draw the additional vertices
-        for (int i = 0; i < sys->d3dregion_count; ++i) {
-            if (sys->d3dregions[i])
+    /* A DXGI stereo swapchain exposes the back buffer as a two-slice texture
+     * array. Render each packed source eye into its corresponding slice. The
+     * SPU pass is deliberately repeated for both eyes so menus, subtitles and
+     * fullscreen controls remain readable in hardware 3D mode. */
+    FLOAT blackRGBA[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    unsigned view_count = sys->stereo_active ? 2 : 1;
+    for (unsigned eye = 0; eye < view_count; ++eye)
+    {
+        ID3D11RenderTargetView *target = eye == 0
+                                       ? sys->d3drenderTargetView
+                                       : sys->d3drenderTargetViewRight;
+        if (target == NULL)
+            continue;
+
+        if (sys->stereo_requested)
+        {
+            float left, top, right, bottom;
+            unsigned source_eye = sys->stereo_active ? eye : 0;
+            StereoEyeTextureRect(vd->fmt.multiview_mode, &sys->quad_fmt,
+                                 source_eye,
+                                 &left, &top, &right, &bottom);
+            if (!sys->stereo_geometry_reported)
             {
-                d3d_quad_t *quad = (d3d_quad_t *) sys->d3dregions[i]->p_sys;
-                D3D11_RenderQuad(&sys->d3d_dev, quad, quad->picSys.resourceView, sys->d3drenderTargetView);
+                msg_Info(vd, "stereo render geometry: source mode %d, "
+                         "quad coded %ux%u visible %ux%u offset %u,%u, "
+                         "eye target %ux%u, eye %u texture %.6f,%.6f-%.6f,%.6f",
+                         vd->fmt.multiview_mode,
+                         sys->quad_fmt.i_width, sys->quad_fmt.i_height,
+                         sys->quad_fmt.i_visible_width,
+                         sys->quad_fmt.i_visible_height,
+                         sys->quad_fmt.i_x_offset, sys->quad_fmt.i_y_offset,
+                         sys->stereo_eye_width, sys->stereo_eye_height,
+                         source_eye, left, top, right, bottom);
+                if (eye + 1 == view_count)
+                    sys->stereo_geometry_reported = true;
+            }
+            D3D11_UpdateQuadTextureCoords(vd, &sys->d3d_dev, &sys->picQuad,
+                                          left, top, right, bottom);
+        }
+
+        ID3D11DeviceContext_ClearRenderTargetView(sys->d3d_dev.d3dcontext,
+                                                  target, blackRGBA);
+        ID3D11DeviceContext_ClearDepthStencilView(
+            sys->d3d_dev.d3dcontext, sys->d3ddepthStencilView,
+            D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+        D3D11_RenderQuad(&sys->d3d_dev, &sys->picQuad, SRV, target);
+
+        if (subpicture)
+        {
+            if (sys->stereo_active &&
+                sys->stereo_spu_report_count < 48 &&
+                sys->stereo_spu_reported_order != sys->d3dregion_order)
+            {
+                msg_Info(vd, "stereo SPU order %"PRId64": %d regions, "
+                         "original %dx%d",
+                         sys->d3dregion_order, sys->d3dregion_count,
+                         sys->d3dregion_original_width,
+                         sys->d3dregion_original_height);
+                for (int region = 0; region < sys->d3dregion_count; ++region)
+                {
+                    if (sys->d3dregions[region] == NULL)
+                        continue;
+                    d3d_quad_t *reported =
+                        (d3d_quad_t *)sys->d3dregions[region]->p_sys;
+                    msg_Info(vd, "stereo SPU region %d: viewport "
+                             "%.2f,%.2f %.2fx%.2f offset %d, texture %ux%u",
+                             region,
+                             reported->cropViewport.TopLeftX,
+                             reported->cropViewport.TopLeftY,
+                             reported->cropViewport.Width,
+                             reported->cropViewport.Height,
+                             reported->stereoOffset,
+                             sys->d3dregions[region]->format.i_visible_width,
+                             sys->d3dregions[region]->format.i_visible_height);
+                }
+                sys->stereo_spu_reported_order = sys->d3dregion_order;
+                sys->stereo_spu_report_count++;
+            }
+            int overlay_depth = var_InheritInteger(
+                vd, "stereo3d-overlay-depth");
+            if (overlay_depth < -100)
+                overlay_depth = -100;
+            else if (overlay_depth > 100)
+                overlay_depth = 100;
+            for (int i = 0; i < sys->d3dregion_count; ++i)
+            {
+                if (sys->d3dregions[i])
+                {
+                    d3d_quad_t *quad =
+                        (d3d_quad_t *)sys->d3dregions[i]->p_sys;
+                    D3D11_VIEWPORT base_viewport = quad->cropViewport;
+                    bool software_cursor =
+                        quad->stereoOffset == INT16_MAX;
+                    if (sys->stereo_active && software_cursor)
+                    {
+                        unsigned logical_width = vd->fmt.i_visible_width;
+                        if (vd->fmt.i_sar_num > 0 &&
+                            vd->fmt.i_sar_den > 0)
+                            logical_width = (uint64_t)logical_width *
+                                            vd->fmt.i_sar_num /
+                                            vd->fmt.i_sar_den;
+                        LONG cursor_x = InterlockedCompareExchange(
+                            &sys->stereo_cursor_x, 0, 0);
+                        LONG cursor_y = InterlockedCompareExchange(
+                            &sys->stereo_cursor_y, 0, 0);
+                        quad->cropViewport.TopLeftX =
+                            (float)cursor_x * sys->stereo_eye_width /
+                            logical_width;
+                        quad->cropViewport.TopLeftY =
+                            (float)cursor_y * sys->stereo_eye_height /
+                            vd->fmt.i_visible_height;
+                        quad->cropViewport.Width = 24.f;
+                        quad->cropViewport.Height = 34.f;
+                    }
+                    else if (sys->stereo_active)
+                    {
+                        float shift = (float)overlay_depth / 100.f *
+                                      .02f * sys->stereo_eye_width;
+                        shift += (float)quad->stereoOffset * .5f;
+                        if (eye != 0)
+                            shift = -shift;
+
+                        bool full_eye =
+                            base_viewport.Width >=
+                            (float)sys->stereo_eye_width - 1.f;
+                        if (full_eye && shift > 0.f)
+                            quad->cropViewport.Width += 2.f * shift;
+                        else if (full_eye && shift < 0.f)
+                        {
+                            quad->cropViewport.TopLeftX += 2.f * shift;
+                            quad->cropViewport.Width -= 2.f * shift;
+                        }
+                        else
+                            quad->cropViewport.TopLeftX += shift;
+                    }
+                    D3D11_RenderQuad(&sys->d3d_dev, quad,
+                                     quad->picSys.resourceView, target);
+                    quad->cropViewport = base_viewport;
+                }
             }
         }
     }
@@ -1308,6 +2956,7 @@ static void Prepare(vout_display_t *vd, picture_t *picture, subpicture_t *subpic
 
     if (is_d3d11_opaque(picture->format.i_chroma))
         d3d11_device_unlock( &sys->d3d_dev );
+
 }
 
 static void Display(vout_display_t *vd, picture_t *picture, subpicture_t *subpicture)
@@ -1317,7 +2966,11 @@ static void Display(vout_display_t *vd, picture_t *picture, subpicture_t *subpic
     DXGI_PRESENT_PARAMETERS presentParams;
     memset(&presentParams, 0, sizeof(presentParams));
     d3d11_device_lock( &sys->d3d_dev );
-    HRESULT hr = IDXGISwapChain1_Present1(sys->dxgiswapChain, 0, 0, &presentParams);
+    /* The Intel HDMI 3D path needs an atomic VBlank present; interval zero
+     * tears even when preceded by IDXGIOutput::WaitForVBlank(). */
+    UINT sync_interval = sys->stereo_active ? 1 : 0;
+    HRESULT hr = IDXGISwapChain1_Present1(sys->dxgiswapChain, sync_interval,
+                                          0, &presentParams);
     if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
     {
         /* TODO device lost */
@@ -1690,6 +3343,11 @@ static int Direct3D11Open(vout_display_t *vd, bool external_device)
     char *psz_hdr = var_InheritString(vd, "d3d11-hdr-mode");
     sys->hdrMode = HdrModeFromString(VLC_OBJECT(vd), psz_hdr);
     free(psz_hdr);
+    /* HDMI 1.4 frame-packed timings and the Windows stereo swapchain path
+     * are SDR. Do not let an automatic HDR choice replace the required
+     * BGRA8 stereo back buffer with a 10-bit monoscopic one. */
+    if (sys->stereo_requested)
+        sys->hdrMode = hdr_Never;
 
     if (!external_device)
     {
@@ -1697,6 +3355,9 @@ static int Direct3D11Open(vout_display_t *vd, bool external_device)
         HRESULT hr = S_OK;
 
         DXGI_SWAP_CHAIN_DESC1 scd;
+        DXGI_SWAP_CHAIN_FULLSCREEN_DESC stereo_fs_desc;
+        IDXGIOutput *stereo_output = NULL;
+        ZeroMemory(&stereo_fs_desc, sizeof(stereo_fs_desc));
 
         hr = D3D11_CreateDevice(vd, &sys->hd3d,
                                 is_d3d11_opaque(vd->source.i_chroma),
@@ -1712,6 +3373,35 @@ static int Direct3D11Open(vout_display_t *vd, bool external_device)
         return VLC_EGENERIC;
         }
 
+        for (UINT output_index = 0;; ++output_index)
+        {
+            IDXGIOutput *probe_output = NULL;
+            if (IDXGIAdapter_EnumOutputs(dxgiadapter, output_index,
+                                         &probe_output) == DXGI_ERROR_NOT_FOUND)
+                break;
+            if (probe_output == NULL)
+                continue;
+            DXGI_OUTPUT_DESC output_desc;
+            if (SUCCEEDED(IDXGIOutput_GetDesc(probe_output, &output_desc)))
+            {
+                DISPLAY_DEVICEW monitor_desc;
+                ZeroMemory(&monitor_desc, sizeof(monitor_desc));
+                monitor_desc.cb = sizeof(monitor_desc);
+                EnumDisplayDevicesW(output_desc.DeviceName, 0,
+                                    &monitor_desc, 0);
+                msg_Info(vd, "DXGI output %u: %ls, monitor '%ls', "
+                         "attached=%d, desktop=%ld,%ld-%ld,%ld",
+                         output_index, output_desc.DeviceName,
+                         monitor_desc.DeviceString,
+                         output_desc.AttachedToDesktop != FALSE,
+                         output_desc.DesktopCoordinates.left,
+                         output_desc.DesktopCoordinates.top,
+                         output_desc.DesktopCoordinates.right,
+                         output_desc.DesktopCoordinates.bottom);
+            }
+            IDXGIOutput_Release(probe_output);
+        }
+
         hr = IDXGIAdapter_GetParent(dxgiadapter, &IID_IDXGIFactory2, (void **)&dxgifactory);
         IDXGIAdapter_Release(dxgiadapter);
         if (FAILED(hr)) {
@@ -1719,10 +3409,94 @@ static int Direct3D11Open(vout_display_t *vd, bool external_device)
         return VLC_EGENERIC;
         }
 
+        if (sys->stereo_requested)
+        {
+            hr = PrimeStereoDisplay(vd, dxgifactory, &stereo_output);
+            if (FAILED(hr))
+            {
+                msg_Warn(vd, "could not prime the HDMI stereo mode "
+                         "(hr=0x%lX)", hr);
+                if (stereo_output != NULL)
+                    IDXGIOutput_Release(stereo_output);
+                IDXGIFactory2_Release(dxgifactory);
+                return VLC_EGENERIC;
+            }
+
+            hr = IDXGIFactory2_QueryInterface(
+                dxgifactory, &IID_IDXGIDisplayControl,
+                (void **)&sys->stereo_display_control);
+            if (FAILED(hr) || sys->stereo_display_control == NULL)
+            {
+                msg_Warn(vd, "DXGI display control is unavailable "
+                         "(hr=0x%lX)", hr);
+                IDXGIOutput_Release(stereo_output);
+                IDXGIFactory2_Release(dxgifactory);
+                return VLC_EGENERIC;
+            }
+
+            bool display_is_enabled =
+                IDXGIDisplayControl_IsStereoEnabled(
+                    sys->stereo_display_control) != FALSE;
+            /* An adopted session must ultimately restore the state from
+             * before the first MVC vout, not the enabled state observed
+             * halfway through the same Blu-ray. */
+            if (!sys->stereo_adopted)
+                sys->stereo_display_was_enabled = display_is_enabled;
+            if (!display_is_enabled)
+                IDXGIDisplayControl_SetStereoEnabled(
+                    sys->stereo_display_control, TRUE);
+
+            bool windowed_stereo_available =
+                IDXGIFactory2_IsWindowedStereoEnabled(dxgifactory) != FALSE;
+            /* Ivy Bridge reports windowed stereo support, yet DWM presents a
+             * black image on this HDMI path.  Keep the proven exclusive path;
+             * in-video controls are composed into its two back-buffer eyes. */
+            sys->stereo_windowed = false;
+            msg_Info(vd, "DXGI stereo after exclusive mode priming: "
+                     "display=%d, windowed=%d",
+                     IDXGIDisplayControl_IsStereoEnabled(
+                         sys->stereo_display_control) != FALSE,
+                     windowed_stereo_available);
+            LogStereoModes(vd, stereo_output,
+                           DXGI_FORMAT_B8G8R8A8_UNORM);
+            LogStereoModes(vd, stereo_output,
+                           DXGI_FORMAT_R8G8B8A8_UNORM);
+
+            if (!sys->stereo_windowed)
+            {
+                /* This query is specifically about *windowed* stereo.  Old
+                 * Intel drivers can keep returning false while accepting an
+                 * exclusive stereo swap chain, which is the path required
+                 * for HDMI frame packing anyway.  Let creation be the
+                 * authoritative test. */
+                msg_Warn(vd, "DXGI windowed stereo is unavailable; trying "
+                         "the exclusive stereo swapchain");
+            }
+
+            stereo_fs_desc.ScanlineOrdering =
+                DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
+            stereo_fs_desc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
+            /* Prefer the DWM stereo compositor when Windows exposes it.  A
+             * borderless Qt fullscreen window still fills the projector, but
+             * its controller/tool windows remain compositable and Windows
+             * duplicates ordinary 2D UI into both eyes.  Exclusive mode is
+             * retained as the fallback for older drivers. */
+            stereo_fs_desc.Windowed = sys->stereo_windowed ? TRUE : FALSE;
+        }
+
         FillSwapChainDesc(vd, &scd);
 
-        hr = IDXGIFactory2_CreateSwapChainForHwnd(dxgifactory, (IUnknown *)sys->d3d_dev.d3ddevice,
-                                                sys->sys.hvideownd, &scd, NULL, NULL, &sys->dxgiswapChain);
+        if (sys->stereo_requested && !sys->stereo_windowed)
+            scd.Flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+        hr = IDXGIFactory2_CreateSwapChainForHwnd(dxgifactory,
+                                                (IUnknown *)sys->d3d_dev.d3ddevice,
+                                                sys->stereo_requested
+                                                    ? StereoSwapChainWindow(sys)
+                                                    : sys->sys.hvideownd,
+                                                &scd,
+                                                sys->stereo_requested ? &stereo_fs_desc : NULL,
+                                                NULL,
+                                                &sys->dxgiswapChain);
         if (hr == DXGI_ERROR_INVALID_CALL && scd.Format == DXGI_FORMAT_R10G10B10A2_UNORM)
         {
             msg_Warn(vd, "10 bits swapchain failed, try 8 bits");
@@ -1732,9 +3506,53 @@ static int Direct3D11Open(vout_display_t *vd, bool external_device)
         }
         IDXGIFactory2_Release(dxgifactory);
         if (FAILED(hr)) {
+        if (stereo_output != NULL)
+            IDXGIOutput_Release(stereo_output);
         msg_Err(vd, "Could not create the SwapChain. (hr=0x%lX)", hr);
         return VLC_EGENERIC;
         }
+        if (sys->stereo_requested)
+        {
+            DXGI_SWAP_CHAIN_DESC1 created_desc;
+            hr = IDXGISwapChain1_GetDesc1(sys->dxgiswapChain,
+                                          &created_desc);
+            if (FAILED(hr) || !created_desc.Stereo)
+            {
+                IDXGIOutput_Release(stereo_output);
+                msg_Warn(vd, "DXGI created a monoscopic swapchain instead "
+                         "of the requested stereoscopic one");
+                return VLC_EGENERIC;
+            }
+            BOOL fullscreen = FALSE;
+            IDXGIOutput *created_output = NULL;
+            HRESULT state_hr = IDXGISwapChain_GetFullscreenState(
+                sys->dxgiswapChain, &fullscreen, &created_output);
+            msg_Info(vd, "DXGI stereo swapchain active: stereo=%d, "
+                     "size=%ux%u, fullscreen=%d (hr=0x%lX)",
+                     created_desc.Stereo != FALSE, created_desc.Width,
+                     created_desc.Height, fullscreen != FALSE, state_hr);
+            if (created_output != NULL)
+                IDXGIOutput_Release(created_output);
+            if (!sys->stereo_windowed)
+            {
+                hr = EnterStereoFullscreen(vd, "after creation",
+                                           stereo_output);
+                if (FAILED(hr))
+                {
+                    IDXGIOutput_Release(stereo_output);
+                    msg_Warn(vd, "could not enter exclusive stereo mode "
+                             "(hr=0x%lX)", hr);
+                    return VLC_EGENERIC;
+                }
+            }
+            else
+                msg_Info(vd, "DXGI windowed stereo compositor active");
+            sys->stereo_active = true;
+            sys->stereo_present_output = stereo_output;
+            IDXGIOutput_AddRef(sys->stereo_present_output);
+        }
+        if (stereo_output != NULL)
+            IDXGIOutput_Release(stereo_output);
 #endif
     }
     else
@@ -1962,6 +3780,11 @@ static void Direct3D11Close(vout_display_t *vd)
     vout_display_sys_t *sys = vd->sys;
 
     Direct3D11DestroyResources(vd);
+    if (sys->stereo_present_output != NULL)
+    {
+        IDXGIOutput_Release(sys->stereo_present_output);
+        sys->stereo_present_output = NULL;
+    }
     if (sys->dxgiswapChain4)
     {
         IDXGISwapChain_Release(sys->dxgiswapChain4);
@@ -1969,6 +3792,12 @@ static void Direct3D11Close(vout_display_t *vd)
     }
     if (sys->dxgiswapChain)
     {
+        BOOL fullscreen = FALSE;
+        if (SUCCEEDED(IDXGISwapChain_GetFullscreenState(
+                          sys->dxgiswapChain, &fullscreen, NULL)) &&
+            fullscreen)
+            IDXGISwapChain_SetFullscreenState(sys->dxgiswapChain,
+                                              FALSE, NULL);
         IDXGISwapChain_Release(sys->dxgiswapChain);
         sys->dxgiswapChain = NULL;
     }
@@ -2220,6 +4049,7 @@ static void Direct3D11DestroyResources(vout_display_t *vd)
     D3D11_ReleaseQuad(&sys->picQuad);
     Direct3D11DeleteRegions(sys->d3dregion_count, sys->d3dregions);
     sys->d3dregion_count = 0;
+    sys->d3dregion_order_valid = false;
 
     ReleasePictureSys(&sys->stagingSys);
     CloseHandle(sys->sharedHandle);
@@ -2256,6 +4086,11 @@ static void Direct3D11DestroyResources(vout_display_t *vd)
     {
         ID3D11RenderTargetView_Release(sys->d3drenderTargetView);
         sys->d3drenderTargetView = NULL;
+    }
+    if (sys->d3drenderTargetViewRight)
+    {
+        ID3D11RenderTargetView_Release(sys->d3drenderTargetViewRight);
+        sys->d3drenderTargetViewRight = NULL;
     }
     if (sys->d3ddepthStencilView)
     {
@@ -2355,7 +4190,9 @@ static int Direct3D11MapSubpicture(vout_display_t *vd, int *subpicture_region_co
             if (unlikely(d3dquad==NULL)) {
                 continue;
             }
-            if (AllocateTextures(vd, &sys->d3d_dev, sys->d3dregion_format, &r->p_picture->format, false, false, 1, d3dquad->picSys.texture)) {
+            if (AllocateTextures(vd, &sys->d3d_dev, sys->d3dregion_format,
+                                 &r->p_picture->format, false, false, 1,
+                                 d3dquad->picSys.texture)) {
                 msg_Err(vd, "Failed to allocate %dx%d texture for OSD",
                         r->fmt.i_visible_width, r->fmt.i_visible_height);
                 for (int j=0; j<D3D11_MAX_SHADER_VIEW; j++)
@@ -2446,9 +4283,9 @@ static int Direct3D11MapSubpicture(vout_display_t *vd, int *subpicture_region_co
         quad->cropViewport.MaxDepth = 1.0f;
         quad->cropViewport.TopLeftX = place.x + (FLOAT) r->i_x * place.width  / subpicture->i_original_picture_width;
         quad->cropViewport.TopLeftY = place.y + (FLOAT) r->i_y * place.height / subpicture->i_original_picture_height;
+        quad->stereoOffset = r->i_stereo_offset;
 
         D3D11_UpdateQuadOpacity(vd, &sys->d3d_dev, quad, r->i_alpha / 255.0f );
     }
     return VLC_SUCCESS;
 }
-

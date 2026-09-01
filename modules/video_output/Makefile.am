@@ -10,10 +10,19 @@ EXTRA_DIST += video_output/README
 OPENGL_COMMONSOURCES = video_output/opengl/vout_helper.c \
 	video_output/opengl/vout_helper.h video_output/opengl/converter.h \
 	video_output/opengl/internal.h video_output/opengl/fragment_shaders.c \
+	video_output/opengl/retroarch_shaders.c \
+	video_output/opengl/retroarch_shaders.h \
 	video_output/opengl/converter_sw.c
 
 OPENGL_COMMONCLFAGS = $(LIBPLACEBO_CFLAGS)
 OPENGL_COMMONLIBS = $(LIBPLACEBO_LIBS)
+
+if HAVE_LIBPLACEBO_NEXT
+OPENGL_COMMONSOURCES += video_output/opengl/dovi_renderer.c \
+	video_output/opengl/dovi_renderer.h
+OPENGL_COMMONCLFAGS += $(LIBPLACEBO_NEXT_CFLAGS)
+OPENGL_COMMONLIBS += $(LIBPLACEBO_NEXT_LIBS)
+endif
 
 if HAVE_DECKLINK
 libdecklinkoutput_plugin_la_SOURCES = video_output/decklink.cpp
@@ -34,11 +43,12 @@ libvout_macosx_plugin_la_SOURCES = video_output/macosx.m $(OPENGL_COMMONSOURCES)
 libvout_macosx_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCLFAGS) -DHAVE_GL_CORE_SYMBOLS
 libvout_macosx_plugin_la_LIBADD = $(OPENGL_COMMONLIBS)
 libvout_macosx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \
-	-Wl,-framework,OpenGL,-framework,Cocoa
+	-Wl,-framework,OpenGL,-framework,Cocoa \
+	-Wl,-framework,IOKit,-framework,Security
 
 libmacosx_gl1_plugin_la_SOURCES = video_output/macosx_gl1.m
 libmacosx_gl1_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \
-	-Wl,-framework,OpenGL,-framework,Cocoa
+	-Wl,-framework,OpenGL,-framework,Cocoa,-weak_framework,CoreVideo
 
 libmacosx_qt_plugin_la_SOURCES = video_output/macosx_qt.m
 libmacosx_qt_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \

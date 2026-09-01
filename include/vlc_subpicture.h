@@ -75,6 +75,13 @@ struct subpicture_region_t
 
     subpicture_region_t *p_next;                /**< next region in the list */
     subpicture_region_private_t *p_private;  /**< Private data for spu_t *only* */
+
+    /** Horizontal disparity requested by the subtitle source, in pixels.
+     * A positive value places the region in front of the screen plane when a
+     * stereoscopic video output duplicates the region for both eyes.  This is
+     * kept per region so disc-authored menu depth does not affect VLC's OSD or
+     * an unrelated subtitle displayed at the same time. */
+    int             i_stereo_offset;
 };
 
 /* Subpicture region position flags */

@@ -1,0 +1,209 @@
+From 7ab13d4f48bde667fc16087e93b177519e804677 Mon Sep 17 00:00:00 2001
+From: PowerVLC <powervlc@localhost>
+Date: Tue, 25 Aug 2026 22:30:00 +0200
+Subject: [PATCH] bdj: propagate S3D graphics-plane offset to ARGB overlays
+
+Profile-5 BD-J applications use HGraphicsConfigurationS3D.setOffsetValue()
+to give the graphics plane a horizontal disparity. libbluray exposed the S3D
+template but returned an ordinary HGraphicsConfiguration, left setOffsetValue
+unimplemented and consequently flattened authored 3D menus to the screen
+plane.
+
+Instantiate the S3D configuration on profile 5, retain the requested offset,
+forward it through JNI and attach it to every ARGB overlay command. The player
+can then duplicate the graphics plane into the two HDMI eyes with the authored
+parallax, without moving or copying the Java ARGB canvas.
+---
+ src/libbluray/bdj/java/org/blurayx/s3d/ui/HGraphicsConfigurationS3D.java | 13 +++++++++++--
+ src/libbluray/bdj/java/org/havi/ui/HGraphicsConfiguration.java           |  2 +-
+ src/libbluray/bdj/java/org/havi/ui/HGraphicsDevice.java                  |  8 +++++++-
+ src/libbluray/bdj/java/org/videolan/Libbluray.java                       |  5 +++++
+ src/libbluray/bdj/native/org_videolan_Libbluray.c                        | 15 +++++++++++++++
+ src/libbluray/bluray.c                                                   | 11 +++++++++++
+ src/libbluray/bluray_internal.h                                          |  1 +
+ src/libbluray/decoders/overlay.h                                         |  3 +++
+ 8 files changed, 54 insertions(+), 4 deletions(-)
+
+diff --git a/src/libbluray/bluray_internal.h b/src/libbluray/bluray_internal.h
+--- a/src/libbluray/bluray_internal.h
++++ b/src/libbluray/bluray_internal.h
+@@ -82,6 +82,7 @@ BD_PRIVATE void                     bdpriv_set_rate(struct bluray *bd, uint32_t r
+ 
+ BD_PRIVATE struct bd_argb_buffer_s *bdpriv_lock_osd_buffer(struct bluray *bd);
+ BD_PRIVATE void                     bdpriv_unlock_osd_buffer(struct bluray *bd);
++BD_PRIVATE void                     bdpriv_bdj_set_graphics_offset(struct bluray *bd, int offset);
+ 
+ BD_PRIVATE void  bdpriv_bdj_osd_cb(struct bluray *bd, const unsigned *img, int w, int h,
+                                    int x0, int y0, int x1, int y1);
+diff --git a/src/libbluray/bluray.c b/src/libbluray/bluray.c
+--- a/src/libbluray/bluray.c
++++ b/src/libbluray/bluray.c
+@@ -172,6 +172,7 @@ struct bluray {
+     bd_argb_overlay_proc_f argb_overlay_proc;
+     BD_ARGB_BUFFER      *argb_buffer;
+     BD_MUTEX             argb_buffer_mutex;
++    int32_t              bdj_graphics_offset;
+ };
+ 
+ /* Stream Packet Number = byte offset / 192. Avoid 64-bit division. */
+@@ -1352,8 +1353,16 @@ BD_ARGB_BUFFER *bdpriv_lock_osd_buffer(BLURAY *bd)
+ }
+ 
+ void bdpriv_unlock_osd_buffer(BLURAY *bd)
++{
++    bd_mutex_unlock(&bd->argb_buffer_mutex);
++}
++
++void bdpriv_bdj_set_graphics_offset(BLURAY *bd, int offset)
+ {
++    bd_mutex_lock(&bd->argb_buffer_mutex);
++    bd->bdj_graphics_offset = offset;
+     bd_mutex_unlock(&bd->argb_buffer_mutex);
++    BD_DEBUG(DBG_BDJ, "BD-J graphics offset: %d pixels\n", offset);
+ }
+ 
+ /*
+@@ -1372,6 +1381,7 @@ void bdpriv_bdj_osd_cb(BLURAY *bd, const unsigned *img, int w, int h,
+     memset(&aov, 0, sizeof(aov));
+     aov.pts   = -1;
+     aov.plane = BD_OVERLAY_IG;
++    aov.stereo_offset = bd->bdj_graphics_offset;
+ 
+     /* no image data -> init or close */
+     if (!img) {
+diff --git a/src/libbluray/decoders/overlay.h b/src/libbluray/decoders/overlay.h
+--- a/src/libbluray/decoders/overlay.h
++++ b/src/libbluray/decoders/overlay.h
+@@ -188,6 +188,9 @@ typedef struct bd_argb_overlay_s {
+     uint16_t stride;       /**< ARGB buffer stride */
+     const uint32_t * argb; /**< ARGB image data, 'h' lines, line stride 'stride' pixels */
+ 
++    /** Horizontal disparity of the graphics plane in pixels. */
++    int32_t stereo_offset;
++
+ } BD_ARGB_OVERLAY;
+ 
+ /**
+diff --git a/src/libbluray/bdj/native/org_videolan_Libbluray.c b/src/libbluray/bdj/native/org_videolan_Libbluray.c
+--- a/src/libbluray/bdj/native/org_videolan_Libbluray.c
++++ b/src/libbluray/bdj/native/org_videolan_Libbluray.c
+@@ -627,6 +627,16 @@ JNIEXPORT void JNICALL Java_org_videolan_Libbluray_updateGraphicN(JNIEnv * env,
+     _updateGraphic(env, bd, width, height, rgbArray, x0, y0, x1, y1, buf);
+ 
+     bdpriv_unlock_osd_buffer(bd);
++}
++
++JNIEXPORT void JNICALL Java_org_videolan_Libbluray_setGraphicsOffsetN(JNIEnv *env,
++        jclass cls, jlong np, jint offset) {
++    (void)env;
++    (void)cls;
++    BLURAY *bd = (BLURAY *)(intptr_t)np;
++    if (bd) {
++        bdpriv_bdj_set_graphics_offset(bd, offset);
++    }
+ }
+ 
+ #define CC (char*)(uintptr_t)  /* cast a literal from (const char*) */
+@@ -636,6 +646,11 @@ JNIEXPORT void JNICALL Java_org_videolan_Libbluray_updateGraphicN(JNIEnv * env,
+ BD_PRIVATE CPP_EXTERN const JNINativeMethod
+ Java_org_videolan_Libbluray_methods[] =
+ { /* AUTOMATICALLY GENERATED */
++    {
++        CC("setGraphicsOffsetN"),
++        CC("(JI)V"),
++        VC(Java_org_videolan_Libbluray_setGraphicsOffsetN),
++    },
+     {
+         CC("getAacsDataN"),
+         CC("(JI)[B"),
+diff --git a/src/libbluray/bdj/java/org/videolan/Libbluray.java b/src/libbluray/bdj/java/org/videolan/Libbluray.java
+--- a/src/libbluray/bdj/java/org/videolan/Libbluray.java
++++ b/src/libbluray/bdj/java/org/videolan/Libbluray.java
+@@ -696,6 +696,10 @@ public class Libbluray {
+                        x0, y0, x1, y1);
+     }
+ 
++    public static void setGraphicsOffset(int offset) {
++        setGraphicsOffsetN(nativePointer, offset);
++    }
++
+     /*
+      * Events from native side
+      */
+@@ -893,6 +897,7 @@ public class Libbluray {
+     private static native Bdjo getBdjoN(long np, String name);
+     private static native void updateGraphicN(long np, int width, int height, int[] rgbArray,
+                                               int x0, int y0, int x1, int y1);
++    private static native void setGraphicsOffsetN(long np, int offset);
+ 
+     private static long nativePointer = 0;
+     private static TitleInfo[] titleInfos = null;
+diff --git a/src/libbluray/bdj/java/org/havi/ui/HGraphicsDevice.java b/src/libbluray/bdj/java/org/havi/ui/HGraphicsDevice.java
+--- a/src/libbluray/bdj/java/org/havi/ui/HGraphicsDevice.java
++++ b/src/libbluray/bdj/java/org/havi/ui/HGraphicsDevice.java
+@@ -21,6 +21,7 @@
+ package org.havi.ui;
+ 
+ import org.blurayx.s3d.ui.HGraphicsConfigTemplateS3D;
++import org.blurayx.s3d.ui.HGraphicsConfigurationS3D;
+ import org.blurayx.uhd.ui.HGraphicsConfigurationTemplateUHD;
+ 
+ import java.awt.Dimension;
+@@ -44,7 +45,12 @@ public class HGraphicsDevice extends HScreenDevice {
+                 hgct = new HGraphicsConfigTemplate();
+             }
+             HScreenConfigTemplate.initDefaultConfigTemplate(hgct, i);
+-            hgcArray[i] = new HGraphicsConfiguration(hgct);
++            if (is_p5) {
++                hgcArray[i] = new HGraphicsConfigurationS3D(
++                        (HGraphicsConfigTemplateS3D)hgct);
++            } else {
++                hgcArray[i] = new HGraphicsConfiguration(hgct);
++            }
+         }
+         hgc = hgcArray[0];
+     }
+diff --git a/src/libbluray/bdj/java/org/havi/ui/HGraphicsConfiguration.java b/src/libbluray/bdj/java/org/havi/ui/HGraphicsConfiguration.java
+--- a/src/libbluray/bdj/java/org/havi/ui/HGraphicsConfiguration.java
++++ b/src/libbluray/bdj/java/org/havi/ui/HGraphicsConfiguration.java
+@@ -33,7 +33,7 @@ public class HGraphicsConfiguration extends HScreenConfiguration {
+     protected HGraphicsConfiguration() {
+     }
+ 
+-    HGraphicsConfiguration(HGraphicsConfigTemplate hgct) {
++    protected HGraphicsConfiguration(HGraphicsConfigTemplate hgct) {
+         super(hgct);
+         this.hgct = hgct;
+     }
+diff --git a/src/libbluray/bdj/java/org/blurayx/s3d/ui/HGraphicsConfigurationS3D.java b/src/libbluray/bdj/java/org/blurayx/s3d/ui/HGraphicsConfigurationS3D.java
+--- a/src/libbluray/bdj/java/org/blurayx/s3d/ui/HGraphicsConfigurationS3D.java
++++ b/src/libbluray/bdj/java/org/blurayx/s3d/ui/HGraphicsConfigurationS3D.java
+@@ -22,13 +22,24 @@ package org.blurayx.s3d.ui;
+ import org.havi.ui.HConfigurationException;
+ import org.havi.ui.HGraphicsConfiguration;
+ import org.havi.ui.HPermissionDeniedException;
++import org.videolan.Libbluray;
+ 
+ public class HGraphicsConfigurationS3D extends HGraphicsConfiguration {
++    protected HGraphicsConfigurationS3D() {
++    }
++
++    public HGraphicsConfigurationS3D(HGraphicsConfigTemplateS3D template) {
++        super(template);
++    }
++
+     public int getOffsetValue() {
+-        return 0;
++        return offsetValue;
+     }
+ 
+     public void setOffsetValue(int offset) throws HPermissionDeniedException, HConfigurationException {
+-        org.videolan.Logger.unimplemented("HGraphicsConfigurationS3D", "setOffsetValue");
++        offsetValue = offset;
++        Libbluray.setGraphicsOffset(offset);
+     }
++
++    private int offsetValue;
+ }
+-- 
+2.50.1

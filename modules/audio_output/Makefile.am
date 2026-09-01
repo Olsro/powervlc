@@ -107,7 +107,7 @@ endif
 libauhal_plugin_la_SOURCES = audio_output/auhal.c \
 	audio_output/coreaudio_common.c audio_output/coreaudio_common.h
 libauhal_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(aoutdir)' \
-	-Wl,-framework,CoreAudio,-framework,AudioUnit,-framework,AudioToolbox,-framework,CoreServices
+	-Wl,-framework,CoreAudio,-framework,AudioUnit,-framework,AudioToolbox,-framework,CoreServices,-framework,IOKit
 if HAVE_OSX
 aout_LTLIBRARIES += libauhal_plugin.la
 endif

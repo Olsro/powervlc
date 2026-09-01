@@ -14,7 +14,7 @@ TARGET="$1"
 
 SCRIPTDIR=$(cd "$(dirname "$0")" && pwd)
 VLCROOT=$(cd "$SCRIPTDIR/../../.." && pwd)
-BUILDDIR="$VLCROOT/build$TARGET"
+BUILDDIR="$VLCROOT/build/macos/$TARGET"
 APP="$BUILDDIR/PowerVLC.app"
 [ -d "$APP" ] || { echo "missing bundle: $APP" >&2; exit 1; }
 

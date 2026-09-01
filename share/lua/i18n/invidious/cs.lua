@@ -36,6 +36,7 @@ return {
   mode_playlists = "Seznamy stop",
   btn_search = "Hledat",
   btn_open = "Otevřít výběr",
+  btn_open_channel = "Otevřít kanál vybrané položky",
   btn_change_instance = "< Instance",
   msg_enter_query = "Napište, co hledat",
   msg_searching = "Hledání…",
@@ -46,7 +47,13 @@ return {
   msg_target_found = "Adresa rozpoznána — otevírá se přímo",
   msg_search_fail = "Hledání selhalo: ",
   msg_select_result = "Nejprve vyberte výsledek v seznamu",
+  msg_channel_unavailable = "Kanál spojený s tímto výběrem není k dispozici",
   lbl_quality = "Kvalita:",
+  lbl_audio_track = "Zvuková stopa:",
+  audio_default = "Výchozí zvuková stopa",
+  audio_original = "původní",
+  lbl_subtitles = "Titulky:",
+  subtitles_none = "Žádné",
   lbl_by = "—",
   audio_only = "Pouze zvuk",
   combined = "zvuk+obraz",
@@ -168,4 +175,15 @@ return {
             .. "Nainstalovat rozšíření PowerVLC</strong> umístí do prohlížeče "
             .. "malé rozšíření, které to zvládne samo — bez záložky, bez "
             .. "klikání, na každé stránce.",
+  web_addon_lead = "Je rozšíření nainstalováno? Není třeba nic přetahovat "
+                 .. "ani na nic klikat: stačí otevřít instanci níže a projít její "
+                 .. "kontrolou. Tato stránka vám oznámí, až bude spojení navázáno.",
+  web_steps_title = "Bez rozšíření: záložka",
+  web_relay_on_addon = "Připojeno k PowerVLC přes rozšíření prohlížeče. Není "
+                     .. "třeba na nic klikat: nechte toto okno i panel instance "
+                     .. "otevřené.",
+  web_m_taking = "PowerVLC přehrává toto video. Panel byl záměrně ihned "
+               .. "vyprázdněn: nechat zde přehrávač webu dokončit načítání by "
+               .. "stroj stálo druhé dekódování a druhé stahování a zbytečně "
+               .. "by zatížilo instanci. Nechte jej otevřený.",
 }

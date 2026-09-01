@@ -22,6 +22,7 @@
 
 #include <vlc_common.h>
 #include <vlc_interface.h>
+#include <vlc_input.h>
 
 @class VLCLegacyCoreInteraction;
 
@@ -37,6 +38,10 @@
     NSTableView *table;
     NSMutableArray *names;   /* NSString */
     NSMutableArray *times;   /* NSString, formatted */
+    NSButton *clipButton;
+    NSButton *shareButton;
+    input_clip_export_t *clipExport;
+    NSTimer *clipExportTimer;
 }
 
 - (id)initWithCore:(VLCLegacyCoreInteraction *)interaction;

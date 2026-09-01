@@ -311,9 +311,11 @@ tc_rgb_base_init(opengl_tex_converter_t *tc, GLenum tex_target,
             };
             break;
         case VLC_CODEC_BGRA: {
+#ifndef __APPLE__
             if (GetTexFormatSize(tc, tex_target, GL_BGRA, GL_RGBA,
                                  GL_UNSIGNED_BYTE) != 32)
                 return VLC_EGENERIC;
+#endif
             tc->texs[0] = (struct opengl_tex_cfg) {
                 { 1, 1 }, { 1, 1 }, GL_RGBA, GL_BGRA, GL_UNSIGNED_BYTE
             };

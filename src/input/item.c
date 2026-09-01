@@ -228,6 +228,15 @@ void input_item_CopyOptions( input_item_t *p_child,
         {
             for( int i = 0; i < p_parent->i_options; i++ )
             {
+                /* These describe the synthetic media-library action node,
+                 * not the artist/album/tracks nested below it. */
+                if( !strcmp( p_parent->ppsz_options[i],
+                             VLC_INPUT_OPTION_POWERVLC_RANDOM_ACTION )
+                 || !strcmp( p_parent->ppsz_options[i],
+                             VLC_INPUT_OPTION_POWERVLC_RANDOM_ALBUM_TRACK )
+                 || !strcmp( p_parent->ppsz_options[i],
+                             VLC_INPUT_OPTION_POWERVLC_ALBUM_SCOPE ) )
+                    continue;
                 char *psz_dup = strdup( p_parent->ppsz_options[i] );
                 if( likely(psz_dup) )
                 {
@@ -1219,6 +1228,7 @@ static int GuessType( const input_item_t *p_item, bool *p_net )
     static const struct item_type_entry tab[] =
     {   /* /!\ Alphabetical order /!\ */
         /* Short match work, not just exact match */
+        { "afp",    ITEM_TYPE_FILE, true },
         { "alsa",   ITEM_TYPE_CARD, false },
         { "atsc",   ITEM_TYPE_CARD, false },
         { "bd",     ITEM_TYPE_DISC, false },
@@ -1226,6 +1236,7 @@ static int GuessType( const input_item_t *p_item, bool *p_net )
         { "cable",  ITEM_TYPE_CARD, false },
         { "cdda",   ITEM_TYPE_DISC, false },
         { "cqam",   ITEM_TYPE_CARD, false },
+        { "dav",    ITEM_TYPE_FILE, true },
         { "dc1394", ITEM_TYPE_CARD, false },
         { "dccp",   ITEM_TYPE_STREAM, true },
         { "deckli", ITEM_TYPE_CARD, false }, /* decklink */
@@ -1279,6 +1290,7 @@ static int GuessType( const input_item_t *p_item, bool *p_net )
         { "vcd",    ITEM_TYPE_DISC, false },
         { "vdr",    ITEM_TYPE_STREAM, true },
         { "wasapi", ITEM_TYPE_CARD, false },
+        { "webdav", ITEM_TYPE_FILE, true },
         { "window", ITEM_TYPE_CARD, false },
     };
 

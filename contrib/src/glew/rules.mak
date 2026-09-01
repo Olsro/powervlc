@@ -2,6 +2,13 @@
 GLEW_VERSION := 2.3.1
 GLEW_URL := $(GITHUB)/nigels-com/glew/releases/download/glew-$(GLEW_VERSION)/glew-$(GLEW_VERSION).tgz
 
+ifdef HAVE_WIN32
+# glwin32 and wgl are first-class Windows video outputs.  Do not rely on
+# projectM to pull GLEW in indirectly: projectM is disabled by the release
+# build, which otherwise silently removes both OpenGL plugins.
+PKGS += glew
+endif
+
 ifeq ($(call need_pkg,"glew"),)
 PKGS_FOUND += glew
 endif

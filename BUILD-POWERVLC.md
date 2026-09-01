@@ -42,6 +42,10 @@ H.264 clip.
 All the scripts below live in `extras/package/macosx/` and are run **from the
 repository root**.
 
+Generated files stay under one ignored root: macOS targets in `build/macos/`,
+Windows targets in `build/windows/`, and private third-party builds such as
+aMule in `build/dependencies/`.
+
 ## Requirements
 All these instructions were tested using an Apple Silicon Mac running Sequoia 15.7.7.
 Your results may vary if you use anything different.
@@ -57,22 +61,42 @@ prerequisite is **Docker Desktop** or **Rancher Desktop**.
 Once the machine is set up (section 1), from the repo root:
 
 ```bash
-# 1. Build every architecture (each writes build<target>/PowerVLC.app)
+# 1. Build every architecture (each writes build/macos/<target>/PowerVLC.app)
+#
+# A target build is incremental and can safely be retried: a transient tool,
+# signing or download failure must not abandon the remaining targets.  Keep
+# retries bounded, though: after three failures, preserve the error and stop
+# instead of hiding a reproducible problem.  The full build output goes to a
+# per-target log so a long campaign does not overwhelm the terminal emulator.
+mkdir -p build/logs
 for t in g3 g4 g5 x86 x64 arm64; do
-    extras/package/macosx/build-powervlc.sh "$t" || break
+    log="build/logs/macos-$t.log"
+    : >"$log"
+    for attempt in 1 2 3; do
+        echo "===== macOS $t — attempt $attempt =====" >>"$log"
+        if extras/package/macosx/build-powervlc.sh "$t" >>"$log" 2>&1; then
+            break
+        fi
+        if [ "$attempt" -eq 3 ]; then
+            echo "Build failed permanently for $t after $attempt attempts." >&2
+            exit 1
+        fi
+        echo "Build failed for $t (attempt $attempt/3); retrying…" >&2
+    done
 done
 
 # 2. Fuse them into one universal bundle (order matters — see section 3)
-extras/package/macosx/make-universal.sh builduniversal/PowerVLC.app \
-    buildarm64/PowerVLC.app buildx64/PowerVLC.app buildx86/PowerVLC.app \
-    buildg3/PowerVLC.app  buildg4/PowerVLC.app  buildg5/PowerVLC.app
+extras/package/macosx/make-universal.sh build/macos/universal/PowerVLC.app \
+    build/macos/arm64/PowerVLC.app build/macos/x64/PowerVLC.app \
+    build/macos/x86/PowerVLC.app build/macos/g3/PowerVLC.app \
+    build/macos/g4/PowerVLC.app build/macos/g5/PowerVLC.app
 
 # 3. Make the zips (one per target + the universal one)
 for t in g3 g4 g5 x86 x64 arm64 universal; do
     extras/package/macosx/package-powervlc.sh "$t"
 done
 
-# 4. Build Windows and Linux releases (amd64 and i386 will be slow to build, be patient)
+# 4. Build Windows and Linux releases (all toolchains run natively on Apple Silicon)
 extras/package/docker/build-in-docker.sh win64 win32 winarm64 linux-arm64-appimage linux-amd64-appimage linux-i386-appimage
 
 # 5. Move all the generated zips to the "zips" folder in the root of the project
@@ -162,7 +186,7 @@ is cached, so it only happens once per target family.
 extras/package/macosx/build-powervlc.sh <target>     # target ∈ g3 g4 g5 x86 x64 arm64
 ```
 
-Result: `build<target>/PowerVLC.app`.
+Result: `build/macos/<target>/PowerVLC.app`.
 
 The script picks the right compiler, SDK, minimum‑OS and CPU tuning for the
 target and applies the PowerVLC configure policy (see the comments at the top of
@@ -193,9 +217,10 @@ otherwise the copy from the **first** input wins. So **list the preferred bundle
 first** — the Info.plist, icon and any single‑arch resources are taken from it:
 
 ```bash
-extras/package/macosx/make-universal.sh builduniversal/PowerVLC.app \
-    buildarm64/PowerVLC.app buildx64/PowerVLC.app buildx86/PowerVLC.app \
-    buildg3/PowerVLC.app  buildg4/PowerVLC.app  buildg5/PowerVLC.app
+extras/package/macosx/make-universal.sh build/macos/universal/PowerVLC.app \
+    build/macos/arm64/PowerVLC.app build/macos/x64/PowerVLC.app \
+    build/macos/x86/PowerVLC.app build/macos/g3/PowerVLC.app \
+    build/macos/g4/PowerVLC.app build/macos/g5/PowerVLC.app
 ```
 
 The script also:
@@ -206,7 +231,7 @@ The script also:
 - ships portable Lua and ad‑hoc code‑signs the result (needed for the arm64
   slice to load on Apple Silicon).
 
-Result: `builduniversal/PowerVLC.app`.
+Result: `build/macos/universal/PowerVLC.app`.
 
 ---
 
@@ -217,8 +242,8 @@ extras/package/macosx/package-powervlc.sh <target>   # target ∈ g3 … arm64 O
 ```
 
 It reads the version from the bundle's Info.plist and writes
-`build<target>/powervlc-<version>-mac-<target>.zip` next to the bundle
-(`builduniversal/powervlc-<version>-mac-universal.zip` for the universal one).
+`build/macos/<target>/powervlc-<version>-mac-<target>.zip` next to the bundle
+(`build/macos/universal/powervlc-<version>-mac-universal.zip` for the universal one).
 The `mac` tag is there because the macOS target names (`g5`, `x64`, `universal`…)
 don't say which platform they belong to, unlike `win64` or `linux-x86_64`.
 
@@ -278,11 +303,11 @@ explicitly after building, for every target you package:
 
 ```bash
 for a in g3 g4 g5 x86 x64 arm64; do
-    cp po/fr.gmo "build$a/PowerVLC.app/Contents/MacOS/share/locale/fr/LC_MESSAGES/vlc.mo"
+    cp po/fr.gmo "build/macos/$a/PowerVLC.app/Contents/MacOS/share/locale/fr/LC_MESSAGES/vlc.mo"
 done
 ```
 
-Verify with `md5 po/fr.gmo build*/PowerVLC.app/Contents/MacOS/share/locale/fr/LC_MESSAGES/vlc.mo`
+Verify with `md5 po/fr.gmo build/macos/*/PowerVLC.app/Contents/MacOS/share/locale/fr/LC_MESSAGES/vlc.mo`
 (they must all match). Note that `strings` on a `.mo` splits at non-ASCII bytes,
 so grepping for an accented word gives a false negative — use `msgunfmt` instead.
 Do this **before** `make-universal.sh`, since the universal bundle takes
@@ -369,7 +394,7 @@ Two things now stop it, and neither needs remembering:
 To check a bundle by hand:
 
 ```bash
-diff -rq share/lua/i18n build<target>/PowerVLC.app/Contents/MacOS/share/lua/i18n
+diff -rq share/lua/i18n build/macos/<target>/PowerVLC.app/Contents/MacOS/share/lua/i18n
 ```
 
 ### 5.3 Which slices carry which interface
@@ -379,7 +404,7 @@ Cocoa interface needs 10.7+, which never ran there), so they contain only the
 
 ### 5.4 Verifying a bundle
 ```bash
-lipo -archs builduniversal/PowerVLC.app/Contents/MacOS/PowerVLC   # list the fused slices
+lipo -archs build/macos/universal/PowerVLC.app/Contents/MacOS/PowerVLC   # list the fused slices
 ```
 
 ### 5.5 libaacs — the one contrib built as a shared library
@@ -455,10 +480,10 @@ and portable) — see 6.4.
 
 Floors match VLC 3.0: win32 → Windows XP SP3, win64 → Vista, winarm64 → Windows 10.
 
-### 6.3 Slow command — emulated Linux (run separately)
+### 6.3 x86 Linux command — native cross-compilation
 
-The 64‑bit and 32‑bit **x86 Linux** AppImages compile under QEMU emulation and
-can take **hours**, so run them on their own when you have the time:
+The 64-bit and 32-bit x86 Linux AppImages are cross-compiled by native arm64
+processes against an Ubuntu 18.04 (glibc 2.27) sysroot. No QEMU is used:
 
 ```bash
 extras/package/docker/build-in-docker.sh linux-amd64-appimage linux-i386-appimage
@@ -565,7 +590,7 @@ you invoke them by name.
   this is handled — but it is why a rerun could once fail in seconds with an
   error that had nothing to do with the change being built.
 - Builds run from a **clean copy of your working tree** (tracked + new files,
-  minus build artifacts), so they never mix with the macOS `build*/` dirs.
+  minus build artifacts), so they never mix with the macOS `build/macos/` dirs.
 - **No snap.** Linux ships as an AppImage only. snapcraft is itself a snap and
   wants LXD/multipass, so it never built reliably in a container; the Docker
   target was dropped rather than left as a trap. `extras/package/snap/` still

@@ -41,6 +41,22 @@ extern "C" {
 #include <stdexcept>
 #include <limits>
 #include <algorithm>
+#include <cctype>
+
+/* Matroska StereoMode values are part of the container format, but older
+ * libmatroska releases expose KaxVideoStereoMode without publishing the
+ * corresponding enum names.  Keep the demuxer source-compatible with those
+ * releases by using local names for the stable on-disk values. */
+enum matroska_stereo_mode_value : uint8_t
+{
+    MKV_STEREO_LEFT_RIGHT         = 1,
+    MKV_STEREO_BOTTOM_TOP         = 2,
+    MKV_STEREO_TOP_BOTTOM         = 3,
+    MKV_STEREO_CHECKBOARD_LR      = 5,
+    MKV_STEREO_ROW_INTERLEAVED_LR = 7,
+    MKV_STEREO_COL_INTERLEAVED_LR = 9,
+    MKV_STEREO_RIGHT_LEFT         = 11,
+};
 
 /* GetFourCC helper */
 #define GetFOURCC( p )  __GetFOURCC( (uint8_t*)p )
@@ -71,6 +87,86 @@ static inline void fill_extra_data( mkv_track_t *p_tk, unsigned int offset )
     p_tk->fmt.p_extra = xmalloc( p_tk->fmt.i_extra );
     if(!p_tk->fmt.p_extra) { p_tk->fmt.i_extra = 0; return; };
     memcpy( p_tk->fmt.p_extra, p_tk->p_extra_data + offset, p_tk->fmt.i_extra );
+}
+
+/* MVC-in-Matroska keeps the historical V_MPEG4/ISO/AVC CodecID.  The
+ * discriminator is the ISO/IEC 14496-15 mvcC configuration box appended to
+ * CodecPrivate; StereoMode is optional and is absent from real remuxes such
+ * as mkvmerge 8.x output. */
+static bool avc_private_has_mvcc( const uint8_t *p, size_t size )
+{
+    for( size_t i = 4; i + 4 <= size; ++i )
+    {
+        if( memcmp( p + i, "mvcC", 4 ) )
+            continue;
+
+        const uint32_t box_size = (uint32_t)p[i - 4] << 24 |
+                                  (uint32_t)p[i - 3] << 16 |
+                                  (uint32_t)p[i - 2] << 8  |
+                                  (uint32_t)p[i - 1];
+        /* mkvmerge writes this as length("mvcC" + payload), whereas an MP4
+         * box length also includes the four-byte length word. Accept both. */
+        if( (box_size >= 4 && box_size <= size - i) ||
+            (box_size >= 8 && box_size <= size - (i - 4)) )
+            return true;
+    }
+    return false;
+}
+
+static bool stereo_filename_separator( char c )
+{
+    return c == '-' || c == '.' || c == '_' || c == ' ';
+}
+
+static bool stereo_filename_token( const char *name, const char *token )
+{
+    if( name == NULL )
+        return false;
+
+    const size_t token_len = strlen( token );
+    for( const char *p = name; *p != '\0'; ++p )
+    {
+        if( p != name && !stereo_filename_separator( p[-1] ) )
+            continue;
+
+        size_t i = 0;
+        while( i < token_len && p[i] != '\0' &&
+               std::tolower( static_cast<unsigned char>( p[i] ) ) ==
+               std::tolower( static_cast<unsigned char>( token[i] ) ) )
+            ++i;
+        if( i == token_len &&
+            (p[i] == '\0' || stereo_filename_separator( p[i] )) )
+            return true;
+    }
+    return false;
+}
+
+static video_multiview_mode_t stereo_mode_from_filename( const char *name )
+{
+    /* Match Kodi's deliberately conservative rule: a 3D flag and a packing
+     * flag must both be separator-delimited. This avoids treating ordinary
+     * titles containing the letters "sbs" or "tab" as stereoscopic. */
+    if( !stereo_filename_token( name, "3d" ) )
+        return MULTIVIEW_2D;
+    if( stereo_filename_token( name, "sbs" ) ||
+        stereo_filename_token( name, "hsbs" ) )
+        return MULTIVIEW_STEREO_SBS;
+    if( stereo_filename_token( name, "tab" ) ||
+        stereo_filename_token( name, "htab" ) )
+        return MULTIVIEW_STEREO_TB;
+    return MULTIVIEW_2D;
+}
+
+static video_multiview_mode_t stereo_mode_from_override( int value )
+{
+    switch( value )
+    {
+        case 2: return MULTIVIEW_STEREO_SBS;
+        case 3: return MULTIVIEW_STEREO_SBS_RIGHT_FIRST;
+        case 4: return MULTIVIEW_STEREO_TB;
+        case 5: return MULTIVIEW_STEREO_TB_RIGHT_FIRST;
+        default: return MULTIVIEW_2D;
+    }
 }
 
 /*****************************************************************************
@@ -200,6 +296,34 @@ void matroska_segment_c::ParseSeekHead( KaxSeekHead *seekhead )
  * ParseTrackEntry:
  *****************************************************************************/
 #define ONLY_FMT(t) if(vars.tk->fmt.i_cat != t ## _ES) return
+
+static void ParseDolbyVisionConfig( demux_t *demux, mkv_track_t *track,
+                                    const uint8_t *data, size_t size )
+{
+    if( track->fmt.i_cat != VIDEO_ES || size < 4 )
+        return;
+
+    vlc_dovi_config_t &dovi = track->fmt.video.dovi;
+    dovi.version_major = data[0];
+    dovi.version_minor = data[1];
+    const uint16_t flags = GetWBE( &data[2] );
+    dovi.profile = (flags >> 9) & 0x7f;
+    dovi.level = (flags >> 3) & 0x3f;
+    dovi.rpu_present = (flags >> 2) & 0x01;
+    dovi.el_present = (flags >> 1) & 0x01;
+    dovi.bl_present = flags & 0x01;
+    if( size >= 5 )
+    {
+        dovi.bl_signal_compatibility_id = (data[4] >> 4) & 0x0f;
+        dovi.metadata_compression = (data[4] >> 2) & 0x03;
+    }
+
+    msg_Dbg( demux, "Dolby Vision configuration: profile %u, level %u, "
+             "RPU %u, EL %u, BL %u, compatibility ID %u",
+             dovi.profile, dovi.level, dovi.rpu_present, dovi.el_present,
+             dovi.bl_present, dovi.bl_signal_compatibility_id );
+}
+
 void matroska_segment_c::ParseTrackEntry( const KaxTrackEntry *m )
 {
     bool bSupported = true;
@@ -244,6 +368,7 @@ void matroska_segment_c::ParseTrackEntry( const KaxTrackEntry *m )
       int                  level;
       std::string          lang;
       bool                 lang_is_ietf;
+      bool                 stereo_mode_present;
       struct {
         unsigned int i_crop_right;
         unsigned int i_crop_left;
@@ -255,7 +380,7 @@ void matroska_segment_c::ParseTrackEntry( const KaxTrackEntry *m )
       } track_video_info;
 
     } metadata_payload = {
-      this, p_track, &sys.demuxer, bSupported, 3, "eng", false, { }
+      this, p_track, &sys.demuxer, bSupported, 3, "eng", false, false, { }
     };
 
     MKV_SWITCH_CREATE( EbmlTypeDispatcher, MetaDataHandlers, MetaDataCapture )
@@ -344,6 +469,22 @@ void matroska_segment_c::ParseTrackEntry( const KaxTrackEntry *m )
         E_CASE( KaxMaxBlockAdditionID, mbl ) // UNUSED
         {
             debug( vars, "Track Max BlockAdditionID=%d", static_cast<uint32>( mbl ) ) ;
+        }
+        E_CASE( KaxBlockAdditionMapping, mapping )
+        {
+            const KaxBlockAddIDType *type =
+                FindChild<const KaxBlockAddIDType>( mapping );
+            const KaxBlockAddIDExtraData *extra =
+                FindChild<const KaxBlockAddIDExtraData>( mapping );
+            if( type != NULL && extra != NULL )
+            {
+                const uint64_t id = static_cast<uint64_t>( *type );
+                if( id == UINT32_C(0x64766343) || /* dvcC */
+                    id == UINT32_C(0x64767643) )  /* dvvC */
+                    ParseDolbyVisionConfig( vars.p_demuxer, vars.tk,
+                                            extra->GetBuffer(),
+                                            extra->GetSize() );
+            }
         }
         E_CASE( KaxTrackName, tname )
         {
@@ -618,9 +759,43 @@ void matroska_segment_c::ParseTrackEntry( const KaxTrackEntry *m )
             ONLY_FMT(VIDEO);
             debug( vars, "Track Video Interlaced=%u", static_cast<uint8>( fint ) ) ;
         }
-        E_CASE( KaxVideoStereoMode, stereo ) // UNUSED
+        E_CASE( KaxVideoStereoMode, stereo )
         {
-            debug( vars, "Track Video Stereo Mode=%u", static_cast<uint8>( stereo ) ) ;
+            ONLY_FMT(VIDEO);
+            const uint8_t mode = static_cast<uint8>( stereo );
+            vars.stereo_mode_present = true;
+            switch( mode )
+            {
+                case MKV_STEREO_LEFT_RIGHT:
+                    vars.tk->fmt.video.multiview_mode = MULTIVIEW_STEREO_SBS;
+                    break;
+                case MKV_STEREO_RIGHT_LEFT:
+                    vars.tk->fmt.video.multiview_mode =
+                        MULTIVIEW_STEREO_SBS_RIGHT_FIRST;
+                    break;
+                case MKV_STEREO_TOP_BOTTOM:
+                    vars.tk->fmt.video.multiview_mode = MULTIVIEW_STEREO_TB;
+                    break;
+                case MKV_STEREO_BOTTOM_TOP:
+                    vars.tk->fmt.video.multiview_mode =
+                        MULTIVIEW_STEREO_TB_RIGHT_FIRST;
+                    break;
+                case MKV_STEREO_CHECKBOARD_LR:
+                    vars.tk->fmt.video.multiview_mode =
+                        MULTIVIEW_STEREO_CHECKERBOARD;
+                    break;
+                case MKV_STEREO_ROW_INTERLEAVED_LR:
+                    vars.tk->fmt.video.multiview_mode = MULTIVIEW_STEREO_ROW;
+                    break;
+                case MKV_STEREO_COL_INTERLEAVED_LR:
+                    vars.tk->fmt.video.multiview_mode = MULTIVIEW_STEREO_COL;
+                    break;
+                default:
+                    vars.tk->fmt.video.multiview_mode = MULTIVIEW_2D;
+                    break;
+            }
+            debug( vars, "Track Video Stereo Mode=%u -> VLC mode %u", mode,
+                   vars.tk->fmt.video.multiview_mode );
         }
         E_CASE( KaxVideoPixelWidth, vwidth )
         {
@@ -934,6 +1109,32 @@ void matroska_segment_c::ParseTrackEntry( const KaxTrackEntry *m )
     };
 
     MetaDataHandlers::Dispatcher().iterate ( m->begin(), m->end(), &metadata_payload );
+
+    if( p_track->fmt.i_cat == VIDEO_ES &&
+        !metadata_payload.stereo_mode_present )
+    {
+        const int override = var_InheritInteger( &sys.demuxer,
+                                                 "stereo3d-input-mode" );
+        if( override != 0 )
+        {
+            p_track->fmt.video.multiview_mode =
+                stereo_mode_from_override( override );
+            msg_Info( &sys.demuxer, "using manual stereoscopic input mode %d",
+                      override );
+        }
+        else
+        {
+            const video_multiview_mode_t detected =
+                stereo_mode_from_filename( sys.demuxer.psz_file );
+            if( detected != MULTIVIEW_2D )
+            {
+                p_track->fmt.video.multiview_mode = detected;
+                msg_Info( &sys.demuxer,
+                          "detected stereoscopic layout from filename: %s",
+                          detected == MULTIVIEW_STEREO_SBS ? "SBS" : "TAB" );
+            }
+        }
+    }
 
     if( p_track->i_number == 0 )
     {
@@ -1614,8 +1815,18 @@ bool matroska_segment_c::TrackInit( mkv_track_t * p_tk )
             vars.p_fmt->i_codec = VLC_CODEC_DIV3;
         }
         S_CASE("V_MPEG4/ISO/AVC") {
-            vars.p_fmt->i_codec = VLC_FOURCC( 'a','v','c','1' );
+            const bool mvc = avc_private_has_mvcc(
+                static_cast<const uint8_t *>(vars.p_tk->p_extra_data),
+                vars.p_tk->i_extra_data );
+            vars.p_fmt->i_codec = mvc ? VLC_CODEC_H264_MVC
+                                      : VLC_FOURCC( 'a','v','c','1' );
             fill_extra_data( vars.p_tk, 0 );
+            if( mvc )
+            {
+                vars.p_fmt->video.multiview_mode = MULTIVIEW_STEREO_FRAMEPACKED;
+                msg_Info( vars.p_demuxer,
+                          "Matroska MVC configuration detected (mvcC)" );
+            }
         }
         S_CASE_GLOB("V_MPEG4/ISO*") {
             vars.p_fmt->i_codec = VLC_CODEC_MP4V;
@@ -1820,7 +2031,16 @@ bool matroska_segment_c::TrackInit( mkv_track_t * p_tk )
             vars.p_fmt->i_codec = VLC_CODEC_DTS;
             vars.p_fmt->b_packetized = false;
         }
-        S_CASE("A_MLP")  { vars.p_fmt->i_codec = VLC_CODEC_MLP; }
+        S_CASE("A_MLP")  {
+            vars.p_fmt->i_codec = VLC_CODEC_MLP;
+            /* Matroska blocks may contain several MLP access units. They
+             * need the same parser as A_TRUEHD so that frame length, sample
+             * count and MAT alignment are known before passthrough. Treating
+             * them as already packetized fed zero-sample blocks to tospdif;
+             * the HDMI carrier opened successfully but contained only
+             * padding. */
+            vars.p_fmt->b_packetized = false;
+        }
         S_CASE("A_TRUEHD") { /* FIXME when more samples arrive */
             vars.p_fmt->i_codec = VLC_CODEC_TRUEHD;
             vars.p_fmt->b_packetized = false;

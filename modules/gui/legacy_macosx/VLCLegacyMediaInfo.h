@@ -22,6 +22,7 @@
 
 #include <vlc_common.h>
 #include <vlc_interface.h>
+#include <vlc_input_item.h>
 
 @class VLCLegacyCoreInteraction;
 
@@ -47,6 +48,8 @@
     NSView *tabHighlight;           /* marks the selected pane button */
     NSTimer *refreshTimer;
     void *lastItem;                 /* input_item_t last filled in */
+    input_item_t *inspectedItem;    /* held item selected in the browser;
+                                     * NULL means follow current playback */
 
     /* general pane */
     NSImageView *artworkView;
@@ -77,5 +80,7 @@
 
 - (id)initWithCore:(VLCLegacyCoreInteraction *)interaction;
 - (void)showWindow;
+- (void)showWindowForInputItem:(input_item_t *)item;
+- (void)refresh:(NSTimer *)timer;
 
 @end

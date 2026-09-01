@@ -92,6 +92,7 @@ static int vlclua_widget_get_checked( lua_State *L );
 static int vlclua_widget_add_value( lua_State *L );
 static int vlclua_widget_get_value( lua_State *L );
 static int vlclua_widget_set_value( lua_State *L );
+static int vlclua_widget_set_selection( lua_State *L );
 static int vlclua_widget_clear( lua_State *L );
 static int vlclua_widget_get_selection( lua_State *L );
 static int vlclua_widget_set_centered( lua_State *L );
@@ -138,6 +139,7 @@ static const luaL_Reg vlclua_widget_reg[] = {
     { "add_value", vlclua_widget_add_value },
     { "get_value", vlclua_widget_get_value },
     { "set_value", vlclua_widget_set_value },
+    { "set_selection", vlclua_widget_set_selection },
     { "clear", vlclua_widget_clear },
     { "get_selection", vlclua_widget_get_selection },
     { "set_centered", vlclua_widget_set_centered },
@@ -1035,6 +1037,55 @@ static int vlclua_widget_set_value( lua_State *L )
          p_value = p_value->p_next )
     {
         p_value->b_selected = ( p_value->i_id == i_id );
+        if( p_value->b_selected )
+            b_found = true;
+    }
+    p_widget->b_update = true;
+    vlc_mutex_unlock( &p_widget->p_dialog->lock );
+
+    lua_SetDialogUpdate( L, 1 );
+    lua_pushboolean( L, b_found );
+    return 1;
+}
+
+/**
+ * Select list rows by their stable value ids.
+ *
+ * set_selection(id) keeps the original single-selection API. A table whose
+ * keys are ids and whose values are true restores a multiple selection in
+ * one update: set_selection({ [id1] = true, [id2] = true }). Dynamic lists
+ * can therefore survive a rebuild without collapsing Command-A to one row.
+ **/
+static int vlclua_widget_set_selection( lua_State *L )
+{
+    extension_widget_t **pp_widget =
+            (extension_widget_t **) luaL_checkudata( L, 1, "widget" );
+    if( !pp_widget || !*pp_widget )
+        return luaL_error( L, "Can't get pointer to widget" );
+    extension_widget_t *p_widget = *pp_widget;
+
+    if( p_widget->type != EXTENSION_WIDGET_LIST )
+        return luaL_error( L, "method set_selection not valid for this widget" );
+
+    bool b_multiple = lua_istable( L, 2 );
+    if( !b_multiple && !lua_isnumber( L, 2 ) )
+        return luaL_error( L, "widget:set_selection usage: (id or id table)" );
+
+    int i_id = b_multiple ? 0 : luaL_checkint( L, 2 );
+    bool b_found = false;
+    vlc_mutex_lock( &p_widget->p_dialog->lock );
+    for( struct extension_widget_value_t *p_value = p_widget->p_values;
+         p_value != NULL; p_value = p_value->p_next )
+    {
+        if( b_multiple )
+        {
+            lua_pushinteger( L, p_value->i_id );
+            lua_rawget( L, 2 );
+            p_value->b_selected = lua_toboolean( L, -1 );
+            lua_pop( L, 1 );
+        }
+        else
+            p_value->b_selected = ( p_value->i_id == i_id );
         if( p_value->b_selected )
             b_found = true;
     }

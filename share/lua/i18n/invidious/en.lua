@@ -39,6 +39,7 @@ return {
     mode_playlists = "Playlists",
     btn_search = "Search",
     btn_open = "Open selection",
+    btn_open_channel = "Open selected item's channel",
     btn_change_instance = "< Instance",
     msg_enter_query = "Enter something to search for",
     msg_searching = "Searching...",
@@ -49,6 +50,7 @@ return {
     msg_target_found = "Address recognised — opening it directly",
     msg_search_fail = "Search failed: ",
     msg_select_result = "Select a result in the list first",
+    msg_channel_unavailable = "The channel linked to this selection is unavailable",
 
     lbl_quality = "Quality:",
     lbl_audio_track = "Audio track:",

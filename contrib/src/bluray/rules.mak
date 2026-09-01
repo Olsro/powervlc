@@ -6,9 +6,10 @@ BLURAY_URL := $(VIDEOLAN)/libbluray/$(BLURAY_VERSION)/libbluray-$(BLURAY_VERSION
 ifdef BUILD_DISCS
 PKGS += bluray
 endif
-ifeq ($(call need_pkg,"libbluray >= 1.0.0"),)
-PKGS_FOUND += bluray
-endif
+
+# PowerVLC's Blu-ray module uses the private MVC/clip accessors added by the
+# patches below. A distribution libbluray, regardless of its version, cannot
+# provide that ABI, so release builds must always use this contrib copy.
 
 # fontconfig is what resolves a BD-J font *family* ("SansSerif", the name a
 # menu asks for) to a font *file*. Without it
@@ -189,7 +190,8 @@ $(TARBALLS)/libbluray-$(BLURAY_VERSION).tar.xz:
 
 .sum-bluray: libbluray-$(BLURAY_VERSION).tar.xz
 
-bluray: libbluray-$(BLURAY_VERSION).tar.xz .sum-bluray
+bluray: libbluray-$(BLURAY_VERSION).tar.xz .sum-bluray \
+	$(wildcard $(SRC)/bluray/*.patch)
 	$(UNPACK)
 	$(APPLY) $(SRC)/bluray/0002-darwin-dont-define-POSIX_C_SOURCE.patch
 	$(APPLY) $(SRC)/bluray/0003-macos-load-Apple-Java-6-through-the-JavaVM-framework.patch
@@ -199,6 +201,21 @@ bluray: libbluray-$(BLURAY_VERSION).tar.xz .sum-bluray
 	$(APPLY) $(SRC)/bluray/0007-macos-find-libjli-in-the-modern-jdk-layout.patch
 	$(APPLY) $(SRC)/bluray/0008-bdj-leave-PRESENT-applications-unloaded.patch
 	$(APPLY) $(SRC)/bluray/0009-bdj-materialise-bd-rom-files-without-a-security-manager.patch
+	$(APPLY) $(SRC)/bluray/0010-expose-mvc-extension-path.patch
+	$(APPLY) $(SRC)/bluray/0011-use-backup-for-substituted-3d-capability-reads.patch
+	$(APPLY) $(SRC)/bluray/0012-propagate-bdj-s3d-graphics-offset.patch
+	$(APPLY) $(SRC)/bluray/0013-bdj-run-without-security-manager-on-java-24.patch
+	$(APPLY) $(SRC)/bluray/0014-select-ig-stream-by-menu-language.patch
+	$(APPLY) $(SRC)/bluray/0015-restore-duplicated-substituted-3d-capability-reads.patch
+	$(APPLY) $(SRC)/bluray/0016-bdj-create-sockets-on-java-17.patch
+	$(APPLY) $(SRC)/bluray/0017-bdj-cache-disc-identity-for-random-access.patch
+	$(APPLY) $(SRC)/bluray/0018-make-bdj-network-access-configurable.patch
+	$(APPLY) $(SRC)/bluray/0019-fix-bdj-graphics-and-mouse-input.patch
+	$(APPLY) $(SRC)/bluray/0020-harden-bdj-session-shutdown.patch
+	$(APPLY) $(SRC)/bluray/0021-fix-hdmv-3d-capability-comparisons.patch
+	$(APPLY) $(SRC)/bluray/0022-lock-current-clip-metadata-access.patch
+	$(APPLY) $(SRC)/bluray/0023-expose-named-clip-metadata.patch
+	$(APPLY) $(SRC)/bluray/0024-expose-s3d-graphics-offset-sequence-control.patch
 ifdef HAVE_WIN32
 ifeq ($(ARCH),i386)
 	# The bundled libudfread maps strtok_r() onto strtok_s(), a "secure CRT"

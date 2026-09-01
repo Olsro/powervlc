@@ -26,6 +26,8 @@
 #include "pixmaps/types/type_unknown.xpm"
 
 #include <QImageReader>
+#include <cstdlib>
+#include <cstring>
 
 VLCModelSubInterface::VLCModelSubInterface()
 {
@@ -192,7 +194,15 @@ bool VLCModel::isCurrent( const QModelIndex &index ) const
 {
     AbstractPLItem *item = getItem( index );
     if ( !item ) return false;
-    return item->inputItem() == THEMIM->currentInputItem();
+    input_item_t *candidate = item->inputItem();
+    input_item_t *current = THEMIM->currentInputItem();
+    if( candidate == current ) return true;
+    char *candidateUri = candidate ? input_item_GetURI( candidate ) : NULL;
+    char *currentUri = current ? input_item_GetURI( current ) : NULL;
+    bool same = candidateUri && currentUri
+             && !strcmp( candidateUri, currentUri );
+    free( candidateUri ); free( currentUri );
+    return same;
 }
 
 int VLCModel::columnCount( const QModelIndex & ) const
@@ -216,4 +226,3 @@ void VLCModel::ensureArtRequested( const QModelIndex &index )
         }
     }
 }
-

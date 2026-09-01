@@ -51,6 +51,11 @@
 - (IBAction)edit:(id)sender;
 - (IBAction)remove:(id)sender;
 - (IBAction)goToBookmark:(id)sender;
+- (IBAction)makeClip:(id)sender;
+- (IBAction)exportCurrent:(id)sender;
+- (IBAction)importBookmarks:(id)sender;
+- (IBAction)exportAll:(id)sender;
+- (IBAction)clearAllSaved:(id)sender;
 
 - (IBAction)edit_cancel:(id)sender;
 - (IBAction)edit_ok:(id)sender;

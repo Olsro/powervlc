@@ -63,6 +63,7 @@ struct tf_es_out_id_s
 struct tf_es_out_s
 {
     es_out_t *original_es_out;
+    vlc_object_t *logger;
     DECL_ARRAY(struct tf_es_out_id_s *) es_list;
     struct timestamps_filter_s pcrtf;
     bool b_discontinuity;
@@ -165,7 +166,10 @@ static int timestamps_filter_es_out_Control(es_out_t *out, int i_query, va_list 
                 i_group = 0;
             int64_t pcr = va_arg(va_list, int64_t);
 
-            if(timestamps_filter_push("PCR ", &p_sys->pcrtf, pcr, 0, p_sys->b_discontinuity, true))
+            const bool b_rebased = timestamps_filter_push("PCR ",
+                                    &p_sys->pcrtf, pcr, 0,
+                                    p_sys->b_discontinuity, true);
+            if(b_rebased)
             {
                 p_sys->pcrtf.sequence++;
                 /* Handle special start case, there was 1 single PCR before */
@@ -191,6 +195,14 @@ static int timestamps_filter_es_out_Control(es_out_t *out, int i_query, va_list 
             }
 
             pcr += p_sys->pcrtf.sequence_offset;
+
+            /* We have deliberately mapped a discontinuous source PCR onto a
+             * continuous output timeline.  Tell the core that this single
+             * clock update must not be mistaken for decoder starvation and
+             * turned into ES_OUT_RESET_PCR/rebuffering. */
+            if(b_rebased)
+                es_out_Control(p_sys->original_es_out,
+                               ES_OUT_SET_NEXT_PCR_SEAMLESS);
 
             if(i_query == ES_OUT_SET_GROUP_PCR)
                 return es_out_Control(p_sys->original_es_out, i_query, i_group, pcr);
@@ -239,9 +251,65 @@ static int timestamps_filter_es_out_Send(es_out_t *out, es_out_id_t *id, block_t
 {
     struct tf_es_out_s *p_sys = (struct tf_es_out_s *) out->p_sys;
     struct tf_es_out_id_s *cur = timestamps_filter_es_out_getID(p_sys, id);
+    const vlc_tick_t raw_dts = p_block->i_dts;
+    const vlc_tick_t raw_pts = p_block->i_pts;
+    const vlc_tick_t previous = cur->tf.mva.i_packet > 0
+                              ? mva_getLastDTS(&cur->tf.mva) : VLC_TICK_INVALID;
+    const bool raw_abnormal =
+        (previous > VLC_TICK_INVALID &&
+         ((raw_dts > VLC_TICK_INVALID &&
+           llabs(raw_dts - previous) > VLC_TICK_FROM_SEC(10)) ||
+          (raw_pts > VLC_TICK_INVALID &&
+           llabs(raw_pts - previous) > VLC_TICK_FROM_SEC(10)))) ||
+        (raw_dts > VLC_TICK_INVALID && raw_pts > VLC_TICK_INVALID &&
+         llabs(raw_dts - raw_pts) > VLC_TICK_FROM_SEC(10)) ||
+        (p_sys->pcrtf.contiguous_last > VLC_TICK_INVALID &&
+         ((raw_dts > VLC_TICK_INVALID &&
+           llabs(raw_dts + cur->tf.sequence_offset -
+                 p_sys->pcrtf.contiguous_last) > VLC_TICK_FROM_SEC(10)) ||
+          (raw_pts > VLC_TICK_INVALID &&
+           llabs(raw_pts + cur->tf.sequence_offset -
+                 p_sys->pcrtf.contiguous_last) > VLC_TICK_FROM_SEC(10))));
+
+    if (unlikely(raw_abnormal))
+        msg_Warn(p_sys->logger,
+                 "TF raw %4.4s dts=%"PRId64" pts=%"PRId64
+                 " prev=%"PRId64" len=%"PRId64" esoff=%"PRId64
+                 " pcroff=%"PRId64" pcrraw=%"PRId64
+                 " pcrout=%"PRId64" seq=%u/%u",
+                 (char *)&cur->fourcc, raw_dts, raw_pts, previous,
+                 p_block->i_length, cur->tf.sequence_offset,
+                 p_sys->pcrtf.sequence_offset,
+                 mva_getLastDTS(&p_sys->pcrtf.mva),
+                 p_sys->pcrtf.contiguous_last,
+                 cur->tf.sequence, p_sys->pcrtf.sequence);
+
+    /* At some seamless Blu-ray M2TS boundaries the TS demuxer briefly emits
+     * one side of the DTS/PTS pair on the unwrapped 33-bit clock grid while
+     * the other side already belongs to the current clip.  Both values are
+     * syntactically valid, but their multi-hour separation is impossible for
+     * either H.264 reordering or LPCM.  Pick the side nearest this ES's last
+     * raw timestamp and normalize the pair before the continuity offset is
+     * calculated; otherwise thousands of blocks are rejected in one burst
+     * and visibly stall the menu transition. */
+    if (p_block->i_dts > VLC_TICK_INVALID &&
+        p_block->i_pts > VLC_TICK_INVALID &&
+        llabs(p_block->i_dts - p_block->i_pts) > VLC_TICK_FROM_SEC(10) &&
+        cur->tf.mva.i_packet > 0)
+    {
+        const vlc_tick_t previous = mva_getLastDTS(&cur->tf.mva);
+        if (llabs(p_block->i_pts - previous) <
+            llabs(p_block->i_dts - previous))
+            p_block->i_dts = p_block->i_pts;
+        else
+            p_block->i_pts = p_block->i_dts;
+    }
+
+    const vlc_tick_t i_date = p_block->i_dts > VLC_TICK_INVALID
+                            ? p_block->i_dts : p_block->i_pts;
 
     timestamps_filter_push((char*)&cur->fourcc, &cur->tf,
-                            p_block->i_dts, p_block->i_length,
+                            i_date, p_block->i_length,
                            p_sys->b_discontinuity, cur->contiguous);
 
     if(cur->tf.sequence == p_sys->pcrtf.sequence) /* Still in the same timestamps segments as PCR */
@@ -272,6 +340,28 @@ static int timestamps_filter_es_out_Send(es_out_t *out, es_out_id_t *id, block_t
         }
     }
 
+    /* An ES recycled across a seamless play-item boundary may retain the
+     * sequence number of the newly rebased PCR while still carrying the
+     * previous segment's offset.  In that state the branch above considers
+     * both clocks synchronized and never copies the PCR offset, producing a
+     * coherent multi-hour ES timeline that the input clock cannot convert.
+     * If the raw ES date is demonstrably on the current raw PCR grid, both
+     * must use the same continuity offset. */
+    const vlc_tick_t pcr_raw = mva_getLastDTS(&p_sys->pcrtf.mva);
+    if (i_date > VLC_TICK_INVALID && pcr_raw > VLC_TICK_INVALID &&
+        llabs(i_date - pcr_raw) < VLC_TICK_FROM_SEC(10) &&
+        llabs(cur->tf.sequence_offset - p_sys->pcrtf.sequence_offset) >
+            VLC_TICK_FROM_SEC(10))
+    {
+        msg_Warn(p_sys->logger,
+                 "TF align %4.4s raw=%"PRId64" pcrraw=%"PRId64
+                 " esoff=%"PRId64" -> pcroff=%"PRId64,
+                 (char *)&cur->fourcc, i_date, pcr_raw,
+                 cur->tf.sequence_offset, p_sys->pcrtf.sequence_offset);
+        cur->tf.sequence_offset = p_sys->pcrtf.sequence_offset;
+        cur->tf.contiguous_last = i_date + cur->tf.sequence_offset;
+    }
+
     /* Record our state */
     if(p_sys->pcrtf.mva.i_packet > 0)
     {
@@ -280,10 +370,18 @@ static int timestamps_filter_es_out_Send(es_out_t *out, es_out_id_t *id, block_t
     }
 
     /* Fix timestamps */
-    if(p_block->i_dts)
+    if(p_block->i_dts > VLC_TICK_INVALID)
         p_block->i_dts += cur->tf.sequence_offset;
-    if(p_block->i_pts)
+    if(p_block->i_pts > VLC_TICK_INVALID)
         p_block->i_pts += cur->tf.sequence_offset;
+
+    if (unlikely(raw_abnormal))
+        msg_Warn(p_sys->logger,
+                 "TF out %4.4s dts=%"PRId64" pts=%"PRId64
+                 " esoff=%"PRId64" pcrdiff=%"PRId64" seq=%u/%u",
+                 (char *)&cur->fourcc, p_block->i_dts, p_block->i_pts,
+                 cur->tf.sequence_offset, cur->pcrdiff,
+                 cur->tf.sequence, p_sys->pcrtf.sequence);
 
     return es_out_Send(p_sys->original_es_out, id, p_block);
 }
@@ -341,7 +439,8 @@ static void timestamps_filter_es_out_Del(es_out_t *out, es_out_id_t *id)
     }
 }
 
-static es_out_t * timestamps_filter_es_out_New(es_out_t *orig)
+static es_out_t * timestamps_filter_es_out_New(es_out_t *orig,
+                                               vlc_object_t *logger)
 {
     es_out_t *p_out = malloc(sizeof(*p_out));
     if(!p_out)
@@ -353,6 +452,7 @@ static es_out_t * timestamps_filter_es_out_New(es_out_t *orig)
         return NULL;
     }
     tf->original_es_out = orig;
+    tf->logger = logger;
     tf->b_discontinuity = false;
     timestamps_filter_init(&tf->pcrtf);
     ARRAY_INIT(tf->es_list);

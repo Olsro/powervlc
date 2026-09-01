@@ -36,14 +36,20 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #ifdef _WIN32
 # include <windows.h>   /* GetUserDefaultUILanguage(), GetLocaleInfoA() */
+# include <shlobj.h>    /* SHBrowseForFolderW() */
 #endif
 
 #include <vlc_common.h>
+#include <vlc_charset.h>
+#include <vlc_fs.h>
+#include <vlc_dialog.h>
 
 #include "../vlc.h"
 #include "../libs.h"
+#include "../extension.h"
 
 /*****************************************************************************
  * Config handling
@@ -150,6 +156,150 @@ static int vlclua_cachedir( lua_State *L )
     char *dir = config_GetUserDir( VLC_CACHE_DIR );
     lua_pushstring( L, dir );
     free( dir );
+    return 1;
+}
+
+#ifdef _WIN32
+struct vlclua_browse_context
+{
+    const wchar_t *initial;
+};
+
+static int CALLBACK vlclua_browse_callback( HWND window, UINT message,
+                                            LPARAM data, LPARAM opaque )
+{
+    VLC_UNUSED( data );
+    struct vlclua_browse_context *context =
+        (struct vlclua_browse_context *)(intptr_t)opaque;
+
+    if( message == BFFM_INITIALIZED && context != NULL
+     && context->initial != NULL && context->initial[0] != L'\0' )
+        SendMessageW( window, BFFM_SETSELECTIONW, TRUE,
+                      (LPARAM)context->initial );
+    return 0;
+}
+
+/* XP has no PowerShell by default, so a script-backed FolderBrowserDialog is
+ * not a native folder picker there. Expose the shell picker that has existed
+ * since Windows 2000 instead. It also keeps every path UTF-8 at the Lua API
+ * boundary, independently of the machine's ANSI code page. */
+static int vlclua_select_directory( lua_State *L )
+{
+    const char *prompt = luaL_optstring( L, 1, "Choose a folder" );
+    const char *initial = luaL_optstring( L, 2, "" );
+    wchar_t *wide_prompt = ToWide( prompt );
+    wchar_t *wide_initial = ToWide( initial );
+    if( wide_prompt == NULL || wide_initial == NULL )
+    {
+        free( wide_prompt );
+        free( wide_initial );
+        return luaL_error( L, "out of memory" );
+    }
+
+    HRESULT hr = CoInitializeEx( NULL, COINIT_APARTMENTTHREADED );
+    const bool uninitialize = SUCCEEDED( hr );
+    struct vlclua_browse_context context = { wide_initial };
+    BROWSEINFOW browse = {
+        .hwndOwner = GetForegroundWindow(),
+        .pszDisplayName = NULL,
+        .lpszTitle = wide_prompt,
+        .ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE,
+        .lpfn = vlclua_browse_callback,
+        .lParam = (LPARAM)(intptr_t)&context,
+    };
+    vlclua_extension_watchdog_suspend( L );
+    PIDLIST_ABSOLUTE item = SHBrowseForFolderW( &browse );
+    vlclua_extension_watchdog_resume( L );
+    wchar_t selected[MAX_PATH];
+    bool accepted = item != NULL
+                 && SHGetPathFromIDListW( item, selected ) != FALSE;
+    if( item != NULL )
+        CoTaskMemFree( item );
+    if( uninitialize )
+        CoUninitialize();
+    free( wide_prompt );
+    free( wide_initial );
+
+    if( !accepted )
+    {
+        lua_pushnil( L );
+        lua_pushliteral( L, "cancelled" );
+        return 2;
+    }
+
+    char *utf8 = FromWide( selected );
+    if( utf8 == NULL )
+        return luaL_error( L, "out of memory" );
+    lua_pushstring( L, utf8 );
+    free( utf8 );
+    return 1;
+}
+#endif
+
+#ifdef __APPLE__
+static int vlclua_select_directory( lua_State *L )
+{
+    vlc_object_t *p_this = vlclua_get_this( L );
+    const char *psz_prompt = luaL_optstring( L, 1, "Choose a folder" );
+    const char *psz_initial = luaL_optstring( L, 2, "" );
+
+    vlclua_extension_watchdog_suspend( L );
+    char *psz_selected = vlc_dialog_select_directory( p_this, psz_prompt,
+                                                      psz_initial );
+    vlclua_extension_watchdog_resume( L );
+    if( psz_selected == NULL )
+    {
+        lua_pushnil( L );
+        lua_pushliteral( L, "cancelled" );
+        return 2;
+    }
+    lua_pushstring( L, psz_selected );
+    free( psz_selected );
+    return 1;
+}
+#endif
+
+/* Resolve an optional executable shipped by the PowerVLC application.
+ * Extensions identify a capability, never the bundle/install layout. */
+static int vlclua_helper( lua_State *L )
+{
+    const char *psz_name = luaL_checkstring( L, 1 );
+    const char *psz_relative;
+
+    if( !strcmp( psz_name, "emule-engine" ) )
+    {
+#ifdef __APPLE__
+        psz_relative = "../Helpers/PowerVLC eMule Engine.app/Contents/MacOS/amuled";
+#elif defined(_WIN32)
+        psz_relative = "powervlc-engines\\amuled.exe";
+#else
+        psz_relative = "powervlc-helpers/amuled";
+#endif
+    }
+    else
+        return luaL_error( L, "unknown bundled helper: %s", psz_name );
+
+    char *psz_libdir = config_GetLibDir();
+    char *psz_path = NULL;
+    struct stat st;
+    if( psz_libdir != NULL )
+    {
+        if( asprintf( &psz_path, "%s" DIR_SEP "%s",
+                      psz_libdir, psz_relative ) == -1 )
+            psz_path = NULL;
+        free( psz_libdir );
+    }
+
+    if( psz_path == NULL || vlc_stat( psz_path, &st ) != 0
+     || !S_ISREG( st.st_mode ) )
+    {
+        free( psz_path );
+        lua_pushnil( L );
+        return 1;
+    }
+
+    lua_pushstring( L, psz_path );
+    free( psz_path );
     return 1;
 }
 
@@ -276,6 +426,10 @@ static const luaL_Reg vlclua_config_reg[] = {
     { "homedir", vlclua_homedir },
     { "configdir", vlclua_configdir },
     { "cachedir", vlclua_cachedir },
+#if defined(_WIN32) || defined(__APPLE__)
+    { "select_directory", vlclua_select_directory },
+#endif
+    { "helper", vlclua_helper },
     { "datadir_list", vlclua_datadir_list },
     { "language", vlclua_language },
     { NULL, NULL }

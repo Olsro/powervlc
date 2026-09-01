@@ -43,6 +43,10 @@
 
 #include "vout_helper.h"
 #include "internal.h"
+#include "retroarch_shaders.h"
+#ifdef HAVE_LIBPLACEBO_NEXT
+# include "dovi_renderer.h"
+#endif
 
 #ifndef GL_CLAMP_TO_EDGE
 # define GL_CLAMP_TO_EDGE 0x812F
@@ -91,6 +95,9 @@ typedef struct {
 
     float    tex_width;
     float    tex_height;
+
+    int      stereo_offset;
+    bool     subtitle;
 } gl_region_t;
 
 struct prgm
@@ -124,9 +131,24 @@ struct prgm
 struct vout_display_opengl_t {
 
     vlc_gl_t   *gl;
+#ifdef HAVE_LIBPLACEBO_NEXT
+    vlc_dovi_renderer_t *dovi;
+#endif
     opengl_vtable_t vt;
+    vlc_ra_shader_engine_t *retroarch;
 
     video_format_t fmt;
+
+    /* The coded packing and the scanout packing are deliberately distinct.
+     * MVC already arrives as two full-height stacked views. SBS/TB keeps its
+     * compact decoded texture and is expanded to HDMI frame packing entirely
+     * by the geometry below. */
+    video_multiview_mode_t source_multiview_mode;
+    bool output_framepacked;
+    unsigned output_eye_width;
+    unsigned output_eye_height;
+    unsigned viewport_width;
+    unsigned viewport_height;
 
     GLsizei    tex_width[PICTURE_PLANE_MAX];
     GLsizei    tex_height[PICTURE_PLANE_MAX];
@@ -143,6 +165,7 @@ struct vout_display_opengl_t {
     struct prgm prgms[2];
     struct prgm *prgm; /* Main program */
     struct prgm *sub_prgm; /* Subpicture program */
+    vlc_fourcc_t subpicture_chromas[2];
 
     unsigned nb_indices;
     GLuint vertex_buffer_object;
@@ -668,7 +691,6 @@ opengl_init_program(vout_display_opengl_t *vgl, struct prgm *prgm,
     int ret;
     if (subpics)
     {
-        tc->fmt.i_chroma = VLC_CODEC_RGB32;
         /* Normal orientation and no projection for subtitles */
         tc->fmt.orientation = ORIENT_NORMAL;
         tc->fmt.projection_mode = PROJECTION_MODE_RECTANGULAR;
@@ -676,7 +698,23 @@ opengl_init_program(vout_display_opengl_t *vgl, struct prgm *prgm,
         tc->fmt.transfer = TRANSFER_FUNC_UNDEF;
         tc->fmt.space = COLOR_SPACE_UNDEF;
 
+        /* BD-J supplies its ARGB canvas in BGRA byte order on little-endian
+         * machines. Desktop OpenGL can upload that layout directly with
+         * GL_BGRA; asking the SPU core for RGBA instead made swscale convert
+         * the complete 1920x1080 menu canvas for every video frame (about
+         * 40 ms on Apple Silicon, already longer than a 23.976 fps period).
+         * Prefer the native layout when the GL implementation accepts it.
+         * GLES and big-endian hosts retain the universally available RGBA
+         * path; small text/PGS regions are converted as before. */
+#if !defined(USE_OPENGL_ES2) && !defined(WORDS_BIGENDIAN)
+        tc->fmt.i_chroma = VLC_CODEC_BGRA;
         ret = opengl_tex_converter_generic_init(tc, false);
+        if (ret != VLC_SUCCESS)
+#endif
+        {
+            tc->fmt.i_chroma = VLC_CODEC_RGB32;
+            ret = opengl_tex_converter_generic_init(tc, false);
+        }
     }
     else
     {
@@ -798,6 +836,30 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
     vgl->gl = gl;
     vgl->supports_long_shaders = true;
 
+#ifdef HAVE_LIBPLACEBO_NEXT
+    /* The VLC 3 OpenGL shader adapter predates parsed Dolby Vision metadata
+     * and cannot combine a Profile 7 enhancement layer. Keep this as a
+     * separate renderer owning the same, already-current GL context. */
+    if (fmt->dovi.rpu_present)
+    {
+        vgl->dovi = vlc_dovi_renderer_Create(gl, fmt);
+        if (!vgl->dovi)
+        {
+            msg_Err(gl, "cannot initialize the Dolby Vision renderer");
+            free(vgl);
+            return NULL;
+        }
+        vgl->fmt = *fmt;
+        if (subpicture_chromas)
+        {
+            vgl->subpicture_chromas[0] = VLC_CODEC_RGBA;
+            vgl->subpicture_chromas[1] = 0;
+            *subpicture_chromas = vgl->subpicture_chromas;
+        }
+        return vgl;
+    }
+#endif
+
 #if defined(USE_OPENGL_ES2) || defined(HAVE_GL_CORE_SYMBOLS)
 #define GET_PROC_ADDR_CORE(name) vgl->vt.name = gl##name
 #else
@@ -896,6 +958,12 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
     GET_PROC_ADDR(DeleteBuffers);
 
     GET_PROC_ADDR_OPTIONAL(GetFramebufferAttachmentParameteriv);
+    GET_PROC_ADDR_OPTIONAL(BindFramebuffer);
+    GET_PROC_ADDR_OPTIONAL(CheckFramebufferStatus);
+    GET_PROC_ADDR_OPTIONAL(DeleteFramebuffers);
+    GET_PROC_ADDR_OPTIONAL(FramebufferTexture2D);
+    GET_PROC_ADDR_OPTIONAL(GenFramebuffers);
+    GET_PROC_ADDR_OPTIONAL(GenerateMipmap);
 
     GET_PROC_ADDR_OPTIONAL(BufferSubData);
     GET_PROC_ADDR_OPTIONAL(BufferStorage);
@@ -1060,6 +1128,11 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
     GL_ASSERT_NOERROR();
     /* Update the fmt to main program one */
     vgl->fmt = vgl->prgm->tc->fmt;
+    vgl->source_multiview_mode = fmt->multiview_mode;
+    /* A packed source is not necessarily being sent to a 3D sink.  Keep the
+     * normal one-eye preview until the platform vout confirms that a real
+     * frame-packing display mode was selected. */
+    vgl->output_framepacked = false;
     /* The orientation is handled by the orientation matrix */
     vgl->fmt.orientation = fmt->orientation;
 
@@ -1115,6 +1188,13 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
     vgl->subpicture_buffer_object_count = subpicture_buffer_object_count;
     vgl->vt.GenBuffers(vgl->subpicture_buffer_object_count, vgl->subpicture_buffer_object);
 
+    /* RetroArch presets are a vout post-process, intentionally after colour
+     * conversion and before SPU composition. The engine probes every preset
+     * on the current driver and publishes only programs that really link. */
+    if (!vgl->fixed_function)
+        vgl->retroarch = vlc_ra_shader_engine_Create(gl, &vgl->vt,
+                                                     vgl->supports_long_shaders);
+
     /* */
     vgl->region_count = 0;
     vgl->region = NULL;
@@ -1129,20 +1209,56 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
 
     *fmt = vgl->fmt;
     if (subpicture_chromas) {
-        *subpicture_chromas = gl_subpicture_chromas;
+        vgl->subpicture_chromas[0] = vgl->sub_prgm->tc->fmt.i_chroma;
+        /* RGB32 is the platform-native alias used to initialize the GL
+         * converter; SPU regions use the explicit RGBA fourcc. */
+        if (vgl->subpicture_chromas[0] == VLC_CODEC_RGB32)
+            vgl->subpicture_chromas[0] = VLC_CODEC_RGBA;
+        vgl->subpicture_chromas[1] = 0;
+        msg_Dbg(gl, "OpenGL subpicture upload chroma: %4.4s",
+                (const char *)&vgl->subpicture_chromas[0]);
+        *subpicture_chromas = vgl->subpicture_chromas;
     }
 
     GL_ASSERT_NOERROR();
     return vgl;
 }
 
+void vout_display_opengl_SetFramePackingOutput(vout_display_opengl_t *vgl,
+                                               bool enabled,
+                                               unsigned eye_width,
+                                               unsigned eye_height)
+{
+#ifdef HAVE_LIBPLACEBO_NEXT
+    if (vgl->dovi)
+        return;
+#endif
+    vgl->output_framepacked = enabled;
+    vgl->output_eye_width = eye_width;
+    vgl->output_eye_height = eye_height;
+
+    /* Force the next Display() to rebuild both vertex and texture buffers. */
+    vgl->last_source.i_visible_width = 0;
+    vgl->last_source.i_visible_height = 0;
+}
+
 void vout_display_opengl_Delete(vout_display_opengl_t *vgl)
 {
+#ifdef HAVE_LIBPLACEBO_NEXT
+    if (vgl->dovi)
+    {
+        vlc_dovi_renderer_Delete(vgl->dovi);
+        free(vgl);
+        return;
+    }
+#endif
     GL_ASSERT_NOERROR();
 
     /* */
     vgl->vt.Finish();
     vgl->vt.Flush();
+
+    vlc_ra_shader_engine_Delete(vgl->retroarch);
 
     const size_t main_tex_count = vgl->prgm->tc->tex_count;
     const bool main_del_texs = !vgl->prgm->tc->handle_texs_gen;
@@ -1207,6 +1323,10 @@ static void UpdateFOVy(vout_display_opengl_t *vgl)
 int vout_display_opengl_SetViewpoint(vout_display_opengl_t *vgl,
                                      const vlc_viewpoint_t *p_vp)
 {
+#ifdef HAVE_LIBPLACEBO_NEXT
+    if (vgl->dovi)
+        return VLC_SUCCESS;
+#endif
 #define RAD(d) ((float) ((d) * M_PI / 180.f))
     float f_fovx = RAD(p_vp->fov);
     if (f_fovx > FIELD_OF_VIEW_DEGREES_MAX * M_PI / 180 + 0.001f
@@ -1235,6 +1355,10 @@ int vout_display_opengl_SetViewpoint(vout_display_opengl_t *vgl,
 void vout_display_opengl_SetWindowAspectRatio(vout_display_opengl_t *vgl,
                                               float f_sar)
 {
+#ifdef HAVE_LIBPLACEBO_NEXT
+    if (vgl->dovi)
+        return;
+#endif
     /* Each time the window size changes, we must recompute the minimum zoom
      * since the aspect ration changes.
      * We must also set the new current zoom value. */
@@ -1247,11 +1371,50 @@ void vout_display_opengl_SetWindowAspectRatio(vout_display_opengl_t *vgl,
 void vout_display_opengl_Viewport(vout_display_opengl_t *vgl, int x, int y,
                                   unsigned width, unsigned height)
 {
+#ifdef HAVE_LIBPLACEBO_NEXT
+    if (vgl->dovi)
+    {
+        vlc_dovi_renderer_SetViewport(vgl->dovi, x, y, width, height);
+        return;
+    }
+#endif
     vgl->vt.Viewport(x, y, width, height);
+    vgl->viewport_width = width;
+    vgl->viewport_height = height;
+    vlc_ra_shader_engine_SetViewport(vgl->retroarch, x, y, width, height);
+}
+
+void vout_display_opengl_SetDrawableSize(vout_display_opengl_t *vgl,
+                                         unsigned width, unsigned height)
+{
+#ifdef HAVE_LIBPLACEBO_NEXT
+    if (vgl->dovi)
+        vlc_dovi_renderer_SetDrawableSize(vgl->dovi, width, height);
+#else
+    VLC_UNUSED(vgl);
+    VLC_UNUSED(width);
+    VLC_UNUSED(height);
+#endif
+}
+
+void vout_display_opengl_SetDisplayHeadroom(vout_display_opengl_t *vgl,
+                                            float headroom)
+{
+#ifdef HAVE_LIBPLACEBO_NEXT
+    if (vgl->dovi)
+        vlc_dovi_renderer_SetDisplayHeadroom(vgl->dovi, headroom);
+#else
+    VLC_UNUSED(vgl);
+    VLC_UNUSED(headroom);
+#endif
 }
 
 picture_pool_t *vout_display_opengl_GetPool(vout_display_opengl_t *vgl, unsigned requested_count)
 {
+#ifdef HAVE_LIBPLACEBO_NEXT
+    if (vgl->dovi)
+        return vlc_dovi_renderer_GetPool(vgl->dovi, requested_count);
+#endif
     GL_ASSERT_NOERROR();
 
     if (vgl->pool)
@@ -1300,6 +1463,10 @@ error:
 int vout_display_opengl_Prepare(vout_display_opengl_t *vgl,
                                 picture_t *picture, subpicture_t *subpicture)
 {
+#ifdef HAVE_LIBPLACEBO_NEXT
+    if (vgl->dovi)
+        return vlc_dovi_renderer_Prepare(vgl->dovi, picture, subpicture);
+#endif
     GL_ASSERT_NOERROR();
 
     opengl_tex_converter_t *tc = vgl->prgm->tc;
@@ -1309,6 +1476,8 @@ int vout_display_opengl_Prepare(vout_display_opengl_t *vgl,
                             picture, NULL);
     if (ret != VLC_SUCCESS)
         return ret;
+
+    vlc_ra_shader_engine_NewFrame(vgl->retroarch, picture->date);
 
     int         last_count = vgl->region_count;
     gl_region_t *last = vgl->region;
@@ -1347,6 +1516,8 @@ int vout_display_opengl_Prepare(vout_display_opengl_t *vgl,
             glr->top    = -2.0 * (r->i_y                          ) / subpicture->i_original_picture_height + 1.0;
             glr->right  =  2.0 * (r->i_x + r->fmt.i_visible_width ) / subpicture->i_original_picture_width  - 1.0;
             glr->bottom = -2.0 * (r->i_y + r->fmt.i_visible_height) / subpicture->i_original_picture_height + 1.0;
+            glr->stereo_offset = r->i_stereo_offset;
+            glr->subtitle = subpicture->b_subtitle;
 
             glr->texture = 0;
             /* Try to recycle the textures allocated by the previous
@@ -1600,6 +1771,118 @@ static int BuildCube(unsigned nbPlanes,
     return VLC_SUCCESS;
 }
 
+static unsigned FramePackingBlankingLines(unsigned eye_height)
+{
+    /* CEA-861 HDMI frame-packing active-space separation. Blu-ray 3D uses
+     * 1080p24 or 720p50/60. */
+    return eye_height == 720 ? 30 : 45;
+}
+
+static int BuildFramePackedRectangle(unsigned nbPlanes,
+                                     GLfloat **vertexCoord,
+                                     GLfloat **textureCoord,
+                                     unsigned *nbVertices,
+                                     GLushort **indices,
+                                     unsigned *nbIndices,
+                                     const float *left, const float *top,
+                                     const float *right, const float *bottom,
+                                     unsigned eye_height,
+                                     video_multiview_mode_t source_mode)
+{
+    *nbVertices = 8;
+    *nbIndices = 12;
+
+    *vertexCoord = vlc_alloc(*nbVertices * 3, sizeof(GLfloat));
+    if (*vertexCoord == NULL)
+        return VLC_ENOMEM;
+    *textureCoord = vlc_alloc(nbPlanes * *nbVertices * 2, sizeof(GLfloat));
+    if (*textureCoord == NULL)
+    {
+        free(*vertexCoord);
+        return VLC_ENOMEM;
+    }
+    *indices = vlc_alloc(*nbIndices, sizeof(GLushort));
+    if (*indices == NULL)
+    {
+        free(*textureCoord);
+        free(*vertexCoord);
+        return VLC_ENOMEM;
+    }
+
+    const unsigned blanking = FramePackingBlankingLines(eye_height);
+    const float edge = (float)blanking / (2.f * eye_height + blanking);
+    const GLfloat coord[] = {
+       -1.f,  1.f,  -1.f,
+       -1.f,  edge, -1.f,
+        1.f,  1.f,  -1.f,
+        1.f,  edge, -1.f,
+       -1.f, -edge, -1.f,
+       -1.f, -1.f,  -1.f,
+        1.f, -edge, -1.f,
+        1.f, -1.f,  -1.f,
+    };
+    memcpy(*vertexCoord, coord, sizeof(coord));
+
+    for (unsigned p = 0; p < nbPlanes; ++p)
+    {
+        const float middle_x = (left[p] + right[p]) * .5f;
+        const float middle_y = (top[p] + bottom[p]) * .5f;
+        GLfloat tex[16];
+
+        if (source_mode == MULTIVIEW_2D)
+        {
+            /* Keep an already-established HDMI 3D session alive across 2D
+             * Blu-ray menus and interstitials: present the complete 2D frame
+             * to both eyes instead of splitting it like a top/bottom source. */
+            const GLfloat duplicated[] = {
+                left[p], top[p], left[p], bottom[p],
+                right[p], top[p], right[p], bottom[p],
+                left[p], top[p], left[p], bottom[p],
+                right[p], top[p], right[p], bottom[p],
+            };
+            memcpy(tex, duplicated, sizeof(tex));
+        }
+        else if (source_mode == MULTIVIEW_STEREO_SBS ||
+            source_mode == MULTIVIEW_STEREO_SBS_RIGHT_FIRST)
+        {
+            const bool right_first =
+                source_mode == MULTIVIEW_STEREO_SBS_RIGHT_FIRST;
+            const float l0 = right_first ? middle_x : left[p];
+            const float r0 = right_first ? right[p] : middle_x;
+            const float l1 = right_first ? left[p] : middle_x;
+            const float r1 = right_first ? middle_x : right[p];
+            const GLfloat packed[] = {
+                l0, top[p], l0, bottom[p], r0, top[p], r0, bottom[p],
+                l1, top[p], l1, bottom[p], r1, top[p], r1, bottom[p],
+            };
+            memcpy(tex, packed, sizeof(tex));
+        }
+        else
+        {
+            const bool bottom_first =
+                source_mode == MULTIVIEW_STEREO_TB_RIGHT_FIRST;
+            const float t0 = bottom_first ? middle_y : top[p];
+            const float b0 = bottom_first ? bottom[p] : middle_y;
+            const float t1 = bottom_first ? top[p] : middle_y;
+            const float b1 = bottom_first ? middle_y : bottom[p];
+            /* Match the vertex order: TL, BL, TR, BR for each eye. */
+            const GLfloat ordered[] = {
+                left[p], t0, left[p], b0, right[p], t0, right[p], b0,
+                left[p], t1, left[p], b1, right[p], t1, right[p], b1,
+            };
+            memcpy(tex, ordered, sizeof(tex));
+        }
+        memcpy(*textureCoord + p * *nbVertices * 2, tex, sizeof(tex));
+    }
+
+    const GLushort ind[] = {
+        0, 1, 2, 2, 1, 3,
+        4, 5, 6, 6, 5, 7,
+    };
+    memcpy(*indices, ind, sizeof(ind));
+    return VLC_SUCCESS;
+}
+
 static int BuildRectangle(unsigned nbPlanes,
                           GLfloat **vertexCoord, GLfloat **textureCoord, unsigned *nbVertices,
                           GLushort **indices, unsigned *nbIndices,
@@ -1670,10 +1953,24 @@ static int SetupCoords(vout_display_opengl_t *vgl,
     switch (vgl->fmt.projection_mode)
     {
     case PROJECTION_MODE_RECTANGULAR:
-        i_ret = BuildRectangle(vgl->prgm->tc->tex_count,
-                               &vertexCoord, &textureCoord, &nbVertices,
-                               &indices, &nbIndices,
-                               left, top, right, bottom);
+        if (vgl->output_framepacked)
+        {
+            msg_Dbg(vgl->gl,
+                    "HDMI frame-pack geometry: source mode %d, visible %ux%u, eye %ux%u",
+                    vgl->source_multiview_mode,
+                    vgl->fmt.i_visible_width, vgl->fmt.i_visible_height,
+                    vgl->output_eye_width, vgl->output_eye_height);
+            i_ret = BuildFramePackedRectangle(vgl->prgm->tc->tex_count,
+                              &vertexCoord, &textureCoord, &nbVertices,
+                              &indices, &nbIndices, left, top, right, bottom,
+                              vgl->output_eye_height,
+                              vgl->source_multiview_mode);
+        }
+        else
+            i_ret = BuildRectangle(vgl->prgm->tc->tex_count,
+                                   &vertexCoord, &textureCoord, &nbVertices,
+                                   &indices, &nbIndices,
+                                   left, top, right, bottom);
         break;
     case PROJECTION_MODE_EQUIRECTANGULAR:
         i_ret = BuildSphere(vgl->prgm->tc->tex_count,
@@ -1817,6 +2114,66 @@ static void DrawFixedFunctionRegion(vout_display_opengl_t *vgl,
 }
 #endif
 
+/* Map a normal 2D overlay into one eye of a full-resolution top/bottom MVC
+ * picture.  PGS subtitles and BD-J graphics are authored once for the movie;
+ * duplicating their geometry here keeps them at zero parallax and therefore
+ * readable in both eyes. */
+static void MapRegionToFramePackedEye(gl_region_t *dst,
+                                      const gl_region_t *src, unsigned eye,
+                                      unsigned eye_width, unsigned eye_height,
+                                      int depth)
+{
+    *dst = *src;
+    const float scale = (float)eye_height /
+                        (2.f * eye_height +
+                         FramePackingBlankingLines(eye_height));
+    const float offset = eye == 0 ? 1.f - scale : -1.f + scale;
+    dst->top = src->top * scale + offset;
+    dst->bottom = src->bottom * scale + offset;
+
+    /* A positive value produces crossed disparity (the left-eye copy moves
+     * right and the right-eye copy moves left), bringing the overlay towards
+     * the viewer. At the endpoints the total disparity is four percent of
+     * the eye width, large enough to be useful without making text painful
+     * to fuse. The configured list normally bounds this already; clamp here
+     * as well for command-line and old preference files. */
+    if (depth < -100)
+        depth = -100;
+    else if (depth > 100)
+        depth = 100;
+    const float user_parallax = (float)depth / 100.f * .04f;
+    /* BD-J HGraphicsConfigurationS3D expresses the graphics-plane offset in
+     * pixels.  The value is the disparity between both eye images, so split
+     * it symmetrically: in normalized GL coordinates each eye moves by
+     * offset / eye_width. */
+    const float authored_parallax = eye_width > 0
+        ? (float)src->stereo_offset / (float)eye_width : 0.f;
+    const float parallax = user_parallax + authored_parallax;
+    const float shift = eye == 0 ? parallax : -parallax;
+    dst->left += shift;
+    dst->right += shift;
+
+    /* A BD-J plane is commonly a full-eye ARGB canvas containing both the
+     * foreground controls and a translucent dimming veil.  Translating that
+     * canvas for depth used to uncover a bright strip at the left edge of one
+     * eye and the right edge of the other.  Extend full-width planes on the
+     * clipped side while preserving their translated centre; OpenGL clips the
+     * excess and the dialog keeps exactly the authored disparity. */
+    if (src->left <= -0.999f && src->right >= 0.999f)
+    {
+        if (shift > 0.f)
+        {
+            dst->left = -1.f;
+            dst->right += shift;
+        }
+        else if (shift < 0.f)
+        {
+            dst->left += shift;
+            dst->right = 1.f;
+        }
+    }
+}
+
 static void DrawWithShaders(vout_display_opengl_t *vgl, struct prgm *prgm)
 {
     opengl_tex_converter_t *tc = prgm->tc;
@@ -1882,12 +2239,22 @@ static void TextureCropForStereo(vout_display_opengl_t *vgl,
     float stereoCoefs[2];
     float stereoOffsets[2];
 
-    switch (vgl->fmt.multiview_mode)
+    switch (vgl->source_multiview_mode)
     {
+    case MULTIVIEW_STEREO_FRAMEPACKED:
+    case MULTIVIEW_STEREO_FRAMEPACKED_RIGHT_BASE:
     case MULTIVIEW_STEREO_TB:
         // Display only the left eye.
         stereoCoefs[0] = 1; stereoCoefs[1] = 0.5;
         stereoOffsets[0] = 0; stereoOffsets[1] = 0;
+        GetTextureCropParamsForStereo(vgl->prgm->tc->tex_count,
+                                      stereoCoefs, stereoOffsets,
+                                      left, top, right, bottom);
+        break;
+    case MULTIVIEW_STEREO_TB_RIGHT_FIRST:
+        // Display only the left eye, stored in the bottom half.
+        stereoCoefs[0] = 1; stereoCoefs[1] = 0.5;
+        stereoOffsets[0] = 0; stereoOffsets[1] = 0.5;
         GetTextureCropParamsForStereo(vgl->prgm->tc->tex_count,
                                       stereoCoefs, stereoOffsets,
                                       left, top, right, bottom);
@@ -1900,6 +2267,14 @@ static void TextureCropForStereo(vout_display_opengl_t *vgl,
                                       stereoCoefs, stereoOffsets,
                                       left, top, right, bottom);
         break;
+    case MULTIVIEW_STEREO_SBS_RIGHT_FIRST:
+        // Display only the left eye, stored in the right half.
+        stereoCoefs[0] = 0.5; stereoCoefs[1] = 1;
+        stereoOffsets[0] = 0.5; stereoOffsets[1] = 0;
+        GetTextureCropParamsForStereo(vgl->prgm->tc->tex_count,
+                                      stereoCoefs, stereoOffsets,
+                                      left, top, right, bottom);
+        break;
     default:
         break;
     }
@@ -1908,12 +2283,22 @@ static void TextureCropForStereo(vout_display_opengl_t *vgl,
 int vout_display_opengl_Display(vout_display_opengl_t *vgl,
                                 const video_format_t *source)
 {
+#ifdef HAVE_LIBPLACEBO_NEXT
+    if (vgl->dovi)
+    {
+        VLC_UNUSED(source);
+        return vlc_dovi_renderer_Display(vgl->dovi);
+    }
+#endif
     GL_ASSERT_NOERROR();
 
     /* Why drawing here and not in Render()? Because this way, the
        OpenGL providers can call vout_display_opengl_Display to force redraw.
        Currently, the OS X provider uses it to get a smooth window resizing */
     vgl->vt.Clear(GL_COLOR_BUFFER_BIT);
+
+    const bool retroarch_active = vlc_ra_shader_engine_Begin(
+        vgl->retroarch, source->i_visible_width, source->i_visible_height);
 
     if (!vgl->fixed_function)
         vgl->vt.UseProgram(vgl->prgm->id);
@@ -1952,7 +2337,8 @@ int vout_display_opengl_Display(vout_display_opengl_t *vgl,
             bottom[j] = (source->i_y_offset + source->i_visible_height) * scale_h;
         }
 
-        TextureCropForStereo(vgl, left, top, right, bottom);
+        if (!vgl->output_framepacked)
+            TextureCropForStereo(vgl, left, top, right, bottom);
         int ret = SetupCoords(vgl, left, top, right, bottom);
         if (ret != VLC_SUCCESS)
             return ret;
@@ -1969,6 +2355,9 @@ int vout_display_opengl_Display(vout_display_opengl_t *vgl,
 #endif
         DrawWithShaders(vgl, vgl->prgm);
 
+    if (retroarch_active)
+        vlc_ra_shader_engine_End(vgl->retroarch);
+
     /* Draw the subpictures */
     struct prgm *prgm = vgl->sub_prgm;
     opengl_tex_converter_t *tc = prgm->tc;
@@ -1980,8 +2369,26 @@ int vout_display_opengl_Display(vout_display_opengl_t *vgl,
 #if !defined(USE_OPENGL_ES2)
     if (vgl->fixed_function)
     {
+        const int overlay_depth = var_InheritInteger(
+            vgl->gl, "stereo3d-overlay-depth");
         for (int i = 0; i < vgl->region_count; i++)
-            DrawFixedFunctionRegion(vgl, tc, &vgl->region[i]);
+        {
+            if (vgl->output_framepacked)
+            {
+                for (unsigned eye = 0; eye < 2; ++eye)
+                {
+                    gl_region_t stereo_region;
+                    MapRegionToFramePackedEye(&stereo_region,
+                                              &vgl->region[i], eye,
+                                              vgl->output_eye_width,
+                                              vgl->output_eye_height,
+                                              overlay_depth);
+                    DrawFixedFunctionRegion(vgl, tc, &stereo_region);
+                }
+            }
+            else
+                DrawFixedFunctionRegion(vgl, tc, &vgl->region[i]);
+        }
     }
     else
 #endif
@@ -2008,12 +2415,6 @@ int vout_display_opengl_Display(vout_display_opengl_t *vgl,
 
     for (int i = 0; i < vgl->region_count; i++) {
         gl_region_t *glr = &vgl->region[i];
-        const GLfloat vertexCoord[] = {
-            glr->left,  glr->top,
-            glr->left,  glr->bottom,
-            glr->right, glr->top,
-            glr->right, glr->bottom,
-        };
         const GLfloat textureCoord[] = {
             0.0, 0.0,
             0.0, glr->tex_height,
@@ -2024,34 +2425,100 @@ int vout_display_opengl_Display(vout_display_opengl_t *vgl,
         assert(glr->texture != 0);
         vgl->vt.BindTexture(tc->tex_target, glr->texture);
 
-        tc->pf_prepare_shader(tc, &glr->width, &glr->height, glr->alpha);
+        const unsigned eye_count = vgl->output_framepacked ? 2 : 1;
+        const int overlay_depth = var_InheritInteger(
+            vgl->gl, "stereo3d-overlay-depth");
+        for (unsigned eye = 0; eye < eye_count; ++eye)
+        {
+            gl_region_t mapped;
+            const gl_region_t *draw_region = glr;
+            if (eye_count == 2)
+            {
+                MapRegionToFramePackedEye(&mapped, glr, eye,
+                                          vgl->output_eye_width,
+                                          vgl->output_eye_height,
+                                          overlay_depth);
+                draw_region = &mapped;
+            }
+            const GLfloat vertexCoord[] = {
+                draw_region->left,  draw_region->top,
+                draw_region->left,  draw_region->bottom,
+                draw_region->right, draw_region->top,
+                draw_region->right, draw_region->bottom,
+            };
 
-        vgl->vt.BindBuffer(GL_ARRAY_BUFFER, vgl->subpicture_buffer_object[2 * i]);
-        vgl->vt.BufferData(GL_ARRAY_BUFFER, sizeof(textureCoord), textureCoord, GL_STATIC_DRAW);
-        vgl->vt.EnableVertexAttribArray(prgm->aloc.MultiTexCoord[0]);
-        vgl->vt.VertexAttribPointer(prgm->aloc.MultiTexCoord[0], 2, GL_FLOAT,
-                                    0, 0, 0);
+            vgl->vt.BindBuffer(GL_ARRAY_BUFFER, vgl->subpicture_buffer_object[2 * i]);
+            vgl->vt.BufferData(GL_ARRAY_BUFFER, sizeof(textureCoord), textureCoord, GL_STATIC_DRAW);
+            vgl->vt.EnableVertexAttribArray(prgm->aloc.MultiTexCoord[0]);
+            vgl->vt.VertexAttribPointer(prgm->aloc.MultiTexCoord[0], 2, GL_FLOAT,
+                                        0, 0, 0);
 
-        vgl->vt.BindBuffer(GL_ARRAY_BUFFER, vgl->subpicture_buffer_object[2 * i + 1]);
-        vgl->vt.BufferData(GL_ARRAY_BUFFER, sizeof(vertexCoord), vertexCoord, GL_STATIC_DRAW);
-        vgl->vt.EnableVertexAttribArray(prgm->aloc.VertexPosition);
-        vgl->vt.VertexAttribPointer(prgm->aloc.VertexPosition, 2, GL_FLOAT,
-                                    0, 0, 0);
+            vgl->vt.BindBuffer(GL_ARRAY_BUFFER, vgl->subpicture_buffer_object[2 * i + 1]);
+            vgl->vt.BufferData(GL_ARRAY_BUFFER, sizeof(vertexCoord), vertexCoord, GL_STATIC_DRAW);
+            vgl->vt.EnableVertexAttribArray(prgm->aloc.VertexPosition);
+            vgl->vt.VertexAttribPointer(prgm->aloc.VertexPosition, 2, GL_FLOAT,
+                                        0, 0, 0);
 
-        vgl->vt.UniformMatrix4fv(prgm->uloc.OrientationMatrix, 1, GL_FALSE,
-                                 prgm->var.OrientationMatrix);
-        vgl->vt.UniformMatrix4fv(prgm->uloc.ProjectionMatrix, 1, GL_FALSE,
-                                 prgm->var.ProjectionMatrix);
-        vgl->vt.UniformMatrix4fv(prgm->uloc.ZRotMatrix, 1, GL_FALSE,
-                                 prgm->var.ZRotMatrix);
-        vgl->vt.UniformMatrix4fv(prgm->uloc.YRotMatrix, 1, GL_FALSE,
-                                 prgm->var.YRotMatrix);
-        vgl->vt.UniformMatrix4fv(prgm->uloc.XRotMatrix, 1, GL_FALSE,
-                                 prgm->var.XRotMatrix);
-        vgl->vt.UniformMatrix4fv(prgm->uloc.ZoomMatrix, 1, GL_FALSE,
-                                 prgm->var.ZoomMatrix);
+            vgl->vt.UniformMatrix4fv(prgm->uloc.OrientationMatrix, 1, GL_FALSE,
+                                     prgm->var.OrientationMatrix);
+            vgl->vt.UniformMatrix4fv(prgm->uloc.ProjectionMatrix, 1, GL_FALSE,
+                                     prgm->var.ProjectionMatrix);
+            vgl->vt.UniformMatrix4fv(prgm->uloc.ZRotMatrix, 1, GL_FALSE,
+                                     prgm->var.ZRotMatrix);
+            vgl->vt.UniformMatrix4fv(prgm->uloc.YRotMatrix, 1, GL_FALSE,
+                                     prgm->var.YRotMatrix);
+            vgl->vt.UniformMatrix4fv(prgm->uloc.XRotMatrix, 1, GL_FALSE,
+                                     prgm->var.XRotMatrix);
+            vgl->vt.UniformMatrix4fv(prgm->uloc.ZoomMatrix, 1, GL_FALSE,
+                                     prgm->var.ZoomMatrix);
 
-        vgl->vt.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+            /* The CRT picture deliberately contains high-frequency scanlines
+             * and phosphor cells. Subpictures are composited after that image,
+             * so the shader never touches their pixels, but authored grey or
+             * translucent PGS glyphs can still lose contrast against it. Add
+             * a small black safety halo behind movie subtitles only. The
+             * original colour, alpha, antialiasing and bitmap remain intact;
+             * OSD, logos, and interactive disc menus are not changed. */
+            if (retroarch_active && glr->subtitle &&
+                vgl->viewport_width && vgl->viewport_height)
+            {
+                static const int offsets[8][2] = {
+                    {-1, 0}, {1, 0}, {0, -1}, {0, 1},
+                    {-1,-1}, {1,-1}, {-1, 1}, {1, 1},
+                };
+                const float radius = fmaxf(2.f,
+                    2.f * (float)vgl->viewport_height / 1080.f);
+                const float dx = 2.f * radius / vgl->viewport_width;
+                const float dy = 2.f * radius / vgl->viewport_height;
+
+                tc->pf_prepare_shader(tc, &glr->width, &glr->height,
+                                      draw_region->alpha);
+                vgl->vt.Uniform4f(tc->uloc.FillColor, 0.f, 0.f, 0.f,
+                                  draw_region->alpha * .55f);
+                for (unsigned h = 0; h < ARRAY_SIZE(offsets); ++h)
+                {
+                    const float ox = offsets[h][0] * dx;
+                    const float oy = offsets[h][1] * dy;
+                    const GLfloat haloVertexCoord[] = {
+                        draw_region->left  + ox, draw_region->top    + oy,
+                        draw_region->left  + ox, draw_region->bottom + oy,
+                        draw_region->right + ox, draw_region->top    + oy,
+                        draw_region->right + ox, draw_region->bottom + oy,
+                    };
+                    vgl->vt.BufferData(GL_ARRAY_BUFFER,
+                                       sizeof(haloVertexCoord),
+                                       haloVertexCoord, GL_STATIC_DRAW);
+                    vgl->vt.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+                }
+            }
+
+            tc->pf_prepare_shader(tc, &glr->width, &glr->height,
+                                  draw_region->alpha);
+            vgl->vt.BufferData(GL_ARRAY_BUFFER, sizeof(vertexCoord),
+                               vertexCoord, GL_STATIC_DRAW);
+
+            vgl->vt.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        }
     }
     } /* end of the shader subpicture path */
     vgl->vt.Disable(GL_BLEND);
@@ -2063,4 +2530,3 @@ int vout_display_opengl_Display(vout_display_opengl_t *vgl,
 
     return VLC_SUCCESS;
 }
-

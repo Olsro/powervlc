@@ -40,7 +40,7 @@
 #include "../libvlc.h" /* stats_ComputeInputStats */
 
 
-static void UpdateBookmarksOption( input_thread_t * );
+void input_UpdateBookmarksOption( input_thread_t * );
 
 /****************************************************************************
  * input_Control
@@ -216,7 +216,7 @@ int input_vaControl( input_thread_t *p_input, int i_query, va_list args )
             }
             vlc_mutex_unlock( &priv->p_item->lock );
 
-            UpdateBookmarksOption( p_input );
+            input_UpdateBookmarksOption( p_input );
 
             return p_bkmk ? VLC_SUCCESS : VLC_EGENERIC;
 
@@ -237,7 +237,7 @@ int input_vaControl( input_thread_t *p_input, int i_query, va_list args )
             else p_bkmk = NULL;
             vlc_mutex_unlock( &priv->p_item->lock );
 
-            UpdateBookmarksOption( p_input );
+            input_UpdateBookmarksOption( p_input );
 
             return p_bkmk ? VLC_SUCCESS : VLC_EGENERIC;
 
@@ -253,7 +253,7 @@ int input_vaControl( input_thread_t *p_input, int i_query, va_list args )
 
                 vlc_mutex_unlock( &priv->p_item->lock );
 
-                UpdateBookmarksOption( p_input );
+                input_UpdateBookmarksOption( p_input );
 
                 return VLC_SUCCESS;
             }
@@ -299,7 +299,7 @@ int input_vaControl( input_thread_t *p_input, int i_query, va_list args )
             TAB_CLEAN( priv->i_bookmark, priv->pp_bookmark );
             vlc_mutex_unlock( &priv->p_item->lock );
 
-            UpdateBookmarksOption( p_input );
+            input_UpdateBookmarksOption( p_input );
             return VLC_SUCCESS;
 
         case INPUT_SET_BOOKMARK:
@@ -612,7 +612,7 @@ int input_vaControl( input_thread_t *p_input, int i_query, va_list args )
     }
 }
 
-static void UpdateBookmarksOption( input_thread_t *p_input )
+void input_UpdateBookmarksOption( input_thread_t *p_input )
 {
     input_thread_private_t *priv = input_priv(p_input);
     input_item_t* item = priv->p_item;
@@ -683,6 +683,6 @@ static void UpdateBookmarksOption( input_thread_t *p_input )
         free( vstr.ptr );
     }
 
+    input_BookmarksPersist( p_input );
     input_SendEventBookmark( p_input );
 }
-

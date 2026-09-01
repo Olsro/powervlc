@@ -133,6 +133,18 @@ enum es_out_query_e
      * a new input starts uninhibited. */
     ES_OUT_SET_VIDEO_CACHE_INHIBIT, /* arg1=int (bool), res=cannot fail */
 
+    /* Keep new public controls at the end of the stable range. Inserting
+     * them above existing values silently changes the numeric ABI seen by
+     * already-built demux plugins and makes an unrelated control get decoded
+     * with the wrong varargs signature. */
+    /* Current stream timestamp at the presentation head (system clock minus
+     * output delay), rather than the demuxer's latest PCR. */
+    ES_OUT_GET_CURRENT_PCR, /* arg1=vlc_tick_t *, res=can fail */
+    /* The next PCR was rebased by a demux-side continuity filter.  Its
+     * apparent lateness is therefore a timestamp discontinuity, not an
+     * exhausted output buffer, and must not trigger a full rebuffer. */
+    ES_OUT_SET_NEXT_PCR_SEAMLESS, /* no arg */
+
     /* First value usable for private control */
     ES_OUT_PRIVATE_START = 0x10000,
 };

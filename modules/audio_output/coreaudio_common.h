@@ -118,6 +118,14 @@ struct aout_sys_common
     uint64_t            i_first_render_host_time;
     uint32_t            i_render_frames;
 
+    /* Encoded outputs cannot use PCM zeroes while their queue is empty: that
+     * breaks IEC 61937 framing and makes an HDMI receiver relock with a new
+     * latency. AUHAL installs a real-time-safe pause-burst filler here for
+     * passthrough; PCM users leave it NULL and keep the normal zero fill. */
+    void                (*pf_fill_silence)(audio_output_t *, uint8_t *,
+                                           size_t, bool);
+    bool                b_silence_started;
+
     vlc_sem_t           flush_sem;
 
     union lock
@@ -154,7 +162,8 @@ void ca_Pause(audio_output_t * p_aout, bool pause, vlc_tick_t date);
 void ca_Play(audio_output_t * p_aout, block_t * p_block);
 
 int  ca_Initialize(audio_output_t *p_aout, const audio_sample_format_t *fmt,
-                   vlc_tick_t i_dev_latency_us);
+                   vlc_tick_t i_dev_latency_us, size_t i_render_buffer_size,
+                   size_t i_encoded_packet_size);
 
 void ca_Uninitialize(audio_output_t *p_aout);
 

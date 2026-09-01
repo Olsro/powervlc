@@ -39,6 +39,7 @@ return {
     mode_playlists = "Playlists",
     btn_search = "Chercher",
     btn_open = "Ouvrir la sélection",
+    btn_open_channel = "Ouvrir la chaîne de la sélection",
     btn_change_instance = "< Instance",
     msg_enter_query = "Saisissez un terme à chercher",
     msg_searching = "Recherche...",
@@ -49,6 +50,7 @@ return {
     msg_target_found = "Adresse reconnue — ouverture directe",
     msg_search_fail = "Échec de la recherche : ",
     msg_select_result = "Sélectionnez d'abord un résultat dans la liste",
+    msg_channel_unavailable = "La chaîne liée à cette sélection n’est pas disponible",
 
     lbl_quality = "Qualité :",
     lbl_audio_track = "Doublage :",

@@ -80,8 +80,37 @@ echo "  output     : $OUTFILE"
 # ---- 1. stage an install tree into AppDir --------------------------------
 
 echo "--- Installing PowerVLC into $APPDIR ..."
-rm -rf "$APPDIR"
-make -C "$BUILDDIR" install DESTDIR="$APPDIR"
+if [ "${POWERVLC_SKIP_INSTALL:-0}" = 1 ]; then
+    [ -d "$APPDIR/usr/bin" ] || {
+        echo "Cannot skip install: $APPDIR/usr/bin is missing" >&2
+        exit 1
+    }
+else
+    rm -rf "$APPDIR"
+    make -C "$BUILDDIR" install DESTDIR="$APPDIR"
+fi
+
+# Build the same daemon-only, UPnP-free engine as the other platforms. Keep it
+# in PowerVLC's private lib directory so config_GetLibDir() resolves it inside
+# the mounted AppImage without consulting the host system.
+SOURCE_ROOT="$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)"
+AMULE_TARGET="linux-$ARCH"
+if [ "${POWERVLC_SKIP_AMULE:-0}" != 1 ]; then
+    "$SOURCE_ROOT/extras/package/build-amule-engine.sh" "$AMULE_TARGET"
+fi
+AMULE_ENGINE="$SOURCE_ROOT/build/dependencies/amule/$AMULE_TARGET/prefix/bin/amuled"
+AMULE_CORE_LIB="$(find "$APPDIR" \( -name 'libpowervlccore.so.*' -o \
+                                    -name 'libvlccore.so.*' \) -print -quit)"
+if [ -n "$AMULE_CORE_LIB" ]; then
+    AMULE_PRIVATE_DIR="$(dirname "$AMULE_CORE_LIB")/vlc/powervlc-helpers"
+else
+    AMULE_PRIVATE_DIR="$APPDIR/usr/lib/vlc/powervlc-helpers"
+    echo "WARNING: core library not found; using $AMULE_PRIVATE_DIR for amuled" >&2
+fi
+mkdir -p "$AMULE_PRIVATE_DIR"
+cp -p "$AMULE_ENGINE" "$AMULE_PRIVATE_DIR/amuled"
+cp "$SOURCE_ROOT/extras/package/amule-engine-NOTICE.txt" \
+   "$AMULE_PRIVATE_DIR/aMule-engine.txt"
 
 # The executable is built as "powervlc" (bin/Makefile.am), so there is nothing
 # to rename here. The interface alias scripts still exec it by ABSOLUTE path

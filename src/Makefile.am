@@ -42,6 +42,7 @@ pluginsinclude_HEADERS = \
 	../include/vlc_configuration.h \
 	../include/vlc_cpu.h \
 	../include/vlc_dialog.h \
+	../include/vlc_dovi.h \
 	../include/vlc_demux.h \
 	../include/vlc_epg.h \
 	../include/vlc_es.h \
@@ -228,6 +229,7 @@ libpowervlccore_la_SOURCES = \
 	playlist/renderer.c \
 	input/item.c \
 	input/access.c \
+	input/bookmarks.c \
 	input/clip_export.c \
 	input/clock.c \
 	input/control.c \

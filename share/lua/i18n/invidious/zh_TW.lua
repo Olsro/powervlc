@@ -33,6 +33,7 @@ return {
   mode_playlists = "播放清單",
   btn_search = "搜尋",
   btn_open = "開啟所選項目",
+  btn_open_channel = "開啟所選項目的頻道",
   btn_change_instance = "< 執行個體",
   msg_enter_query = "請輸入要搜尋的內容",
   msg_searching = "正在搜尋…",
@@ -43,7 +44,13 @@ return {
   msg_target_found = "已辨識位址 — 直接開啟",
   msg_search_fail = "搜尋失敗: ",
   msg_select_result = "請先在清單中選擇一筆結果",
+  msg_channel_unavailable = "與所選項目關聯的頻道無法使用",
   lbl_quality = "畫質:",
+  lbl_audio_track = "音軌:",
+  audio_default = "預設音訊",
+  audio_original = "原聲",
+  lbl_subtitles = "字幕:",
+  subtitles_none = "無",
   lbl_by = "—",
   audio_only = "僅音訊",
   combined = "音訊+影像",
@@ -135,4 +142,12 @@ return {
             .. "之前的所有瀏覽器，都拒絕在帶有安全性原則的頁面上執行書籤指令碼，而每個執行個體都會送出這樣的原則: "
             .. "在那裡按書籤毫無作用。在播放器中選擇<strong>說明 &gt; 安裝 PowerVLC "
             .. "擴充套件</strong>，會在瀏覽器裝上一個小擴充套件，由它自動完成同樣的事 — 不需書籤、不需點按，在所有頁面上都有效。",
+  web_addon_lead = "已安裝擴充套件？不需拖放，也不需點按: 只要開啟下方的執行個體並通過驗證即可。"
+                 .. "連線建立後，本頁會提示您。",
+  web_steps_title = "不使用擴充套件: 書籤",
+  web_relay_on_addon = "已透過瀏覽器擴充套件連線到 PowerVLC。不需點按: "
+                     .. "請讓這個視窗和執行個體的分頁保持開啟。",
+  web_m_taking = "PowerVLC 正在播放這部影片。分頁是一開始就刻意清空的: "
+               .. "讓網站的播放器在這裡完成載入，會讓這台機器多解碼一次、多下載一次，還會白白增加執行個體的負擔。"
+               .. "請讓它保持開啟。",
 }

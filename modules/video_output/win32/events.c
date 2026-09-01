@@ -269,8 +269,23 @@ static void *EventThread( void *p_this )
             MouseReleased( p_event, MOUSE_BUTTON_LEFT );
             break;
         case WM_LBUTTONDBLCLK:
-            vout_display_SendEventMouseDoubleClick(vd);
+        {
+            vlc_object_t *vout = vd->obj.parent;
+            if (vout != NULL &&
+                var_Type(vout, "stereo-controls-double-click-until") != 0 &&
+                mdate() < var_GetInteger(
+                              vout,
+                              "stereo-controls-double-click-until"))
+            {
+                /* Windows substitutes WM_LBUTTONDBLCLK for the second DOWN.
+                 * Inside the stereo controller it is a second command, so
+                 * feed it back through the ordinary press/release path. */
+                MousePressed(p_event, msg.hwnd, MOUSE_BUTTON_LEFT);
+            }
+            else
+                vout_display_SendEventMouseDoubleClick(vd);
             break;
+        }
 
         case WM_MBUTTONDOWN:
             MousePressed( p_event, msg.hwnd, MOUSE_BUTTON_CENTER );
@@ -1129,4 +1144,3 @@ static int Win32VoutConvertKey( int i_key )
 
     return 0;
 }
-

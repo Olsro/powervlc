@@ -1,0 +1,98 @@
+From 80326123dc44695465df422649b96e39e2a91356 Mon Sep 17 00:00:00 2001
+From: PowerVLC <powervlc@localhost>
+Date: Wed, 26 Aug 2026 18:15:00 +0200
+Subject: [PATCH] bluray: restore substituted 3D reads duplicated in backup
+
+Some processed 3D images contain the same stale immediate substitutions in
+both MovieObject.bdmv and its BACKUP copy.  The structural comparison added by
+0011 cannot recover those discs because there is no intact copy to select.
+
+Recognize the same exact MOVE substitutions already accepted by that patch,
+require both members of the capability pair, and restore the PSR31 player
+profile and PSR23 display capability operands in memory.  This keeps the
+workaround limited to the known transformation while allowing the disc to see
+the capabilities that libbluray initialized for the current player.
+---
+ src/libbluray/hdmv/mobj_parse.c | 51 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 51 insertions(+)
+
+diff --git a/src/libbluray/hdmv/mobj_parse.c b/src/libbluray/hdmv/mobj_parse.c
+index f1d3316..f4a9b72 100644
+--- a/src/libbluray/hdmv/mobj_parse.c
++++ b/src/libbluray/hdmv/mobj_parse.c
+@@ -304,6 +304,63 @@ static int _mobj_backup_restores_3d_caps(const MOBJ_OBJECTS *primary,
+     return profile_reads > 0 && display_reads > 0;
+ }
+ 
++static int _mobj_restore_duplicated_3d_caps(MOBJ_OBJECTS *objects)
++{
++    unsigned int profile_reads = 0;
++    unsigned int display_reads = 0;
++    int i;
++
++    for (i = 0; i < objects->num_objects; i++) {
++        MOBJ_OBJECT *obj = &objects->objects[i];
++        int j;
++
++        for (j = 0; j < obj->num_cmds; j++) {
++            MOBJ_CMD *cmd = &obj->cmds[j];
++
++            if (cmd->insn.grp != INSN_GROUP_SET ||
++                cmd->insn.sub_grp != SET_SET ||
++                cmd->insn.set_opt != INSN_MOVE ||
++                cmd->insn.op_cnt != 2 ||
++                cmd->insn.imm_op1 || !cmd->insn.imm_op2) {
++                continue;
++            }
++
++            if (cmd->src == UINT32_C(0x00010200)) {
++                profile_reads++;
++            } else if (cmd->src == UINT32_C(0x00003403)) {
++                display_reads++;
++            }
++        }
++    }
++
++    if (!profile_reads || !display_reads) {
++        return 0;
++    }
++
++    for (i = 0; i < objects->num_objects; i++) {
++        MOBJ_OBJECT *obj = &objects->objects[i];
++        int j;
++
++        for (j = 0; j < obj->num_cmds; j++) {
++            MOBJ_CMD *cmd = &obj->cmds[j];
++
++            if (cmd->insn.grp == INSN_GROUP_SET &&
++                cmd->insn.sub_grp == SET_SET &&
++                cmd->insn.set_opt == INSN_MOVE &&
++                cmd->insn.op_cnt == 2 && !cmd->insn.imm_op1 &&
++                cmd->insn.imm_op2 &&
++                (cmd->src == UINT32_C(0x00010200) ||
++                 cmd->src == UINT32_C(0x00003403))) {
++                cmd->insn.imm_op2 = 0;
++                cmd->src = cmd->src == UINT32_C(0x00010200)
++                         ? UINT32_C(0x8000001f) : UINT32_C(0x80000017);
++            }
++        }
++    }
++
++    return 1;
++}
++
+ MOBJ_OBJECTS *mobj_get(BD_DISC *disc)
+ {
+     MOBJ_OBJECTS *objects, *backup;
+@@ -324,5 +380,9 @@ MOBJ_OBJECTS *mobj_get(BD_DISC *disc)
+     }
+ 
+     mobj_free(&backup);
++    if (_mobj_restore_duplicated_3d_caps(objects)) {
++        BD_DEBUG(DBG_NAV | DBG_CRIT,
++                 "MovieObject copies have substituted 3D capability reads; restoring player registers\n");
++    }
+     return objects;
+ }
+-- 
+2.50.1

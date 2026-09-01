@@ -1,0 +1,212 @@
+From: PowerVLC
+Subject: [PATCH] Harden repeated BD-J session shutdown
+
+libbluray keeps its JVM bridge and action manager in process-wide state.  A
+player can nevertheless close one input on a worker while another input is
+being opened.  PowerVLC serializes those complete lifetimes at the access
+module boundary; make the bridge defensive too:
+
+* fail cleanly when attaching a native thread to the existing JVM fails,
+  instead of dereferencing an invalid JNIEnv or trying to create a second VM;
+* initialize and clear BDJActionManager's running state correctly;
+* retain and join the watchdog thread during shutdown.
+
+The latter two changes prevent one action-queue/monitor pair from being leaked
+for every disc opened during a long player session.
+
+Recent JDKs removed ThreadGroup.stop(), and Thread.stop() throws
+UnsupportedOperationException since Java 20.  Fall back to enumerating the
+Xlet group for older runtimes that can still stop individual threads, but
+never wait without a deadline for a non-cooperative disc IXC call.  Otherwise
+bdj_close() waits forever when the user quits during playback.
+
+--- a/src/libbluray/bdj/bdj.c
++++ b/src/libbluray/bdj/bdj.c
+@@ -851,6 +851,11 @@
+     int result = JNI_GetCreatedJavaVMs_fp(&javavm, 1, &nVMs);
+     if (result == JNI_OK && nVMs > 0) {
+-      *jvm = javavm;
+-      (**jvm)->AttachCurrentThread(*jvm, (void**)env, NULL);
+-      return 1;
++        *jvm = javavm;
++        if ((**jvm)->AttachCurrentThread(*jvm, (void**)env, NULL) != JNI_OK) {
++            BD_DEBUG(DBG_BDJ | DBG_CRIT, "Failed to attach to existing JVM\n");
++            *env = NULL;
++            *jvm = NULL;
++            return -1;
++        }
++        return 1;
+     }
+@@ -1085,8 +1090,9 @@
+ 
+     JNIEnv* env = NULL;
+     JavaVM *jvm = NULL;
+-    if (!_find_jvm(jvm_lib, &env, &jvm) &&
+-        !_create_jvm(jvm_lib, java_home, cfg, &env, &jvm)) {
++    int find_result = _find_jvm(jvm_lib, &env, &jvm);
++    if (find_result < 0 ||
++        (find_result == 0 && !_create_jvm(jvm_lib, java_home, cfg, &env, &jvm))) {
+ 
+         X_FREE(bdjava);
+         dl_dlclose(jvm_lib);
+@@ -1117,7 +1123,7 @@
+ 
+ void bdj_close(BDJAVA *bdjava)
+ {
+-    JNIEnv *env;
++    JNIEnv *env = NULL;
+     int attach = 0;
+     jclass shutdown_class;
+     jmethodID shutdown_id;
+@@ -1130,11 +1136,15 @@
+ 
+     if (bdjava->jvm) {
+         if ((*bdjava->jvm)->GetEnv(bdjava->jvm, (void**)&env, JNI_VERSION_1_4) != JNI_OK) {
+-            (*bdjava->jvm)->AttachCurrentThread(bdjava->jvm, (void**)&env, NULL);
+-            attach = 1;
++            if ((*bdjava->jvm)->AttachCurrentThread(bdjava->jvm, (void**)&env, NULL) == JNI_OK) {
++                attach = 1;
++            } else {
++                BD_DEBUG(DBG_BDJ | DBG_CRIT, "Failed to attach JVM thread during BD-J shutdown\n");
++                env = NULL;
++            }
+         }
+ 
+-        if (_get_method(env, &shutdown_class, &shutdown_id,
++        if (env && _get_method(env, &shutdown_class, &shutdown_id,
+                            "org/videolan/Libbluray", "shutdown", "()V")) {
+             (*env)->CallStaticVoidMethod(env, shutdown_class, shutdown_id);
+ 
+@@ -1147,7 +1157,9 @@
+             (*env)->DeleteLocalRef(env, shutdown_class);
+         }
+ 
+-        bdj_unregister_native_methods(env);
++        if (env) {
++            bdj_unregister_native_methods(env);
++        }
+ 
+         if (attach) {
+             (*bdjava->jvm)->DetachCurrentThread(bdjava->jvm);
+--- a/src/libbluray/bdj/java/org/videolan/BDJActionManager.java
++++ b/src/libbluray/bdj/java/org/videolan/BDJActionManager.java
+@@ -19,12 +19,13 @@
+ package org.videolan;
+ 
+ public class BDJActionManager {
+-    protected static void createInstance() {
++    protected static synchronized void createInstance() {
+         if (running) {
+             System.err.println("BDJActionManager: manager already running! " + Logger.dumpStack());
+             return;
+         }
+         instance = new BDJActionManager();
++        running = true;
+     }
+ 
+     public static BDJActionManager getInstance() {
+@@ -35,11 +36,14 @@
+         commandQueue = BDJActionQueue.create("BDJActionManager");
+     }
+ 
+-    protected static void shutdown() {
++    protected static synchronized void shutdown() {
+         try {
+-            instance.commandQueue.shutdown();
+-        } catch (Exception t) {
++            if (instance != null)
++                instance.commandQueue.shutdown();
++        } catch (Throwable t) {
++            System.err.println("BDJActionManager: shutdown failed: " + t);
+         } finally {
++            instance = null;
+             running = false;
+         }
+     }
+--- a/src/libbluray/bdj/java/org/videolan/BDJActionQueue.java
++++ b/src/libbluray/bdj/java/org/videolan/BDJActionQueue.java
+@@ -125,18 +125,31 @@
+ 
+         private Object currentAction = null;
+         private boolean terminate = false;
++        private Thread watchdogThread = null;
+ 
+         Watchdog() {}
+ 
+         synchronized void start(String name) {
+-            Thread t = new Thread(null, this, name + ".BDJActionQueue.Monitor");
+-            t.setDaemon(true);
+-            t.start();
++            watchdogThread = new Thread(null, this, name + ".BDJActionQueue.Monitor");
++            watchdogThread.setDaemon(true);
++            watchdogThread.start();
+         }
+ 
+-        public synchronized void shutdown() {
+-            terminate = true;
+-            notifyAll();
++        public void shutdown() {
++            Thread threadToJoin;
++            synchronized (this) {
++                terminate = true;
++                notifyAll();
++                threadToJoin = watchdogThread;
++                watchdogThread = null;
++            }
++            if (threadToJoin != null) {
++                try {
++                    threadToJoin.join();
++                } catch (InterruptedException t) {
++                    logger.error("Error joining watchdog thread: " + t);
++                }
++            }
+         }
+ 
+         public synchronized void startAction(Object action) {
+--- a/src/libbluray/bdj/java-j2se/org/videolan/PortingHelper.java
++++ b/src/libbluray/bdj/java-j2se/org/videolan/PortingHelper.java
+@@ -39,11 +39,23 @@ public class PortingHelper {
+     public static void stopThreadGroup(ThreadGroup t) {
+         try {
+             ThreadGroup.class.getMethod("stop", new Class[0]).invoke(t, new Object[0]);
++            return;
+         } catch (NoSuchMethodException e) {
+-            // ignore
++            // ThreadGroup.stop() was removed in recent JDKs. Fall through and
++            // make a best-effort stop request for each platform thread.
+         } catch (IllegalAccessException e) {
+-            // ignore
++            // Fall through to the per-thread implementation.
+         } catch (InvocationTargetException e) {
+-            // ignore
++            // Fall through to the per-thread implementation.
++        }
++
++        Thread[] threads = new Thread[Math.max(1, t.activeCount() + 1)];
++        while (t.enumerate(threads, true) == threads.length) {
++            threads = new Thread[threads.length * 2];
++        }
++        for (int i = 0; i < threads.length; i++) {
++            if ((threads[i] != null) && (threads[i] != Thread.currentThread())) {
++                stopThread(threads[i]);
++            }
+         }
+     }
+--- a/src/libbluray/bdj/java/org/videolan/BDJXletContext.java
++++ b/src/libbluray/bdj/java/org/videolan/BDJXletContext.java
+@@ -390,8 +390,14 @@
+             }
+         }
+         try {
+-            thread.join();
++            /* Thread.stop() throws UnsupportedOperationException since Java
++             * 20. Never let a non-cooperative disc thread turn shutdown into
++             * an unbounded native join. */
++            thread.join(200);
+         } catch (InterruptedException e) { }
++        if (thread.isAlive()) {
++            logger.error("leaving unresponsive " + type + " thread behind " + thread);
++        }
+     }
+ 
+     private void stopIxcThreads() {

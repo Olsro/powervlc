@@ -39,10 +39,31 @@
 @interface VLCRemoteControlService()
 {
     VLCCoreInteraction *_coreInteraction;
+    BOOL _subscribedToRemoteCommands;
 }
 @end
 
 @implementation VLCRemoteControlService
+
+/* Some disc inputs temporarily expose their own media URL as artwork while
+ * BD-J metadata is being replaced.  NSImage probes the complete file
+ * synchronously; doing that to a multi-gigabyte ISO on the AppKit thread
+ * freezes both the interface and vout window creation for many seconds. */
+static BOOL VLCRemoteArtworkURLIsLoadable(NSURL *url)
+{
+    if (url == nil)
+        return NO;
+    if (![url isFileURL])
+        return YES;
+
+    static NSSet *imageExtensions;
+    if (imageExtensions == nil)
+        imageExtensions = [[NSSet alloc] initWithObjects:
+            @"bmp", @"gif", @"heic", @"icns", @"jpeg", @"jpg",
+            @"png", @"tif", @"tiff", @"webp", nil];
+    return [imageExtensions containsObject:
+        [[[url path] pathExtension] lowercaseString]];
+}
 
 static inline NSArray * RemoteCommandCenterCommandsToHandle()
 {
@@ -78,6 +99,7 @@ static inline NSArray * RemoteCommandCenterCommandsToHandle()
 
 - (void)dealloc
 {
+    [self unsubscribeFromRemoteCommands];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
@@ -167,7 +189,9 @@ static inline NSArray * RemoteCommandCenterCommandsToHandle()
     if (psz_artworkURL) {
         NSString *artworkURL = toNSStr(psz_artworkURL);
         if (![artworkURL hasPrefix:@"attachment://"]) {
-            NSImage *coverArtImage = [[NSImage alloc] initWithContentsOfURL:[NSURL URLWithString:artworkURL]];
+            NSURL *url = [NSURL URLWithString:artworkURL];
+            NSImage *coverArtImage = VLCRemoteArtworkURLIsLoadable(url)
+                ? [[NSImage alloc] initWithContentsOfURL:url] : nil;
             if (coverArtImage) {
                 MPMediaItemArtwork *mpartwork = [[MPMediaItemArtwork alloc] initWithBoundsSize:coverArtImage.size
                                                                                 requestHandler:^NSImage* _Nonnull(CGSize size) {
@@ -195,6 +219,15 @@ static inline NSArray * RemoteCommandCenterCommandsToHandle()
 
 - (void)subscribeToRemoteCommands
 {
+    /* Playlist mutations used to call this method for every appended item.
+     * During a parallel portable-player transfer that could register this
+     * object hundreds of times with MediaPlayer. Besides making every media
+     * key event fan out repeatedly, macOS' command-target bookkeeping was
+     * observed in the crash path while the allocator reported corrupted
+     * guards. Treat subscription as the state transition it actually is. */
+    if (_subscribedToRemoteCommands)
+        return;
+
     MPRemoteCommandCenter *commandCenter = [MPRemoteCommandCenter sharedCommandCenter];
 
     //Enable when you want to support these
@@ -213,16 +246,21 @@ static inline NSArray * RemoteCommandCenterCommandsToHandle()
     for (MPRemoteCommand *command in RemoteCommandCenterCommandsToHandle()) {
         [command addTarget:self action:@selector(remoteCommandEvent:)];
     }
+    _subscribedToRemoteCommands = YES;
 
 }
 
 - (void)unsubscribeFromRemoteCommands
 {
+    if (!_subscribedToRemoteCommands)
+        return;
+
     [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nil;
 
     for (MPRemoteCommand *command in RemoteCommandCenterCommandsToHandle()) {
         [command removeTarget:self];
     }
+    _subscribedToRemoteCommands = NO;
 }
 
 - (MPRemoteCommandHandlerStatus)remoteCommandEvent:(MPRemoteCommandEvent *)event

@@ -125,6 +125,11 @@ static int transcode_audio_initialize_encoder( sout_stream_id_sys_t *id, sout_st
         id->p_encoder->fmt_out.audio.i_physical_channels;
     aout_FormatPrepare( &id->p_encoder->fmt_in.audio );
 
+    /* Honour the transcode chain's thread count for audio too. Historically
+     * only the video path propagated it, leaving audio encoders at their
+     * implicit default. This lets background device conversions explicitly
+     * use the detected CPU count while ordinary copies remain serial. */
+    id->p_encoder->i_threads = p_sys->i_threads;
     id->p_encoder->p_cfg = p_stream->p_sys->p_audio_cfg;
     id->p_encoder->p_module =
         module_need( id->p_encoder, "encoder", p_sys->psz_aenc, true );

@@ -1,0 +1,39 @@
+--- libbluray/src/libbluray/bdj/java/org/videolan/BDJSocketFactory.java.orig	2026-08-26 00:00:00.000000000 +0200
++++ libbluray/src/libbluray/bdj/java/org/videolan/BDJSocketFactory.java	2026-08-26 00:00:00.000000000 +0200
+@@ -23,6 +23,7 @@ package org.videolan;
+ import java.io.IOException;
+ 
+ import java.lang.reflect.Constructor;
++import java.lang.reflect.Method;
+ 
+ import java.net.ServerSocket;
+ import java.net.Socket;
+@@ -53,8 +54,25 @@ class BDJSocketFactory implements SocketImplFactory {
+                     public Object run() throws Exception {
+                         Class defaultSocketImpl = Class.forName("java.net.SocksSocketImpl");
+-                        Constructor constructor = defaultSocketImpl.getDeclaredConstructor/*s*/(new Class[0])/*[0]*/;
+-                        constructor.setAccessible(true);
+-                        return constructor.newInstance(new Object[0]);
++                        try {
++                            Constructor constructor = defaultSocketImpl.getDeclaredConstructor/*s*/(new Class[0])/*[0]*/;
++                            constructor.setAccessible(true);
++                            return constructor.newInstance(new Object[0]);
++                        } catch (NoSuchMethodException e) {
++                            /* Java 17 removed SocksSocketImpl().  Its
++                             * replacement wraps the platform implementation
++                             * returned by SocketImpl's private factory.  Use
++                             * reflection so this jar still links on Java 5. */
++                            Method platformFactory = SocketImpl.class.getDeclaredMethod(
++                                "createPlatformSocketImpl",
++                                new Class[] { Boolean.TYPE });
++                            platformFactory.setAccessible(true);
++                            SocketImpl platform = (SocketImpl)platformFactory.invoke(
++                                null, new Object[] { Boolean.FALSE });
++                            Constructor constructor = defaultSocketImpl.getDeclaredConstructor(
++                                new Class[] { SocketImpl.class });
++                            constructor.setAccessible(true);
++                            return constructor.newInstance(new Object[] { platform });
++                        }
+                     }
+                 });
+         } catch (PrivilegedActionException e) {

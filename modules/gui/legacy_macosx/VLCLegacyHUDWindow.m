@@ -24,6 +24,8 @@
 
 #import "VLCLegacyHUDWindow.h"
 #import "misc.h"
+
+#define _NS(s) ((NSString *)[NSString stringWithUTF8String:vlc_gettext(s)])
 #import "VLCLegacyControls.h"
 
 /*****************************************************************************
@@ -548,6 +550,117 @@ NSString *VLCLegacyRunTextPrompt(NSString *title, NSString *subtitle,
         ? [[[field stringValue] copy] autorelease] : nil;
     [panel release];
     return result;
+}
+
+BOOL VLCLegacyRunLoginPrompt(NSString *title, NSString *subtitle,
+                             NSString *initialUsername, BOOL askStore,
+                             NSString **username, NSString **password,
+                             BOOL *store)
+{
+    if (username)
+        *username = nil;
+    if (password)
+        *password = nil;
+    if (store)
+        *store = NO;
+
+    VLCLegacyPromptHelper *helper =
+        [[[VLCLegacyPromptHelper alloc] init] autorelease];
+    NSPanel *panel = [[NSPanel alloc]
+        initWithContentRect:NSMakeRect(0, 0, 420, 210)
+                  styleMask:NSTitledWindowMask
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    [panel setTitle:title ? title : _NS("Authentication")];
+    [panel setReleasedWhenClosed:NO];
+    NSView *content = [panel contentView];
+
+    NSTextField *message = [[[NSTextField alloc]
+        initWithFrame:NSMakeRect(16, 158, 388, 38)] autorelease];
+    [message setEditable:NO];
+    [message setBordered:NO];
+    [message setDrawsBackground:NO];
+    [[message cell] setFont:[NSFont systemFontOfSize:12]];
+    [[message cell] setWraps:YES];
+    [[message cell] setScrollable:NO];
+    [message setStringValue:subtitle ? subtitle : @""];
+    [content addSubview:message];
+
+    NSTextField *userLabel = [[[NSTextField alloc]
+        initWithFrame:NSMakeRect(16, 126, 92, 17)] autorelease];
+    [userLabel setEditable:NO];
+    [userLabel setBordered:NO];
+    [userLabel setDrawsBackground:NO];
+    [userLabel setAlignment:NSRightTextAlignment];
+    [userLabel setStringValue:_NS("Username")];
+    [content addSubview:userLabel];
+
+    NSTextField *userField = [[[NSTextField alloc]
+        initWithFrame:NSMakeRect(116, 122, 288, 22)] autorelease];
+    [userField setStringValue:initialUsername ? initialUsername : @""];
+    [content addSubview:userField];
+
+    NSTextField *passwordLabel = [[[NSTextField alloc]
+        initWithFrame:NSMakeRect(16, 94, 92, 17)] autorelease];
+    [passwordLabel setEditable:NO];
+    [passwordLabel setBordered:NO];
+    [passwordLabel setDrawsBackground:NO];
+    [passwordLabel setAlignment:NSRightTextAlignment];
+    [passwordLabel setStringValue:_NS("Password")];
+    [content addSubview:passwordLabel];
+
+    NSSecureTextField *passwordField = [[[NSSecureTextField alloc]
+        initWithFrame:NSMakeRect(116, 90, 288, 22)] autorelease];
+    [content addSubview:passwordField];
+
+    NSButton *storeButton = nil;
+    if (askStore) {
+        storeButton = [[[NSButton alloc]
+            initWithFrame:NSMakeRect(116, 55, 288, 22)] autorelease];
+        [storeButton setButtonType:NSSwitchButton];
+        [storeButton setTitle:_NS("Remember password")];
+        [storeButton setState:NSOffState];
+        [content addSubview:storeButton];
+    }
+
+    NSButton *okButton = [[[NSButton alloc]
+        initWithFrame:NSMakeRect(308, 10, 96, 28)] autorelease];
+    [okButton setTitle:_NS("OK")];
+    [okButton setBezelStyle:NSRoundedBezelStyle];
+    [okButton setKeyEquivalent:@"\r"];
+    [okButton setTarget:helper];
+    [okButton setAction:@selector(promptOK:)];
+    [content addSubview:okButton];
+
+    NSButton *cancelButton = [[[NSButton alloc]
+        initWithFrame:NSMakeRect(208, 10, 96, 28)] autorelease];
+    [cancelButton setTitle:_NS("Cancel")];
+    [cancelButton setBezelStyle:NSRoundedBezelStyle];
+    [cancelButton setKeyEquivalent:@"\033"];
+    [cancelButton setTarget:helper];
+    [cancelButton setAction:@selector(promptCancel:)];
+    [content addSubview:cancelButton];
+
+    [panel center];
+    [panel makeKeyAndOrderFront:nil];
+    if ([initialUsername length])
+        [passwordField selectText:nil];
+    else
+        [userField selectText:nil];
+    [NSApp runModalForWindow:panel];
+    [panel orderOut:nil];
+
+    BOOL accepted = helper->accepted;
+    if (accepted) {
+        if (username)
+            *username = [[[userField stringValue] copy] autorelease];
+        if (password)
+            *password = [[[passwordField stringValue] copy] autorelease];
+        if (store)
+            *store = storeButton && [storeButton state] == NSOnState;
+    }
+    [panel release];
+    return accepted;
 }
 
 NSInteger VLCLegacyRunPopupPrompt(NSString *title, NSString *subtitle,

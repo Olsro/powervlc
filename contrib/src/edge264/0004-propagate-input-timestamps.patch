@@ -1,0 +1,95 @@
+From: PowerVLC contributors
+Subject: [PATCH] edge264: propagate caller timestamps to decoded frames
+
+Random-access recovery may consume access units that never produce an output
+picture. Associating output frames with a parallel FIFO of timestamps then
+shifts every picture by the number of silently discarded units. Keep the
+caller's timestamp in the DPB slot instead so B-frame reordering, MVC pairing,
+worker completion order and seek recovery cannot detach pixels from their PTS.
+
+diff --git a/edge264/edge264.h b/edge264/edge264.h
+--- a/edge264/edge264.h
++++ b/edge264/edge264.h
+@@ -59,6 +59,8 @@ typedef struct Edge264Frame {
+ 	int32_t FrameId_mvc; // second view
+ 	int32_t PictureOrderCnt; // display order for base view
+ 	int32_t PictureOrderCnt_mvc; // display order for second view
++	int64_t Timestamp; // caller timestamp attached to the base access unit
++	int64_t Timestamp_mvc; // caller timestamp attached to the second view
+ 	int16_t frame_crop_offsets[4]; // {top,right,bottom,left}, useful to derive the original frame with 16x16 macroblocks
+ 	void *return_arg;
+ } Edge264Frame;
+@@ -68,4 +70,5 @@ Edge264Decoder *edge264_alloc(int n_threads, Edge264LogCb log_cb, void *log_arg,
+ void edge264_flush(Edge264Decoder *dec);
+ void edge264_free(Edge264Decoder **pdec);
++void edge264_set_timestamp(Edge264Decoder *dec, int64_t timestamp);
+ int edge264_decode_NAL(Edge264Decoder *dec, const uint8_t *buf, const uint8_t *end, Edge264UnrefCb unref_cb, void *unref_arg);
+ int edge264_get_frame(Edge264Decoder *dec, Edge264Frame *out, int borrow);
+diff --git a/edge264/src/edge264_internal.h b/edge264/src/edge264_internal.h
+--- a/edge264/src/edge264_internal.h
++++ b/edge264/src/edge264_internal.h
+@@ -395,4 +395,6 @@ typedef struct Edge264Decoder {
+ 	uint32_t prev_long_term_frames; // state of long_term_frames for both views before current frame
+ 	int32_t FrameNums[32]; // signed to be used along FieldOrderCnt in initial reference ordering
+ 	int32_t FrameIds[32]; // unique identifiers for each frame, incremented in decoding order
++	int64_t FrameTimestamps[32]; // opaque caller timestamps, one per decoded picture
++	int64_t inputTimestamp; // timestamp to copy into the next allocated picture
+ 	union { int8_t get_frame_queue[2][16]; i8x16 get_frame_queue_v[2]; }; // FIFO with insertion at 0 for both views, and empty slots having value -1
+diff --git a/edge264/src/edge264.c b/edge264/src/edge264.c
+--- a/edge264/src/edge264.c
++++ b/edge264/src/edge264.c
+@@ -277,4 +277,14 @@ void edge264_flush(Edge264Decoder *dec) {
+ 		pthread_mutex_unlock(&dec->lock);
+ }
+ 
++void edge264_set_timestamp(Edge264Decoder *dec, int64_t timestamp) {
++	if (dec == NULL)
++		return;
++	if (dec->n_threads)
++		pthread_mutex_lock(&dec->lock);
++	dec->inputTimestamp = timestamp;
++	if (dec->n_threads)
++		pthread_mutex_unlock(&dec->lock);
++}
++
+ void edge264_free(Edge264Decoder **pdec) {
+@@ -440,4 +451,5 @@ int edge264_get_frame(Edge264Decoder *dec, Edge264Frame *out, int borrow) {
+ 		out->samples[2] = dec->samples_buffers[pic0] + offC + (dec->out.stride_C >> 1);
+ 		out->FrameId = dec->FrameIds[pic0];
+ 		out->PictureOrderCnt = dec->FieldOrderCnt[0][pic0];
++		out->Timestamp = dec->FrameTimestamps[pic0];
+ 		out->return_arg = (void *)((uintptr_t)1 << pic0);
+@@ -450,4 +462,5 @@ int edge264_get_frame(Edge264Decoder *dec, Edge264Frame *out, int borrow) {
+ 			out->samples_mvc[2] = dec->samples_buffers[pic1] + offC + (dec->out.stride_C >> 1);
+ 			out->FrameId_mvc = dec->FrameIds[pic1];
+ 			out->PictureOrderCnt_mvc = dec->FieldOrderCnt[0][pic1];
++			out->Timestamp_mvc = dec->FrameTimestamps[pic1];
+ 			out->return_arg = (void *)((uintptr_t)1 << pic0 | (uintptr_t)1 << pic1);
+diff --git a/edge264/src/edge264_headers.c b/edge264/src/edge264_headers.c
+--- a/edge264/src/edge264_headers.c
++++ b/edge264/src/edge264_headers.c
+@@ -307,6 +307,10 @@ static int alloc_frame(Edge264Decoder *dec, int id, int errno_on_fail) {
+ }
+ 
+ static void clear_decoder(Edge264Decoder *dec) {
++	// Parameter sets can reset the DPB inside the access unit whose timestamp
++	// the caller just supplied. Preserve that metadata for the following IDR.
++	int64_t inputTimestamp = dec->inputTimestamp;
+ 	memset((void *)dec + offsetof(Edge264Decoder, nal_ref_idc), 0, offsetof(Edge264Decoder, log_base_us) - offsetof(Edge264Decoder, nal_ref_idc));
++	dec->inputTimestamp = inputTimestamp;
+ 	dec->currPic = dec->basePic = -1;
+ 	dec->PrevRefFrameNum[0] = dec->PrevRefFrameNum[1] = -1;
+@@ -1397,4 +1397,5 @@ static int ADD_VARIANT(parse_slice_header)(Edge264Decoder *dec, Edge264Task *t,
+ 			dec->non_base_frames = dec->non_base_frames & ~(1 << i) | non_base_view << i;
+ 			dec->FrameNums[i] = dec->PrevRefFrameNum[non_base_view] = FrameNum;
+ 			dec->FrameIds[i] = ++dec->prevFrameId;
++			dec->FrameTimestamps[i] = dec->inputTimestamp;
+ 			int PicOrderCnt = 0;
+@@ -1435,4 +1436,5 @@ static int ADD_VARIANT(parse_slice_header)(Edge264Decoder *dec, Edge264Task *t,
+ 		dec->non_base_frames = dec->non_base_frames & ~(1 << currPic) | non_base_view << currPic;
+ 		dec->frame_flip_bits ^= 1 << currPic;
+ 		dec->FrameIds[currPic] = ++dec->prevFrameId;
++		dec->FrameTimestamps[currPic] = dec->inputTimestamp;
+ 		dec->FrameNums[currPic] = dec->FrameNum;
+-- 
+2.39.5

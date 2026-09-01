@@ -246,6 +246,10 @@
 - (IBAction)inputSettingChanged:(id)sender;
 - (IBAction)urlHandlerAction:(id)sender;
 
+/* PowerVLC media management */
+- (void)showMediaLibrarySettings;
+- (void)showPortablePlayersSettings;
+
 /* hotkeys */
 - (IBAction)hotkeySettingChanged:(id)sender;
 - (BOOL)changeHotkeyTo: (NSString *)theKey;

@@ -57,6 +57,7 @@ ${LangFileString} Action_OnArrivalSVCDMovie "SVCD filmni qo‘yish"
 ${LangFileString} Action_OnArrivalVideoFiles "Video fayllarni qo‘yish"
 ${LangFileString} Action_OnArrivalMusicFiles "Audio fayllarni qo‘yish"
 ${LangFileString} Action_OnArrivalDVDAudio "DVD audion qo‘yish"
+${LangFileString} Action_OnArrivalBluray "Blu-ray qo‘yish"
 ${LangFileString} License_NextText "Siz o‘z huquqlaringiz bo‘yicha haqsiz. Davom etish uchun $\"Keyingi$\" tugmasini bosing."
 
 ${LangFileString} Detail_CheckProcesses "Jarayonlar tekshirilmoqda..."

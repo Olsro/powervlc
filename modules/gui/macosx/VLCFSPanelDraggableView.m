@@ -32,37 +32,24 @@
     return NO;
 }
 
+- (NSView *)hitTest:(NSPoint)point
+{
+    NSView *hit = [super hitTest:point];
+
+    /* Labels and otherwise empty layout views occupy almost every pixel of
+     * the panel. Treat them as draggable background while preserving buttons
+     * and sliders as real controls. */
+    if ([hit isKindOfClass:[NSTextField class]] ||
+        (hit != self && ![hit isKindOfClass:[NSControl class]]))
+        return self;
+    return hit;
+}
+
 - (void)mouseDown:(NSEvent *)event
 {
-    NSWindow *window = [self window];
-    NSRect mouseLocationInWindow = {[event locationInWindow], {0,0}};
-    NSPoint originalMouseLocation = [window convertRectToScreen:mouseLocationInWindow].origin;
-    NSRect originalFrame = [window frame];
-
-    while (YES)
-    {
-        // Get all dragged and mouse up events during dragging
-        NSEvent *newEvent = [window nextEventMatchingMask:(NSLeftMouseDraggedMask | NSLeftMouseUpMask)];
-
-        if ([newEvent type] == NSLeftMouseUp) {
-            break;
-        }
-
-        // Calculate delta of dragging
-        NSRect newMouseLocationInWindow = {[newEvent locationInWindow], {0,0}};
-        NSPoint newMouseLocation = [window convertRectToScreen:newMouseLocationInWindow].origin;
-        NSPoint delta = NSMakePoint(newMouseLocation.x - originalMouseLocation.x,
-                                    newMouseLocation.y - originalMouseLocation.y);
-
-        NSRect newFrame = originalFrame;
-        newFrame.origin.x += delta.x;
-        newFrame.origin.y += delta.y;
-
-        newFrame = [(VLCFSPanelController *)[[self window] delegate] contrainFrameToAssociatedVoutWindow: newFrame];
-
-        [window setFrame:newFrame display:YES animate:NO];
-    }
-
+    VLCFSPanelController *controller =
+        (VLCFSPanelController *)self.window.delegate;
+    [controller dragFullscreenPanelWithEvent:event trackingWindow:self.window];
 }
 
 @end

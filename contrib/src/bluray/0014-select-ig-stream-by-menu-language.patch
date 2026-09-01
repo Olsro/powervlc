@@ -1,0 +1,16 @@
+--- bluray.orig/src/libbluray/bluray.c
++++ bluray/src/libbluray/bluray.c
+@@ -394,7 +394,12 @@ static void _update_clip_psrs(BLURAY *bd, const NAV_CLIP *clip)
+     if (stn->num_ig && bd->title_type != title_undef) {
+         bd_psr_lock(bd->regs);
+         psr_val = bd_psr_read(bd->regs, PSR_IG_STREAM_ID);
+-        if ((psr_val == 0) || (psr_val > stn->num_ig)) {
++        if (stn->num_ig > 1) {
++            _update_stream_psr_by_lang(bd->regs,
++                                       PSR_MENU_LANG, PSR_IG_STREAM_ID, 0,
++                                       stn->ig, stn->num_ig,
++                                       NULL, 0);
++        } else if ((psr_val == 0) || (psr_val > stn->num_ig)) {
+             bd_psr_write(bd->regs, PSR_IG_STREAM_ID, 1);
+             BD_DEBUG(DBG_BLURAY | DBG_CRIT, "Selected IG stream 1 (stream %d not available)\n", psr_val);
+         }

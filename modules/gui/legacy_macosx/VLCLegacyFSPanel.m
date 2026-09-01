@@ -26,6 +26,7 @@
 
 void VLCLegacyCursorActivity(void);      /* intf.m */
 void VLCLegacyCursorSetHidden(bool);     /* intf.m */
+void VLCLegacyCursorSetHiddenOnDisplay(bool, CGDirectDisplayID); /* intf.m */
 #import "misc.h"
 #import "VLCLegacyCoreInteraction.h"
 #import "VLCLegacyMain.h"
@@ -37,6 +38,7 @@ void VLCLegacyCursorSetHidden(bool);     /* intf.m */
 #include <vlc_playlist.h>
 #include <vlc_input.h>
 #include <vlc_vout.h>
+#include <dlfcn.h>
 
 #define FS_PANEL_HIDE_DELAY 4.0
 
@@ -45,6 +47,8 @@ void VLCLegacyCursorSetHidden(bool);     /* intf.m */
 @interface VLCLegacyFSPanel (ChaptersPrivate)
 - (void)updateChaptersForInput:(input_thread_t *)p_input
                       duration:(int64_t)i_length;
+- (void)updateStereoMirrorPanel;
+- (void)videoMouseActivity:(NSNotification *)notification;
 @end
 
 #define _NS(s) ((NSString *)[NSString stringWithUTF8String:vlc_gettext(s)])
@@ -60,6 +64,23 @@ void VLCLegacyCursorSetHidden(bool);     /* intf.m */
 {
     [[NSColor colorWithCalibratedWhite:0.0f alpha:0.8f] set];
     [VLCLegacyRoundedRectPath([self bounds], 8.0f) fill];
+}
+@end
+
+/* AppKit can keep the ordinary 1080-line NSScreen geometry after DCP has
+ * switched the projector to a 2205-line frame-packed raster.  NSWindow then
+ * constrains a user drag against those stale bounds when the mouse is
+ * released, visibly snapping the controller back to its original place.
+ * The panel is deliberately user-positionable on the complete HDMI raster;
+ * WindowServer, not the stale NSScreen cache, is authoritative here. */
+@interface VLCLegacyFSPanelWindow : NSPanel
+@end
+
+@implementation VLCLegacyFSPanelWindow
+- (NSRect)constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen *)screen
+{
+    (void)screen;
+    return frameRect;
 }
 @end
 
@@ -129,17 +150,111 @@ static NSButton *fsTemplateButton(NSView *parent, NSString *name,
         core = [interaction retain];
         p_intf = [interaction intf];
         lastRunningState = -1;
+        [[NSNotificationCenter defaultCenter]
+            addObserver:self
+               selector:@selector(videoMouseActivity:)
+                   name:@"VLCLegacyVideoMouseActivity"
+                 object:nil];
+        [[NSNotificationCenter defaultCenter]
+            addObserver:self
+               selector:@selector(videoMouseActivity:)
+                   name:NSApplicationDidBecomeActiveNotification
+                 object:nil];
     }
     return self;
 }
 
 - (void)dealloc
 {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     [pollTimer invalidate];
     free(chaptersUri);
+    [stereoMirrorPanel release];
     [panel release];
     [core release];
     [super dealloc];
+}
+
+static NSScreen *fsStereoScreen(intf_thread_t *p_intf)
+{
+    int display = (int)var_InheritInteger(p_intf,
+                                          "stereo3d-fullscreen-display");
+    if (display <= 0)
+        return nil;
+    NSArray *screens = [NSScreen screens];
+    for (NSUInteger i = 0; i < [screens count]; ++i) {
+        NSScreen *screen = [screens objectAtIndex:i];
+        NSNumber *number = [[screen deviceDescription]
+                            objectForKey:@"NSScreenNumber"];
+        if ([number intValue] == display)
+            return screen;
+    }
+    return nil;
+}
+
+static BOOL fsStereoEyeStride(NSScreen *screen, CGFloat *stride)
+{
+    /* A private CGS mode switch updates CGDisplayBounds immediately, while
+     * Mavericks can keep the existing NSScreen's -frame at the previous
+     * 1920x1080 size.  Using that stale height disables the second-eye copy
+     * and leaves the controller apparently high in (or visible to only one
+     * eye of) the projected image. */
+    CGFloat height = screen ? NSHeight(VLCLegacyLiveScreenFrame(screen)) : 0.;
+    CGFloat gap;
+    if (fabs(height - 2205.) < 2.)
+        gap = 45.;
+    else if (fabs(height - 1470.) < 2.)
+        gap = 30.;
+    else
+        return NO;
+    *stride = (height - gap) / 2. + gap;
+    return YES;
+}
+
+/* The polling implementation predates event monitors and sees the global
+ * pointer.  In a multi-display setup that does not mean every movement is an
+ * activity of the fullscreen video: moving on the Mac panel must not wake the
+ * controller floating on the HDMI projector. */
+static BOOL fsMouseIsOnScreen(NSPoint mouse, NSScreen *screen)
+{
+    return screen != nil
+        && NSPointInRect(mouse, VLCLegacyLiveScreenFrame(screen));
+}
+
+static CGDirectDisplayID fsDisplayID(NSScreen *screen)
+{
+    NSNumber *number = screen == nil ? nil :
+        [[screen deviceDescription] objectForKey:@"NSScreenNumber"];
+    return number == nil ? kCGDirectMainDisplay
+                         : (CGDirectDisplayID)[number unsignedIntValue];
+}
+
+static BOOL fsMoveWindowViaWindowServer(NSWindow *window,
+                                        CGFloat x, CGFloat y)
+{
+    typedef int (*CGSMainConnectionIDFunc)(void);
+    typedef int (*CGSMoveWindowFunc)(int, int, const CGPoint *);
+    static CGSMainConnectionIDFunc mainConnection;
+    static CGSMoveWindowFunc moveWindow;
+    /* This controller is main-thread-only. Avoid dispatch_once and blocks:
+     * neither is available in the 10.4 SDK used for the i386 slice. */
+    static BOOL attempted = NO;
+    if (!attempted) {
+        attempted = YES;
+        void *framework = dlopen(
+            "/System/Library/Frameworks/ApplicationServices.framework/"
+            "ApplicationServices", RTLD_LAZY | RTLD_LOCAL);
+        if (framework) {
+            mainConnection = (CGSMainConnectionIDFunc)
+                dlsym(framework, "CGSMainConnectionID");
+            moveWindow = (CGSMoveWindowFunc)
+                dlsym(framework, "CGSMoveWindow");
+        }
+    }
+    if (!window || !mainConnection || !moveWindow)
+        return NO;
+    CGPoint point = CGPointMake(x, y);
+    return moveWindow(mainConnection(), (int)[window windowNumber], &point) == 0;
 }
 
 static NSString *fsTimeToString(int seconds)
@@ -158,14 +273,22 @@ static NSString *fsTimeToString(int seconds)
     /* Geometry of the 3.0 fullscreen controller: time and title on top,
      * the seek bar across, transport centered at the bottom with the
      * volume on the left and the exit button on the right. */
-    NSRect screenFrame = VLCLegacyLiveScreenFrame([NSScreen mainScreen]);
+    NSScreen *targetScreen = fsStereoScreen(p_intf);
+    if (!targetScreen)
+        targetScreen = [NSScreen mainScreen];
+    NSRect screenFrame = VLCLegacyLiveScreenFrame(targetScreen);
+    CGFloat eyeStride = 0.;
+    BOOL framePacked = fsStereoEyeStride(targetScreen, &eyeStride);
     NSRect rect = NSMakeRect(screenFrame.origin.x
                                  + (screenFrame.size.width - 550) / 2,
-                             screenFrame.origin.y + 90, 550, 84);
-    panel = [[NSPanel alloc] initWithContentRect:rect
-                                       styleMask:NSBorderlessWindowMask
-                                         backing:NSBackingStoreBuffered
-                                           defer:NO];
+                             framePacked ? eyeStride + 90.
+                                         : screenFrame.origin.y + 90.,
+                             550, 84);
+    panel = [[VLCLegacyFSPanelWindow alloc] initWithContentRect:rect
+                                                       styleMask:NSBorderlessWindowMask
+                                                         backing:NSBackingStoreBuffered
+                                                           defer:NO];
+    [panel setAcceptsMouseMovedEvents:YES];
     [panel setLevel:NSFloatingWindowLevel];
     [panel setOpaque:NO];
     [panel setBackgroundColor:[NSColor clearColor]];
@@ -287,6 +410,78 @@ static NSString *fsTimeToString(int seconds)
     [fsTemplateButton(content, @"VLCFullscreenOnTemplate",
         NSMakeRect(512, 11, 21, 21), self, @selector(leaveFullscreen:))
         setToolTip:_NS("Leave fullscreen")];
+
+    /* On Mavericks AppKit can retain geometry from before the private HDMI
+     * mode switch. Move the owned window through WindowServer coordinates;
+     * unlike AX this requires no accessibility authorization. */
+    CGFloat physicalEyeHeight = framePacked
+        ? (eyeStride > 1000. ? 1080. : 720.)
+        : MIN(NSHeight(screenFrame), 1080.);
+    CGFloat physicalX = screenFrame.origin.x
+        + (NSWidth(screenFrame) - NSWidth([panel frame])) / 2.;
+    /* Quartz/CGS uses top-left coordinates. Keep the same physical target as
+     * the modern controller: Y=900 for a 1080-line eye, Y=540 for 720. */
+    CGFloat physicalY = MAX(physicalEyeHeight - 180., 0.);
+    fsMoveWindowViaWindowServer(panel, physicalX, physicalY);
+}
+
+- (void)updateStereoMirrorPanel
+{
+    NSScreen *screen = fsStereoScreen(p_intf);
+    CGFloat eyeStride;
+    if (!panel || ![panel isVisible]
+        || !fsStereoEyeStride(screen, &eyeStride)) {
+        [stereoMirrorPanel orderOut:nil];
+        return;
+    }
+
+    NSRect screenFrame = VLCLegacyLiveScreenFrame(screen);
+    NSRect panelFrame = [panel frame];
+    if (!stereoMirrorPanel) {
+        stereoMirrorPanel = [[NSPanel alloc]
+            initWithContentRect:[panel frame]
+                      styleMask:NSBorderlessWindowMask
+                        backing:NSBackingStoreBuffered defer:NO];
+        [stereoMirrorPanel setOpaque:NO];
+        [stereoMirrorPanel setBackgroundColor:[NSColor clearColor]];
+        [stereoMirrorPanel setHasShadow:NO];
+        [stereoMirrorPanel setIgnoresMouseEvents:YES];
+        [stereoMirrorPanel setHidesOnDeactivate:NO];
+        [stereoMirrorPanel setReleasedWhenClosed:NO];
+        stereoMirrorImageView = [[[NSImageView alloc]
+            initWithFrame:[[stereoMirrorPanel contentView] bounds]] autorelease];
+        [stereoMirrorImageView setImageScaling:NSScaleToFit];
+        [stereoMirrorImageView setAutoresizingMask:
+            NSViewWidthSizable | NSViewHeightSizable];
+        [[stereoMirrorPanel contentView] addSubview:stereoMirrorImageView];
+    }
+
+    NSView *content = [panel contentView];
+    [content displayIfNeeded];
+    NSRect bounds = [content bounds];
+    NSBitmapImageRep *rep =
+        [content bitmapImageRepForCachingDisplayInRect:bounds];
+    if (!rep)
+        return;
+    [content cacheDisplayInRect:bounds toBitmapImageRep:rep];
+    NSImage *image = [[[NSImage alloc] initWithSize:bounds.size] autorelease];
+    [image addRepresentation:rep];
+    [stereoMirrorImageView setImage:image];
+
+    NSRect frame = panelFrame;
+    BOOL sourceIsLowerEye = NSMidY(frame) < NSMidY(screenFrame);
+    frame.origin.y += sourceIsLowerEye ? eyeStride : -eyeStride;
+    int depth = (int)var_InheritInteger(p_intf, "stereo3d-overlay-depth");
+    depth = MAX(-100, MIN(100, depth));
+    CGFloat fullDisparity = NSWidth(screenFrame) * .04 * depth / 100.;
+    frame.origin.x += sourceIsLowerEye ? fullDisparity : -fullDisparity;
+
+    [seekSlider refreshHoverForCurrentMouseLocation];
+    if (!NSEqualRects([stereoMirrorPanel frame], frame))
+        [stereoMirrorPanel setFrame:frame display:NO];
+    [stereoMirrorPanel setLevel:[panel level]];
+    if (![stereoMirrorPanel isVisible])
+        [stereoMirrorPanel orderFront:nil];
 }
 
 /* debug hook (VLC_LEGACY_SHOW=fspanel): shows the panel without a
@@ -312,11 +507,20 @@ static NSString *fsTimeToString(int seconds)
                                                 repeats:YES];
 }
 
+- (void)videoMouseActivity:(NSNotification *)notification
+{
+    (void)notification;
+    lastMouseLocation = [NSEvent mouseLocation];
+    lastActivity = [NSDate timeIntervalSinceReferenceDate];
+    VLCLegacyCursorActivity();
+}
+
 - (void)shutdown
 {
     [pollTimer invalidate];
     pollTimer = nil;
     [panel orderOut:nil];
+    [stereoMirrorPanel orderOut:nil];
 }
 
 /*****************************************************************************
@@ -387,6 +591,19 @@ static NSString *fsTimeToString(int seconds)
 {
     double now = [NSDate timeIntervalSinceReferenceDate];
 
+    /* CGS disables and republishes displays during the Snow Leopard HDMI 3D
+     * transaction.  NSEvent can report alternating coordinates in that short
+     * interval; treating each as genuine activity balances Show/Hide on
+     * successive displays and makes the hardware cursor flash.  Keep it
+     * firmly hidden until the final topology and fullscreen window exist. */
+    if (var_InheritBool(p_intf, "stereo3d-display-transition")
+        && floor(NSAppKitVersionNumber) < 1343) {
+        NSScreen *transitionScreen = fsStereoScreen(p_intf);
+        VLCLegacyCursorSetHiddenOnDisplay(YES,
+                                          fsDisplayID(transitionScreen));
+        return;
+    }
+
     /* Le suivi du pointeur tourne à CHAQUE tic, y compris hors plein écran :
      * c'est lui qui pilote le masquage du curseur dans les deux modes (le
      * coeur en est incapable, cf. intf.m). Seule la recherche d'un vout plein
@@ -394,8 +611,15 @@ static NSString *fsTimeToString(int seconds)
     NSPoint mouse = [NSEvent mouseLocation];
     if (!NSEqualPoints(mouse, lastMouseLocation)) {
         lastMouseLocation = mouse;
-        lastActivity = now;
         VLCLegacyCursorActivity();   /* mouvement → pointeur rendu */
+
+        /* While HDMI 3D is active, only movement inside that display wakes
+         * its controller.  fsStereoScreen() deliberately follows the
+         * transient 1920x2205/1280x1470 NSScreen, so this remains correct
+         * after the display is republished during the mode switch. */
+        NSScreen *stereoScreen = fsStereoScreen(p_intf);
+        if (stereoScreen == nil || fsMouseIsOnScreen(mouse, stereoScreen))
+            lastActivity = now;
     }
 
     if (!fullscreenActive) {
@@ -417,14 +641,28 @@ static NSString *fsTimeToString(int seconds)
         if (vv == nil)
             vv = [VLCLegacyCurrentVoutWindow() videoView];
         NSWindow *vw = (vv != nil) ? [vv window] : nil;
-        if (vw != nil && [vw isVisible]) {
+        BOOL videoVisible = vw != nil && [vw isVisible];
+        /* Starting media by dropping it can create the vout without another
+         * mouse-coordinate change after the drop.  Do not inherit the idle
+         * time accumulated while the playlist was empty: a newly visible
+         * video is cursor activity in its own right.  This also restores a
+         * cursor hidden by the legacy display-transition guard as soon as the
+         * final window becomes visible. */
+        if (videoVisible && !windowedVideoWasVisible) {
+            lastMouseLocation = mouse;
+            lastActivity = now;
+            VLCLegacyCursorActivity();
+        }
+        windowedVideoWasVisible = videoVisible;
+        if (videoVisible) {
             NSRect r = [vv convertRect:[vv bounds] toView:nil];
             r.origin.x += [vw frame].origin.x;
             r.origin.y += [vw frame].origin.y;
             b_over_video = NSPointInRect(mouse, r);
         }
-        VLCLegacyCursorSetHidden(b_over_video
-                                 && (now - lastActivity) >= FS_PANEL_HIDE_DELAY);
+        VLCLegacyCursorSetHiddenOnDisplay(
+            b_over_video && (now - lastActivity) >= FS_PANEL_HIDE_DELAY,
+            fsDisplayID([vw screen]));
 
         if (++dormantTicks < 3)
             return;
@@ -440,7 +678,9 @@ static NSString *fsTimeToString(int seconds)
     if (!fullscreen) {
         if (fullscreenActive) {
             fullscreenActive = NO;
+            VLCLegacyCursorActivity();
             [panel orderOut:nil];
+            [stereoMirrorPanel orderOut:nil];
         }
         return;
     }
@@ -450,18 +690,28 @@ static NSString *fsTimeToString(int seconds)
         lastActivity = now;
     }
 
-    BOOL shouldShow = (now - lastActivity) < FS_PANEL_HIDE_DELAY;
+    NSScreen *stereoScreen = fsStereoScreen(p_intf);
+    BOOL mouseOnFullscreenScreen = stereoScreen == nil
+                                || fsMouseIsOnScreen(mouse, stereoScreen);
+    BOOL shouldShow = mouseOnFullscreenScreen
+                   && (now - lastActivity) < FS_PANEL_HIDE_DELAY;
     /* Le pointeur suit le panneau : masqué avec lui, rendu avec lui. Un seul
      * propriétaire, donc aucun risque d'état incohérent ni de curseur perdu. */
-    VLCLegacyCursorSetHidden(!shouldShow);
+    NSScreen *cursorScreen = stereoScreen;
+    if (cursorScreen == nil && panel != nil)
+        cursorScreen = [panel screen];
+    VLCLegacyCursorSetHiddenOnDisplay(mouseOnFullscreenScreen && !shouldShow,
+                                      fsDisplayID(cursorScreen));
     if (shouldShow) {
         if (!panel)
             [self buildPanel];
         if (![panel isVisible])
             [panel orderFront:nil];
         [self refreshControls];
+        [self updateStereoMirrorPanel];
     } else if (panel && [panel isVisible]) {
         [panel orderOut:nil];
+        [stereoMirrorPanel orderOut:nil];
     }
 }
 
@@ -531,10 +781,14 @@ static NSString *fsTimeToString(int seconds)
         [(VLCLegacySeekSlider *)seekSlider
             setMediaDuration:(double)length / CLOCK_FREQ];
         [self updateChaptersForInput:p_input duration:length];
+        VLCLegacyUpdateSliderBookmarks((VLCLegacySeekSlider *)seekSlider,
+                                       p_input, length);
         vlc_object_release(p_input);
     } else {
         [(VLCLegacySeekSlider *)seekSlider setMediaDuration:0.0];
         [self updateChaptersForInput:NULL duration:0];
+        VLCLegacyUpdateSliderBookmarks((VLCLegacySeekSlider *)seekSlider,
+                                       NULL, 0);
         /* Stop leaves no input at all, and that is the only branch that
          * puts the clip knobs away (same fix as the windowed bar) */
         VLCLegacyProgressSliderCell *clipCell =
@@ -560,6 +814,16 @@ static NSString *fsTimeToString(int seconds)
         clipStepFrames:(int)direction
 {
     [core clipStepFrames:direction];
+}
+
+- (void)seekSlider:(VLCLegacySeekSlider *)slider
+        bookmarkSelectedAtIndex:(int)index
+{
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (p_input) {
+        input_Control(p_input, INPUT_SET_BOOKMARK, index);
+        vlc_object_release(p_input);
+    }
 }
 
 /* chapter separators, same rules and caching as the main window */

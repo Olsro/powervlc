@@ -2,12 +2,10 @@
 UPNP_VERSION := 1.14.31
 UPNP_URL := $(GITHUB)/pupnp/pupnp/archive/refs/tags/release-$(UPNP_VERSION).tar.gz
 
-ifdef BUILD_NETWORK
-PKGS += upnp
-endif
-ifeq ($(call need_pkg,"libupnp >= 1.6.19"),)
-PKGS_FOUND += upnp
-endif
+# PowerVLC's extension-facing UPnP support is implemented in the core. pupnp
+# remains an explicit contrib target for upstream compatibility, but is not a
+# default network dependency and therefore cannot leak libupnp/libixml into
+# normal macOS, Linux or Windows packages.
 
 $(TARBALLS)/pupnp-release-$(UPNP_VERSION).tar.gz:
 	$(call download_pkg,$(UPNP_URL),upnp)

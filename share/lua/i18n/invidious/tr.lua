@@ -36,6 +36,7 @@ return {
   mode_playlists = "Oynatma listeleri",
   btn_search = "Ara",
   btn_open = "Seçileni aç",
+  btn_open_channel = "Seçili öğenin kanalını aç",
   btn_change_instance = "< Örnek",
   msg_enter_query = "Aranacak bir şey yazın",
   msg_searching = "Aranıyor…",
@@ -46,7 +47,13 @@ return {
   msg_target_found = "Adres tanındı — doğrudan açılıyor",
   msg_search_fail = "Arama başarısız: ",
   msg_select_result = "Önce listeden bir sonuç seçin",
+  msg_channel_unavailable = "Bu seçimle bağlantılı kanal kullanılamıyor",
   lbl_quality = "Kalite:",
+  lbl_audio_track = "Ses izi:",
+  audio_default = "Varsayılan ses",
+  audio_original = "özgün",
+  lbl_subtitles = "Altyazılar:",
+  subtitles_none = "Yok",
   lbl_by = "—",
   audio_only = "Yalnızca ses",
   combined = "ses+video",
@@ -168,4 +175,16 @@ return {
             .. "<strong>Yardım &gt; PowerVLC eklentisini kur</strong>, "
             .. "tarayıcınıza bunu kendi başına yapan küçük bir eklenti "
             .. "yerleştirir — yer imi yok, tıklama yok, her sayfada.",
+  web_addon_lead = "Eklenti kurulu mu? Sürüklenecek ve tıklanacak hiçbir şey "
+                 .. "yok: aşağıdaki örneği açıp denetimini geçmeniz yeterli. "
+                 .. "Bu sayfa bağlantının ne zaman kurulduğunu size bildirir.",
+  web_steps_title = "Eklenti olmadan: yer imi",
+  web_relay_on_addon = "PowerVLC'ye tarayıcı eklentisi üzerinden bağlanıldı. "
+                     .. "Tıklanacak bir şey yok: bu pencereyi ve örneğin "
+                     .. "sekmesini açık bırakın.",
+  web_m_taking = "PowerVLC bu videoyu oynatıyor. Sekme bilerek hemen "
+               .. "boşaltıldı: sitenin oynatıcısının burada yüklenmesini "
+               .. "tamamlamasına izin vermek, makineye ikinci bir kod çözme "
+               .. "ve ikinci bir indirme yükü bindirir, örneği de boş yere "
+               .. "yorar. Sekmeyi açık bırakın.",
 }

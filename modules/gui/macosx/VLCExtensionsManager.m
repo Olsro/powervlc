@@ -33,6 +33,25 @@
 #define MENU_GET_ACTION(a) ((uint16_t)(((uint32_t)a) >> 16))
 #define MENU_GET_EXTENSION(a) ((uint16_t)(((uint32_t)a) & 0xFFFF))
 
+typedef struct {
+    extension_t *extension;
+    int index;
+} vlc_extension_menu_entry_t;
+
+static int compareExtensionMenuEntries(const void *leftValue, const void *rightValue)
+{
+    const vlc_extension_menu_entry_t *left = leftValue;
+    const vlc_extension_menu_entry_t *right = rightValue;
+    NSString *leftTitle = toNSStr(left->extension->psz_title);
+    NSString *rightTitle = toNSStr(right->extension->psz_title);
+    NSComparisonResult result = [leftTitle caseInsensitiveCompare:rightTitle];
+    if (result == NSOrderedSame)
+        result = [leftTitle compare:rightTitle];
+    if (result == NSOrderedSame)
+        return left->index < right->index ? -1 : left->index > right->index;
+    return result == NSOrderedAscending ? -1 : 1;
+}
+
 @interface VLCExtensionsManager()
 {
     extensions_manager_t *p_extensions_manager;
@@ -77,10 +96,22 @@
 
     vlc_mutex_lock(&p_extensions_manager->lock);
 
-    extension_t *p_ext = NULL;
-    int i_ext = 0;
+    size_t extensionCount = p_extensions_manager->extensions.i_size;
+    vlc_extension_menu_entry_t *entries = calloc(extensionCount, sizeof(*entries));
+    if (extensionCount > 0 && entries == NULL) {
+        vlc_mutex_unlock(&p_extensions_manager->lock);
+        return;
+    }
+    for (size_t index = 0; index < extensionCount; ++index) {
+        entries[index].extension = ARRAY_VAL(p_extensions_manager->extensions, index);
+        entries[index].index = (int)index;
+    }
+    if (extensionCount > 1)
+        qsort(entries, extensionCount, sizeof(*entries), compareExtensionMenuEntries);
 
-    FOREACH_ARRAY(p_ext, p_extensions_manager->extensions) {
+    for (size_t position = 0; position < extensionCount; ++position) {
+        extension_t *p_ext = entries[position].extension;
+        int i_ext = entries[position].index;
         bool b_Active = extension_IsActivated(p_extensions_manager, p_ext);
 
         NSString *titleString = toNSStr(p_ext->psz_title);
@@ -147,9 +178,8 @@
             }
             menuItem.tag = MENU_MAP(0, i_ext);
         }
-        i_ext++;
     }
-    FOREACH_END()
+    free(entries);
 
     vlc_mutex_unlock(&p_extensions_manager->lock);
 }
@@ -294,9 +324,18 @@
     intf_thread_t *p_intf = getIntf();
     msg_Dbg(p_intf, "Deinitializing extensions manager");
 
-    _extensionDialogProvider = nil;
-    if (p_extensions_manager)
+    /* The module owns worker and watchdog threads.  Releasing the VLC object
+     * directly leaves those threads running with p_extensions_manager as
+     * their callback data, and they can then dereference the freed object
+     * while the application is shutting down.  Keep the dialog provider
+     * alive until Close_Extension() has stopped and joined every thread. */
+    if (p_extensions_manager) {
+        _isUnloading = true;
+        module_unneed(p_extensions_manager, p_extensions_manager->p_module);
         vlc_object_release(p_extensions_manager);
+        p_extensions_manager = NULL;
+    }
+    _extensionDialogProvider = nil;
 }
 
 - (BOOL)isLoaded

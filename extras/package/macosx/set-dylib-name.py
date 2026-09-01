@@ -34,6 +34,7 @@ edit, here as with install_name_tool. The caller re-signs (build.sh does).
 Usage:
     set-dylib-name.py --id <new-name> <file>...
     set-dylib-name.py --change <old-name> <new-name> <file>...
+    set-dylib-name.py --change-compat <old-name> <new-name> <major.min.patch> <file>...
 
 Exit status is 0 when every file was already correct or was rewritten, 1 on
 any failure. --change on a file that does not name <old-name> is not a
@@ -130,11 +131,28 @@ def _dylib_names(data, base):
                 raise MachOError("dylib name offset %d out of its command"
                                  % name_off)
             raw = data[off + name_off:off + cmdsize]
-            yield cmd, off, cmdsize, name_off, raw.split(b"\0", 1)[0].decode()
+            yield (cmd, off, cmdsize, name_off,
+                   raw.split(b"\0", 1)[0].decode(), endian)
         off += cmdsize
 
 
-def rewrite(path, new_name, old_name=None, set_id=False):
+def _packed_version(version):
+    try:
+        parts = [int(part) for part in version.split(".")]
+    except ValueError as exc:
+        raise MachOError("invalid compatibility version: %s" % version) from exc
+    if not 1 <= len(parts) <= 3:
+        raise MachOError("invalid compatibility version: %s" % version)
+    parts += [0] * (3 - len(parts))
+    major, minor, patch = parts
+    if not (0 <= major <= 0xffff and 0 <= minor <= 0xff and
+            0 <= patch <= 0xff):
+        raise MachOError("compatibility version out of range: %s" % version)
+    return major << 16 | minor << 8 | patch
+
+
+def rewrite(path, new_name, old_name=None, set_id=False,
+            compatibility_version=None):
     """Rewrite this file's id (set_id) or its references to old_name.
 
     Returns the number of load commands changed.
@@ -146,7 +164,7 @@ def rewrite(path, new_name, old_name=None, set_id=False):
     changed = 0
 
     for base in _slices(data):
-        for cmd, off, cmdsize, name_off, name in _dylib_names(data, base):
+        for cmd, off, cmdsize, name_off, name, endian in _dylib_names(data, base):
             if set_id:
                 if cmd != LC_ID_DYLIB or name == new_name:
                     continue
@@ -163,6 +181,9 @@ def rewrite(path, new_name, old_name=None, set_id=False):
                     "moves everything after it." % (new_name, room,
                                                     len(new) + 1))
             data[off + name_off:off + cmdsize] = new.ljust(room, b"\0")
+            if compatibility_version is not None:
+                data[off + 20:off + 24] = struct.pack(
+                    endian + "I", _packed_version(compatibility_version))
             changed += 1
 
     if changed:
@@ -173,9 +194,13 @@ def rewrite(path, new_name, old_name=None, set_id=False):
 
 def main(argv):
     if len(argv) >= 4 and argv[1] == "--id":
-        mode, new, old, files = "id", argv[2], None, argv[3:]
+        mode, new, old, compat, files = "id", argv[2], None, None, argv[3:]
     elif len(argv) >= 5 and argv[1] == "--change":
-        mode, old, new, files = "change", argv[2], argv[3], argv[4:]
+        mode, old, new, compat, files = (
+            "change", argv[2], argv[3], None, argv[4:])
+    elif len(argv) >= 6 and argv[1] == "--change-compat":
+        mode, old, new, compat, files = (
+            "change", argv[2], argv[3], argv[4], argv[5:])
     else:
         sys.stderr.write(__doc__.split("Usage:", 1)[1].lstrip("\n"))
         return 1
@@ -183,7 +208,8 @@ def main(argv):
     status = 0
     for path in files:
         try:
-            n = rewrite(path, new, old_name=old, set_id=(mode == "id"))
+            n = rewrite(path, new, old_name=old, set_id=(mode == "id"),
+                        compatibility_version=compat)
         except (MachOError, OSError, struct.error) as exc:
             sys.stderr.write("set-dylib-name: %s: %s\n" % (path, exc))
             status = 1

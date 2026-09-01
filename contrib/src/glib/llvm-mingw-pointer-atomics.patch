@@ -1,0 +1,47 @@
+--- glib/glib/gthread-win32.c.orig
++++ glib/glib/gthread-win32.c
+@@ -341,12 +341,12 @@
+ static DWORD
+ g_private_get_impl (GPrivate *key)
+ {
+-  DWORD impl = (DWORD) key->p;
++  DWORD impl = (DWORD) (guintptr) key->p;
+ 
+   if G_UNLIKELY (impl == 0)
+     {
+       EnterCriticalSection (&g_private_lock);
+-      impl = (DWORD) key->p;
++      impl = (DWORD) (guintptr) key->p;
+       if (impl == 0)
+         {
+           GPrivateDestructor *destructor;
+@@ -367,13 +367,16 @@
+                *
+                * It can double as a sanity check...
+                */
+-              if (InterlockedCompareExchangePointer (&g_private_destructors, destructor,
+-                                                     destructor->next) != destructor->next)
++              if (InterlockedCompareExchangePointer ((PVOID volatile *) &g_private_destructors,
++                                                     (PVOID) destructor,
++                                                     (PVOID) destructor->next) != destructor->next)
+                 g_thread_abort (0, "g_private_get_impl(1)");
+             }
+ 
+           /* Ditto, due to the unlocked access on the fast path */
+-          if (InterlockedCompareExchangePointer (&key->p, impl, NULL) != NULL)
++          if (InterlockedCompareExchangePointer ((PVOID volatile *) &key->p,
++                                                 (PVOID) (guintptr) impl,
++                                                 NULL) != NULL)
+             g_thread_abort (0, "g_private_get_impl(2)");
+         }
+       LeaveCriticalSection (&g_private_lock);
+@@ -820,7 +823,8 @@
+       result->first = NULL;
+       result->last_ptr = &result->first;
+ 
+-      if (InterlockedCompareExchangePointer (cond, result, NULL) != NULL)
++      if (InterlockedCompareExchangePointer ((PVOID volatile *) cond,
++                                             (PVOID) result, NULL) != NULL)
+         {
+           free (result);
+           result = *cond;

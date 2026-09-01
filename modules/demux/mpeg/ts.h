@@ -96,6 +96,7 @@ struct demux_sys_t
 
     bool        b_trust_pcr;
     bool        b_check_pcr_offset;
+    bool        b_pcr_autofallback;
 
     /* */
     bool        b_access_control;

@@ -1,0 +1,125 @@
+diff --git a/src/libbluray/hdmv/mobj_parse.c b/src/libbluray/hdmv/mobj_parse.c
+index e33f7e7..3e13340 100644
+--- a/src/libbluray/hdmv/mobj_parse.c
++++ b/src/libbluray/hdmv/mobj_parse.c
+@@ -23,6 +23,7 @@
+ 
+ #include "mobj_parse.h"
+ 
++#include "hdmv_insn.h"
+ #include "mobj_data.h"
+ 
+ #include "bdnav/bdmv_parse.h"
+@@ -220,16 +221,107 @@ static MOBJ_OBJECTS *_mobj_get(BD_DISC *disc, const char *path)
+     return objects;
+ }
+ 
++static int _mobj_same_insn(const HDMV_INSN *a, const HDMV_INSN *b, int ignore_imm_op2)
++{
++    return a->sub_grp    == b->sub_grp &&
++           a->op_cnt     == b->op_cnt &&
++           a->grp        == b->grp &&
++           a->branch_opt == b->branch_opt &&
++           (ignore_imm_op2 || a->imm_op2 == b->imm_op2) &&
++           a->imm_op1    == b->imm_op1 &&
++           a->cmp_opt    == b->cmp_opt &&
++           a->set_opt    == b->set_opt;
++}
++
++static int _mobj_same_cmd(const MOBJ_CMD *a, const MOBJ_CMD *b)
++{
++    return _mobj_same_insn(&a->insn, &b->insn, 0) &&
++           a->dst == b->dst && a->src == b->src;
++}
++
++/*
++ * Some otherwise valid discs have a damaged primary MovieObject.bdmv where
++ * reads of the player's 3D profile and display capability registers were
++ * replaced with stale immediate values. The BACKUP copy still contains the
++ * intended register reads. Only accept that copy when its complete structure
++ * matches and these exact substitutions are the sole differences.
++ */
++static int _mobj_backup_restores_3d_caps(const MOBJ_OBJECTS *primary,
++                                         const MOBJ_OBJECTS *backup)
++{
++    unsigned int profile_reads = 0;
++    unsigned int display_reads = 0;
++    int i;
++
++    if (primary->mobj_version != backup->mobj_version ||
++        primary->num_objects != backup->num_objects) {
++        return 0;
++    }
++
++    for (i = 0; i < primary->num_objects; i++) {
++        const MOBJ_OBJECT *pobj = &primary->objects[i];
++        const MOBJ_OBJECT *bobj = &backup->objects[i];
++        int j;
++
++        if (pobj->resume_intention_flag != bobj->resume_intention_flag ||
++            pobj->menu_call_mask != bobj->menu_call_mask ||
++            pobj->title_search_mask != bobj->title_search_mask ||
++            pobj->num_cmds != bobj->num_cmds) {
++            return 0;
++        }
++
++        for (j = 0; j < pobj->num_cmds; j++) {
++            const MOBJ_CMD *pcmd = &pobj->cmds[j];
++            const MOBJ_CMD *bcmd = &bobj->cmds[j];
++
++            if (_mobj_same_cmd(pcmd, bcmd)) {
++                continue;
++            }
++
++            if (!_mobj_same_insn(&pcmd->insn, &bcmd->insn, 1) ||
++                pcmd->insn.grp != INSN_GROUP_SET ||
++                pcmd->insn.sub_grp != SET_SET ||
++                pcmd->insn.set_opt != INSN_MOVE ||
++                pcmd->insn.op_cnt != 2 ||
++                pcmd->insn.imm_op1 || !pcmd->insn.imm_op2 ||
++                bcmd->insn.imm_op1 || bcmd->insn.imm_op2 ||
++                pcmd->dst != bcmd->dst) {
++                return 0;
++            }
++
++            if (pcmd->src == UINT32_C(0x00010200) &&
++                bcmd->src == UINT32_C(0x8000001f)) {
++                profile_reads++;
++            } else if (pcmd->src == UINT32_C(0x00003403) &&
++                       bcmd->src == UINT32_C(0x80000017)) {
++                display_reads++;
++            } else {
++                return 0;
++            }
++        }
++    }
++
++    return profile_reads > 0 && display_reads > 0;
++}
++
+ MOBJ_OBJECTS *mobj_get(BD_DISC *disc)
+ {
+-    MOBJ_OBJECTS *objects;
++    MOBJ_OBJECTS *objects, *backup;
+ 
+     objects = _mobj_get(disc, "BDMV" DIR_SEP "MovieObject.bdmv");
+-    if (objects) {
+-        return objects;
++    backup = _mobj_get(disc, "BDMV" DIR_SEP "BACKUP" DIR_SEP "MovieObject.bdmv");
++
++    if (!objects) {
++        return backup;
++    }
++
++    if (backup && _mobj_backup_restores_3d_caps(objects, backup)) {
++        BD_DEBUG(DBG_NAV | DBG_CRIT,
++                 "MovieObject.bdmv has substituted 3D capability reads; using BACKUP copy\n");
++        mobj_free(&objects);
++        return backup;
+     }
+ 
+-    /* if failed, try backup file */
+-    objects = _mobj_get(disc, "BDMV" DIR_SEP "BACKUP" DIR_SEP "MovieObject.bdmv");
++    mobj_free(&backup);
+     return objects;
+ }

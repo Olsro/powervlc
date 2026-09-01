@@ -26,12 +26,15 @@
 #include "dialogs/extensions.hpp"
 
 #include <vlc_modules.h>
+#include <algorithm>
 #include <cassert>
 
 #include <QMenu>
 #include <QAction>
 #include <QSignalMapper>
 #include <QIcon>
+#include <QString>
+#include <QVector>
 
 #define MENU_MAP(a,e) ((uint32_t)( (((uint16_t)a) << 16) | ((uint16_t)e) ))
 #define MENU_GET_ACTION(a) ( (uint16_t)( ((uint32_t)a) >> 16 ) )
@@ -144,11 +147,38 @@ void ExtensionsManager::menu( QMenu *current )
 
     vlc_mutex_lock( &p_extensions_manager->lock );
 
-    QAction *action;
+    struct MenuEntry
+    {
+        extension_t *extension;
+        int index;
+        QString title;
+    };
+    QVector<MenuEntry> entries;
     extension_t *p_ext = NULL;
     int i_ext = 0;
     FOREACH_ARRAY( p_ext, p_extensions_manager->extensions )
     {
+        entries.push_back( { p_ext, i_ext,
+            qfu( p_ext->psz_shortdescription ? p_ext->psz_shortdescription
+                                              : p_ext->psz_title ) } );
+        ++i_ext;
+    }
+    FOREACH_END()
+    std::stable_sort( entries.begin(), entries.end(),
+        []( const MenuEntry &left, const MenuEntry &right ) {
+            int result = QString::compare( left.title, right.title,
+                                           Qt::CaseInsensitive );
+            if( result == 0 )
+                result = QString::compare( left.title, right.title,
+                                           Qt::CaseSensitive );
+            return result == 0 ? left.index < right.index : result < 0;
+        } );
+
+    QAction *action;
+    for( const MenuEntry &entry : entries )
+    {
+        p_ext = entry.extension;
+        i_ext = entry.index;
         bool b_Active = extension_IsActivated( p_extensions_manager, p_ext );
 
         if( b_Active && extension_HasMenu( p_extensions_manager, p_ext ) )
@@ -211,9 +241,7 @@ void ExtensionsManager::menu( QMenu *current )
                 action->setChecked( b_Active );
             }
         }
-        i_ext++;
     }
-    FOREACH_END()
 
     vlc_mutex_unlock( &p_extensions_manager->lock );
 }

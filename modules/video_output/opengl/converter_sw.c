@@ -405,10 +405,15 @@ opengl_tex_converter_generic_init(opengl_tex_converter_t *tc, bool allow_dr)
 
     if (allow_dr && priv->has_unpack_subimage)
     {
-        /* Ensure we do direct rendering / PBO with OpenGL 3.0 or higher. */
+        /* Keep the upstream OpenGL 3.0 guard. Apple's Mavericks HD 4000
+         * compatibility context advertises the PBO extensions with a 2.1
+         * version, but its asynchronous upload can expose the tail of a PBO
+         * before the final MVC rows have arrived. That corrupts only the
+         * bottom of the second eye. The synchronous texture path below is
+         * the validated legacy behaviour on this driver. */
         const unsigned char *ogl_version = tc->vt->GetString(GL_VERSION);
-        const bool glver_ok = strverscmp((const char *)ogl_version, "3.0") >= 0;
-
+        const bool glver_ok = ogl_version != NULL &&
+            strverscmp((const char *)ogl_version, "3.0") >= 0;
         const bool has_pbo = glver_ok &&
             (HasExtension(tc->glexts, "GL_ARB_pixel_buffer_object") ||
              HasExtension(tc->glexts, "GL_EXT_pixel_buffer_object"));

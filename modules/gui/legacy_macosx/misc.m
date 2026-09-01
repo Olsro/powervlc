@@ -28,6 +28,8 @@
 #endif
 
 #import "misc.h"
+#import "VLCLegacyMainWindow.h"
+#import "VLCLegacyCoreInteraction.h"
 /* <objc/message.h> is a 10.5+ SDK split; the 10.4u SDK declares
  * objc_msgSend in <objc/objc-runtime.h> */
 #if defined(__has_include)
@@ -51,6 +53,8 @@
 #include <vlc_plugin.h>    /* CONFIG_ITEM_KEY */
 
 #import "VLCLegacyControls.h"   /* VLCLegacyDarkMode() */
+
+extern VLCLegacyCoreInteraction *VLCLegacyGetCore(void);
 
 /* PowerVLC: same gettext helper the other legacy files define locally */
 #define _NS(s) ((NSString *)[NSString stringWithUTF8String:vlc_gettext(s)])
@@ -193,8 +197,11 @@ void VLCLegacyStepVolume(intf_thread_t *p_intf, int direction, bool b_osd)
         s_slider_chan = vout_RegisterSubpictureChannel(p_vout);
     }
     vout_FlushSubpictureChannel(p_vout, s_slider_chan);
-    if (var_GetBool(p_vout, "fullscreen"))
-        vout_OSDSlider(p_vout, s_slider_chan, target, OSD_VERT_SLIDER);
+    /* The legacy private frame-packed transition can briefly republish the
+     * vout without its fullscreen variable even though the video occupies
+     * the projector.  The key was already handled as a playback volume
+     * command, so always enqueue its visual feedback. */
+    vout_OSDSlider(p_vout, s_slider_chan, target, OSD_VERT_SLIDER);
     vout_OSDMessage(p_vout, VOUT_SPU_CHANNEL_OSD,
                     vlc_gettext("Volume %ld%%"), (long)target);
     vlc_object_release(p_vout);
@@ -342,6 +349,9 @@ BOOL VLCLegacyHandleKeyEvent(intf_thread_t *p_intf, NSEvent *event)
      * -[VLCLegacyHostWindow performKeyEquivalent:] */
     event = VLCLegacyEventWithDigitRowFallback(event);
 
+    extern VLCLegacyMainWindow *VLCLegacyGetMainWindow(void);
+    [VLCLegacyGetMainWindow() noteResumeOSDUserInteraction];
+
     unsigned int modifiers = (unsigned int)[event modifierFlags];
     vlc_value_t val;
     val.i_int = 0;
@@ -361,6 +371,13 @@ BOOL VLCLegacyHandleKeyEvent(intf_thread_t *p_intf, NSEvent *event)
     if (!key)
         return NO;
 
+    unsigned int vlcKey = CocoaKeyToVLC(key);
+    unsigned int promptModifiers = NSShiftKeyMask | NSControlKeyMask
+                                 | NSAlternateKeyMask | NSCommandKeyMask;
+    if (!(modifiers & promptModifiers)
+     && [VLCLegacyGetMainWindow() handleResumeOSDKey:vlcKey])
+        return YES;
+
     /* Escape should always get you out of fullscreen (3.0.23 behavior) */
     if (key == (unichar)0x1b) {
         playlist_t *p_playlist = pl_Get(p_intf);
@@ -379,16 +396,41 @@ BOOL VLCLegacyHandleKeyEvent(intf_thread_t *p_intf, NSEvent *event)
         return YES;
     }
 
-    val.i_int |= (int)CocoaKeyToVLC(key);
-    /* volume hotkeys use the interface stepping (multiples of 5%) and
-     * never reach the core handler; per 3.0 behavior their OSD belongs
-     * to the mouse wheel only */
+    val.i_int |= (int)vlcKey;
+    /* Route play/pause through the interface just like the fullscreen-panel
+     * button.  Besides keeping the panel state immediate, this guarantees
+     * that the 3D-aware OSD feedback is queued before the paused vout stops
+     * requesting frames. */
+    if (KeyMatchesHotkey(p_intf, (uint_fast32_t)val.i_int,
+                         "key-play-pause")) {
+        [VLCLegacyGetCore() togglePlayPause];
+        return YES;
+    }
+    /* Keep the ordinary Left/Right seek on the UI route too.  Besides clip
+     * mode's frame stepping, jumpWithSeconds: owns a dedicated position OSD
+     * channel that survives the Mavericks frame-packed display republish. */
+    if (KeyMatchesHotkey(p_intf, (uint_fast32_t)val.i_int,
+                         "key-jump-short")) {
+        int seconds = (int)var_InheritInteger(p_intf, "short-jump-size");
+        [VLCLegacyGetCore() jumpWithSeconds:-seconds];
+        return YES;
+    }
+    if (KeyMatchesHotkey(p_intf, (uint_fast32_t)val.i_int,
+                         "key-jump+short")) {
+        int seconds = (int)var_InheritInteger(p_intf, "short-jump-size");
+        [VLCLegacyGetCore() jumpWithSeconds:seconds];
+        return YES;
+    }
+    /* Volume hotkeys use the interface stepping (multiples of 5%) and never
+     * reach the core handler.  In fullscreen they must therefore request the
+     * OSD here; otherwise neither the bar nor the updated percentage is
+     * visible to the user. */
     if (KeyMatchesHotkey(p_intf, (uint_fast32_t)val.i_int, "key-vol-up")) {
-        VLCLegacyStepVolume(p_intf, 1, false);
+        VLCLegacyStepVolume(p_intf, 1, true);
         return YES;
     }
     if (KeyMatchesHotkey(p_intf, (uint_fast32_t)val.i_int, "key-vol-down")) {
-        VLCLegacyStepVolume(p_intf, -1, false);
+        VLCLegacyStepVolume(p_intf, -1, true);
         return YES;
     }
     var_Set(p_intf->obj.libvlc, "key-pressed", val);

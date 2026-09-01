@@ -336,6 +336,7 @@ skip_uninstall32_cleanup:
   !insertmacro InstallFolder hrtfs
 @BUILD_SKINS_TRUE@   !insertmacro InstallFolder skins
 @BUILD_LUA_TRUE@     !insertmacro InstallFolder lua
+  !insertmacro InstallFolder powervlc-engines
 
   ; Generate the cache and add it to uninstall.log
   nsExec::ExecToStack '"$INSTDIR\powervlc-cache-gen.exe" $INSTDIR\plugins'

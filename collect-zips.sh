@@ -3,7 +3,7 @@
 # zips/ folder at the repository root.
 #
 # Sources:
-#   build*/                       macOS bundles  (package-powervlc.sh)
+#   build/macos/*/                macOS bundles  (package-powervlc.sh)
 #   extras/package/docker/out/    Windows & Linux builds (build-in-docker.sh)
 #
 # Nothing else is touched: the .zip files vendored under contrib/tarballs/ and
@@ -51,8 +51,8 @@ echo "Collecting zips into $DEST"
 # Only collect the current PowerVLC release. Build directories and docker/out
 # intentionally retain older releases (and macOS may also contain the
 # upstream vlc-*-release.zip), none of which belongs in the current round.
-# macOS bundles: build<target>/powervlc-<version>-mac-<target>.zip
-for d in "$ROOT"/build*/; do
+# macOS bundles: build/macos/<target>/powervlc-<version>-mac-<target>.zip
+for d in "$ROOT"/build/macos/*/; do
     [ -d "$d" ] || continue
     for z in "$d"powervlc-"$VERSION"-*.zip; do
         [ -f "$z" ] || continue

@@ -217,6 +217,10 @@ static int Open (vlc_object_t *obj)
 
     sys->vgl = vout_display_opengl_New (&vd->fmt, &spu_chromas, sys->gl,
                                         &vd->cfg->viewpoint);
+    if (sys->vgl != NULL)
+        vout_display_opengl_SetDrawableSize(sys->vgl,
+                                            vd->cfg->display.width,
+                                            vd->cfg->display.height);
     vlc_gl_ReleaseCurrent (sys->gl);
 
     if (sys->vgl == NULL)
@@ -352,6 +356,8 @@ static int Control (vout_display_t *vd, int query, va_list ap)
         vlc_gl_Resize (sys->gl, place.width, place.height);
         if (vlc_gl_MakeCurrent (sys->gl) != VLC_SUCCESS)
             return VLC_EGENERIC;
+        vout_display_opengl_SetDrawableSize(sys->vgl, place.width,
+                                            place.height);
         vout_display_opengl_SetWindowAspectRatio(sys->vgl, (float)place.width / place.height);
         vout_display_opengl_Viewport(sys->vgl, place.x, place.y, place.width, place.height);
         vlc_gl_ReleaseCurrent (sys->gl);
@@ -367,6 +373,8 @@ static int Control (vout_display_t *vd, int query, va_list ap)
         vout_display_PlacePicture (&place, &vd->source, cfg, false);
         if (vlc_gl_MakeCurrent (sys->gl) != VLC_SUCCESS)
             return VLC_EGENERIC;
+        vout_display_opengl_SetDrawableSize(sys->vgl, cfg->display.width,
+                                            cfg->display.height);
         vout_display_opengl_SetWindowAspectRatio(sys->vgl, (float)place.width / place.height);
         vout_display_opengl_Viewport(sys->vgl, place.x, place.y, place.width, place.height);
         vlc_gl_ReleaseCurrent (sys->gl);

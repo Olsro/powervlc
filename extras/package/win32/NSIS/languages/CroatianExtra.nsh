@@ -57,6 +57,7 @@ ${LangFileString} Action_OnArrivalSVCDMovie "Reproduciraj SVCD film"
 ${LangFileString} Action_OnArrivalVideoFiles "Reproduciraj video datoteke"
 ${LangFileString} Action_OnArrivalMusicFiles "Reproduciraj zvučne datoteke"
 ${LangFileString} Action_OnArrivalDVDAudio "Reproduciraj glazbeni DVD"
+${LangFileString} Action_OnArrivalBluray "Reproduciraj Blu-ray"
 ${LangFileString} License_NextText "Sada ste svjesni Vaših prava. Kliknite Slijedeće za nastavak."
 
 ${LangFileString} Detail_CheckProcesses "Provjeravanje obrade..."

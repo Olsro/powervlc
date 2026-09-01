@@ -35,6 +35,11 @@
 #define VLC_CODEC_SVQ1            VLC_FOURCC('S','V','Q','1')
 #define VLC_CODEC_SVQ3            VLC_FOURCC('S','V','Q','3')
 #define VLC_CODEC_H264            VLC_FOURCC('h','2','6','4')
+/* ISO/IEC 14496-10 Annex H Multiview Video Coding.  Keep this distinct from
+ * regular AVC: an MVC access unit contains both the AVC-compatible base view
+ * and one or more dependent views and must not be handed to an AVC-only
+ * decoder (which would silently discard the 3D view). */
+#define VLC_CODEC_H264_MVC        VLC_FOURCC('m','v','c','1')
 #define VLC_CODEC_H263            VLC_FOURCC('h','2','6','3')
 #define VLC_CODEC_H263I           VLC_FOURCC('I','2','6','3')
 #define VLC_CODEC_H263P           VLC_FOURCC('I','L','V','R')

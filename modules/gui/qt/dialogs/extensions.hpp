@@ -113,6 +113,7 @@ private:
 protected:
     void closeEvent( QCloseEvent* ) override;
     void keyPressEvent( QKeyEvent* ) override;
+    bool eventFilter( QObject *, QEvent * ) override;
 
 private slots:
     int TriggerClick( QObject *object );

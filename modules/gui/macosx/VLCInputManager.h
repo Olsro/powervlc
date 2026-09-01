@@ -44,4 +44,14 @@ extern NSString *VLCPlayerRateChanged;
 
 - (BOOL)hasInput;
 
+/* Handles the keyboard while the resume choice is displayed in the video
+ * OSD. Returns YES when the key belongs to the prompt and must not reach the
+ * regular hotkey engine (notably Escape, which would leave fullscreen). */
+- (BOOL)handleResumeOSDKey:(unsigned int)key;
+
+/* Cancels only the ten-second automatic dismissal. The resume question and
+ * its timer stay alive so the stereo OSD remains visible until the user
+ * explicitly confirms a choice. */
+- (void)noteResumeOSDUserInteraction;
+
 @end

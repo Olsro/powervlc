@@ -160,3 +160,11 @@ Use Blu-ray menus. If disabled, the movie will start directly
 # --- 2026-08-22: split the mixed recent-media menu into files and streams ---
 Open Recent
 Open &Recent Media
+
+# --- 2026-08-28: console strings updated to the current PowerVLC name ---
+PowerVLC %s (forked from VLC %s)\n\n
+\nWarning: if you cannot access the GUI anymore, open a command-line window, go to the directory where you installed VLC and run "vlc -I qt"\n
+
+# --- 2026-08-29: portable-player backups now live in the managed media folder ---
+Backup and Compatibility
+Backup folder

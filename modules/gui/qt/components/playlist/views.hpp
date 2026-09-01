@@ -118,6 +118,8 @@ protected:
     void dragMoveEvent ( QDragMoveEvent * event ) Q_DECL_OVERRIDE;
     void keyPressEvent( QKeyEvent *event ) Q_DECL_OVERRIDE;
     void setModel( QAbstractItemModel * ) Q_DECL_OVERRIDE;
+    void drawBranches( QPainter *, const QRect &,
+                       const QModelIndex & ) const Q_DECL_OVERRIDE;
 };
 
 class PicFlowView : public QAbstractItemView

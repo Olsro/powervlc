@@ -55,6 +55,7 @@ struct input_resource_t
 
     /* */
     input_thread_t *p_input;
+    bool            b_vout_title_displayed;
 
     sout_instance_t *p_sout;
     vout_thread_t   *p_vout_free;
@@ -153,12 +154,31 @@ static void DestroyVout( input_resource_t *p_resource )
 static void DisplayVoutTitle( input_resource_t *p_resource,
                               vout_thread_t *p_vout )
 {
-    if( p_resource->p_input == NULL )
+    if( p_resource->p_input == NULL || p_resource->b_vout_title_displayed )
         return;
 
-    /* TODO display the title only one time for the same input ? */
+    /* A single input can reconfigure its video output many times. This is
+     * especially common for authored Blu-ray menus (MVC logo, 2D language
+     * page, MVC feature). Recreating the title OSD on every format change
+     * makes it flash at each page transition and can leave its last D3D11
+     * subpicture quad in only one stereo eye. Display it once for the input,
+     * as at normal playback startup, and reset the guard for the next input. */
+    p_resource->b_vout_title_displayed = true;
 
     input_item_t *p_item = input_GetItem( p_resource->p_input );
+
+    /* Authored Blu-ray playback regularly rebuilds its vout while moving
+     * between logos, language pages and the feature.  The generic startup
+     * title is redundant there (the interface already carries the disc
+     * title), and on a DXGI stereo swapchain its expiring bottom-aligned quad
+     * can survive in only one eye as a solid black rectangle.  Do not create
+     * that OSD for disc-navigation inputs in the first place. */
+    char *psz_uri = input_item_GetURI( p_item );
+    bool b_bluray = psz_uri != NULL &&
+                    !strncasecmp( psz_uri, "bluray:", strlen( "bluray:" ) );
+    free( psz_uri );
+    if( b_bluray )
+        return;
 
     char *psz_nowplaying = input_item_GetNowPlayingFb( p_item );
     if( psz_nowplaying && *psz_nowplaying )
@@ -476,6 +496,11 @@ void input_resource_SetInput( input_resource_t *p_resource, input_thread_t *p_in
     if( p_resource->p_input && !p_input )
         assert( p_resource->i_vout == 0 );
 
+    /* A newly attached input gets its own startup title. Keep the flag while
+     * detaching so a late vout teardown cannot re-arm the old input. */
+    if( p_input != NULL && p_input != p_resource->p_input )
+        p_resource->b_vout_title_displayed = false;
+
     /* */
     p_resource->p_input = p_input;
 
@@ -538,4 +563,3 @@ void input_resource_Terminate( input_resource_t *p_resource )
     input_resource_ResetAout( p_resource );
     input_resource_TerminateVout( p_resource );
 }
-

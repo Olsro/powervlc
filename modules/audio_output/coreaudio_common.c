@@ -63,6 +63,13 @@ FramesToBytes(struct aout_sys_common *p_sys, uint64_t i_frames)
  * déjà rendu, on ne le repaie pas plein tarif à chaque bloc. */
 #define CA_DEAD_OUTPUT_RETRY          ((vlc_tick_t)CLOCK_FREQ / 20)
 
+/* Four periods are enough to absorb normal userspace scheduling jitter while
+ * keeping compressed audio close to the HDMI wire. This is the same queue
+ * depth used by Kodi's Darwin sink; unlike a duration-only constant, applying
+ * it both to the device render quantum and to the codec's IEC 61937 period
+ * also covers E-AC-3 and MAT packets larger than a CoreAudio callback. */
+#define CA_ENCODED_QUEUE_PERIODS 4
+
 static inline uint64_t
 UsToFrames(struct aout_sys_common *p_sys, vlc_tick_t i_us)
 {
@@ -104,6 +111,23 @@ ca_ClearOutBuffers(audio_output_t *p_aout)
     p_sys->pp_out_last = &p_sys->p_out_chain;
 
     p_sys->i_out_size = 0;
+}
+
+/* Fill an output gap without making the generic renderer know which encoded
+ * carrier AUHAL selected. The last argument tells the callback whether this
+ * is the beginning of a new uninterrupted gap, so a short CoreAudio buffer
+ * can continue a pause-burst period exactly where the previous one ended. */
+static inline void
+ca_FillSilence(audio_output_t *p_aout, uint8_t *p_output, size_t i_size)
+{
+    struct aout_sys_common *p_sys = (struct aout_sys_common *)p_aout->sys;
+
+    if (p_sys->pf_fill_silence != NULL)
+        p_sys->pf_fill_silence(p_aout, p_output, i_size,
+                               !p_sys->b_silence_started);
+    else
+        memset(p_output, 0, i_size);
+    p_sys->b_silence_started = true;
 }
 
 /* os_unfair_lock is only available since macOS 10.12: the checks on
@@ -173,6 +197,8 @@ ca_Open(audio_output_t *p_aout)
     p_sys->p_out_chain = NULL;
     p_sys->pp_out_last = &p_sys->p_out_chain;
     p_sys->chans_to_reorder = 0;
+    p_sys->pf_fill_silence = NULL;
+    p_sys->b_silence_started = false;
 
     p_aout->play = ca_Play;
     p_aout->pause = ca_Pause;
@@ -238,17 +264,42 @@ ca_Render(audio_output_t *p_aout, uint32_t i_frames, uint64_t i_host_time,
             goto drop;
         }
 
-        /* Write silence to reach the first_render host time */
-        const vlc_tick_t i_silence_us =
-            HostTimeToTick(p_sys, p_sys->i_first_render_host_time - i_host_time);
+        /* An encoded CoreAudio stream is packetized by the HAL (one complete
+         * 6144-byte AC-3 packet, or one 61440-byte HBR/MAT packet, per normal
+         * callback on the HDMI devices tested here).  Splitting the final
+         * IEC 61937 pause packet at an arbitrary sample and putting programme
+         * bytes in the remainder makes the wire packet undecodable.  VLC's
+         * dates still look perfect, but the receiver has to relock and then
+         * plays with a new, externally invisible delay after every seek.
+         *
+         * PCM can start sample-accurately.  For a digital carrier choose the
+         * nearest whole callback boundary instead: either this packet starts
+         * with programme bytes or it remains entirely a pause packet.  The
+         * quantisation error is bounded by half a codec period (16 ms for
+         * AC-3, 10 ms for MAT), rather than an HDMI relock of arbitrary size. */
+        if (p_sys->pf_fill_silence != NULL)
+        {
+            const uint64_t i_to_start = p_sys->i_first_render_host_time
+                                      - i_host_time;
+            if (i_to_start * 2 >= i_requested_host_time)
+                goto drop;
+            /* The requested start is nearer this callback's leading edge. */
+        }
+        else
+        {
 
-        const uint64_t i_silence_bytes =
-            FramesToBytes(p_sys, UsToFrames(p_sys, i_silence_us));
-        assert(i_silence_bytes <= i_requested);
-        memset(p_output, 0, i_silence_bytes);
+            /* Write silence to reach the first_render host time */
+            const vlc_tick_t i_silence_us = HostTimeToTick(
+                p_sys, p_sys->i_first_render_host_time - i_host_time);
 
-        i_requested -= i_silence_bytes;
-        p_output += i_silence_bytes;
+            const uint64_t i_silence_bytes =
+                FramesToBytes(p_sys, UsToFrames(p_sys, i_silence_us));
+            assert(i_silence_bytes <= i_requested);
+            ca_FillSilence(p_aout, p_output, i_silence_bytes);
+
+            i_requested -= i_silence_bytes;
+            p_output += i_silence_bytes;
+        }
 
         /* Start the first rendering */
     }
@@ -285,19 +336,24 @@ ca_Render(audio_output_t *p_aout, uint32_t i_frames, uint64_t i_host_time,
         p_sys->pp_out_last = &p_sys->p_out_chain;
     p_sys->i_out_size -= i_copied;
 
+    /* Any real programme bytes end the previous silence run. If this same
+     * callback also underruns, the pause filler must begin at its preamble. */
+    if (i_copied > 0)
+        p_sys->b_silence_started = false;
+
     /* Pad with 0 */
     if (i_requested > 0)
     {
         assert(p_sys->i_out_size == 0);
         p_sys->i_underrun_size += i_requested;
-        memset(p_output, 0, i_requested);
+        ca_FillSilence(p_aout, p_output, i_requested);
     }
 
     lock_unlock(p_sys);
     return;
 
 drop:
-    memset(p_output, 0, i_requested);
+    ca_FillSilence(p_aout, p_output, i_requested);
     lock_unlock(p_sys);
 }
 
@@ -442,8 +498,20 @@ ca_Flush(audio_output_t *p_aout, bool wait)
         }
     }
 
-    p_sys->i_render_host_time = p_sys->i_first_render_host_time = 0;
-    p_sys->i_render_frames = 0;
+    /* A compressed HDMI stream does not stop at a non-draining flush: its
+     * render callback keeps feeding IEC 61937 pause bursts so the receiver
+     * stays locked. Keep the HAL's predicted output horizon in that case, so
+     * the first post-seek aout_TimeGet() includes the real driver/transport
+     * distance to the next callback. PCM and a digital output whose callback
+     * has not run retain the normal cold-start behaviour. */
+    if (p_sys->pf_fill_silence != NULL && p_sys->i_render_host_time != 0)
+        p_sys->i_first_render_host_time = p_sys->i_render_host_time;
+    else
+    {
+        p_sys->i_render_host_time = p_sys->i_first_render_host_time = 0;
+        p_sys->i_render_frames = 0;
+    }
+    p_sys->b_silence_started = false;
     lock_unlock(p_sys);
 
     if (b_gave_up && !b_already_dead)
@@ -496,26 +564,36 @@ ca_Play(audio_output_t * p_aout, block_t * p_block)
 
         if (unlikely(i_avalaible_bytes != p_block->i_buffer))
         {
-            /* Not optimal but unlikely code path. */
+            /* This is uncommon for the large PCM queue, but deliberately
+             * normal for the short encoded queue. Never enqueue a zero-byte
+             * block when the queue is exactly full. */
 
             lock_unlock(p_sys);
 
-            block_t *p_new = block_Alloc(i_avalaible_bytes);
-            if (!p_new)
+            block_t *p_new = NULL;
+            if (i_avalaible_bytes > 0)
             {
-                block_Release(p_block);
-                return;
+                p_new = block_Alloc(i_avalaible_bytes);
+                if (!p_new)
+                {
+                    block_Release(p_block);
+                    return;
+                }
+
+                memcpy(p_new->p_buffer, p_block->p_buffer,
+                       i_avalaible_bytes);
+
+                p_block->p_buffer += i_avalaible_bytes;
+                p_block->i_buffer -= i_avalaible_bytes;
             }
-
-            memcpy(p_new->p_buffer, p_block->p_buffer, i_avalaible_bytes);
-
-            p_block->p_buffer += i_avalaible_bytes;
-            p_block->i_buffer -= i_avalaible_bytes;
 
             lock_lock(p_sys);
 
-            block_ChainLastAppend(&p_sys->pp_out_last, p_new);
-            p_sys->i_out_size += i_avalaible_bytes;
+            if (p_new != NULL)
+            {
+                block_ChainLastAppend(&p_sys->pp_out_last, p_new);
+                p_sys->i_out_size += i_avalaible_bytes;
+            }
 
             if (p_sys->b_paused)
             {
@@ -524,8 +602,20 @@ ca_Play(audio_output_t * p_aout, block_t * p_block)
                 return;
             }
 
-            const vlc_tick_t i_frame_us =
-                FramesToUs(p_sys, BytesToFrames(p_sys, p_block->i_buffer));
+            /* With passthrough, wait one quarter of the queue: by construction
+             * that is at least one complete IEC period or four render quanta.
+             * Waiting for the whole unqueued remainder would let a large MAT
+             * block underrun the deliberately short queue. */
+            vlc_tick_t i_frame_us;
+            if (p_sys->pf_fill_silence != NULL)
+                i_frame_us = FramesToUs(p_sys, BytesToFrames(
+                    p_sys, p_sys->i_out_max_size
+                         / CA_ENCODED_QUEUE_PERIODS));
+            else
+                i_frame_us = FramesToUs(p_sys, BytesToFrames(
+                    p_sys, p_block->i_buffer));
+            if (i_frame_us <= 0)
+                i_frame_us = 1000;
 
             /* Wait for the render buffer to play the remaining data */
             const size_t i_out_before = p_sys->i_out_size;
@@ -586,7 +676,8 @@ ca_Play(audio_output_t * p_aout, block_t * p_block)
 
 int
 ca_Initialize(audio_output_t *p_aout, const audio_sample_format_t *fmt,
-              vlc_tick_t i_dev_latency_us)
+              vlc_tick_t i_dev_latency_us, size_t i_render_buffer_size,
+              size_t i_encoded_packet_size)
 {
     struct aout_sys_common *p_sys = (struct aout_sys_common *) p_aout->sys;
 
@@ -611,7 +702,38 @@ ca_Initialize(audio_output_t *p_aout, const audio_sample_format_t *fmt,
     /* setup circular buffer */
     size_t i_audiobuffer_size = fmt->i_rate * fmt->i_bytes_per_frame
                               / p_sys->i_frame_length;
-    if (fmt->channel_type == AUDIO_CHANNEL_TYPE_AMBISONICS)
+    if (p_sys->pf_fill_silence != NULL)
+    {
+        /* The historical two-second PCM queue is harmful to encoded HDMI: a
+         * seek can leave about a second of programme audio between VLC and the
+         * wire even though the receiver remains locked on our pause carrier.
+         * Keep four real device callbacks like Kodi, but never less than four
+         * whole IEC periods since E-AC-3/MAT packets may span callbacks. */
+        size_t i_render_queue = i_render_buffer_size <= SIZE_MAX
+                              / CA_ENCODED_QUEUE_PERIODS
+                              ? i_render_buffer_size
+                              * CA_ENCODED_QUEUE_PERIODS : SIZE_MAX;
+        size_t i_packet_queue = i_encoded_packet_size <= SIZE_MAX
+                              / CA_ENCODED_QUEUE_PERIODS
+                              ? i_encoded_packet_size
+                              * CA_ENCODED_QUEUE_PERIODS : SIZE_MAX;
+        p_sys->i_out_max_size = __MAX(i_render_queue, i_packet_queue);
+
+        /* Very old drivers may not publish their render quantum. The classic
+         * 125-ms carrier capacity is a safe bounded fallback and remains eight
+         * times shorter than the old two-second queue. */
+        if (p_sys->i_out_max_size == 0)
+            p_sys->i_out_max_size = __MAX((size_t)1,
+                                          i_audiobuffer_size / 8);
+
+        const vlc_tick_t i_queue_us = FramesToUs(p_sys, BytesToFrames(
+            p_sys, p_sys->i_out_max_size));
+        msg_Dbg(p_aout, "encoded CoreAudio queue: %zu bytes (%"PRId64
+                " us), render quantum %zu, IEC period %zu",
+                p_sys->i_out_max_size, i_queue_us, i_render_buffer_size,
+                i_encoded_packet_size);
+    }
+    else if (fmt->channel_type == AUDIO_CHANNEL_TYPE_AMBISONICS)
     {
         /* lower latency: 200 ms of buffering. XXX: Decrease when VLC's core
          * can handle lower audio latency */
@@ -1198,7 +1320,7 @@ au_Initialize(audio_output_t *p_aout, AudioUnit au, audio_sample_format_t *fmt,
         return VLC_EGENERIC;
     }
 
-    ret = ca_Initialize(p_aout, fmt, i_dev_latency_us);
+    ret = ca_Initialize(p_aout, fmt, i_dev_latency_us, 0, 0);
     if (ret != VLC_SUCCESS)
     {
         AudioUnitUninitialize(au);

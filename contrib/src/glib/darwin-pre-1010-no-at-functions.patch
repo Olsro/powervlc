@@ -1,0 +1,19 @@
+--- a/gio/glocalfile.c
++++ b/gio/glocalfile.c
+@@ -31,6 +31,16 @@
+ #include <unistd.h>
+ #endif
+ 
++/* The current macOS SDK exposes AT_FDCWD even for deployment targets where
++ * fstatat(), openat() and fdopendir() do not exist.  GLib 2.38 uses the
++ * presence of that macro as its feature test, so force its pathname fallback
++ * for pre-10.10 binaries. */
++#if defined(__APPLE__) && \
++    defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && \
++    __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101000
++# undef AT_FDCWD
++#endif
++
+ #if HAVE_SYS_STATFS_H
+ #include <sys/statfs.h>
+ #endif

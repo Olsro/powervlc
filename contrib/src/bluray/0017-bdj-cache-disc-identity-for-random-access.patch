@@ -1,0 +1,16 @@
+--- libbluray/src/libbluray/bdj/java/org/videolan/VFSCache.java.orig	2026-08-26 00:00:00.000000000 +0200
++++ libbluray/src/libbluray/bdj/java/org/videolan/VFSCache.java	2026-08-26 00:00:00.000000000 +0200
+@@ -61,6 +61,13 @@ class VFSCache {
+             System.setProperty("bluray.vfs.root", cacheRoot);
+             vfsRoot = cacheRoot;
+             cacheAll = true;
++
++            /* Some BD-Live frameworks read the disc identity through
++             * RandomAccessFile before any regular FileInputStream touches it.
++             * RandomAccessFile is supplied by the host JDK and therefore does
++             * not pass through our on-demand BD-ROM materialisation hook. */
++            String idPath = "CERTIFICATE" + File.separator + "id.bdmv";
++            Libbluray.cacheBdRomFile(idPath, cacheRoot + idPath);
+         }
+ 
+         if (!vfsRoot.endsWith(File.separator)) {

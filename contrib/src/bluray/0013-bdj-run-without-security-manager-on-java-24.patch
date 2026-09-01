@@ -1,0 +1,59 @@
+From 8d00c582ecec4b7ac2da1f5fc3cf4393c67192cf Mon Sep 17 00:00:00 2001
+From: PowerVLC <powervlc@localhost>
+Date: Wed, 26 Aug 2026 14:30:00 +0200
+Subject: [PATCH] bdj: run without a Security Manager on Java 24 and later
+
+JEP 486 permanently disabled the Security Manager in Java 24:
+System.setSecurityManager() always throws UnsupportedOperationException and
+the private System.implSetSecurityManager() entry point used by libbluray's
+Java 18 workaround no longer exists. This makes BD-J initialization fatal on
+a machine whose only selected JVM is modern. The player then retries the disc
+and looks as though it is loading forever.
+
+Do not attempt an operation which the runtime cannot perform. The VFS no
+longer relies on BDJSecurityManager to materialise files from an ISO: the
+open path calls BDJLoader.accessFile() directly since the preceding PowerVLC
+patch. Java 21 was already observed running through that path with
+System.getSecurityManager() returning null, so Java 24 merely makes explicit
+the effective mode already supported there.
+
+Keep the existing implementation unchanged on Java 23 and earlier, including
+the reflection workaround for Java 18 through 23 and the real manager on old
+JVMs.
+---
+ src/libbluray/bdj/java/org/videolan/Libbluray.java | 16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/src/libbluray/bdj/java/org/videolan/Libbluray.java b/src/libbluray/bdj/java/org/videolan/Libbluray.java
+--- a/src/libbluray/bdj/java/org/videolan/Libbluray.java
++++ b/src/libbluray/bdj/java/org/videolan/Libbluray.java
+@@ -133,11 +133,25 @@ public class Libbluray {
+     }
+ 
+     private static void setSecurityManager(SecurityManager sm) throws Exception {
++        int javaMajor = getJavaMajor();
++
++        /* JEP 486 permanently disabled the Security Manager in Java 24.
++         * System.setSecurityManager() can no longer succeed and the private
++         * implSetSecurityManager() used by the Java 18 workaround was removed.
++         * BD-ROM file materialisation does not depend on the manager anymore,
++         * so continue without one on these runtimes. */
++        if (javaMajor >= 24) {
++            if (sm != null) {
++                System.err.println("Detected Java >= 24, continuing without a SecurityManager");
++            }
++            return;
++        }
++
+         try {
+             System.setSecurityManager(sm);
+             return;
+         } catch (Exception ex) {
+-            if (getJavaMajor() < 18)
++            if (javaMajor < 18)
+                 throw ex;
+ 
+             /* Workaround for Java 18 security manager issues.
+-- 
+2.50.1
+

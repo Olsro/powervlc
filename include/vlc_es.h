@@ -28,6 +28,7 @@
 #include <vlc_fourcc.h>
 #include <vlc_text_style.h>
 #include <vlc_viewpoint.h>
+#include <vlc_dovi.h>
 
 /**
  * \file
@@ -237,6 +238,23 @@ typedef enum video_multiview_mode_t
 
     /* Checkerboard pattern with left eye first. */
     MULTIVIEW_STEREO_CHECKERBOARD,
+
+    /* Two full-resolution views, left eye first, intended for HDMI frame
+     * packing. Unlike top/bottom, neither view is a half-height anamorphic
+     * image. Display backends must insert the standardized blanking interval
+     * (45 lines for 1080p, 30 for 720p) in the output raster. */
+    MULTIVIEW_STEREO_FRAMEPACKED,
+
+    /* Full-resolution frame packing whose coded base view is the right eye.
+     * Decoders normalize this to FRAMEPACKED (left eye first) on output. */
+    MULTIVIEW_STEREO_FRAMEPACKED_RIGHT_BASE,
+
+    /* Side-by-side with right eye first. Kept after the historical values so
+     * adding the mode does not renumber the plugin ABI. */
+    MULTIVIEW_STEREO_SBS_RIGHT_FIRST,
+
+    /* Top-bottom with right eye first (bottom/top in Matroska). */
+    MULTIVIEW_STEREO_TB_RIGHT_FIRST,
 } video_multiview_mode_t;
 
 /**
@@ -375,6 +393,7 @@ struct video_format_t
         uint16_t MaxCLL;  /* max content light level */
         uint16_t MaxFALL; /* max frame average light level */
     } lighting;
+    vlc_dovi_config_t dovi;
     uint32_t i_cubemap_padding; /**< padding in pixels of the cube map faces */
 };
 

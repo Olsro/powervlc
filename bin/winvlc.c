@@ -111,6 +111,27 @@ static void PrioritizeSystem32(void)
     SetProcessMitigationPolicy( 10 /* ProcessImageLoadPolicy */, &m, sizeof( m ) );
 }
 
+/**
+ * MinGW's shared DW2 unwinder keeps one process-wide linked list containing
+ * frame descriptors from every loaded plug-in DLL. On Windows XP, letting
+ * ExitProcess detach a portable first run's hundreds of freshly scanned
+ * plug-ins can corrupt that list while the loader is tearing it down. The
+ * application has already stopped every interface, saved its configuration,
+ * released LibVLC and its crash handler, so running DLL_PROCESS_DETACH now
+ * has no useful application-level work left to do. TerminateProcess is the
+ * documented way to end without another round of DLL detach callbacks.
+ *
+ * Keep this narrowly restricted to NT 5.x: newer Windows versions do not
+ * exhibit the loader/unwinder failure and should retain normal CRT teardown.
+ */
+static void ExitWithoutDllDetachOnLegacyWindows(void)
+{
+    OSVERSIONINFOW version = { .dwOSVersionInfoSize = sizeof(version) };
+
+    if (GetVersionExW(&version) && version.dwMajorVersion < 6)
+        TerminateProcess(GetCurrentProcess(), 0);
+}
+
 /*
  * Export WinMain to force GNU ld to generate a .reloc section
  */
@@ -283,6 +304,8 @@ int WINAPI WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance,
 #endif
     for (int i = 0; i < argc; i++)
         free (argv[i]);
+
+    ExitWithoutDllDetachOnLegacyWindows();
 
     (void)hInstance; (void)hPrevInstance; (void)lpCmdLine; (void)nCmdShow;
     return 0;

@@ -36,6 +36,7 @@ return {
   mode_playlists = "Playlisty",
   btn_search = "Szukaj",
   btn_open = "Otwórz zaznaczone",
+  btn_open_channel = "Otwórz kanał wybranej pozycji",
   btn_change_instance = "< Instancja",
   msg_enter_query = "Wpisz, czego szukać",
   msg_searching = "Wyszukiwanie…",
@@ -46,7 +47,13 @@ return {
   msg_target_found = "Rozpoznano adres — otwieram go bezpośrednio",
   msg_search_fail = "Wyszukiwanie nie powiodło się: ",
   msg_select_result = "Najpierw wybierz wynik z listy",
+  msg_channel_unavailable = "Kanał powiązany z tym wyborem jest niedostępny",
   lbl_quality = "Jakość:",
+  lbl_audio_track = "Ścieżka audio:",
+  audio_default = "Domyślna ścieżka audio",
+  audio_original = "oryginalna",
+  lbl_subtitles = "Napisy:",
+  subtitles_none = "Brak",
   lbl_by = "—",
   audio_only = "Tylko dźwięk",
   combined = "dźwięk+obraz",
@@ -169,4 +176,17 @@ return {
             .. "&gt; Zainstaluj rozszerzenie PowerVLC</strong> umieszcza w "
             .. "przeglądarce małe rozszerzenie, które robi to samo — bez "
             .. "zakładki, bez klikania, na każdej stronie.",
+  web_addon_lead = "Masz zainstalowane rozszerzenie? Nie trzeba niczego "
+                 .. "przeciągać ani klikać: po prostu otwórz poniższą "
+                 .. "instancję i przejdź pokazaną przez nią kontrolę. Ta "
+                 .. "strona powiadomi cię, gdy połączenie zostanie nawiązane.",
+  web_steps_title = "Bez rozszerzenia: zakładka",
+  web_relay_on_addon = "Połączono z PowerVLC przez rozszerzenie przeglądarki. "
+                     .. "Nie trzeba niczego klikać: zostaw to okno i kartę "
+                     .. "instancji otwarte.",
+  web_m_taking = "PowerVLC odtwarza ten film. Karta została od razu celowo "
+               .. "opróżniona: dokończenie ładowania odtwarzacza witryny "
+               .. "również tutaj wymagałoby od maszyny drugiego dekodowania "
+               .. "i drugiego pobierania, a także niepotrzebnie obciążałoby "
+               .. "instancję. Zostaw ją otwartą.",
 }

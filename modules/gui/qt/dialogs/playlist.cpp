@@ -73,6 +73,11 @@ bool PlaylistDialog::addNetworkLocation( const QString& mrl )
     return playlistWidget && playlistWidget->addNetworkLocation( mrl );
 }
 
+void PlaylistDialog::reloadPowerDevices()
+{
+    if( playlistWidget ) playlistWidget->reloadPowerDevices();
+}
+
 void PlaylistDialog::hideEvent( QHideEvent * event )
 {
     QWidget::hideEvent( event );

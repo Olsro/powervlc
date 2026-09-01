@@ -3,8 +3,8 @@
 #
 # Usage: build-powervlc.sh <x64|x86|g3|g4|g5|arm64> [extra build.sh args]
 #
-# Runs extras/package/macosx/build.sh inside the matching build<name>
-# directory at the repository root with the PowerVLC configure policy:
+# Runs extras/package/macosx/build.sh inside build/macos/<name> with the
+# PowerVLC configure policy:
 #  - macosx-avfoundation, chromecast and osx-notifications are NEVER
 #    force-disabled: configure drops what its dependencies cannot
 #    provide, and what an old OS release cannot run degrades cleanly at
@@ -58,7 +58,7 @@ esac
 
 SCRIPTDIR=$(cd "$(dirname "$0")" && pwd)
 VLCROOT=$(cd "$SCRIPTDIR/../../.." && pwd)
-BUILDDIR="$VLCROOT/build$TARGET"
+BUILDDIR="$VLCROOT/build/macos/$TARGET"
 
 # Keep an explicit floor stamp as a guard against accidentally pointing an
 # architecture label at the wrong build directory. build.sh now reconfigures
@@ -88,19 +88,53 @@ VLC_CONFIGURE_ARGS="$ARGS $VLC_CONFIGURE_ARGS" \
 # Lua bytecode is architecture-specific; ship portable source so the PowerPC
 # and 32-bit slices stop failing with "bad header in precompiled chunk".
 if [ -d "$BUILDDIR/PowerVLC.app" ]; then
+    case "$TARGET" in
+        g3|g4|g5)
+            # Keep the eD2k engine on the same legacy toolchain and shared
+            # compatibility layer as PowerVLC.  The builder is incremental
+            # after its first pinned-source build.
+            "$SCRIPTDIR/build-amule-engine-ppc.sh" "$TARGET"
+            AMULED_ENGINE="$VLCROOT/build/dependencies/amule/$TARGET/prefix/bin/amuled"
+            ;;
+        x86)
+            "$VLCROOT/extras/package/build-amule-engine.sh" macos-i686
+            AMULED_ENGINE="$VLCROOT/build/dependencies/amule/macos-i686/prefix/bin/amuled"
+            ;;
+        x64)
+            "$VLCROOT/extras/package/build-amule-engine.sh" macos-x86_64
+            AMULED_ENGINE="$VLCROOT/build/dependencies/amule/macos-x86_64/prefix/bin/amuled"
+            ;;
+        arm64)
+            "$VLCROOT/extras/package/build-amule-engine.sh" macos-arm64
+            AMULED_ENGINE="$VLCROOT/build/dependencies/amule/macos-arm64/prefix/bin/amuled"
+            ;;
+    esac
     "$SCRIPTDIR/lua-portable.sh" "$BUILDDIR/PowerVLC.app"
+    AMULED_BINARY="$AMULED_ENGINE" \
+        "$SCRIPTDIR/embed-amule-engine.sh" "$BUILDDIR/PowerVLC.app"
 
-    # package.mak initially creates the cache before build.sh normalises and
-    # strips the bundled Mach-O plugins.  Those operations change every
-    # plugin's mtime, so the cache is already stale when the finished app is
-    # launched (and was especially harmful on the native Apple Silicon
-    # bundle).  Regenerate it only when this host can execute the target cache
-    # generator; cross-built legacy slices deliberately ship without one.
+    # lua-portable and amuled are installed after build.sh's signing pass.
+    # Sign every nested slice first: signing changes plugin mtimes, and the
+    # cache must describe those final files rather than their unsigned state.
+    codesign --force --deep --sign - "$BUILDDIR/PowerVLC.app" >/dev/null 2>&1 || true
+
+    # package.mak initially creates the cache before build.sh normalises,
+    # strips and signs the bundled Mach-O plugins.  Regenerate it only when
+    # this host can execute the target cache generator; cross-built legacy
+    # slices deliberately ship without one.
     CACHEGEN="$BUILDDIR/bin/powervlc-cache-gen"
     PLUGINDIR="$BUILDDIR/PowerVLC.app/Contents/MacOS/plugins"
     if [ -x "$CACHEGEN" ] && "$CACHEGEN" --help >/dev/null 2>&1; then
         "$CACHEGEN" "$PLUGINDIR"
+        # Contents/MacOS is a code location, so the generic cache file also
+        # needs an ad hoc seal for strict deep verification on Apple Silicon.
+        codesign --force --sign - "$PLUGINDIR/plugins.dat"
     else
         rm -f "$PLUGINDIR/plugins.dat"
     fi
+
+    # Seal the refreshed cache without touching the already signed nested
+    # plugins again (which would immediately invalidate their cache mtimes).
+    codesign --force --sign - "$BUILDDIR/PowerVLC.app"
+    codesign --verify --deep --strict "$BUILDDIR/PowerVLC.app"
 fi

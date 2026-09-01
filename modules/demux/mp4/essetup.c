@@ -442,6 +442,32 @@ int SetupVideoES( demux_t *p_demux, mp4_track_t *p_track, MP4_Box_t *p_sample )
         }
     }
 
+    const MP4_Box_t *p_dvcC = MP4_BoxGet( p_sample, "dvcC" );
+    if( p_dvcC == NULL )
+        p_dvcC = MP4_BoxGet( p_sample, "dvvC" );
+    if( p_dvcC == NULL )
+        p_dvcC = MP4_BoxGet( p_sample, "dvwC" );
+    if( p_dvcC != NULL && BOXDATA(p_dvcC) != NULL )
+    {
+        const MP4_Box_data_dvcC_t *dovi = BOXDATA( p_dvcC );
+        p_track->fmt.video.dovi.version_major = dovi->i_version_major;
+        p_track->fmt.video.dovi.version_minor = dovi->i_version_minor;
+        p_track->fmt.video.dovi.profile = dovi->i_profile;
+        p_track->fmt.video.dovi.level = dovi->i_level;
+        p_track->fmt.video.dovi.rpu_present = dovi->i_rpu_present;
+        p_track->fmt.video.dovi.el_present = dovi->i_el_present;
+        p_track->fmt.video.dovi.bl_present = dovi->i_bl_present;
+        p_track->fmt.video.dovi.bl_signal_compatibility_id =
+            dovi->i_bl_signal_compatibility_id;
+        p_track->fmt.video.dovi.metadata_compression =
+            dovi->i_metadata_compression;
+        msg_Dbg( p_demux, "Dolby Vision configuration: profile %u, level %u, "
+                 "RPU %u, EL %u, BL %u, compatibility ID %u",
+                 dovi->i_profile, dovi->i_level, dovi->i_rpu_present,
+                 dovi->i_el_present, dovi->i_bl_present,
+                 dovi->i_bl_signal_compatibility_id );
+    }
+
     SetupGlobalExtensions( p_track, p_sample );
 
     /* now see if esds is present and if so create a data packet

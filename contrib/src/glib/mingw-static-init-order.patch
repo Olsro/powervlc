@@ -1,0 +1,79 @@
+--- a/glib/glib-init.h
++++ b/glib/glib-init.h
+@@ -34,6 +34,7 @@
+ void g_thread_win32_thread_detach (void);
+ void g_thread_win32_init (void);
+ void g_clock_win32_init (void);
++void g_win32_process_init (void);
+ extern HMODULE glib_dll;
+ #endif
+ 
+--- a/glib/glib-init.c
++++ b/glib/glib-init.c
+@@ -234,6 +234,30 @@ BOOL WINAPI DllMain (HINSTANCE hinstDLL,
+                      LPVOID    lpvReserved);
+ 
+ HMODULE glib_dll;
++static volatile LONG glib_init_state;
++
++/* A static GLib archive can be folded into a plug-in DLL whose actual
++ * DllMain belongs to the host.  In that case GLib's DllMain is never the PE
++ * entry point, while GObject's constructor still runs and immediately uses
++ * the Win32 lock vtable.  Make the process initialization callable from
++ * GObject and idempotent so constructor ordering is harmless. */
++void
++g_win32_process_init (void)
++{
++  LONG state = InterlockedCompareExchange (&glib_init_state, 1, 0);
++  if (state == 0)
++    {
++      g_clock_win32_init ();
++#ifdef THREADS_WIN32
++      g_thread_win32_init ();
++#endif
++      glib_init ();
++      InterlockedExchange (&glib_init_state, 2);
++    }
++  else
++    while (InterlockedCompareExchange (&glib_init_state, 2, 2) != 2)
++      Sleep (0);
++}
+ 
+ BOOL WINAPI
+ DllMain (HINSTANCE hinstDLL,
+@@ -238,11 +264,7 @@ DllMain (HINSTANCE hinstDLL,
+     {
+     case DLL_PROCESS_ATTACH:
+       glib_dll = hinstDLL;
+-      g_clock_win32_init ();
+-#ifdef THREADS_WIN32
+-      g_thread_win32_init ();
+-#endif
+-      glib_init ();
++      g_win32_process_init ();
+       break;
+ 
+     case DLL_THREAD_DETACH:
+--- a/gobject/gtype.c
++++ b/gobject/gtype.c
+@@ -26,6 +26,9 @@
+ #include <string.h>
+ 
+ #include "gtype.h"
++#ifdef G_OS_WIN32
++#include "../glib/glib-init.h"
++#endif
+ #include "gtype-private.h"
+ #include "gtypeplugin.h"
+ #include "gvaluecollector.h"
+@@ -4322,6 +4325,10 @@ gobject_init_ctor (void)
+   GTypeInfo info;
+   TypeNode *node;
+   GType type;
++
++#ifdef G_OS_WIN32
++  g_win32_process_init ();
++#endif
+ 
+   G_WRITE_LOCK (&type_rw_lock);
+ 

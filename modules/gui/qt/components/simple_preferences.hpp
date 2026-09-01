@@ -49,6 +49,8 @@ enum {
     SPrefsVideo,
     SPrefsSubtitles,
     SPrefsInputAndCodecs,
+    SPrefsMediaLibrary,
+    SPrefsPortablePlayers,
     SPrefsHotkeys,
     SPrefsMax
 };
@@ -65,6 +67,8 @@ enum {
 
 class ConfigControl;
 class QString;
+class PowerVLCMediaLibraryPrefs;
+class PowerVLCPortablePlayersPrefs;
 
 #ifdef _WIN32
 class QTreeWidgetItem;
@@ -107,6 +111,8 @@ private:
     QButtonGroup *radioGroup;
 
     char *lang;
+    PowerVLCMediaLibraryPrefs *mediaLibraryPrefs;
+    PowerVLCPortablePlayersPrefs *portablePlayersPrefs;
 
 #ifdef _WIN32
     QList<QTreeWidgetItem *> listAsso;

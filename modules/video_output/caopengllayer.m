@@ -96,6 +96,7 @@ static int Control          (vout_display_t *vd, int query, va_list ap);
 #endif
 {
     vout_display_t *_vlc_vd; // All accesses to this must be @synchronized(self)
+    NSTrackingArea *_mouseTrackingArea;
 }
 
 - (instancetype)initWithVoutDisplay:(vout_display_t *)vd;
@@ -267,6 +268,26 @@ static int Open(vlc_object_t *this)
     @autoreleasepool {
         vout_display_t *vd = (vout_display_t *)this;
         vout_display_sys_t *sys;
+
+        /* The NSOpenGL vout owns the macOS HDMI frame-packing transaction
+         * (mirror detach, 1920x2205/24 switch, fullscreen and restoration).
+         * Let module selection fall through to it for MVC instead of showing
+         * the raw two-eye 1920x2160 surface in the higher-priority CA layer. */
+        const bool stereoHandoff =
+            var_GetAddress(vd->obj.parent, "stereo3d-display-state") != NULL;
+        if (stereoHandoff ||
+            vd->fmt.multiview_mode == MULTIVIEW_STEREO_FRAMEPACKED ||
+            vd->fmt.multiview_mode ==
+                MULTIVIEW_STEREO_FRAMEPACKED_RIGHT_BASE ||
+            vd->fmt.multiview_mode == MULTIVIEW_STEREO_SBS ||
+            vd->fmt.multiview_mode == MULTIVIEW_STEREO_TB ||
+            vd->fmt.multiview_mode == MULTIVIEW_STEREO_SBS_RIGHT_FIRST ||
+            vd->fmt.multiview_mode == MULTIVIEW_STEREO_TB_RIGHT_FIRST) {
+            msg_Info(vd, stereoHandoff
+                         ? "delegating active HDMI 3D handoff to the macOS vout"
+                         : "delegating stereo frame packing to the macOS HDMI vout");
+            return VLC_EGENERIC;
+        }
 
         vd->sys = sys = vlc_obj_calloc(this, 1, sizeof(*sys));
         if (sys == NULL)
@@ -586,6 +607,15 @@ static int Control(vout_display_t *vd, int query, va_list ap)
     }
 }
 
+- (void)dealloc
+{
+    if (_mouseTrackingArea != nil) {
+        [self removeTrackingArea:_mouseTrackingArea];
+        [_mouseTrackingArea release];
+    }
+    [super dealloc];
+}
+
 - (void)viewWillStartLiveResize
 {
     [(VLCCAOpenGLLayer *)self.layer setAsynchronous:YES];
@@ -649,6 +679,30 @@ shouldInheritContentsScale:(CGFloat)newScale
 - (BOOL)mouseDownCanMoveWindow
 {
     return YES;
+}
+
+- (void)viewDidMoveToWindow
+{
+    if (self.window != nil)
+        self.window.acceptsMouseMovedEvents = YES;
+    [super viewDidMoveToWindow];
+}
+
+- (void)updateTrackingAreas
+{
+    [super updateTrackingAreas];
+
+    if (_mouseTrackingArea != nil) {
+        [self removeTrackingArea:_mouseTrackingArea];
+        [_mouseTrackingArea release];
+    }
+    _mouseTrackingArea = [[NSTrackingArea alloc]
+        initWithRect:NSZeroRect
+            options:NSTrackingMouseMoved | NSTrackingActiveAlways |
+                    NSTrackingInVisibleRect
+              owner:self
+           userInfo:nil];
+    [self addTrackingArea:_mouseTrackingArea];
 }
 
 
@@ -941,6 +995,8 @@ shouldInheritContentsScale:(CGFloat)newScale
         }
 
         // Ensure viewport and aspect ratio is correct
+        vout_display_opengl_SetDrawableSize(sys->vgl, newSize.width,
+                                            newSize.height);
         vout_display_opengl_Viewport(sys->vgl, sys->place.x, sys->place.y,
                                      sys->place.width, sys->place.height);
         vout_display_opengl_SetWindowAspectRatio(sys->vgl, (float)sys->place.width / sys->place.height);

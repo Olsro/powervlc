@@ -2,9 +2,9 @@
 # Merge per-architecture PowerVLC.app bundles into one universal bundle.
 #
 # Usage: make-universal.sh <output.app> <input1.app> [input2.app ...]
-# e.g.   make-universal.sh builduniversal/PowerVLC.app \
-#            buildarm64/PowerVLC.app buildx64/PowerVLC.app \
-#            buildx86/PowerVLC.app buildg3/PowerVLC.app
+# e.g.   make-universal.sh build/macos/universal/PowerVLC.app \
+#            build/macos/arm64/PowerVLC.app build/macos/x64/PowerVLC.app \
+#            build/macos/x86/PowerVLC.app build/macos/g3/PowerVLC.app
 #
 # Every regular file present in several inputs is lipo-merged when it is
 # a Mach-O, taken from the FIRST input otherwise (list the preferred
@@ -19,6 +19,19 @@ OUT="$1"
 shift
 
 command -v lipo >/dev/null || { echo "lipo not found" >&2; exit 1; }
+
+lipo_merge()
+{
+    merge_dest=$1
+    merge_list=$2
+    set --
+    while IFS= read -r merge_candidate; do
+        [ -n "$merge_candidate" ] && set -- "$@" "$merge_candidate"
+    done <<EOF
+$merge_list
+EOF
+    lipo -create "$@" -output "$merge_dest"
+}
 
 for IN in "$@"; do
     [ -d "$IN" ] || { echo "missing input bundle: $IN" >&2; exit 1; }
@@ -87,8 +100,7 @@ $IN/$REL"
 
     NUNIQUE=$(printf '%s' "$UNIQUE" | grep -c . || true)
     if [ "$NUNIQUE" -gt 1 ]; then
-        # shellcheck disable=SC2086
-        lipo -create $(printf '%s' "$UNIQUE" | grep .) -output "$DEST" \
+        lipo_merge "$DEST" "$UNIQUE" \
             || cp "$FIRST" "$DEST"
     else
         cp "$FIRST" "$DEST"

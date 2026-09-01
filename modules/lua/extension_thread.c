@@ -416,14 +416,12 @@ static void* Run( void *data )
                 continue; /* signalled: look at the queue again */
 
             /* One shot: the script re-arms it if it wants another. */
-            char *psz_func = p_ext->p_sys->psz_timer_func;
-            p_ext->p_sys->psz_timer_func = NULL;
+            char psz_func[sizeof( p_ext->p_sys->psz_timer_func )];
+            strcpy( psz_func, p_ext->p_sys->psz_timer_func );
+            p_ext->p_sys->psz_timer_func[0] = '\0';
             p_ext->p_sys->i_timer_deadline = 0;
-            if( psz_func == NULL || p_ext->p_sys->b_exiting )
-            {
-                free( psz_func );
+            if( psz_func[0] == '\0' || p_ext->p_sys->b_exiting )
                 continue;
-            }
 
             /* Same watchdog and same lock as any other command: the call
              * runs Lua, so nothing else may be running it at the time. */
@@ -434,7 +432,6 @@ static void* Run( void *data )
             vlc_mutex_lock( &p_ext->p_sys->running_lock );
             lua_ExecuteFunction( p_mgr, p_ext, psz_func, LUA_END );
             vlc_mutex_unlock( &p_ext->p_sys->running_lock );
-            free( psz_func );
 
             vlc_mutex_lock( &p_ext->p_sys->command_lock );
             vlc_timer_schedule( p_ext->p_sys->timer, false, 0, 0 );

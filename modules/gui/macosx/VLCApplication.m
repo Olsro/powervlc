@@ -29,6 +29,92 @@
  *****************************************************************************/
 
 #import "VLCApplication.h"
+#import "VLCMain.h"
+
+#include <vlc_playlist.h>
+#include <vlc_services_discovery.h>
+#include <pthread.h>
+#include <time.h>
+#include <unistd.h>
+
+/* A mounted NAS can leave a kernel stat() uninterruptible for minutes. The
+ * media-library shutdown correctly requests cancellation, but libvlc_release
+ * must still join that thread and Cocoa's main thread would consequently
+ * appear frozen. Hide the already-closing application immediately and keep a
+ * final process-level deadline. Normal cleanup exits well before it; only a
+ * wedged network syscall reaches _exit(). Scan checkpoints make that fallback
+ * recoverable (at most the current checkpoint batch is replayed). */
+static void *VLCQuitWatchdog(void *opaque)
+{
+    (void)opaque;
+    struct timespec delay = { 3, 0 };
+    while (nanosleep(&delay, &delay) != 0)
+        ;
+    _exit(0);
+}
+
+static void VLCStartQuitWatchdog(void)
+{
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, VLCQuitWatchdog, NULL) == 0)
+        pthread_detach(thread);
+}
+
+static BOOL VLCDeviceTransferIsActive(void)
+{
+    playlist_t *playlist = pl_Get(getIntf());
+    for (NSUInteger index = 0; index < 64; ++index) {
+        NSString *service = [NSString stringWithFormat:
+            @"powervlc_device{index=%lu}", (unsigned long)index];
+        if (!playlist_IsServicesDiscoveryLoaded(playlist, service.UTF8String))
+            continue;
+        services_discovery_transfer_status_t status = { 0 };
+        int result = playlist_ServicesDiscoveryControl(playlist,
+            service.UTF8String, SD_CMD_POWERVLC_DEVICE_TRANSFERS, &status);
+        BOOL active = result == VLC_SUCCESS && status.b_synchronizing;
+        for (size_t i = 0; i < status.i_count; ++i) {
+            free(status.p_items[i].psz_source);
+            free(status.p_items[i].psz_destination);
+        }
+        free(status.p_items);
+        if (active) return YES;
+    }
+    return NO;
+}
+
+static BOOL VLCDeviceHasPendingChanges(void)
+{
+    playlist_t *playlist = pl_Get(getIntf());
+    for (NSUInteger index = 0; index < 64; ++index) {
+        NSString *service = [NSString stringWithFormat:
+            @"powervlc_device{index=%lu}", (unsigned long)index];
+        if (!playlist_IsServicesDiscoveryLoaded(playlist, service.UTF8String))
+            continue;
+        services_discovery_transfer_status_t status = { 0 };
+        int result = playlist_ServicesDiscoveryControl(playlist,
+            service.UTF8String, SD_CMD_POWERVLC_DEVICE_TRANSFERS, &status);
+        BOOL pending = result == VLC_SUCCESS && status.b_pending_changes;
+        for (size_t i = 0; i < status.i_count; ++i) {
+            free(status.p_items[i].psz_source);
+            free(status.p_items[i].psz_destination);
+        }
+        free(status.p_items);
+        if (pending) return YES;
+    }
+    return NO;
+}
+
+static void VLCDevicePendingChangesControl(int command)
+{
+    playlist_t *playlist = pl_Get(getIntf());
+    for (NSUInteger index = 0; index < 64; ++index) {
+        NSString *service = [NSString stringWithFormat:
+            @"powervlc_device{index=%lu}", (unsigned long)index];
+        if (playlist_IsServicesDiscoveryLoaded(playlist, service.UTF8String))
+            playlist_ServicesDiscoveryControl(playlist, service.UTF8String,
+                                               command);
+    }
+}
 
 /*****************************************************************************
  * VLCApplication implementation
@@ -42,6 +128,35 @@
 - (void)terminate:(id)sender
 {
     [self activateIgnoringOtherApps:YES];
+    if (VLCDeviceTransferIsActive()) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = _NS("Synchronization in progress");
+        alert.informativeText = _NS("A portable player is still being synchronized. Quitting now will interrupt the current transfer.");
+        [alert addButtonWithTitle:_NS("Continue Synchronization")];
+        [alert addButtonWithTitle:_NS("Quit Anyway")];
+        if ([alert runModal] != NSAlertSecondButtonReturn)
+            return;
+    }
+    if (VLCDeviceHasPendingChanges()) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = _NS("Portable-player changes are pending");
+        alert.informativeText = _NS("One or more iPods contain changes that have not been validated. Validate them before quitting, or discard them.");
+        [alert addButtonWithTitle:_NS("Finalize Changes")];
+        [alert addButtonWithTitle:_NS("Quit Without Finalizing")];
+        [alert addButtonWithTitle:_NS("Cancel")];
+        NSInteger answer = [alert runModal];
+        if (answer == NSAlertFirstButtonReturn) {
+            VLCDevicePendingChangesControl(SD_CMD_POWERVLC_DEVICE_COMMIT);
+            return;
+        }
+        if (answer != NSAlertSecondButtonReturn)
+            return;
+        VLCDevicePendingChangesControl(SD_CMD_POWERVLC_DEVICE_DISCARD);
+    }
+    VLCStartQuitWatchdog();
+    /* The user has completed every quit confirmation. Do not leave a frozen
+     * window visible while libvlc performs its bounded cleanup. */
+    [self hide:sender];
     [self stop:sender];
 
     // Trigger event in loop to force evaluating the stop flag

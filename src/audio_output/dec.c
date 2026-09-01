@@ -769,15 +769,35 @@ int aout_DecPlay (audio_output_t *aout, block_t *block, int input_rate)
     }
     block->i_pts += owner->sync.gapless_offset;
 
+    /* Inspect the discontinuity before deciding whether the timestamp is too
+     * late.  After a seek the first compressed-audio burst can legitimately
+     * arrive behind the freshly rebased clock.  The old ordering dropped that
+     * burst before seeing its flag, then kept dropping every following IEC
+     * 61937 burst, leaving only the HDMI pause carrier.  Let the synchronizer
+     * below consume the first discontinuous block and rebuild the output
+     * timing instead. */
+    if (block->i_flags & BLOCK_FLAG_DISCONTINUITY)
+        owner->sync.discontinuity = true;
+
     /* Judged on the time it will ACTUALLY be played at. */
     const vlc_tick_t advance = block->i_pts - now;
-    if (advance < -AOUT_MAX_PTS_DELAY)
+    if (advance < -AOUT_MAX_PTS_DELAY && !owner->sync.discontinuity)
     {   /* Late buffer can be caused by bugs in the decoder, by scheduling
          * latency spikes (excessive load, SIGSTOP, etc.) or if buffering is
          * insufficient. We assume the PTS is wrong and play the buffer anyway:
          * Hopefully video has encountered a similar PTS problem as audio. */
         msg_Warn (aout, "buffer too late (%"PRId64" us): dropped", advance);
-        goto drop;
+        /* Do not turn every stale block into a fresh discontinuity.  A
+         * passthrough menu loop can jump its audio timestamps backwards by a
+         * few IEC periods. Marking each rejected burst discontinuous made the
+         * following burst flush and play, then the next one drop again: the
+         * stream could never consume the backlog and produced endless cuts.
+         * Drop stale bursts consecutively until their PTS catches the clock;
+         * an explicit seek already enters here with sync.discontinuity set and
+         * therefore still takes the resynchronization path above. */
+        block_Release (block);
+        atomic_fetch_add(&owner->buffers_lost, 1);
+        goto out;
     }
     /* The early bound carries the offset with it: a joined track legitimately
      * sits that much further in the future, and this check exists to catch a
@@ -790,9 +810,6 @@ int aout_DecPlay (audio_output_t *aout, block_t *block, int input_rate)
         goto drop;
     }
 
-    if (block->i_flags & BLOCK_FLAG_DISCONTINUITY)
-        owner->sync.discontinuity = true;
-
     if (atomic_exchange(&owner->vp.update, false))
     {
         vlc_mutex_lock (&owner->vp.lock);
@@ -802,11 +819,17 @@ int aout_DecPlay (audio_output_t *aout, block_t *block, int input_rate)
 
     const unsigned i_samples_in = block->i_nb_samples;
 
+    /* Count every input block, including blocks retained by an aggregating
+     * filter. TrueHD-to-MAT, for example, consumes 24 small TrueHD frames
+     * before returning one IEC 61937 burst. Counting only the 24th input made
+     * the diagnostic report a fictitious 2300% expansion even though both
+     * sides represented exactly the same 20 ms of audio. */
+    owner->sync.samples_in += i_samples_in;
+
     block = aout_FiltersPlay (owner->filters, block, input_rate);
     if (block == NULL)
         goto lost;
 
-    owner->sync.samples_in += i_samples_in;
     owner->sync.samples_out += block->i_nb_samples;
 
     /* Software volume */
@@ -866,6 +889,13 @@ void aout_DecFlush (audio_output_t *aout, bool wait)
     owner->sync.end = VLC_TICK_INVALID;
     owner->sync.gapless_offset = 0;
     owner->sync.b_gapless_pending = false;
+    owner->sync.samples_in = 0;
+    owner->sync.samples_out = 0;
+    owner->sync.report_date = VLC_TICK_INVALID;
+    /* The next decoded block establishes a new timeline.  In particular,
+     * allow it through the late-buffer guard so a seek can recover even when
+     * the codec/container did not propagate BLOCK_FLAG_DISCONTINUITY. */
+    owner->sync.discontinuity = true;
     if (owner->mixer_format.i_format)
     {
         if (wait)

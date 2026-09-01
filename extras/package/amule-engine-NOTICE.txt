@@ -1,0 +1,23 @@
+PowerVLC bundled aMule engine
+==============================
+
+PowerVLC includes its own headless `amuled` 3.0.1 engine, built from the pinned
+sources below for every shipped architecture. Third-party dependencies are
+linked statically; PowerVLC packages never import the official aMule binary or
+its dynamic-library closure.
+
+The legacy aMule UPnP client is disabled at build time on every platform: port
+mappings are owned by PowerVLC's smaller IGD client. HTTP(S) bootstrap
+downloads are likewise delegated to PowerVLC's existing HTTP stack, so the
+engine includes neither curl nor a second TLS implementation. aMule's GUI,
+web server and command-line clients are not included.
+
+Project: https://github.com/amule-org/amule
+Corresponding source:
+https://github.com/amule-org/amule/archive/refs/tags/3.0.1.tar.gz
+Source archive SHA-256:
+44484f2b003e2e9de2e86f6a9e57c948401aa24d6d398e2af73e563fd66a3413
+
+aMule is distributed under the GNU General Public License, version 2 or later.
+Its copyright and license notices remain applicable to these files. PowerVLC's
+Lua EC controller is likewise distributed under GPL-2.0-or-later.

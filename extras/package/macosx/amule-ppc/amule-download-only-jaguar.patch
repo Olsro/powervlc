@@ -1,0 +1,223 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -307 +307 @@ if (CMAKE_SIZEOF_VOID_P EQUAL 4)
+-		set (LIBATOMIC atomic)
++		set (LIBATOMIC ${LIBATOMIC_LIBRARY})
+diff --git a/cmake/options.cmake b/cmake/options.cmake
+--- a/cmake/options.cmake
++++ b/cmake/options.cmake
+@@ -44,0 +45,4 @@ option (BUILD_TESTING "Build unit tests" OFF)
++option (POWERVLC_EXTERNAL_HTTP "delegate bootstrap HTTP downloads to the PowerVLC extension" OFF)
++if (POWERVLC_EXTERNAL_HTTP)
++	add_compile_definitions (POWERVLC_EXTERNAL_HTTP=1)
++endif()
+diff --git a/cmake/wx.cmake b/cmake/wx.cmake
+--- a/cmake/wx.cmake
++++ b/cmake/wx.cmake
+@@ -103 +103 @@ unset (_amule_wx_targets)
+-if (wx_NEED_NET)
++if (wx_NEED_NET AND NOT POWERVLC_EXTERNAL_HTTP)
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -169,0 +170,6 @@ if (BUILD_DAEMON)
++	if (POWERVLC_JAGUAR_COMPAT_LIBRARY)
++		# wxBase and the static C++ runtime refer to symbols supplied here;
++		# force-loading avoids Darwin's one-pass archive ordering trap.
++		target_link_options (amuled PRIVATE
++			"LINKER:-force_load,${POWERVLC_JAGUAR_COMPAT_LIBRARY}")
++	endif()
+@@ -782 +790,2 @@ IF (NEED_LIB_MULESOCKET)
+ 		PUBLIC ${LIBS_INCLUDE_DIR}
++		PRIVATE ${Boost_INCLUDE_DIR}
+diff --git a/src/GetTickCount.cpp b/src/GetTickCount.cpp
+--- a/src/GetTickCount.cpp
++++ b/src/GetTickCount.cpp
+@@ -66,19 +66,36 @@
+-#include <time.h>		// Needed for clock_gettime
++#ifdef __APPLE__
++#include <mach/mach_time.h>
++#else
++#include <time.h>		// Needed for clock_gettime
++#endif
+ 
+ // in milliseconds, not seconds
+ // avoids 32bit rollover error for differences above 50days
+ // since 2**32 milliseconds = 50 days aprox
+ uint64 GetTickCount64(void) {
++#ifdef __APPLE__
++	static mach_timebase_info_data_t timebase = { 0, 0 };
++	if (timebase.denom == 0) {
++		mach_timebase_info(&timebase);
++	}
++	const uint64 ticks = mach_absolute_time();
++	const uint64 whole = ticks / timebase.denom;
++	const uint64 remainder = ticks % timebase.denom;
++	const uint64 nanos = whole * timebase.numer
++		+ (remainder * timebase.numer) / timebase.denom;
++	return nanos / 1000000;
++#else
+ 	struct timespec ts;
+ 	uint64 msecs;
+ 
+ 	// Fetch time (Y2038-safe)
+ 	// CLOCK_MONOTONIC: tick count is for timeouts / deltas, must not
+ 	// jump when wall clock is adjusted. Callers that need a Unix
+ 	// timestamp (CClientCredits::SetLastSeen, partfile source-seeds
+ 	// serialization, wxCas defaults) should use time(NULL) instead.
+ 	clock_gettime(CLOCK_MONOTONIC, &ts);
+ 	msecs = (uint64) ts.tv_sec * 1000;
+ 	msecs += ts.tv_nsec / 1000000;
+ 	return msecs;
++#endif
+ }
+diff --git a/src/HTTPDownload.h b/src/HTTPDownload.h
+--- a/src/HTTPDownload.h
++++ b/src/HTTPDownload.h
+@@ -33,1 +34,3 @@
++#ifndef POWERVLC_EXTERNAL_HTTP
+ #include <wx/webrequest.h>	// Needed for wxWebRequest
++#endif
+@@ -37,1 +40,3 @@
++#ifndef POWERVLC_EXTERNAL_HTTP
+ class wxWebRequestEvent;
++#endif
+@@ -88,6 +93,7 @@ private:
++#ifndef POWERVLC_EXTERNAL_HTTP
+ 	void	OnStateEvent(wxWebRequestEvent& evt);
+-	void	FinishAndDestroy(int result);
+-
+ 	static wxString FormatDateHTTP(const wxDateTime& date);
+ 
+ 	wxWebRequest		m_request;
++#endif
++	void	FinishAndDestroy(int result);
+diff --git a/src/HTTPDownload.cpp b/src/HTTPDownload.cpp
+--- a/src/HTTPDownload.cpp
++++ b/src/HTTPDownload.cpp
+@@ -28,1 +29,3 @@
++#ifndef POWERVLC_EXTERNAL_HTTP
+ #include <wx/webrequest.h>
++#endif
+@@ -42,0 +45,62 @@
++#ifdef POWERVLC_EXTERNAL_HTTP
++
++CHTTPDownloadThread::CHTTPDownloadThread(const wxString& url,
++		const wxString& filename, const wxString& oldfilename,
++		HTTP_Download_File file_id, bool showDialog, bool checkDownloadNewer)
++	: m_url(url), m_tempfile(filename), m_result(-1), m_response(0),
++	  m_error(0), m_file_id(file_id), m_companion(NULL),
++	  m_finishPosted(false)
++{
++	(void)oldfilename;
++	(void)showDialog;
++	(void)checkDownloadNewer;
++	{
++		wxMutexLocker lock(s_allThreadsMutex);
++		s_allThreads.insert(this);
++	}
++	AddDebugLogLineN(logHTTP,
++		CFormat("HTTP download delegated to PowerVLC: %s") % m_url);
++	CallAfter([this]{ FinishAndDestroy(HTTP_Error); });
++}
++
++void CHTTPDownloadThread::FinishAndDestroy(int result)
++{
++	if (m_finishPosted) return;
++	m_finishPosted = true;
++	m_result = result;
++	CMuleInternalEvent evt(wxEVT_CORE_FINISHED_HTTP_DOWNLOAD);
++	evt.SetInt((int)m_file_id);
++	evt.SetExtraInt64(m_result);
++	wxQueueEvent(wxTheApp, (evt).Clone());
++	{
++		wxMutexLocker lock(s_allThreadsMutex);
++		s_allThreads.erase(this);
++	}
++	CallAfter([this]{ delete this; });
++}
++
++void CHTTPDownloadThread::DetachCompanion()
++{
++	m_companion = NULL;
++}
++
++void CHTTPDownloadThread::Stop()
++{
++	FinishAndDestroy(HTTP_Error);
++}
++
++void CHTTPDownloadThread::StopAll()
++{
++	ThreadSet snapshot;
++	{
++		wxMutexLocker lock(s_allThreadsMutex);
++		snapshot = s_allThreads;
++	}
++	for (ThreadSet::iterator it = snapshot.begin(); it != snapshot.end(); ++it)
++		(*it)->Stop();
++}
++
++CHTTPDownloadThread::ThreadSet CHTTPDownloadThread::s_allThreads;
++wxMutex CHTTPDownloadThread::s_allThreadsMutex;
++
++#else
+@@ -471,0 +545 @@ wxMutex CHTTPDownloadThread::s_allThreadsMutex;
++#endif // POWERVLC_EXTERNAL_HTTP
+diff --git a/src/ExternalConn.cpp b/src/ExternalConn.cpp
+--- a/src/ExternalConn.cpp
++++ b/src/ExternalConn.cpp
+@@ -2047,2 +2047,18 @@
+-			theApp->serverlist->UpdateServerMetFromURL(url);
+-			response = new CECPacket(EC_OP_NOOP);
++			#ifdef POWERVLC_EXTERNAL_HTTP
++			// PowerVLC owns the only HTTP/TLS stack in the bundle. Its Lua
++			// controller has already downloaded this file atomically; merge it
++			// into the running daemon instead of starting wxWebRequest.
++			CPath downloaded(thePrefs::GetConfigDir() + "server.met.download");
++			if (theApp->serverlist->LoadServerMet(downloaded)) {
++				theApp->serverlist->SaveServerMet();
++				CPath::RemoveFile(downloaded);
++				response = new CECPacket(EC_OP_NOOP);
++			} else {
++				response = new CECPacket(EC_OP_FAILED);
++				response->AddTag(CECTag(EC_TAG_STRING,
++					wxTRANSLATE("Unable to load the PowerVLC server.met file.")));
++			}
++			#else
++			theApp->serverlist->UpdateServerMetFromURL(url);
++			response = new CECPacket(EC_OP_NOOP);
++			#endif
+diff --git a/src/SharedDirWatcher.h b/src/SharedDirWatcher.h
+--- a/src/SharedDirWatcher.h
++++ b/src/SharedDirWatcher.h
+@@ -22,1 +23,3 @@
++#if wxUSE_FSWATCHER
+ #include <wx/fswatcher.h>
++#endif
+@@ -33,0 +36,13 @@ class CPath;
++#if !wxUSE_FSWATCHER
++class CSharedDirWatcher
++{
++public:
++	explicit CSharedDirWatcher(CSharedFileList *) {}
++	~CSharedDirWatcher() {}
++	void Enable() {}
++	void Disable() {}
++	bool IsEnabled() const { return false; }
++	void Refresh() {}
++};
++#else
++
+@@ -169,0 +190 @@ private:
++#endif // wxUSE_FSWATCHER
+diff --git a/src/SharedDirWatcher.cpp b/src/SharedDirWatcher.cpp
+--- a/src/SharedDirWatcher.cpp
++++ b/src/SharedDirWatcher.cpp
+@@ -18,0 +19,2 @@
++#if wxUSE_FSWATCHER
++
+@@ -693,0 +696,2 @@ void CSharedDirWatcher::OnMacRunLoopPump(wxTimerEvent & WXUNUSED(event))
++
++#endif // wxUSE_FSWATCHER

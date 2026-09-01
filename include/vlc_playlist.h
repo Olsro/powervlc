@@ -380,6 +380,22 @@ VLC_API int playlist_AddInput( playlist_t *, input_item_t *, bool, bool );
 VLC_API playlist_item_t * playlist_NodeAddInput( playlist_t *, input_item_t *, playlist_item_t *, int );
 VLC_API int playlist_NodeAddCopy( playlist_t *, playlist_item_t *, playlist_item_t *, int );
 
+/** Result of resolving a PowerVLC media-library Random action.
+ * Call with the playlist lock held. On the first call, pass -1 as the branch
+ * id. If p_browse is returned, preparse it and retry with i_branch_id once
+ * that input is fully preparsed. */
+typedef struct playlist_powervlc_random_result_t
+{
+    playlist_item_t *p_track;
+    playlist_item_t *p_scope;
+    playlist_item_t *p_browse;
+    int i_branch_id;
+} playlist_powervlc_random_result_t;
+
+VLC_API void playlist_PowerVLCRandomResolve(
+    playlist_t *, playlist_item_t *, int,
+    playlist_powervlc_random_result_t * );
+
 /********************************** Item search *************************/
 VLC_API playlist_item_t * playlist_ItemGetById(playlist_t *, int ) VLC_USED;
 VLC_API playlist_item_t *playlist_ItemGetByInput(playlist_t *,
@@ -395,6 +411,24 @@ VLC_API int playlist_LiveSearchUpdate(playlist_t *, playlist_item_t *, const cha
 VLC_API playlist_item_t * playlist_NodeCreate( playlist_t *, const char *, playlist_item_t * p_parent, int i_pos, int i_flags );
 VLC_API playlist_item_t * playlist_ChildSearchName(playlist_item_t*, const char* ) VLC_USED;
 VLC_API void playlist_NodeDelete( playlist_t *, playlist_item_t * );
+
+/**
+ * Delete a complete subtree while emitting one removal notification for its
+ * root. This avoids one UI/model update per descendant for large virtual
+ * folders and portable-player playlists.
+ *
+ * The playlist must be locked by the caller.
+ */
+VLC_API void playlist_NodeDeleteBatch( playlist_t *, playlist_item_t * );
+
+/**
+ * Remove every child of a playlist node, including read-only children.
+ *
+ * The playlist must be locked by the caller. Children are removed from the
+ * end so clearing a large lazy directory does not repeatedly shift the whole
+ * child array. The node itself is retained.
+ */
+VLC_API void playlist_NodeEmpty( playlist_t *, playlist_item_t * );
 
 /**************************
  * Audio output management

@@ -1,0 +1,46 @@
+set(CMAKE_SYSTEM_NAME Darwin)
+set(CMAKE_SYSTEM_PROCESSOR powerpc)
+
+set(_root "$ENV{POWERVLC_ROOT}")
+set(_tools "$ENV{POWERVLC_LEGACY_TOOLCHAIN}")
+set(_prefix "$ENV{POWERVLC_AMULE_PREFIX}")
+set(_sdk "${_tools}/sdks/MacOSX10.4u.sdk")
+set(_contrib "$ENV{POWERVLC_AMULE_CONTRIB}")
+set(_cpu "$ENV{POWERVLC_AMULE_CPU_FLAGS}")
+
+set(CMAKE_C_COMPILER "${_tools}/opt/gcc-ppc-tiger/bin/tiger-cc")
+set(CMAKE_CXX_COMPILER "${_tools}/opt/gcc-ppc-tiger/bin/tiger-c++")
+set(CMAKE_AR "${_tools}/opt/gcc-ppc-tiger/bin/powerpc-apple-darwin8-gcc-ar")
+set(CMAKE_RANLIB "${_tools}/opt/gcc-ppc-tiger/bin/powerpc-apple-darwin8-gcc-ranlib")
+
+set(CMAKE_OSX_SYSROOT "${_sdk}" CACHE PATH "")
+set(CMAKE_OSX_DEPLOYMENT_TARGET "10.2" CACHE STRING "")
+set(CMAKE_OSX_ARCHITECTURES "ppc" CACHE STRING "")
+# CMake sees Darwin on both sides and otherwise tries to run PowerPC probes.
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
+set(_common "-O2 ${_cpu} -fno-stack-check -isysroot ${_sdk} -mmacosx-version-min=10.2 -I${_prefix}/include -I${_contrib}/include -D_INTL_REDIRECT_MACROS -DPOWERVLC_WXBASE_JAGUAR=1")
+set(CMAKE_C_FLAGS_INIT "${_common}")
+set(CMAKE_CXX_FLAGS_INIT "${_common} -std=gnu++17 -DBOOST_ASIO_DISABLE_KQUEUE=1 -DBOOST_ERROR_CODE_HEADER_ONLY=1 -DBOOST_ALIGN_USE_ALIGN=1 -DCRYPTOPP_DISABLE_ASM=1")
+set(_link "-Wl,-syslibroot,${_sdk} -mmacosx-version-min=10.2 -Wl,-no_uuid -Wl,-dead_strip -static-libstdc++ -static-libgcc -L${_contrib}/lib -lSystemStubs")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "${_link}")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "${_link}")
+
+set(CMAKE_FIND_ROOT_PATH "${_prefix}" "${_contrib}" "${_sdk}")
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)
+
+set(wxWidgets_CONFIG_EXECUTABLE "${_prefix}/bin/wx-config" CACHE FILEPATH "")
+set(CRYPTOPP_INCLUDE_DIR "${_prefix}/include" CACHE PATH "")
+set(CRYPTOPP_INCLUDE_PREFIX "cryptopp" CACHE STRING "")
+set(CRYPTOPP_CONFIG_FILE "${_prefix}/include/cryptopp/config.h" CACHE FILEPATH "")
+set(CRYPTOPP_LIBRARY "${_prefix}/lib/libcryptopp.a" CACHE FILEPATH "")
+set(CRYPTOPP_VERSION "890" CACHE STRING "")
+set(CRYPTOPP_LIB_SEARCH_PATH "${_prefix}/lib" CACHE PATH "")
+
+set(ZLIB_INCLUDE_DIR "${_contrib}/include" CACHE PATH "")
+set(ZLIB_LIBRARY "${_contrib}/lib/libz.a" CACHE FILEPATH "")
+set(LIBATOMIC_LIBRARY "${_tools}/opt/gcc-ppc-tiger/powerpc-apple-darwin8/lib/libatomic.a" CACHE FILEPATH "")
+set(POWERVLC_JAGUAR_COMPAT_LIBRARY "${_prefix}/lib/libjaguarcompat.a" CACHE FILEPATH "")

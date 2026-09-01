@@ -27,6 +27,7 @@
 #import "VLCLegacyControls.h"
 #import "VLCLegacySeekThumbnailer.h"
 #import "VLCLegacyMain.h"
+#import "VLCLegacyMediaInfo.h"
 #import "VLCLegacyMenu.h"
 #import "VLCLegacyHUDWindow.h"
 #import "VLCLegacyVoutWindow.h"
@@ -57,15 +58,72 @@
 #include <vlc_input.h>
 #include <vlc_input_item.h>
 #include <vlc_services_discovery.h>
+#include <vlc_rand.h>
 #include <vlc_strings.h>
 #include <vlc_url.h>
+#include <vlc_services_discovery.h>
+#include <vlc_actions.h>
+#include <vlc_vout_osd.h>
 
 #define _NS(s) ((NSString *)[NSString stringWithUTF8String:vlc_gettext(s)])
 
+extern VLCLegacyMainWindow *VLCLegacyGetMainWindow(void);
+
 #define SIDEBAR_WIDTH 150.0f
 #define BOTTOM_BAR_HEIGHT 36.0f
+#define PVLC_ML_SCAN_ACTIVE "powervlc-ml-scan-active"
+#define PVLC_ML_SCAN_DONE   "powervlc-ml-scan-done"
+#define PVLC_ML_SCAN_TOTAL  "powervlc-ml-scan-total"
 /* height of the Subscribe / Unsubscribe strip under the podcast list */
 #define PODCAST_BAR_HEIGHT 32.0f
+
+static void VLCLegacyCollectAudioCDTracks(playlist_item_t *node,
+                                           NSMutableArray *tracks)
+{
+    if (!node) return;
+    if (node->i_children > 0) {
+        int i;
+        for (i = 0; i < node->i_children; i++)
+            VLCLegacyCollectAudioCDTracks(node->pp_children[i], tracks);
+        return;
+    }
+    if (!node->p_input) return;
+    char *uri = input_item_GetURI(node->p_input);
+    BOOL isTrack = uri && !strncmp(uri, "cdda://", 7)
+                && input_item_GetDuration(node->p_input) > 0;
+    free(uri);
+    if (isTrack)
+        [tracks addObject:[NSValue valueWithPointer:
+                           input_item_Hold(node->p_input)]];
+}
+
+static BOOL VLCLegacyIsPowerVLCIndexItem(input_item_t *input)
+{
+    return input && input_item_IsPowerVLCLazyIndex(input);
+}
+
+static NSInteger VLCLegacyPowerVLCIntegerOption(input_item_t *input,
+                                                 const char *prefix)
+{
+    if (!input || !prefix)
+        return -1;
+    size_t length = strlen(prefix);
+    NSInteger value = -1;
+    vlc_mutex_lock(&input->lock);
+    int i;
+    for (i = 0; i < input->i_options; ++i) {
+        const char *option = input->ppsz_options[i];
+        if (!strncmp(option, prefix, length)) {
+            char *end = NULL;
+            long parsed = strtol(option + length, &end, 10);
+            if (end && *end == '\0' && parsed >= 0)
+                value = (NSInteger)parsed;
+            break;
+        }
+    }
+    vlc_mutex_unlock(&input->lock);
+    return value;
+}
 
 /* Accents, case, Latin ligatures and typographic punctuation folded away,
  * through the very function the core-side search uses: the display filter
@@ -82,6 +140,31 @@ static NSString *VLCLegacyFoldedString(NSString *string)
     return folded ? folded : string;
 }
 
+static BOOL VLCLegacyInputMatchesSearch(input_item_t *input,
+                                        NSString *foldedNeedle)
+{
+    if (!input || ![foldedNeedle length])
+        return YES;
+    char *values[] = {
+        input_item_GetTitleFbName(input),
+        input_item_GetArtist(input),
+        input_item_GetAlbum(input),
+        input_item_GetAlbumArtist(input)
+    };
+    BOOL matches = NO;
+    unsigned i;
+    for (i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+        if (values[i]) {
+            NSString *value = [NSString stringWithUTF8String:values[i]];
+            if (value && [VLCLegacyFoldedString(value)
+                    rangeOfString:foldedNeedle].location != NSNotFound)
+                matches = YES;
+            free(values[i]);
+        }
+    }
+    return matches;
+}
+
 static NSString *timeToString(int64_t us)
 {
     if (us < 0)
@@ -92,6 +175,68 @@ static NSString *timeToString(int64_t us)
                 seconds / 3600, (seconds / 60) % 60, seconds % 60];
     return [NSString stringWithFormat:@"%02d:%02d",
             seconds / 60, seconds % 60];
+}
+
+static void VLCLegacyCollectRatings(NSDictionary *entry,
+                                    NSMutableDictionary *ratings)
+{
+    if (!entry || [[entry objectForKey:@"randomAction"] boolValue])
+        return;
+    NSArray *children = [entry objectForKey:@"children"];
+    if (children) {
+        unsigned i;
+        for (i = 0; i < [children count]; ++i)
+            VLCLegacyCollectRatings([children objectAtIndex:i], ratings);
+        return;
+    }
+    NSString *path = [entry objectForKey:@"path"];
+    if ([path length])
+        [ratings setObject:([entry objectForKey:@"rating"] ?: [NSNumber numberWithInt:0])
+                    forKey:path];
+}
+
+static BOOL VLCLegacyCanExpandRecursively(NSDictionary *entry,
+                                           NSUInteger *remaining)
+{
+    if (!entry || !remaining || *remaining == 0)
+        return NO;
+    --*remaining;
+    if ([[entry objectForKey:@"browse"] boolValue])
+        return NO;
+    NSArray *children = [entry objectForKey:@"children"];
+    unsigned i;
+    for (i = 0; i < [children count]; ++i)
+        if (!VLCLegacyCanExpandRecursively([children objectAtIndex:i],
+                                            remaining))
+            return NO;
+    return YES;
+}
+
+/* NSWindowCollectionBehaviorCanJoinAllSpaces is a compile-time flag added
+ * after the 10.4 SDK. Keep the call dynamic so the same source still builds
+ * and runs on Tiger, while a manually managed external-screen fullscreen
+ * window remains visible on the active Space of modern macOS. */
+#define VLC_WINDOW_CAN_JOIN_ALL_SPACES ((NSUInteger)1 << 0)
+
+static void VLCLegacySetWindowVisibleInAllSpaces(NSWindow *window,
+                                                  BOOL visible)
+{
+    if (window == nil ||
+        ![window respondsToSelector:@selector(collectionBehavior)] ||
+        ![window respondsToSelector:@selector(setCollectionBehavior:)])
+        return;
+
+    NSUInteger (*getBehavior)(id, SEL) =
+        (NSUInteger (*)(id, SEL))objc_msgSend;
+    void (*setBehavior)(id, SEL, NSUInteger) =
+        (void (*)(id, SEL, NSUInteger))objc_msgSend;
+    NSUInteger behavior = getBehavior(window,
+                                      @selector(collectionBehavior));
+    if (visible)
+        behavior |= VLC_WINDOW_CAN_JOIN_ALL_SPACES;
+    else
+        behavior &= ~VLC_WINDOW_CAN_JOIN_ALL_SPACES;
+    setBehavior(window, @selector(setCollectionBehavior:), behavior);
 }
 
 /*****************************************************************************
@@ -721,6 +866,8 @@ static BOOL VLCLegacyKeyBelongsToFocusedList(NSWindow *window, NSEvent *event)
 
 - (BOOL)performKeyEquivalent:(NSEvent *)event
 {
+    [VLCLegacyGetMainWindow() noteResumeOSDUserInteraction];
+
     /* never steal keystrokes from text editing (search field) */
     if ([[self firstResponder] isKindOfClass:[NSText class]])
         return [super performKeyEquivalent:event];
@@ -741,6 +888,22 @@ static BOOL VLCLegacyKeyBelongsToFocusedList(NSWindow *window, NSEvent *event)
      * carries the same equivalent (same list as VLCMainWindow) */
     if (match == 2)
         return VLCLegacyHandleKeyEvent(p_intf, event);
+
+    /* A modifier-less Return is special-cased by AppKit as the default-button
+     * action.  On BD-J first-play screens (Frozen is one example), forwarding
+     * it to super below therefore consumes the ordinary Return key before
+     * -keyDown: can deliver KEY_ENTER to libbluray.  The keypad Enter does not
+     * take that path, which made the two keys behave differently.  Text and
+     * playlist responders have already been excluded above; when Return is a
+     * configured VLC hotkey, deliver it directly just like keypad Enter. */
+    NSString *characters = [event charactersIgnoringModifiers];
+    if (match == 1 && [characters length] == 1
+     && !([event modifierFlags] & (NSControlKeyMask | NSAlternateKeyMask
+                                  | NSShiftKeyMask | NSCommandKeyMask))) {
+        unichar key = [characters characterAtIndex:0];
+        if (key == NSCarriageReturnCharacter || key == NSEnterCharacter)
+            return VLCLegacyHandleKeyEvent(p_intf, event);
+    }
 
     /* ⚠ The menu has to be looked up TWICE, because no single way of doing it
      * works on both ends of the supported range -- measured, not guessed:
@@ -769,6 +932,8 @@ static BOOL VLCLegacyKeyBelongsToFocusedList(NSWindow *window, NSEvent *event)
  * to performKeyEquivalent:; unhandled ones bubble up here instead */
 - (void)keyDown:(NSEvent *)event
 {
+    [VLCLegacyGetMainWindow() noteResumeOSDUserInteraction];
+
     if (VLCLegacyKeyBelongsToFocusedList(self, event)) {
         [super keyDown:event];
         return;
@@ -1020,6 +1185,7 @@ static NSString *VLCLegacyDefaultWindowTitle(void)
  * rebuilds the table snapshot when something actually changed, so an idle
  * or paused player no longer burns CPU walking the playlist every 300 ms */
 static volatile BOOL s_playlistDirty = YES;
+static BOOL s_scanWasActive = NO;
 /* bumped on every change: lets the refresh tell "one edit" from a long
  * burst (a service discovery like Icecast adds thousands of stations
  * one by one) and coalesce the reloads */
@@ -1043,6 +1209,71 @@ static const char *const changeVariables[] = {
     "playlist-item-append", "playlist-item-deleted", "item-change",
     "leaf-to-parent", "input-current"
 };
+
+/* Playback metadata updates can replace the formatted XSPF title. Build the
+ * visible library title from the authoritative disc/track metadata instead. */
+static char *VLCLegacyDisplayTitle(input_item_t *input)
+{
+    char *title = input_item_GetTitleFbName(input);
+    if (!title)
+        return NULL;
+    char *discText = input_item_GetDiscNumber(input);
+    char *trackText = input_item_GetTrackNumber(input);
+    unsigned long disc = discText ? strtoul(discText, NULL, 10) : 0;
+    unsigned long track = trackText ? strtoul(trackText, NULL, 10) : 0;
+    free(discText);
+    free(trackText);
+    if (!track)
+        return title;
+
+    char prefix[64];
+    if (disc)
+        snprintf(prefix, sizeof(prefix), "%lu.%lu. ", disc, track);
+    else
+        snprintf(prefix, sizeof(prefix), "%lu. ", track);
+    if (!strncmp(title, prefix, strlen(prefix)))
+        return title;
+    if (!disc && isdigit((unsigned char)title[0])) {
+        char *endDisc;
+        strtoul(title, &endDisc, 10);
+        if (*endDisc == '.' && isdigit((unsigned char)endDisc[1])) {
+            char *endTrack;
+            unsigned long embeddedTrack = strtoul(endDisc + 1, &endTrack, 10);
+            if (embeddedTrack == track && !strncmp(endTrack, ". ", 2))
+                return title;
+        }
+    }
+    char *formatted = NULL;
+    if (asprintf(&formatted, "%s%s", prefix, title) < 0)
+        formatted = NULL;
+    free(title);
+    return formatted;
+}
+
+static BOOL VLCLegacyInputIsPowerVLCRandomAction(input_item_t *input)
+{
+    return input && input_item_IsPowerVLCRandomAction(input);
+}
+
+/* Must be called with the playlist lock held. */
+static playlist_item_t *VLCLegacyFirstPlayableDescendant(
+    playlist_item_t *node)
+{
+    if (!node || node->i_children < 0)
+        return node;
+    int i;
+    for (i = 0; i < node->i_children; ++i) {
+        playlist_item_t *child = node->pp_children[i];
+        if (!child || !child->p_input
+         || VLCLegacyInputIsPowerVLCRandomAction(child->p_input))
+            continue;
+        playlist_item_t *leaf =
+            VLCLegacyFirstPlayableDescendant(child);
+        if (leaf)
+            return leaf;
+    }
+    return NULL;
+}
 
 /* internal drag flavour: identifies a drag that started in our own outline
  * (VLCPLItemPasteboadType port). The actual dragged rows are kept in the
@@ -1258,7 +1489,7 @@ static NSString *const VLCLegacyArtHeightKey = @"VLCLegacySidebarArtHeight";
 @end
 
 @implementation VLCLegacySidebarTable
-- (void)rightMouseDown:(NSEvent *)event
+- (NSMenu *)menuForEvent:(NSEvent *)event
 {
     NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
     NSInteger row = [self rowAtPoint:point];
@@ -1267,15 +1498,65 @@ static NSString *const VLCLegacyArtHeightKey = @"VLCLegacySidebarArtHeight";
         if ([controller respondsToSelector:@selector(sidebarMenuForRow:)]) {
             NSMenu *menu = [controller performSelector:@selector(sidebarMenuForRow:)
                                              withObject:[NSNumber numberWithInt:(int)row]];
-            if (menu) {
-                [NSMenu popUpContextMenu:menu withEvent:event forView:self];
-                return;
-            }
+            if (menu)
+                return menu;
         }
+    }
+    return nil;
+}
+
+- (void)rightMouseDown:(NSEvent *)event
+{
+    /* A physical secondary click reaches rightMouseDown:, while Jaguar's
+     * Control-click contextual path asks the view for menuForEvent:. Support
+     * both paths so the Media Library rescan is reachable with either input. */
+    NSMenu *menu = [self menuForEvent:event];
+    if (menu) {
+        [NSMenu popUpContextMenu:menu withEvent:event forView:self];
+        return;
     }
     [super rightMouseDown:event];
 }
 @end
+
+@interface VLCLegacyMainWindow (ResumeOSDPrivate)
+- (void)cancelResumeOSD;
+- (void)resumeOSDTick:(NSTimer *)timer;
+- (BOOL)importPathsIntoPowerLibrary:(NSArray *)paths;
+- (BOOL)syncPaths:(NSArray *)paths toDeviceService:(NSString *)service;
+- (BOOL)syncDraggedItems:(NSArray *)items toDeviceService:(NSString *)service;
+- (void)showPowerVLCDeviceTransfers:(id)sender;
+- (void)updatePowerVLCDeviceTransfers;
+- (void)playPendingVisibleNodeIfReady;
+- (NSString *)selectedPowerVLCDeviceService;
+- (NSDictionary *)containingUserPlaylistForEntry:(NSDictionary *)entry;
+@end
+
+static void VLCLegacyTransferStatusClear(
+    services_discovery_transfer_status_t *status)
+{
+    size_t i;
+    for (i = 0; i < status->i_count; ++i) {
+        free(status->p_items[i].psz_source);
+        free(status->p_items[i].psz_destination);
+    }
+    free(status->p_items);
+    memset(status, 0, sizeof(*status));
+}
+
+static NSString *VLCLegacyTransferStage(
+    services_discovery_transfer_stage_e stage)
+{
+    switch (stage) {
+        case SD_TRANSFER_QUEUED: return _NS("Queued");
+        case SD_TRANSFER_COPYING: return _NS("Copying");
+        case SD_TRANSFER_TRANSCODING: return _NS("Transcoding");
+        case SD_TRANSFER_COMPLETED: return _NS("Completed");
+        case SD_TRANSFER_FAILED: return _NS("Failed");
+        case SD_TRANSFER_CANCELLED: return _NS("Cancelled");
+    }
+    return @"";
+}
 
 @implementation VLCLegacyMainWindow
 
@@ -1287,13 +1568,22 @@ static NSString *const VLCLegacyArtHeightKey = @"VLCLegacySidebarArtHeight";
         items = [[NSMutableArray alloc] init];
         artworkCache = [[NSMutableDictionary alloc] init];
         expandedItemIds = [[NSMutableSet alloc] init];
+        searchExpandedItemIds = [[NSMutableSet alloc] init];
+        searchScopeItemIds = [[NSMutableSet alloc] init];
+        playlistScrollPositions = [[NSMutableDictionary alloc] init];
         browseRequestedIds = [[NSMutableDictionary alloc] init];
         dirCheckCache = [[NSMutableDictionary alloc] init];
         sidebarItems = [[NSMutableArray alloc] init];
         networkLocations = [[NSMutableArray alloc] init];
         activatedServices = [[NSMutableSet alloc] init];
+        deviceTransferPanels = [[NSMutableDictionary alloc] init];
         sidebarSelection = 1;   /* the Playlist row (below the header) */
         currentItemId = -1;
+        currentRandomScopeId = -1;
+        pendingRandomPlaybackItemId = -1;
+        pendingRandomBranchItemId = -1;
+        pendingRandomRevealItemId = -1;
+        pendingVisibleNodePlaybackItemId = -1;
         showTimeRemaining = [[NSUserDefaults standardUserDefaults]
             boolForKey:@"DisplayTimeAsTimeRemaining"];
         NSArray *storedColumns = [[NSUserDefaults standardUserDefaults]
@@ -1311,6 +1601,7 @@ static NSString *const VLCLegacyArtHeightKey = @"VLCLegacySidebarArtHeight";
 - (void)dealloc
 {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [self cancelResumeOSD];
     [updateTimer invalidate];
     [fsVideoWindow release];
     [videoHostWindow release];
@@ -1321,6 +1612,9 @@ static NSString *const VLCLegacyArtHeightKey = @"VLCLegacySidebarArtHeight";
     [sidebarArtUrl release];
     [searchString release];
     [searchStringFolded release];
+    [pendingSearchString release];
+    [searchDelayTimer invalidate];
+    [searchDelayTimer release];
     [visibleColumns release];
     [fileSizeCache release];
     [resumeTrackedURI release];
@@ -1330,10 +1624,16 @@ static NSString *const VLCLegacyArtHeightKey = @"VLCLegacySidebarArtHeight";
     [draggedItems release];
     [artworkCache release];
     [expandedItemIds release];
+    [searchExpandedItemIds release];
+    [searchScopeItemIds release];
+    [searchBranchMatches release];
+    [playlistScrollPositions release];
     [browseRequestedIds release];
     [dirCheckCache release];
     [sidebarItems release];
     [activatedServices release];
+    [deviceTransferPanels release];
+    [currentItemURI release];
     [core release];
     [super dealloc];
 }
@@ -1647,11 +1947,20 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
     [topStrip setAutoresizingMask:NSViewWidthSizable | NSViewMinYMargin];
     [rightContainer addSubview:topStrip];
 
+    /* Leave the search field its fixed 156 px, but give the view title all
+     * remaining room.  Device titles include their activity and capacity;
+     * the old fixed 260 px frame clipped even a moderately long device name
+     * while most of the strip remained unused. */
     viewTitleLabel = [[[NSTextField alloc]
-        initWithFrame:NSMakeRect(10, 6, 260, 17)] autorelease];
+        initWithFrame:NSMakeRect(10, 6,
+            MAX(80, rightBounds.size.width - 186), 17)] autorelease];
     [viewTitleLabel setEditable:NO];
     [viewTitleLabel setBordered:NO];
     [viewTitleLabel setDrawsBackground:NO];
+    [viewTitleLabel setAutoresizingMask:NSViewWidthSizable];
+    [[viewTitleLabel cell] setWraps:NO];
+    VLCLegacySetCellLineBreakMode([viewTitleLabel cell],
+                                  NSLineBreakByTruncatingTail);
     [[viewTitleLabel cell] setFont:[NSFont boldSystemFontOfSize:12]];
     [viewTitleLabel setTextColor:VLCLegacyTextColor()];
     [viewTitleLabel setStringValue:_NS("Playlist")];
@@ -1720,6 +2029,18 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
                                       action:@selector(deleteSelectedItems:)
                                keyEquivalent:@""];
     [menuItem setTarget:self];
+    menuItem = [contextMenu addItemWithTitle:_NS("New Playlist…")
+                                      action:@selector(createUserPlaylist:)
+                               keyEquivalent:@""];
+    [menuItem setTarget:self];
+    menuItem = [contextMenu addItemWithTitle:_NS("New Playlist Folder…")
+                                      action:@selector(createUserPlaylistFolder:)
+                               keyEquivalent:@""];
+    [menuItem setTarget:self];
+    menuItem = [contextMenu addItemWithTitle:_NS("Rename…")
+                                      action:@selector(renameUserPlaylist:)
+                               keyEquivalent:@""];
+    [menuItem setTarget:self];
     [contextMenu addItem:[NSMenuItem separatorItem]];
     menuItem = [contextMenu addItemWithTitle:_NS("Select All")
                                       action:@selector(selectAllItems:)
@@ -1753,6 +2074,30 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
                                       action:@selector(addFilesToPlaylist:)
                                keyEquivalent:@""];
     [menuItem setTarget:self];
+    menuItem = [contextMenu addItemWithTitle:_NS("Burn Playlist to Audio CD…")
+                                      action:@selector(burnPlaylistToAudioCD:)
+                               keyEquivalent:@""];
+    [menuItem setTarget:self];
+    [contextMenu addItem:[NSMenuItem separatorItem]];
+    NSMenu *ratingMenu = [[[NSMenu alloc] initWithTitle:_NS("Rating")]
+    autorelease];
+    for (NSInteger value = 1; value <= 5; ++value) {
+        NSMutableString *stars = [NSMutableString string];
+        for (NSInteger starIndex = 0; starIndex < value; ++starIndex)
+            [stars appendString:@"★"];
+        NSMenuItem *star = [ratingMenu addItemWithTitle:stars
+            action:@selector(setPowerVLCRating:) keyEquivalent:@""];
+        [star setTarget:self];
+        [star setRepresentedObject:[NSNumber numberWithInt:(int)value]];
+    }
+    [ratingMenu addItem:[NSMenuItem separatorItem]];
+    menuItem = [ratingMenu addItemWithTitle:_NS("No Rating")
+        action:@selector(setPowerVLCRating:) keyEquivalent:@""];
+    [menuItem setTarget:self];
+    [menuItem setRepresentedObject:[NSNumber numberWithInt:0]];
+    menuItem = [contextMenu addItemWithTitle:_NS("Rating")
+        action:nil keyEquivalent:@""];
+    [menuItem setSubmenu:ratingMenu];
     [playlistTable setMenu:contextMenu];
     [playlistTable setAllowsMultipleSelection:YES];
     [playlistTable registerForDraggedTypes:
@@ -2183,7 +2528,7 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
 - (void)showPlaylistView
 {
     [window makeKeyAndOrderFront:nil];
-    if (videoActive && !VLCLegacyViewIsHidden(videoView)) {
+    if (videoViewUsers != 0 && !VLCLegacyViewIsHidden(videoView)) {
         playlistViewWanted = YES;
         VLCLegacySetViewHidden(videoView, YES);
         VLCLegacySetViewHidden(splitView, NO);
@@ -2314,9 +2659,21 @@ static const struct {
 - (void)recursiveExpandOrCollapseNode:(id)sender
 {
     BOOL expand = [[sender title] isEqualToString:_NS("Expand All")];
-    if (expand)
+    if (expand) {
+        NSUInteger remaining = 256;
+        unsigned i;
+        for (i = 0; i < [items count]; ++i) {
+            if (!VLCLegacyCanExpandRecursively([items objectAtIndex:i],
+                                                &remaining)) {
+                NSRunInformationalAlertPanel(
+                    _NS("Cannot Expand Entire Section"),
+                    @"%@", _NS("OK"), nil, nil,
+                    _NS("This section is too large or loaded on demand. Expand only the branches you need."));
+                return;
+            }
+        }
         [playlistTable expandItem:nil expandChildren:YES];
-    else
+    } else
         [playlistTable collapseItem:nil collapseChildren:YES];
 }
 
@@ -2495,6 +2852,7 @@ static const struct {
 {
     /* quitting mid-playback must remember the position too */
     [self storeResumePosition];
+    [self cancelResumeOSD];
     [resumeTrackedURI release];
     resumeTrackedURI = nil;
     [updateTimer invalidate];
@@ -2623,7 +2981,7 @@ static const struct {
 
 - (void)hideVideoHostWindowNow
 {
-    if (!videoHostWindow || videoActive)
+    if (!videoHostWindow || videoViewUsers != 0)
         return;                       /* une nouvelle vidéo est arrivée */
     [self detachVideoHostWindow];
     /* ⚠ Ne réinitialiser le choix « vue liste » QUE si la lecture est
@@ -2706,9 +3064,7 @@ static const struct {
 
 - (NSView *)acquireVideoView
 {
-    if (videoActive)
-        return nil;
-    videoActive = YES;
+    videoViewUsers++;
     /* The window server recomputes the window shadow whenever content
      * near the edges changes: with 25 GL frames a second that turns
      * every flush into a surface remap (io_connect_map_memory storm,
@@ -2767,11 +3123,13 @@ static const struct {
 
 - (void)releaseVideoView
 {
-    if (!videoActive)
+    if (videoViewUsers == 0)
+        return;
+    videoViewUsers--;
+    if (videoViewUsers != 0)
         return;
     if ([self videoIsFullscreen])
         [self setVideoFullscreenFromNumber:[NSNumber numberWithBool:NO]];
-    videoActive = NO;
     VLCLegacySetViewHidden(videoView, YES);
     /* La fenêtre hôte SURVIT au vout : un DVD en recrée un à chaque transition
      * (menu → titre…) et la démonter à chaque fois la faisait clignoter. Elle
@@ -2800,11 +3158,11 @@ static const struct {
 - (void)applyWindowShadowSetting
 {
     BOOL hwArmed = VLCLegacyHwDecoderArmed(p_intf);
-    if (videoActive && hwArmed && VLCLegacyOSVersionAtLeast(10, 3, 0))
+    if (videoViewUsers != 0 && hwArmed && VLCLegacyOSVersionAtLeast(10, 3, 0))
         [window setHasShadow:NO];
     else if (VLCLegacyWindowShadows())
         [window setHasShadow:YES];
-    else if (videoActive && VLCLegacyOSVersionAtLeast(10, 3, 0))
+    else if (videoViewUsers != 0 && VLCLegacyOSVersionAtLeast(10, 3, 0))
         [window setHasShadow:NO];
 }
 
@@ -3031,7 +3389,7 @@ static const struct {
 
 - (void)hideControlsForPlayback
 {
-    if (controlsHiddenForPlayback || !videoActive
+    if (controlsHiddenForPlayback || videoViewUsers == 0
         || [self videoIsFullscreen])
         return;
 
@@ -3171,7 +3529,7 @@ static const struct {
 {
     BOOL enabled = [core autoHideControls];
     BOOL fullscreen = [self videoIsFullscreen];
-    BOOL videoShown = videoActive && !playlistViewWanted
+    BOOL videoShown = videoViewUsers != 0 && !playlistViewWanted
                       && !VLCLegacyViewIsHidden(videoView);
 
     if (controlsHiddenForPlayback) {
@@ -3335,7 +3693,7 @@ static const struct {
 
 - (void)setVideoViewSizeFromValue:(NSValue *)value
 {
-    if (!videoActive || [self videoIsFullscreen])
+    if (videoViewUsers == 0 || [self videoIsFullscreen])
         return;
     NSSize size = [value sizeValue];
     /* remembered for the picture-fit of the auto-hidden window */
@@ -3397,12 +3755,21 @@ static const struct {
     [self syncVideoSubviews];
 }
 
-/* Écran de destination du plein écran : legacy-macosx-vdev (0 = celui de la
- * fenêtre), même correspondance que le menu des préférences. */
+/* Écran de destination du plein écran. Les sorties HDMI transitoires ont
+ * priorité, puis le choix commun macosx-vdev, puis la préférence historique
+ * legacy-macosx-vdev (0 = celui de la fenêtre). */
 - (NSScreen *)fullscreenScreen
 {
     NSScreen *screen = [window screen];
-    int i_vdev = (int)var_InheritInteger(p_intf, "legacy-macosx-vdev");
+    int i_stereo_vdev = (int)var_InheritInteger(p_intf,
+                                                "stereo3d-fullscreen-display");
+    int i_dovi_vdev = (int)var_InheritInteger(p_intf,
+                                              "dovi-fullscreen-display");
+    int i_common_vdev = (int)var_InheritInteger(p_intf, "macosx-vdev");
+    int i_vdev = i_stereo_vdev > 0 ? i_stereo_vdev :
+                 i_dovi_vdev > 0 ? i_dovi_vdev :
+                 i_common_vdev > 0 ? i_common_vdev :
+                   (int)var_InheritInteger(p_intf, "legacy-macosx-vdev");
     if (i_vdev) {
         NSArray *screens = [NSScreen screens];
         unsigned si;
@@ -3414,8 +3781,21 @@ static const struct {
                 break;
             }
         }
+        /* A private frame-packing mode briefly removes and republishes the
+         * HDMI NSScreen.  Returning the window's screen here sent the GL view
+         * to the Mac panel while the fullscreen controller, created after the
+         * display notification, correctly went to HDMI.  A missing transient
+         * 3D target therefore means "not ready yet", not "use a fallback". */
+        if ((i_stereo_vdev > 0 || i_dovi_vdev > 0) &&
+            si == [screens count])
+            return nil;
     }
     return screen ? screen : [NSScreen mainScreen];
+}
+
+- (void)retryStereoFullscreen
+{
+    [self setVideoFullscreenFromNumber:[NSNumber numberWithBool:YES]];
 }
 
 /* Écrans secondaires noircis pendant le plein écran (legacy-macosx-black). */
@@ -3454,6 +3834,53 @@ static const struct {
     [fsBlackWindows removeAllObjects];
 }
 
+- (void)reassertVideoFullscreenFrame
+{
+    NSWindow *fullscreenWindow = videoHostFullscreen
+        ? videoHostWindow : fsVideoWindow;
+    if (fullscreenWindow == nil)
+        return;
+
+    NSScreen *screen = [self fullscreenScreen];
+    if (screen == nil)
+        return;
+
+    /* A private HDMI mode change can briefly publish the right display ID
+     * with an old arrangement origin. AppKit then sizes the window for the
+     * XGIMI but leaves it straddling the built-in panel. Re-read the live
+     * CoreGraphics bounds after WindowServer has settled and defend the full
+     * destination rectangle. Several delayed passes cover both fast Apple
+     * Silicon transitions and the older asynchronous drivers. */
+    NSRect target = VLCLegacyLiveScreenFrame(screen);
+    if (!NSEqualRects([fullscreenWindow frame], target))
+    {
+        [fullscreenWindow setFrame:target display:YES animate:NO];
+        if ([videoView window] == fullscreenWindow)
+            [videoView setFrame:VLCLegacySafeContentRect(fullscreenWindow,
+                                                         screen)];
+        [self syncVideoSubviews];
+        msg_Info(p_intf, "reasserted fullscreen on display %u at "
+                         "%.0f,%.0f %.0fx%.0f",
+                 [screen displayID], target.origin.x, target.origin.y,
+                 target.size.width, target.size.height);
+    }
+}
+
+- (void)scheduleVideoFullscreenFrameReassertion
+{
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(reassertVideoFullscreenFrame)
+                                               object:nil];
+    [self performSelector:@selector(reassertVideoFullscreenFrame)
+               withObject:nil afterDelay:0.1];
+    [self performSelector:@selector(reassertVideoFullscreenFrame)
+               withObject:nil afterDelay:0.5];
+    [self performSelector:@selector(reassertVideoFullscreenFrame)
+               withObject:nil afterDelay:1.5];
+    [self performSelector:@selector(reassertVideoFullscreenFrame)
+               withObject:nil afterDelay:3.0];
+}
+
 
 /* Chantier F — bascule plein écran de la fenêtre HÔTE : un redimensionnement,
  * rien d'autre. La vue vidéo ne déménage pas, le numéro de fenêtre ne change
@@ -3475,6 +3902,16 @@ static const struct {
          * quand on détachait : elle repassait devant). La fenêtre elle-même ne
          * change pas — seul son cadre grandit. */
         [self openBlackScreensExcept:screen];
+        /* AppKit does not reliably composite a child window on a display
+         * different from its parent.  Keep the stable video host/window
+         * number, but make it temporarily independent for external-screen
+         * fullscreen.  It is reattached after moving back on exit. */
+        NSScreen *parentScreen = [window screen];
+        if (parentScreen != nil &&
+            [parentScreen displayID] != [screen displayID] &&
+            [host parentWindow] != nil)
+            [[host parentWindow] removeChildWindow:host];
+        VLCLegacySetWindowVisibleInAllSpaces(host, YES);
         /* Barre de menus masquée AVANT l'agrandissement : dans l'autre ordre
          * elle reste visible par-dessus la vidéo le temps d'un rafraîchissement. */
         if ([screen hasMenuBar] || [screen hasDock])
@@ -3500,12 +3937,20 @@ static const struct {
         [self syncVideoSubviews];
         [host makeKeyAndOrderFront:nil];
         [host makeFirstResponder:videoView];
+        [self scheduleVideoFullscreenFrameReassertion];
     } else {
+        [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                                 selector:@selector(reassertVideoFullscreenFrame)
+                                                   object:nil];
         SetSystemUIMode(kUIModeNormal, 0);
         [self closeBlackScreens];
         videoHostFullscreen = NO;
         host->keyable = NO;           /* fenêtré : la principale redevient clé */
         [host setFrame:videoHostWindowedFrame display:YES animate:NO];
+        VLCLegacySetWindowVisibleInAllSpaces(host, NO);
+        if ([host parentWindow] == nil &&
+            !VLCLegacyViewIsHidden(videoView))
+            [window addChildWindow:host ordered:NSWindowAbove];
         if ([videoView window] == host)
             [videoView setFrame:[[host contentView] bounds]];
         [self syncVideoSubviews];
@@ -3529,9 +3974,35 @@ static const struct {
 - (void)setVideoFullscreenFromNumber:(NSNumber *)fullscreen
 {
     BOOL enter = [fullscreen boolValue];
-    if (!videoActive) {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(retryStereoFullscreen)
+                                               object:nil];
+    /* With no video users an ENTER request is stale, but EXIT must still run.
+     * releaseVideoView intentionally decrements the last user before asking
+     * us to leave fullscreen. Rejecting that exit left SetSystemUIMode in
+     * kUIModeAllHidden after Stop, so Finder's menu bar stayed absent whenever
+     * PowerVLC had focus. */
+    if (videoViewUsers == 0 && enter) {
+        stereoFullscreenScreenRetries = 0;
         return;
     }
+
+    /* The HDMI display can be absent from +[NSScreen screens] for a few
+     * notification cycles after the private 1920x2205 switch.  Do not enter
+     * fullscreen on another screen in the meantime. */
+    if (enter && [self fullscreenScreen] == nil) {
+        if (stereoFullscreenScreenRetries++ < 50) {
+            [self performSelector:@selector(retryStereoFullscreen)
+                       withObject:nil afterDelay:0.1];
+        } else {
+            msg_Err(p_intf, "HDMI display did not appear in AppKit after "
+                    "frame-packing mode switch; fullscreen was not moved to "
+                    "the built-in display");
+            stereoFullscreenScreenRetries = 0;
+        }
+        return;
+    }
+    stereoFullscreenScreenRetries = 0;
 
     /* ⚠ Fullscreen must start from the normal window state. With the
      * controls auto-hidden the window IS the picture, and the frames the
@@ -3570,6 +4041,7 @@ static const struct {
                       styleMask:NSBorderlessWindowMask
                         backing:NSBackingStoreBuffered
                           defer:NO];
+        VLCLegacySetWindowVisibleInAllSpaces(fsVideoWindow, YES);
         [self openBlackScreensExcept:screen];
         [fsVideoWindow setBackgroundColor:[NSColor blackColor]];
         [fsVideoWindow setReleasedWhenClosed:NO];
@@ -3587,7 +4059,11 @@ static const struct {
         [self syncVideoSubviews];
         [fsVideoWindow makeKeyAndOrderFront:nil];
         [fsVideoWindow makeFirstResponder:videoView];
+        [self scheduleVideoFullscreenFrameReassertion];
     } else {
+        [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                                 selector:@selector(reassertVideoFullscreenFrame)
+                                                   object:nil];
         SetSystemUIMode(kUIModeNormal, 0);
         [self closeBlackScreens];
         [videoView retain];
@@ -3753,6 +4229,16 @@ static const struct {
     [core clipStepFrames:direction];
 }
 
+- (void)seekSlider:(VLCLegacySeekSlider *)slider
+        bookmarkSelectedAtIndex:(int)index
+{
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (p_input) {
+        input_Control(p_input, INPUT_SET_BOOKMARK, index);
+        vlc_object_release(p_input);
+    }
+}
+
 /* chapter separators on the seek bar and names for its hover tooltip,
  * same INPUT_GET_TITLE_INFO rules as the Qt and modern seek sliders:
  * only usable when the seekpoints carry time offsets */
@@ -3865,13 +4351,344 @@ static const struct {
 
 - (void)searchChanged:(id)sender
 {
+    NSString *normalized = [[sender stringValue]
+        stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    [pendingSearchString release];
+    pendingSearchString = [normalized copy];
+    [searchDelayTimer invalidate];
+    [searchDelayTimer release];
+    searchDelayTimer = [[NSTimer scheduledTimerWithTimeInterval:0.35
+        target:self selector:@selector(applyDelayedLibrarySearch:)
+        userInfo:nil repeats:NO] retain];
+}
+
+static void VLCLegacyCollectSearchProtectedIds(playlist_item_t *node,
+                                                NSMutableSet *ids)
+{
+    if (!node)
+        return;
+    [ids addObject:[NSNumber numberWithInt:node->i_id]];
+    int i;
+    for (i = 0; i < node->i_children; ++i)
+        VLCLegacyCollectSearchProtectedIds(node->pp_children[i], ids);
+}
+
+- (NSSet *)searchProtectedItemIds
+{
+    NSMutableSet *protectedIds = [NSMutableSet set];
+    playlist_t *p_playlist = pl_Get(p_intf);
+    playlist_Lock(p_playlist);
+    playlist_item_t *current = playlist_CurrentPlayingItem(p_playlist);
+    playlist_item_t *album = NULL;
+    playlist_item_t *item;
+    for (item = current; item; item = item->p_parent) {
+        [protectedIds addObject:[NSNumber numberWithInt:item->i_id]];
+        if (!album && item->p_input
+         && input_item_IsPowerVLCAlbumScope(item->p_input))
+            album = item;
+    }
+    if (album)
+        VLCLegacyCollectSearchProtectedIds(album, protectedIds);
+    playlist_Unlock(p_playlist);
+    return protectedIds;
+}
+
+- (void)collectOpenSearchScopes
+{
+    [searchScopeItemIds removeAllObjects];
+    NSInteger rows = [playlistTable numberOfRows];
+    NSInteger row;
+    for (row = 0; row < rows; ++row) {
+        id item = [playlistTable itemAtRow:row];
+        if (![playlistTable isItemExpanded:item])
+            continue;
+        if ([[item objectForKey:@"userPlaylistsRoot"] boolValue]) {
+            NSNumber *itemId = [item objectForKey:@"id"];
+            if (itemId)
+                [searchScopeItemIds addObject:itemId];
+            continue;
+        }
+        id parent = [playlistTable parentForItem:item];
+        if (parent && [playlistTable parentForItem:parent] == nil) {
+            NSNumber *itemId = [item objectForKey:@"id"];
+            if (itemId)
+                [searchScopeItemIds addObject:itemId];
+        }
+    }
+}
+
+- (BOOL)requestSearchLoadingInNodeLocked:(playlist_item_t *)node
+                                 playlist:(playlist_t *)p_playlist
+{
+    BOOL pending = NO;
+    int i;
+    for (i = 0; node && i < node->i_children; ++i) {
+        playlist_item_t *child = node->pp_children[i];
+        if (child) {
+            input_item_t *input = child->p_input;
+            BOOL browsable = input
+                && !VLCLegacyInputIsPowerVLCRandomAction(input)
+                && (input->i_type == ITEM_TYPE_DIRECTORY
+                 || VLCLegacyIsPowerVLCIndexItem(input));
+            BOOL hasChildren = child->i_children > 0;
+            if (browsable || hasChildren) {
+                [expandedItemIds addObject:
+                    [NSNumber numberWithInt:child->i_id]];
+                [searchExpandedItemIds addObject:
+                    [NSNumber numberWithInt:child->i_id]];
+                if (browsable && !hasChildren) {
+                    pending = YES;
+                    NSNumber *itemId = [NSNumber numberWithInt:child->i_id];
+                    if (![browseRequestedIds objectForKey:itemId]) {
+                        [browseRequestedIds setObject:[NSDate date]
+                                               forKey:itemId];
+                        libvlc_MetadataRequest(p_playlist->obj.libvlc, input,
+                            META_REQUEST_OPTION_SCOPE_ANY, 120000, child);
+                    }
+                }
+            }
+            if (child->i_children > 0
+             && [self requestSearchLoadingInNodeLocked:child
+                                               playlist:p_playlist])
+                pending = YES;
+        }
+    }
+    return pending;
+}
+
+- (BOOL)requestSearchScopeLoading
+{
+    BOOL pending = NO;
+    playlist_t *p_playlist = pl_Get(p_intf);
+    playlist_Lock(p_playlist);
+    NSEnumerator *scopeEnumerator = [searchScopeItemIds objectEnumerator];
+    NSNumber *scopeId;
+    while ((scopeId = [scopeEnumerator nextObject]) != nil) {
+        playlist_item_t *scope = playlist_ItemGetById(p_playlist,
+                                                       [scopeId intValue]);
+        NSInteger view = scope && scope->p_input
+            ? VLCLegacyPowerVLCIntegerOption(scope->p_input,
+                    VLC_INPUT_OPTION_POWERVLC_LIBRARY_VIEW_PREFIX) : -1;
+        if (searchUsesMemoryIndex && view >= 0
+         && view < SD_POWERVLC_LIBRARY_VIEW_COUNT) {
+            uint64_t mask = searchBucketMasks[view];
+            int i;
+            for (i = 0; scope && i < scope->i_children; ++i) {
+                playlist_item_t *bucketItem = scope->pp_children[i];
+                NSInteger bucket = bucketItem && bucketItem->p_input
+                    ? VLCLegacyPowerVLCIntegerOption(bucketItem->p_input,
+                        VLC_INPUT_OPTION_POWERVLC_LIBRARY_BUCKET_PREFIX) : -1;
+                if (bucket < 0 || bucket >= 64
+                 || !(mask & (UINT64_C(1) << bucket)))
+                    continue;
+                NSNumber *bucketId = [NSNumber numberWithInt:bucketItem->i_id];
+                [expandedItemIds addObject:bucketId];
+                [searchExpandedItemIds addObject:bucketId];
+                if (bucketItem->i_children <= 0) {
+                    if (![browseRequestedIds objectForKey:bucketId]) {
+                        [browseRequestedIds setObject:[NSDate date]
+                                               forKey:bucketId];
+                        libvlc_MetadataRequest(p_playlist->obj.libvlc,
+                            bucketItem->p_input, META_REQUEST_OPTION_SCOPE_ANY,
+                            120000, bucketItem);
+                    }
+                    pending = YES;
+                    continue;
+                }
+
+                NSEnumerator *matches = [searchBranchMatches objectEnumerator];
+                NSDictionary *match;
+                while ((match = [matches nextObject]) != nil) {
+                    if ([[match objectForKey:@"view"] intValue] != view
+                     || [[match objectForKey:@"bucket"] intValue] != bucket)
+                        continue;
+                    NSString *primaryName = [match objectForKey:@"primary"];
+                    playlist_item_t *primary = NULL;
+                    int p;
+                    for (p = 0; p < bucketItem->i_children; ++p) {
+                        playlist_item_t *candidate = bucketItem->pp_children[p];
+                        if (!candidate || !candidate->p_input
+                         || VLCLegacyInputIsPowerVLCRandomAction(
+                                                        candidate->p_input))
+                            continue;
+                        char *nameValue = input_item_GetName(candidate->p_input);
+                        NSString *name = nameValue
+                            ? [NSString stringWithUTF8String:nameValue] : @"";
+                        free(nameValue);
+                        if ([name caseInsensitiveCompare:primaryName]
+                                                            == NSOrderedSame) {
+                            primary = candidate;
+                            break;
+                        }
+                    }
+                    if (!primary)
+                        continue;
+                    NSNumber *primaryId = [NSNumber numberWithInt:primary->i_id];
+                    [expandedItemIds addObject:primaryId];
+                    [searchExpandedItemIds addObject:primaryId];
+                    if (primary->i_children <= 0) {
+                        if (![browseRequestedIds objectForKey:primaryId]) {
+                            [browseRequestedIds setObject:[NSDate date]
+                                                   forKey:primaryId];
+                            libvlc_MetadataRequest(p_playlist->obj.libvlc,
+                                primary->p_input, META_REQUEST_OPTION_SCOPE_ANY,
+                                120000, primary);
+                        }
+                        pending = YES;
+                        continue;
+                    }
+                    if (view == 2)
+                        continue;
+                    NSString *albumName = [match objectForKey:@"secondary"];
+                    int a;
+                    for (a = 0; a < primary->i_children; ++a) {
+                        playlist_item_t *album = primary->pp_children[a];
+                        if (!album || !album->p_input
+                         || VLCLegacyInputIsPowerVLCRandomAction(album->p_input))
+                            continue;
+                        char *nameValue = input_item_GetName(album->p_input);
+                        NSString *name = nameValue
+                            ? [NSString stringWithUTF8String:nameValue] : @"";
+                        free(nameValue);
+                        if ([name caseInsensitiveCompare:albumName]
+                                                            != NSOrderedSame)
+                            continue;
+                        NSNumber *albumId = [NSNumber numberWithInt:album->i_id];
+                        [expandedItemIds addObject:albumId];
+                        [searchExpandedItemIds addObject:albumId];
+                        if (album->i_children <= 0) {
+                            if (![browseRequestedIds objectForKey:albumId]) {
+                                [browseRequestedIds setObject:[NSDate date]
+                                                       forKey:albumId];
+                                libvlc_MetadataRequest(p_playlist->obj.libvlc,
+                                    album->p_input,
+                                    META_REQUEST_OPTION_SCOPE_ANY,
+                                    120000, album);
+                            }
+                            pending = YES;
+                        }
+                        break;
+                    }
+                }
+            }
+        } else if ([self requestSearchLoadingInNodeLocked:scope
+                                                 playlist:p_playlist])
+            pending = YES;
+    }
+    playlist_Unlock(p_playlist);
+    return pending;
+}
+
+- (void)collectSearchExpandedInArray:(NSArray *)array active:(BOOL)active
+{
+    NSEnumerator *entryEnumerator = [array objectEnumerator];
+    NSDictionary *entry;
+    while ((entry = [entryEnumerator nextObject]) != nil) {
+        NSNumber *itemId = [entry objectForKey:@"id"];
+        BOOL inScope = active || [searchScopeItemIds containsObject:itemId];
+        NSArray *children = [entry objectForKey:@"children"];
+        if (inScope && [children count]) {
+            if (![expandedItemIds containsObject:itemId])
+                [searchExpandedItemIds addObject:itemId];
+            [expandedItemIds addObject:itemId];
+        }
+        if (children)
+            [self collectSearchExpandedInArray:children active:inScope];
+    }
+}
+
+- (void)finishDelayedLibrarySearch:(NSNumber *)generation
+{
+    if ([generation unsignedIntValue] != searchGeneration)
+        return;
+    if ([self requestSearchScopeLoading] && searchLoadRetries++ < 800) {
+        [self performSelector:@selector(finishDelayedLibrarySearch:)
+                   withObject:generation afterDelay:0.15];
+        return;
+    }
     [searchString release];
-    searchString = [[sender stringValue] copy];
-    /* the display filter must agree with the core-side flags, which are
-     * set from the folded needle too */
+    searchString = [pendingSearchString copy];
     [searchStringFolded release];
     searchStringFolded = [VLCLegacyFoldedString(searchString) retain];
     [self rebuildItemsSnapshot];
+    [self collectSearchExpandedInArray:items active:NO];
+    [playlistTable reloadData];
+    [self restoreExpandedItems];
+}
+
+- (void)applyDelayedLibrarySearch:(NSTimer *)timer
+{
+    (void)timer;
+    searchGeneration++;
+    [self collectOpenSearchScopes];
+    NSSet *protectedIds = [self searchProtectedItemIds];
+    NSEnumerator *expandedEnumerator = [[searchExpandedItemIds allObjects]
+                                         objectEnumerator];
+    NSNumber *itemId;
+    while ((itemId = [expandedEnumerator nextObject]) != nil)
+        if (![protectedIds containsObject:itemId])
+            [expandedItemIds removeObject:itemId];
+    [searchExpandedItemIds removeAllObjects];
+
+    [searchString release]; searchString = nil;
+    [searchStringFolded release]; searchStringFolded = nil;
+    [self rebuildItemsSnapshot];
+    if (![pendingSearchString length]) {
+        [searchScopeItemIds removeAllObjects];
+        searchUsesMemoryIndex = NO;
+        [searchBranchMatches release]; searchBranchMatches = nil;
+        return;
+    }
+
+    memset(searchBucketMasks, 0, sizeof(searchBucketMasks));
+    services_discovery_library_search_t request;
+    memset(&request, 0, sizeof(request));
+    request.psz_query = [pendingSearchString UTF8String];
+    playlist_t *playlist = pl_Get(p_intf);
+    playlist_Lock(playlist);
+    NSEnumerator *scopeEnumerator = [searchScopeItemIds objectEnumerator];
+    NSNumber *scopeId;
+    while ((scopeId = [scopeEnumerator nextObject]) != nil) {
+        playlist_item_t *scope = playlist_ItemGetById(playlist,
+                                                       [scopeId intValue]);
+        NSInteger view = scope && scope->p_input
+            ? VLCLegacyPowerVLCIntegerOption(scope->p_input,
+                    VLC_INPUT_OPTION_POWERVLC_LIBRARY_VIEW_PREFIX) : -1;
+        if (view >= 0 && view < SD_POWERVLC_LIBRARY_VIEW_COUNT)
+            request.i_view_mask |= UINT64_C(1) << view;
+    }
+    playlist_Unlock(playlist);
+    searchUsesMemoryIndex = request.i_view_mask != 0
+        && playlist_ServicesDiscoveryControl(playlist, "powervlc_library",
+            SD_CMD_POWERVLC_LIBRARY_SEARCH, &request) == VLC_SUCCESS;
+    [searchBranchMatches release]; searchBranchMatches = nil;
+    if (searchUsesMemoryIndex) {
+        memcpy(searchBucketMasks, request.p_bucket_masks,
+               sizeof(searchBucketMasks));
+        NSMutableArray *matches = [NSMutableArray arrayWithCapacity:
+                                                     request.i_match_count];
+        size_t i;
+        for (i = 0; i < request.i_match_count; ++i) {
+            services_discovery_library_match_t *match = &request.p_matches[i];
+            NSString *primary = match->psz_primary
+                ? [NSString stringWithUTF8String:match->psz_primary] : @"";
+            NSString *secondary = match->psz_secondary
+                ? [NSString stringWithUTF8String:match->psz_secondary] : @"";
+            NSDictionary *entry = [NSDictionary dictionaryWithObjectsAndKeys:
+                [NSNumber numberWithUnsignedInt:match->i_view], @"view",
+                [NSNumber numberWithUnsignedInt:match->i_bucket], @"bucket",
+                primary ? primary : @"", @"primary",
+                secondary ? secondary : @"", @"secondary", nil];
+            [matches addObject:entry];
+            free(match->psz_primary); free(match->psz_secondary);
+        }
+        free(request.p_matches);
+        searchBranchMatches = [matches copy];
+    }
+    searchLoadRetries = 0;
+    [self finishDelayedLibrarySearch:
+        [NSNumber numberWithUnsignedInt:(unsigned)searchGeneration]];
 }
 
 /* Only ever called on 10.2, where the search field is a plain NSTextField
@@ -3887,7 +4704,7 @@ static const struct {
  * playlist button */
 - (void)toggleView:(id)sender
 {
-    if (!videoActive)
+    if (videoViewUsers == 0)
         return;
     BOOL showPlaylist = VLCLegacyViewIsHidden(videoView) == NO;
     playlistViewWanted = showPlaylist;
@@ -4068,8 +4885,14 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     if (hasML)
         [sidebarItems addObject:
             [NSMutableDictionary dictionaryWithObjectsAndKeys:
-                @"ml", @"kind", _NS("Media Library"), @"title",
+                @"ml", @"kind", _NS("Catch-all Media Library"), @"title",
                 [self sidebarIcon:@"sidebar-playlist"], @"icon", nil]];
+    [sidebarItems addObject:
+        [NSMutableDictionary dictionaryWithObjectsAndKeys:
+            @"powerml", @"kind", _NS("Media Library"), @"title",
+            @"powervlc_library", @"sd",
+            _NS("PowerVLC Media Library"), @"nodeTitle",
+            [self sidebarIcon:@"sidebar-playlist"], @"icon", nil]];
 
     /* services discovery, grouped like the 3.0 sidebar */
     char **names = NULL, **longnames = NULL;
@@ -4089,7 +4912,10 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
             int nidx = 0;
             int i;
             for (i = 0; names[i]; i++) {
-                if (categories[i] == sections[section].cat
+                int category = !strcmp(names[i], "disc")
+                             ? SD_CAT_MYCOMPUTER : categories[i];
+                if (strcmp(names[i], "powervlc_library")
+                 && category == sections[section].cat
                  && nidx < (int)(sizeof(idx) / sizeof(idx[0])))
                     idx[nidx++] = i;
             }
@@ -4112,13 +4938,14 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
                 i = idx[a];
                 NSImage *icon = [self sidebarIconForSD:names[i]
                                               category:categories[i]];
+                NSString *displayName = [NSString stringWithUTF8String:
+                    vlc_gettext(longnames[i])];
                 [sidebarItems addObject:
                     [NSMutableDictionary dictionaryWithObjectsAndKeys:
                         @"sd", @"kind",
-                        [NSString stringWithUTF8String:
-                            vlc_gettext(longnames[i])],
-                        @"title",
+                        displayName, @"title",
                         [NSString stringWithUTF8String:names[i]], @"sd",
+                        displayName, @"baseTitle",
                         icon, @"icon",
                         nil]];
             }
@@ -4143,6 +4970,11 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     [sidebarTable reloadData];
 }
 
+- (void)reloadPowerVLCDevices
+{
+    [self buildSidebarModel];
+}
+
 /* resolves the currently selected sidebar entry to a playlist node */
 - (playlist_item_t *)currentRootLocked:(playlist_t *)p_playlist
 {
@@ -4153,9 +4985,17 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     NSString *kind = [entry objectForKey:@"kind"];
     if ([kind isEqualToString:@"ml"] && p_playlist->p_media_library)
         return p_playlist->p_media_library;
-    if ([kind isEqualToString:@"sd"]) {
+    if ([kind isEqualToString:@"sd"]
+     || [kind isEqualToString:@"powerml"]) {
         /* the SD node lives under the hidden root, named by longname */
-        const char *psz_name = [[entry objectForKey:@"title"] UTF8String];
+        /* Device rows append live activity/capacity text to `title`.  The
+         * hidden playlist node keeps the immutable SD long name, stored in
+         * `baseTitle`; looking it up with the decorated title made every
+         * portable player silently fall back to the main playlist root. */
+        NSString *nodeTitle = [entry objectForKey:@"nodeTitle"]
+                            ?: [entry objectForKey:@"baseTitle"]
+                            ?: [entry objectForKey:@"title"];
+        const char *psz_name = [nodeTitle UTF8String];
         playlist_item_t *p_root = &p_playlist->root;
         int i;
         for (i = 0; i < p_root->i_children; i++) {
@@ -4172,6 +5012,21 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         return item ? item : p_playlist->p_playing;
     }
     return p_playlist->p_playing;
+}
+
+/* A sidebar row is rebuilt whenever services or network roots change, so its
+ * row number is not an identity. Use the source itself as the key for the
+ * per-view scroll position. */
+- (NSString *)scrollKeyForSidebarEntry:(NSDictionary *)entry
+{
+    NSString *kind = [entry objectForKey:@"kind"];
+    if ([kind isEqualToString:@"network"])
+        return [NSString stringWithFormat:@"network:%@",
+            [entry objectForKey:@"mrl"] ?: [entry objectForKey:@"id"]];
+    if ([kind isEqualToString:@"sd"])
+        return [NSString stringWithFormat:@"sd:%@",
+            [entry objectForKey:@"sd"] ?: [entry objectForKey:@"title"]];
+    return kind;
 }
 
 - (BOOL)addNetworkLocation:(NSString *)mrl
@@ -4237,9 +5092,63 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     if (row < 0 || (unsigned)row >= [sidebarItems count])
         return nil;
     NSDictionary *entry = [sidebarItems objectAtIndex:row];
-    if (![[entry objectForKey:@"kind"] isEqualToString:@"network"])
-        return nil;
     NSMenu *menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
+    NSString *kind = [entry objectForKey:@"kind"];
+    if ([kind isEqualToString:@"powerml"]) {
+        NSMenuItem *rescan = [[[NSMenuItem alloc]
+            initWithTitle:_NS("Rescan Media Library")
+                    action:@selector(rescanPowerVLCLibrary:)
+             keyEquivalent:@""] autorelease];
+        [rescan setTarget:self]; [menu addItem:rescan];
+        return menu;
+    }
+    NSString *sd = [entry objectForKey:@"sd"];
+    if ([kind isEqualToString:@"sd"] && [sd hasPrefix:@"powervlc_device{"]) {
+        NSMenuItem *commit = [[[NSMenuItem alloc]
+            initWithTitle:_NS("Finalize Changes")
+                    action:@selector(commitPowerVLCDeviceChanges:)
+             keyEquivalent:@""] autorelease];
+        [commit setTarget:self]; [commit setRepresentedObject:sd];
+        services_discovery_transfer_status_t status = { 0 };
+        BOOL statusOK = playlist_ServicesDiscoveryControl(pl_Get(p_intf),
+            [sd UTF8String], SD_CMD_POWERVLC_DEVICE_TRANSFERS,
+            &status) == VLC_SUCCESS;
+        [commit setEnabled:statusOK && status.b_pending_changes
+                                && !status.b_synchronizing];
+        size_t statusIndex;
+        for (statusIndex = 0; statusIndex < status.i_count; statusIndex++) {
+            free(status.p_items[statusIndex].psz_source);
+            free(status.p_items[statusIndex].psz_destination);
+        }
+        free(status.p_items);
+        [menu addItem:commit];
+        [menu addItem:[NSMenuItem separatorItem]];
+        NSArray *titles = [NSArray arrayWithObjects:_NS("Transfer History…"),
+            _NS("Back Up…"), _NS("Refresh"), nil];
+        SEL actions[] = { @selector(showPowerVLCDeviceTransfers:),
+            @selector(backupPowerVLCDevice:), @selector(refreshPowerVLCDevice:) };
+        unsigned i;
+        for (i = 0; i < [titles count]; i++) {
+            NSMenuItem *item = [[[NSMenuItem alloc]
+                initWithTitle:[titles objectAtIndex:i] action:actions[i]
+                 keyEquivalent:@""] autorelease];
+            [item setTarget:self]; [item setRepresentedObject:sd];
+            [menu addItem:item];
+            if (i == 0 || i == 1)
+                [menu addItem:[NSMenuItem separatorItem]];
+        }
+        return menu;
+    }
+    if ([kind isEqualToString:@"sd"] && [sd isEqualToString:@"disc"]) {
+        NSMenuItem *import = [[[NSMenuItem alloc]
+            initWithTitle:_NS("Import Audio CD into Media Library")
+                    action:@selector(importPowerVLCAudioCD:)
+             keyEquivalent:@""] autorelease];
+        [import setTarget:self]; [menu addItem:import];
+        return menu;
+    }
+    if (![kind isEqualToString:@"network"])
+        return nil;
     NSMenuItem *eject = [[[NSMenuItem alloc] initWithTitle:_NS("Eject")
                             action:@selector(ejectNetworkLocation:)
                      keyEquivalent:@""] autorelease];
@@ -4247,6 +5156,290 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     [eject setRepresentedObject:entry];
     [menu addItem:eject];
     return menu;
+}
+
+- (void)rescanPowerVLCLibrary:(id)sender
+{
+    playlist_ServicesDiscoveryControl(pl_Get(p_intf), "powervlc_library",
+                                       SD_CMD_POWERVLC_RESCAN);
+}
+
+- (void)refreshPowerVLCDevice:(id)sender
+{
+    playlist_ServicesDiscoveryControl(pl_Get(p_intf),
+        [[sender representedObject] UTF8String], SD_CMD_POWERVLC_RESCAN);
+}
+
+- (void)commitPowerVLCDeviceChanges:(id)sender
+{
+    int result = playlist_ServicesDiscoveryControl(pl_Get(p_intf),
+        [[sender representedObject] UTF8String], SD_CMD_POWERVLC_DEVICE_COMMIT);
+    if (result != VLC_SUCCESS)
+        NSRunAlertPanel(_NS("Unable to Finalize Changes"), @"%@", _NS("OK"), nil,
+            nil, _NS("The portable player is unavailable. Your changes remain pending and can be validated after reconnecting it."));
+}
+
+- (void)backupPowerVLCDevice:(id)sender
+{
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    [panel setCanChooseDirectories:YES]; [panel setCanChooseFiles:NO];
+    [panel setCanCreateDirectories:YES]; [panel setAllowsMultipleSelection:NO];
+    if ([panel runModalForDirectory:NSHomeDirectory() file:nil] != NSOKButton
+     || ![[panel filenames] count]) return;
+    playlist_ServicesDiscoveryControl(pl_Get(p_intf),
+        [[sender representedObject] UTF8String], SD_CMD_POWERVLC_DEVICE_BACKUP,
+        [[[panel filenames] objectAtIndex:0] fileSystemRepresentation]);
+}
+
+- (void)showPowerVLCDeviceTransfers:(id)sender
+{
+    NSString *service = [sender representedObject];
+    NSMutableDictionary *record = [deviceTransferPanels objectForKey:service];
+    if (!record) {
+        NSPanel *panel = [[NSPanel alloc]
+            initWithContentRect:NSMakeRect(0, 0, 720, 340)
+                      styleMask:NSTitledWindowMask | NSClosableWindowMask |
+                                NSResizableWindowMask
+                        backing:NSBackingStoreBuffered defer:NO];
+        NSString *base = service;
+        unsigned i;
+        for (i = 0; i < [sidebarItems count]; ++i) {
+            NSDictionary *entry = [sidebarItems objectAtIndex:i];
+            if ([[entry objectForKey:@"sd"] isEqualToString:service]) {
+                base = [entry objectForKey:@"baseTitle"] ?: [entry objectForKey:@"title"];
+                break;
+            }
+        }
+        [panel setTitle:[NSString stringWithFormat:_NS("Transfer History — %@"), base]];
+        NSRect bounds = [[panel contentView] bounds];
+        NSScrollView *scroll = [[NSScrollView alloc]
+            initWithFrame:NSMakeRect(0, 42, bounds.size.width,
+                                      bounds.size.height - 42)];
+        [scroll setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+        [scroll setHasVerticalScroller:YES];
+        NSTableView *table = [[NSTableView alloc] initWithFrame:[scroll bounds]];
+        NSArray *ids = [NSArray arrayWithObjects:@"source", @"destination",
+                         @"stage", @"progress", nil];
+        NSArray *titles = [NSArray arrayWithObjects:_NS("File"), _NS("Destination"),
+                            _NS("Step"), _NS("Progress"), nil];
+        CGFloat widths[] = { 205, 245, 125, 85 };
+        for (i = 0; i < [ids count]; ++i) {
+            NSTableColumn *column = [[NSTableColumn alloc]
+                initWithIdentifier:[ids objectAtIndex:i]];
+            [[column headerCell] setStringValue:[titles objectAtIndex:i]];
+            [column setWidth:widths[i]];
+            [table addTableColumn:column];
+            [column release];
+        }
+        [table setDataSource:self];
+        [table setUsesAlternatingRowBackgroundColors:YES];
+        [scroll setDocumentView:table];
+        [[panel contentView] addSubview:scroll];
+        NSButton *cancelSelected = [[NSButton alloc]
+            initWithFrame:NSMakeRect(12, 7, 185, 28)];
+        [cancelSelected setTitle:_NS("Cancel Selected Transfer")];
+        [cancelSelected setBezelStyle:NSRoundedBezelStyle];
+        [cancelSelected setTarget:self];
+        [cancelSelected setAction:@selector(cancelSelectedPowerVLCTransfer:)];
+        [cancelSelected setRepresentedObject:service];
+        [[panel contentView] addSubview:cancelSelected];
+        [cancelSelected release];
+        NSButton *cancelAll = [[NSButton alloc]
+            initWithFrame:NSMakeRect(207, 7, 155, 28)];
+        [cancelAll setTitle:_NS("Cancel All Transfers")];
+        [cancelAll setBezelStyle:NSRoundedBezelStyle];
+        [cancelAll setTarget:self];
+        [cancelAll setAction:@selector(cancelAllPowerVLCTransfers:)];
+        [cancelAll setRepresentedObject:service];
+        [[panel contentView] addSubview:cancelAll];
+        [cancelAll release];
+        record = [NSMutableDictionary dictionaryWithObjectsAndKeys:
+            panel, @"panel", table, @"table",
+            [NSMutableArray array], @"rows", service, @"service", nil];
+        [deviceTransferPanels setObject:record forKey:service];
+        [table release]; [scroll release]; [panel release];
+        [[record objectForKey:@"panel"] center];
+    }
+    [self updatePowerVLCDeviceTransfers];
+    [[record objectForKey:@"panel"] makeKeyAndOrderFront:nil];
+}
+
+- (void)cancelSelectedPowerVLCTransfer:(id)sender
+{
+    NSString *service = [sender representedObject];
+    NSDictionary *record = [deviceTransferPanels objectForKey:service];
+    NSTableView *table = [record objectForKey:@"table"];
+    NSInteger row = [table selectedRow];
+    NSArray *rows = [record objectForKey:@"rows"];
+    if (row < 0 || (NSUInteger)row >= [rows count]) return;
+    services_discovery_transfer_cancel_t request;
+    request.i_id = [[[rows objectAtIndex:(NSUInteger)row]
+                      objectForKey:@"id"] unsignedLongLongValue];
+    playlist_ServicesDiscoveryControl(pl_Get(p_intf), [service UTF8String],
+        SD_CMD_POWERVLC_DEVICE_CANCEL_TRANSFER, &request);
+    [self updatePowerVLCDeviceTransfers];
+}
+
+- (void)cancelAllPowerVLCTransfers:(id)sender
+{
+    NSString *service = [sender representedObject];
+    playlist_ServicesDiscoveryControl(pl_Get(p_intf), [service UTF8String],
+                                      SD_CMD_POWERVLC_DEVICE_CANCEL_ALL);
+    [self updatePowerVLCDeviceTransfers];
+}
+
+- (void)updatePowerVLCDeviceTransfers
+{
+    playlist_t *playlist = pl_Get(p_intf);
+    BOOL sidebarChanged = NO;
+    BOOL selectedDeviceDeleting = NO;
+    unsigned i;
+    for (i = 0; i < [sidebarItems count]; ++i) {
+        NSMutableDictionary *entry = [sidebarItems objectAtIndex:i];
+        if ([[entry objectForKey:@"kind"] isEqualToString:@"powerml"]) {
+            BOOL scanActive = var_GetBool(p_intf->obj.libvlc, PVLC_ML_SCAN_ACTIVE);
+            uint64_t scanDone = var_GetInteger(p_intf->obj.libvlc, PVLC_ML_SCAN_DONE);
+            uint64_t scanTotal = var_GetInteger(p_intf->obj.libvlc, PVLC_ML_SCAN_TOTAL);
+            NSString *title = _NS("Media Library");
+            if (scanActive) {
+                if (scanTotal > 0) {
+                    uint64_t remaining = scanTotal > scanDone ? scanTotal - scanDone : 0;
+                    unsigned percent = (unsigned)MIN(100,
+                                            (scanDone * 100) / scanTotal);
+                    title = [NSString stringWithFormat:
+                        remaining == 1
+                            ? _NS("Media Library — scanning %u%% · %llu file remaining")
+                            : _NS("Media Library — scanning %u%% · %llu files remaining"),
+                        percent, (unsigned long long)remaining];
+                } else
+                    title = _NS("Media Library — scanning…");
+            }
+            if (![[entry objectForKey:@"title"] isEqualToString:title]) {
+                [entry setObject:title forKey:@"title"];
+                if ((int)i == sidebarSelection)
+                    [viewTitleLabel setStringValue:title];
+                sidebarChanged = YES;
+            }
+            continue;
+        }
+        NSString *service = [entry objectForKey:@"sd"];
+        if (![service hasPrefix:@"powervlc_device{"]) continue;
+        BOOL active = NO;
+        BOOL pendingChanges = NO;
+        BOOL commitFailed = NO;
+        unsigned activity = SD_DEVICE_IDLE;
+        uint64_t totalBytes = 0, freeBytes = 0;
+        if (playlist_IsServicesDiscoveryLoaded(playlist, [service UTF8String])) {
+            services_discovery_transfer_status_t status = { 0 };
+            if (playlist_ServicesDiscoveryControl(playlist, [service UTF8String],
+                    SD_CMD_POWERVLC_DEVICE_TRANSFERS, &status) == VLC_SUCCESS) {
+                active = status.b_synchronizing;
+                pendingChanges = status.b_pending_changes;
+                commitFailed = status.b_commit_failed;
+                activity = status.i_activity;
+                totalBytes = status.i_total_bytes;
+                freeBytes = status.i_free_bytes;
+            }
+            VLCLegacyTransferStatusClear(&status);
+        }
+        NSString *base = [entry objectForKey:@"baseTitle"] ?: [entry objectForKey:@"title"];
+        NSString *operation = activity == SD_DEVICE_LOADING_ITUNESDB ? _NS("Loading iTunesDB…")
+                            : activity == SD_DEVICE_LOADING_CONTENTS ? _NS("Loading contents…")
+                            : activity == SD_DEVICE_UPDATING_ITUNESDB ? _NS("Updating iTunesDB…")
+                            : activity == SD_DEVICE_DELETING ? _NS("Deleting…")
+                            : active ? _NS("Synchronizing")
+                            : commitFailed ? _NS("Finalization failed — changes still pending")
+                            : pendingChanges ? _NS("Changes pending finalization") : nil;
+        NSString *title = operation
+            ? [base stringByAppendingFormat:@" (%@)", operation] : base;
+        if (totalBytes > 0)
+            title = [title stringByAppendingFormat:@" — %.1f GB %@ %.1f GB (%u%%)",
+                (double)freeBytes / 1000000000., _NS("free of"),
+                (double)totalBytes / 1000000000.,
+                (unsigned)((freeBytes * 100) / totalBytes)];
+        if (![[entry objectForKey:@"title"] isEqualToString:title]) {
+            [entry setObject:title forKey:@"title"];
+            if ((int)i == sidebarSelection)
+                [viewTitleLabel setStringValue:title];
+            sidebarChanged = YES;
+        }
+        if ((int)i == sidebarSelection && activity == SD_DEVICE_DELETING)
+            selectedDeviceDeleting = YES;
+    }
+    [playlistTable setEnabled:!selectedDeviceDeleting];
+    if (sidebarChanged) [sidebarTable reloadData];
+
+    NSArray *panelRecords = [deviceTransferPanels allValues];
+    for (i = 0; i < [panelRecords count]; ++i) {
+        NSMutableDictionary *record = [panelRecords objectAtIndex:i];
+        NSPanel *panel = [record objectForKey:@"panel"];
+        if (![panel isVisible]) continue;
+        NSString *service = [record objectForKey:@"service"];
+        services_discovery_transfer_status_t status = { 0 };
+        if (playlist_ServicesDiscoveryControl(playlist, [service UTF8String],
+                SD_CMD_POWERVLC_DEVICE_TRANSFERS, &status) != VLC_SUCCESS)
+            continue;
+        NSMutableArray *rows = [NSMutableArray arrayWithCapacity:status.i_count];
+        size_t n;
+        for (n = status.i_count; n > 0; --n) {
+            services_discovery_transfer_item_t *item = &status.p_items[n - 1];
+            NSString *source = [NSString stringWithUTF8String:
+                                  item->psz_source ? item->psz_source : ""];
+            NSString *destination = [NSString stringWithUTF8String:
+                                       item->psz_destination ? item->psz_destination : ""];
+            [rows addObject:[NSDictionary dictionaryWithObjectsAndKeys:
+                [NSNumber numberWithUnsignedLongLong:item->i_id], @"id",
+                [source lastPathComponent], @"source", destination, @"destination",
+                VLCLegacyTransferStage(item->i_stage), @"stage",
+                [NSString stringWithFormat:@"%u %%", item->i_progress], @"progress",
+                nil]];
+        }
+        [record setObject:rows forKey:@"rows"];
+        [[record objectForKey:@"table"] reloadData];
+        VLCLegacyTransferStatusClear(&status);
+    }
+}
+
+- (void)importPowerVLCAudioCD:(id)sender
+{
+    NSMutableArray *tracks = [NSMutableArray array];
+    playlist_t *playlist = pl_Get(p_intf);
+    playlist_Lock(playlist);
+    VLCLegacyCollectAudioCDTracks(&playlist->root, tracks);
+    playlist_Unlock(playlist);
+    if (![tracks count]) {
+        NSRunInformationalAlertPanel(_NS("Import Audio CD"),
+            _NS("Open the Audio CD once so its tracks are displayed, then run the import again."),
+            _NS("OK"), nil, nil);
+        return;
+    }
+    if (!playlist_IsServicesDiscoveryLoaded(playlist, "powervlc_library")
+     && playlist_ServicesDiscoveryAdd(playlist, "powervlc_library") != VLC_SUCCESS) {
+        unsigned i;
+        for (i = 0; i < [tracks count]; i++)
+            input_item_Release([[tracks objectAtIndex:i] pointerValue]);
+        return;
+    }
+    unsigned imported = 0, i;
+    for (i = 0; i < [tracks count]; i++) {
+        input_item_t *track = [[tracks objectAtIndex:i] pointerValue];
+        char *uri = input_item_GetURI(track);
+        char *title = input_item_GetTitleFbName(track);
+        char *artist = input_item_GetMeta(track, vlc_meta_Artist);
+        char *album = input_item_GetMeta(track, vlc_meta_Album);
+        services_discovery_import_t request = {
+            uri, title, artist, album, track
+        };
+        if (playlist_ServicesDiscoveryControl(playlist, "powervlc_library",
+              SD_CMD_POWERVLC_IMPORT, &request) == VLC_SUCCESS) imported++;
+        free(uri); free(title); free(artist); free(album);
+        input_item_Release(track);
+    }
+    NSString *importedCount = [NSString stringWithFormat:@"%u", imported];
+    NSString *importMessage = [_NS("%u tracks are being imported as lossless FLAC files in the managed library.")
+        stringByReplacingOccurrencesOfString:@"%u" withString:importedCount];
+    NSRunInformationalAlertPanel(_NS("Import Audio CD"),
+        @"%@", _NS("OK"), nil, nil, importMessage);
 }
 
 - (void)ejectNetworkLocation:(id)sender
@@ -4421,6 +5614,112 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
  * playlist table
  *****************************************************************************/
 
+- (void)setPowerVLCRating:(NSMenuItem *)sender
+{
+    unsigned rating = (unsigned)[[sender representedObject] unsignedIntValue];
+    NSArray *rows = VLCLegacySelectedRows(playlistTable);
+    NSMutableDictionary *ratings = [NSMutableDictionary dictionary];
+    unsigned rowIndex;
+    for (rowIndex = 0; rowIndex < [rows count]; ++rowIndex) {
+        NSNumber *number = [rows objectAtIndex:rowIndex];
+        NSDictionary *entry = [playlistTable itemAtRow:[number intValue]];
+        VLCLegacyCollectRatings(entry, ratings);
+    }
+    NSArray *paths = [ratings allKeys];
+    if (![paths count]) return;
+    const char **utf8Paths = calloc([paths count], sizeof(*utf8Paths));
+    if (!utf8Paths) return;
+    for (rowIndex = 0; rowIndex < [paths count]; ++rowIndex)
+        utf8Paths[rowIndex] = [[paths objectAtIndex:rowIndex] UTF8String];
+    services_discovery_ratings_t request = {
+        utf8Paths, [paths count], rating
+    };
+    playlist_ServicesDiscoveryControl(pl_Get(p_intf), "powervlc_library",
+        SD_CMD_POWERVLC_SET_RATINGS, &request);
+    free(utf8Paths);
+    [playlistTable setNeedsDisplay:YES];
+}
+
+static NSDictionary *VLCLegacyFindSnapshotEntryById(NSArray *rows,
+                                                     int itemId)
+{
+    unsigned i;
+    for (i = 0; i < [rows count]; ++i) {
+        NSDictionary *entry = [rows objectAtIndex:i];
+        if ([[entry objectForKey:@"id"] intValue] == itemId)
+            return entry;
+        NSArray *children = [entry objectForKey:@"children"];
+        NSDictionary *found = children
+            ? VLCLegacyFindSnapshotEntryById(children, itemId) : nil;
+        if (found)
+            return found;
+    }
+    return nil;
+}
+
+- (void)playPendingVisibleNodeIfReady
+{
+    if (pendingVisibleNodePlaybackItemId < 0)
+        return;
+    NSDictionary *root = VLCLegacyFindSnapshotEntryById(
+        items, pendingVisibleNodePlaybackItemId);
+    if (!root) {
+        pendingVisibleNodePlaybackItemId = -1;
+        return;
+    }
+
+    NSDictionary *cursor = root;
+    while (cursor) {
+        NSNumber *cursorId = [cursor objectForKey:@"id"];
+        if (cursorId)
+            [expandedItemIds addObject:cursorId];
+        NSArray *children = [cursor objectForKey:@"children"];
+        NSDictionary *next = nil;
+        unsigned i;
+        for (i = 0; i < [children count]; ++i) {
+            NSDictionary *candidate = [children objectAtIndex:i];
+            if (![[candidate objectForKey:@"randomAction"] boolValue]) {
+                next = candidate;
+                break;
+            }
+        }
+        if (next) {
+            [playlistTable expandItem:cursor];
+            cursor = next;
+            continue;
+        }
+
+        /* An empty compact node is a lazy level. Expanding it starts the
+         * metadata request; the rebuilt snapshot retries this method. */
+        if (children && [[cursor objectForKey:@"browse"] boolValue]) {
+            [playlistTable expandItem:cursor];
+            return;
+        }
+        if (children)
+            return;
+
+        int leafId = [[cursor objectForKey:@"id"] intValue];
+        playlist_t *p_playlist = pl_Get(p_intf);
+        playlist_Lock(p_playlist);
+        playlist_item_t *leaf = playlist_ItemGetById(p_playlist, leafId);
+        playlist_item_t *scope = leaf ? leaf->p_parent : NULL;
+        while (scope && scope->p_parent
+            && (!scope->p_input
+             || !input_item_IsPowerVLCAlbumScope(scope->p_input)))
+            scope = scope->p_parent;
+        if (leaf) {
+            pendingVisibleNodePlaybackItemId = -1;
+            pendingRandomRevealItemId = leafId;
+            playlist_ViewPlay(p_playlist, scope ? scope : leaf->p_parent,
+                              leaf);
+        } else {
+            pendingVisibleNodePlaybackItemId = -1;
+        }
+        playlist_Unlock(p_playlist);
+        return;
+    }
+}
+
 - (void)playSelectedItem:(id)sender
 {
     int row = (int)[playlistTable clickedRow];
@@ -4439,26 +5738,207 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     /* Resolve by id: the item may have been deleted since the snapshot */
     playlist_item_t *p_item = playlist_ItemGetById(p_playlist, itemId);
     if (p_item) {
+        if (p_item->p_input
+         && VLCLegacyInputIsPowerVLCRandomAction(p_item->p_input)) {
+            pendingRandomPlaybackItemId = p_item->i_id;
+            pendingRandomBranchItemId = -1;
+            playlist_powervlc_random_result_t resolved;
+            playlist_PowerVLCRandomResolve(p_playlist, p_item, -1,
+                                           &resolved);
+            pendingRandomBranchItemId = resolved.i_branch_id;
+            if (resolved.p_browse)
+                libvlc_MetadataRequest(p_playlist->obj.libvlc,
+                    resolved.p_browse->p_input, META_REQUEST_OPTION_SCOPE_ANY,
+                    120000, resolved.p_browse);
+            else if (resolved.p_track) {
+                pendingRandomPlaybackItemId = -1;
+                pendingRandomBranchItemId = -1;
+                pendingRandomRevealItemId = resolved.p_track->i_id;
+                playlist_ViewPlay(p_playlist, resolved.p_scope,
+                                  resolved.p_track);
+            } else {
+                pendingRandomPlaybackItemId = -1;
+                pendingRandomBranchItemId = -1;
+            }
+            playlist_Unlock(p_playlist);
+            return;
+        }
+        if ([entry objectForKey:@"children"] != nil) {
+            pendingVisibleNodePlaybackItemId = itemId;
+            playlist_Unlock(p_playlist);
+            [self playPendingVisibleNodeIfReady];
+            return;
+        }
         /* double-clicking a node starts playing inside it (3.0) */
-        if (p_item->i_children >= 0)
-            playlist_ViewPlay(p_playlist, p_item, NULL);
-        else
-            /* Play the leaf within the shown root so playback continues
-             * through its siblings. Passing NULL as the node makes the core
-             * default to the current status node (p_playing), which is wrong
-             * for a Media Library leaf: it is not under p_playing, so the
-             * "current" queue would be built from the playlist and playback
-             * would stop after this one track. currentRootLocked is the root
-             * the leaf actually lives in (Playlist, Media Library, SD). */
-            playlist_ViewPlay(p_playlist,
-                              [self currentRootLocked:p_playlist], p_item);
+        if (p_item->i_children >= 0) {
+            playlist_item_t *direct = NULL;
+            if (p_item->p_input
+             && VLCLegacyInputIsPowerVLCRandomAction(p_item->p_input)
+             && input_item_IsPowerVLCRandomAlbumTrackAction(p_item->p_input)
+             && p_item->p_parent) {
+                playlist_item_t *parent = p_item->p_parent;
+                int count = 0, i;
+                for (i = 0; i < parent->i_children; ++i) {
+                    playlist_item_t *candidate = parent->pp_children[i];
+                    if (candidate && candidate != p_item
+                     && candidate->i_children < 0 && candidate->p_input
+                     && !VLCLegacyInputIsPowerVLCRandomAction(
+                            candidate->p_input)) count++;
+                }
+                if (count) {
+                    uint32_t value;
+                    vlc_rand_bytes(&value, sizeof(value));
+                    int wanted = (int)(value % (uint32_t)count), seen = 0;
+                    for (i = 0; i < parent->i_children; ++i) {
+                        playlist_item_t *candidate = parent->pp_children[i];
+                        if (candidate && candidate != p_item
+                         && candidate->i_children < 0 && candidate->p_input
+                         && !VLCLegacyInputIsPowerVLCRandomAction(
+                                candidate->p_input)
+                         && seen++ == wanted) {
+                            direct = candidate;
+                            break;
+                        }
+                    }
+                }
+            }
+            playlist_item_t *first = p_item;
+            while (!direct && first && first->i_children >= 0) {
+                playlist_item_t *next = NULL;
+                int i;
+                for (i = 0; i < first->i_children; ++i) {
+                    playlist_item_t *candidate = first->pp_children[i];
+                    if (candidate && candidate->p_input
+                     && !VLCLegacyInputIsPowerVLCRandomAction(
+                            candidate->p_input)) {
+                        next = candidate;
+                        break;
+                    }
+                }
+                first = next;
+            }
+            if (direct) {
+                playlist_ViewPlay(p_playlist, p_item->p_parent, direct);
+            } else if (first) {
+                playlist_ViewPlay(p_playlist, p_item, first);
+            }
+        }
+        else {
+            /* Keep Next inside the leaf's displayed group. The discovery
+             * root also contains private Random-XSPF copies of the album. */
+            playlist_item_t *scope = p_item->p_parent ? p_item->p_parent
+                : [self currentRootLocked:p_playlist];
+            playlist_ViewPlay(p_playlist, scope, p_item);
+        }
     }
     playlist_Unlock(p_playlist);
+}
+
+- (NSDictionary *)userPlaylistContextEntry
+{
+    NSInteger row = [playlistTable clickedRow];
+    if (row < 0) row = [playlistTable selectedRow];
+    return row >= 0 ? [playlistTable itemAtRow:row] : nil;
+}
+
+- (NSString *)selectedPowerVLCDeviceService
+{
+    if (sidebarSelection < 0
+     || (unsigned)sidebarSelection >= [sidebarItems count])
+        return nil;
+    NSString *service = [[sidebarItems objectAtIndex:sidebarSelection]
+                                                   objectForKey:@"sd"];
+    return [service hasPrefix:@"powervlc_device{"] ? service : nil;
+}
+
+- (NSDictionary *)containingUserPlaylistForEntry:(NSDictionary *)entry
+{
+    id cursor = entry;
+    while (cursor) {
+        if ([[cursor objectForKey:@"userPlaylist"] boolValue])
+            return cursor;
+        cursor = [playlistTable parentForItem:cursor];
+    }
+    return nil;
+}
+
+- (NSString *)promptForUserPlaylistName:(NSString *)title
+                            initialValue:(NSString *)initialValue
+{
+    NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+    [alert setMessageText:title];
+    [alert addButtonWithTitle:_NS("OK")];
+    [alert addButtonWithTitle:_NS("Cancel")];
+    NSTextField *field = [[[NSTextField alloc]
+        initWithFrame:NSMakeRect(0, 0, 320, 24)] autorelease];
+    [field setStringValue:initialValue ?: @""];
+    [alert setAccessoryView:field];
+    if ([alert runModal] != NSAlertFirstButtonReturn)
+        return nil;
+    NSString *name = [[field stringValue]
+        stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return [name length] ? name : nil;
+}
+
+- (void)createUserPlaylistAtContextFolder:(BOOL)folder
+{
+    NSDictionary *entry = [self userPlaylistContextEntry];
+    if (![[entry objectForKey:@"userPlaylistsRoot"] boolValue]
+     && ![[entry objectForKey:@"userPlaylistFolder"] boolValue])
+        return;
+    NSString *name = [self promptForUserPlaylistName:
+        folder ? _NS("New Playlist Folder") : _NS("New Playlist")
+        initialValue:@""];
+    if (!name) return;
+    services_discovery_playlist_create_t request = {
+        [[entry objectForKey:@"id"] intValue], [name UTF8String], folder
+    };
+    NSString *deviceService = [self selectedPowerVLCDeviceService];
+    playlist_ServicesDiscoveryControl(pl_Get(p_intf),
+        deviceService ? [deviceService UTF8String] : "powervlc_library",
+        SD_CMD_POWERVLC_PLAYLIST_CREATE, &request);
+}
+
+- (void)createUserPlaylist:(id)sender
+{
+    (void)sender;
+    [self createUserPlaylistAtContextFolder:NO];
+}
+
+- (void)createUserPlaylistFolder:(id)sender
+{
+    (void)sender;
+    [self createUserPlaylistAtContextFolder:YES];
+}
+
+- (void)renameUserPlaylist:(id)sender
+{
+    (void)sender;
+    NSDictionary *entry = [self userPlaylistContextEntry];
+    if (![[entry objectForKey:@"userPlaylist"] boolValue]
+     && ![[entry objectForKey:@"userPlaylistFolder"] boolValue])
+        return;
+    NSString *name = [self promptForUserPlaylistName:_NS("Rename Playlist")
+        initialValue:[entry objectForKey:@"title"]];
+    if (!name) return;
+    services_discovery_playlist_rename_t request = {
+        [[entry objectForKey:@"id"] intValue], [name UTF8String]
+    };
+    NSString *deviceService = [self selectedPowerVLCDeviceService];
+    playlist_ServicesDiscoveryControl(pl_Get(p_intf),
+        deviceService ? [deviceService UTF8String] : "powervlc_library",
+        SD_CMD_POWERVLC_PLAYLIST_RENAME, &request);
 }
 
 - (void)deleteSelectedItems:(id)sender
 {
     NSArray *selection = VLCLegacySelectedRows(playlistTable);
+    NSInteger clickedRow = [playlistTable clickedRow];
+    if (clickedRow >= 0
+     && ![selection containsObject:[NSNumber numberWithInt:(int)clickedRow]])
+        selection = [NSArray arrayWithObject:
+                         [NSNumber numberWithInt:(int)clickedRow]];
     if (![selection count])
         return;
 
@@ -4466,14 +5946,178 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     if ([self podcastRowIsSelected] && [self unsubscribeSelectedPodcasts])
         return;
 
+    NSDictionary *sidebarEntry = sidebarSelection >= 0
+        && (unsigned)sidebarSelection < [sidebarItems count]
+        ? [sidebarItems objectAtIndex:(unsigned)sidebarSelection] : nil;
+    NSString *deviceService = [sidebarEntry objectForKey:@"sd"];
+    if ([deviceService hasPrefix:@"powervlc_device{"]) {
+        NSMutableArray *selectedEntries = [NSMutableArray array];
+        for (NSUInteger rowIndex = 0; rowIndex < [selection count]; ++rowIndex) {
+            NSNumber *rowValue = [selection objectAtIndex:rowIndex];
+            NSDictionary *entry = [playlistTable itemAtRow:[rowValue intValue]];
+            if (entry) [selectedEntries addObject:entry];
+        }
+        for (NSUInteger entryIndex = 0;
+             entryIndex < [selectedEntries count]; ++entryIndex) {
+            NSDictionary *entry = [selectedEntries objectAtIndex:entryIndex];
+            if ([[entry objectForKey:@"deviceStructure"] boolValue])
+                return;
+        }
+
+        /* Playlist objects and playlist occurrences are database edits, not
+         * media-file deletions.  The previous Legacy path sent all three
+         * cases to DEVICE_DELETE: removing one occurrence consequently
+         * removed that track from every view, while a playlist had no path
+         * to resolve and silently did nothing. */
+        BOOL playlistsOnly = [selectedEntries count] > 0;
+        for (NSUInteger entryIndex = 0;
+             entryIndex < [selectedEntries count]; ++entryIndex) {
+            NSDictionary *entry = [selectedEntries objectAtIndex:entryIndex];
+            playlistsOnly &= [[entry objectForKey:@"userPlaylist"] boolValue];
+        }
+        if (playlistsOnly) {
+            NSInteger answer = NSRunAlertPanel(_NS("Delete Playlist?"), @"%@",
+                _NS("Delete"), _NS("Cancel"), nil,
+                _NS("The playlist will be removed, but its media will remain on the player."));
+            if (answer != NSAlertDefaultReturn) return;
+            BOOL failed = NO;
+            for (NSUInteger entryIndex = 0;
+                 entryIndex < [selectedEntries count]; ++entryIndex) {
+                NSDictionary *entry = [selectedEntries objectAtIndex:entryIndex];
+                services_discovery_playlist_item_t request = {
+                    [[entry objectForKey:@"id"] intValue]
+                };
+                if (playlist_ServicesDiscoveryControl(pl_Get(p_intf),
+                        [deviceService UTF8String],
+                        SD_CMD_POWERVLC_PLAYLIST_DELETE,
+                        &request) != VLC_SUCCESS)
+                    failed = YES;
+            }
+            if (failed)
+                NSRunInformationalAlertPanel(_NS("Unable to Delete Playlist"),
+                    @"%@", _NS("OK"), nil, nil,
+                    _NS("The portable player rejected the playlist deletion."));
+            [self rebuildItemsSnapshot];
+            return;
+        }
+
+        NSDictionary *playlist = nil;
+        BOOL playlistMembersOnly = [selectedEntries count] > 0;
+        for (NSUInteger entryIndex = 0;
+             entryIndex < [selectedEntries count]; ++entryIndex) {
+            NSDictionary *entry = [selectedEntries objectAtIndex:entryIndex];
+            NSDictionary *container = [self containingUserPlaylistForEntry:entry];
+            if (!container || container == entry
+             || (playlist && playlist != container)) {
+                playlistMembersOnly = NO;
+                break;
+            }
+            playlist = container;
+        }
+        if (playlistMembersOnly && playlist) {
+            NSInteger answer = NSRunAlertPanel(_NS("Remove from Playlist?"),
+                _NS("%lu item(s) will be removed from this playlist. The media will remain on the player."),
+                _NS("Remove from Playlist"), _NS("Cancel"), nil,
+                (unsigned long)[selectedEntries count]);
+            if (answer != NSAlertDefaultReturn) return;
+            int *memberIds = calloc([selectedEntries count], sizeof(*memberIds));
+            if (!memberIds) return;
+            for (NSUInteger index = 0; index < [selectedEntries count]; ++index)
+                memberIds[index] = [[[selectedEntries objectAtIndex:index]
+                                           objectForKey:@"id"] intValue];
+            services_discovery_playlist_remove_t request = {
+                [[playlist objectForKey:@"id"] intValue],
+                [selectedEntries count], memberIds
+            };
+            int result = playlist_ServicesDiscoveryControl(pl_Get(p_intf),
+                [deviceService UTF8String], SD_CMD_POWERVLC_PLAYLIST_REMOVE,
+                &request);
+            free(memberIds);
+            if (result != VLC_SUCCESS)
+                NSRunInformationalAlertPanel(_NS("Unable to Remove from Playlist"),
+                    @"%@", _NS("OK"), nil, nil,
+                    _NS("The portable player rejected the playlist change."));
+            [self rebuildItemsSnapshot];
+            return;
+        }
+        for (NSUInteger entryIndex = 0;
+             entryIndex < [selectedEntries count]; ++entryIndex) {
+            NSDictionary *entry = [selectedEntries objectAtIndex:entryIndex];
+            if ([[entry objectForKey:@"userPlaylistTree"] boolValue]) {
+                NSRunInformationalAlertPanel(_NS("Unable to Delete Selected Content"),
+                    @"%@", _NS("OK"), nil, nil,
+                    _NS("Select entries from one playlist at a time, or select media from Music to delete it from the player."));
+                return;
+            }
+        }
+
+        int *itemIds = calloc([selection count], sizeof(*itemIds));
+        if (!itemIds) return;
+        NSUInteger itemCount = 0;
+        for (NSUInteger rowIndex = 0; rowIndex < [selection count]; ++rowIndex) {
+            NSNumber *rowValue = [selection objectAtIndex:rowIndex];
+            NSDictionary *entry = [playlistTable itemAtRow:[rowValue intValue]];
+            if (entry) itemIds[itemCount++] = [[entry objectForKey:@"id"] intValue];
+        }
+        services_discovery_device_delete_resolve_t resolved = {
+            itemIds, itemCount, NULL, 0
+        };
+        int resolveResult = playlist_ServicesDiscoveryControl(pl_Get(p_intf),
+            [deviceService UTF8String], SD_CMD_POWERVLC_DEVICE_RESOLVE_DELETE,
+            &resolved);
+        if (resolveResult != VLC_SUCCESS || resolved.i_count == 0) {
+            free(itemIds);
+            NSRunInformationalAlertPanel(_NS("Unable to Delete Selected Content"),
+                @"%@", _NS("OK"), nil, nil,
+                _NS("PowerVLC could not resolve the selected rows to media stored on this player."));
+            return;
+        }
+        NSInteger answer = NSRunAlertPanel(_NS("Delete Content from Portable Player?"),
+            _NS("%lu item(s) will be permanently deleted from the player. This action cannot be undone."),
+            _NS("Delete"), _NS("Cancel"), nil,
+            (unsigned long)resolved.i_count);
+        if (answer == NSAlertDefaultReturn) {
+            services_discovery_device_delete_t request = {
+                (const char *const *)resolved.ppsz_paths, resolved.i_count,
+                itemIds, itemCount
+            };
+            if (playlist_ServicesDiscoveryControl(pl_Get(p_intf),
+                    [deviceService UTF8String], SD_CMD_POWERVLC_DEVICE_DELETE,
+                    &request) != VLC_SUCCESS)
+                NSRunInformationalAlertPanel(_NS("Unable to Delete Selected Content"),
+                    @"%@", _NS("OK"), nil, nil,
+                    _NS("The portable player rejected the deletion request. No content was changed."));
+            else
+                [playlistTable setEnabled:NO];
+        }
+        for (size_t i = 0; i < resolved.i_count; ++i)
+            free(resolved.ppsz_paths[i]);
+        free(resolved.ppsz_paths);
+        free(itemIds);
+        return;
+    }
+
     /* collect the ids first: the outline rows shift as nodes go away */
     NSMutableArray *ids = [NSMutableArray array];
+    NSMutableArray *userIds = [NSMutableArray array];
     unsigned i;
     for (i = 0; i < [selection count]; i++) {
         NSInteger row = (NSInteger)[[selection objectAtIndex:i] intValue];
         NSDictionary *entry = [playlistTable itemAtRow:row];
-        if (entry)
-            [ids addObject:[entry objectForKey:@"id"]];
+        if (entry) {
+            if ([[entry objectForKey:@"userPlaylistTree"] boolValue]
+             && ![[entry objectForKey:@"userPlaylistsRoot"] boolValue])
+                [userIds addObject:[entry objectForKey:@"id"]];
+            else
+                [ids addObject:[entry objectForKey:@"id"]];
+        }
+    }
+    for (i = 0; i < [userIds count]; ++i) {
+        services_discovery_playlist_item_t request = {
+            [[userIds objectAtIndex:i] intValue]
+        };
+        playlist_ServicesDiscoveryControl(pl_Get(p_intf), "powervlc_library",
+            SD_CMD_POWERVLC_PLAYLIST_DELETE, &request);
     }
     playlist_t *p_playlist = pl_Get(p_intf);
     playlist_Lock(p_playlist);
@@ -4490,10 +6134,31 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
 /* context menu: media info window is owned by the app delegate */
 - (void)showItemInfo:(id)sender
 {
+    int row = (int)[playlistTable clickedRow];
+    if (row < 0)
+        row = (int)[playlistTable selectedRow];
+    NSDictionary *entry = row >= 0 ? [playlistTable itemAtRow:row] : nil;
+    if (!entry)
+        return;
+
+    input_item_t *input = NULL;
+    playlist_t *playlist = pl_Get(p_intf);
+    playlist_Lock(playlist);
+    playlist_item_t *item = playlist_ItemGetById(
+        playlist, [[entry objectForKey:@"id"] intValue]);
+    if (item && item->p_input)
+        input = input_item_Hold(item->p_input);
+    playlist_Unlock(playlist);
+    if (!input)
+        return;
+
     id delegate = [NSApp delegate];
-    if ([delegate respondsToSelector:@selector(mediaInfoController)])
-        [[delegate performSelector:@selector(mediaInfoController)]
-            performSelector:@selector(showWindow)];
+    if ([delegate respondsToSelector:@selector(mediaInfoController)]) {
+        VLCLegacyMediaInfo *controller =
+            [delegate performSelector:@selector(mediaInfoController)];
+        [controller showWindowForInputItem:input];
+    }
+    input_item_Release(input);
 }
 
 - (void)revealItemInFinder:(id)sender
@@ -4524,14 +6189,118 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     free(psz_uri);
 }
 
+static void VLCLegacyCollectBurnPaths(NSDictionary *entry,
+                                       NSMutableArray *paths)
+{
+    NSArray *children = [entry objectForKey:@"children"];
+    if ([children count]) {
+        unsigned i;
+        for (i = 0; i < [children count]; i++)
+            VLCLegacyCollectBurnPaths([children objectAtIndex:i], paths);
+        return;
+    }
+    NSString *path = [entry objectForKey:@"path"];
+    if (![path length]) return;
+    NSArray *extensions = [NSArray arrayWithObjects:@"aac", @"aif", @"aiff",
+        @"alac", @"flac", @"m4a", @"mp3", @"ogg", @"opus", @"wav", nil];
+    if ([extensions containsObject:[[path pathExtension] lowercaseString]])
+        [paths addObject:path];
+}
+
+- (void)burnPlaylistToAudioCD:(id)sender
+{
+    NSMutableArray *paths = [NSMutableArray array];
+    NSArray *rows = VLCLegacySelectedRows(playlistTable);
+    unsigned i;
+    for (i = 0; i < [rows count]; i++) {
+        NSDictionary *entry = [playlistTable itemAtRow:
+            [[rows objectAtIndex:i] intValue]];
+        if (entry) VLCLegacyCollectBurnPaths(entry, paths);
+    }
+    if (![paths count]) {
+        NSRunInformationalAlertPanel(_NS("Burn Audio CD"),
+            _NS("The selection contains no local audio tracks."),
+            _NS("OK"), nil, nil); return;
+    }
+    NSString *burnCount = [NSString stringWithFormat:@"%u",
+                            (unsigned)[paths count]];
+    NSString *burnMessage = [_NS("Burn %u tracks to the blank Audio CD?")
+        stringByReplacingOccurrencesOfString:@"%u" withString:burnCount];
+    if (NSRunAlertPanel(_NS("Burn Audio CD"), @"%@",
+        _NS("Burn"), _NS("Cancel"), nil, burnMessage)
+        != NSAlertDefaultReturn) return;
+    NSString *directory = [NSTemporaryDirectory() stringByAppendingPathComponent:
+        [NSString stringWithFormat:@"PowerVLC-Audio-CD-%@",
+            [[NSProcessInfo processInfo] globallyUniqueString]]];
+    NSFileManager *manager = [NSFileManager defaultManager];
+    if (![manager createDirectoryAtPath:directory attributes:nil]) return;
+    for (i = 0; i < [paths count]; i++) {
+        NSString *source = [paths objectAtIndex:i];
+        NSString *name = [NSString stringWithFormat:@"%03u.%@", i + 1,
+                           [source pathExtension]];
+        NSString *target = [directory stringByAppendingPathComponent:name];
+        if (symlink([source fileSystemRepresentation],
+                    [target fileSystemRepresentation]) != 0)
+            [manager copyPath:source toPath:target handler:nil];
+    }
+    NSTask *task = [[[NSTask alloc] init] autorelease];
+    [task setLaunchPath:@"/usr/bin/drutil"];
+    [task setArguments:[NSArray arrayWithObjects:@"burn", @"-audio", @"-eject",
+                        directory, nil]];
+    [task launch];
+    NSDictionary *state = [NSDictionary dictionaryWithObjectsAndKeys:
+        task, @"task", directory, @"directory", nil];
+    [NSTimer scheduledTimerWithTimeInterval:1.0 target:self
+        selector:@selector(pollAudioCDBurn:) userInfo:state repeats:YES];
+}
+
+- (void)pollAudioCDBurn:(NSTimer *)timer
+{
+    NSTask *task = [[timer userInfo] objectForKey:@"task"];
+    if ([task isRunning]) return;
+    [timer invalidate];
+    [[NSFileManager defaultManager] removeFileAtPath:
+        [[timer userInfo] objectForKey:@"directory"] handler:nil];
+    if ([task terminationStatus] != 0)
+        NSRunInformationalAlertPanel(_NS("Burn Audio CD"),
+            _NS("The disc burning process failed."), _NS("OK"), nil, nil);
+}
+
 /*****************************************************************************
  * table data sources (playlist table and sidebar share the controller)
  *****************************************************************************/
+
+static void VLCLegacyPrepareAlternatingCell(id cell, NSTableView *table,
+                                             NSInteger row)
+{
+    if (![cell respondsToSelector:@selector(setDrawsBackground:)])
+        return;
+    /* On Jaguar, usesAlternatingRowBackgroundColors paints the row first, but
+     * NSTextFieldCell then clears its own occupied rectangle to white. This
+     * leaves blue fragments only in the disclosure/empty areas. Give every
+     * unselected text cell the same background as its complete row. */
+    if (VLCLegacyDarkMode() || [table isRowSelected:row]) {
+        [cell setDrawsBackground:NO];
+        return;
+    }
+    NSColor *color = (row & 1)
+        ? [NSColor colorWithCalibratedRed:0.93 green:0.955 blue:1.0 alpha:1.0]
+        : [NSColor whiteColor];
+    [cell setBackgroundColor:color];
+    [cell setDrawsBackground:YES];
+}
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
 {
     if (tableView == sidebarTable)
         return (NSInteger)[sidebarItems count];
+    NSArray *records = [deviceTransferPanels allValues];
+    unsigned i;
+    for (i = 0; i < [records count]; ++i) {
+        NSDictionary *record = [records objectAtIndex:i];
+        if ([record objectForKey:@"table"] == tableView)
+            return (NSInteger)[[record objectForKey:@"rows"] count];
+    }
     return 0;   /* the playlist view is an outline now */
 }
 
@@ -4558,6 +6327,14 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     return [item objectForKey:@"children"] != nil;
 }
 
+- (void)outlineView:(NSOutlineView *)outlineView
+    willDisplayOutlineCell:(id)cell
+            forTableColumn:(NSTableColumn *)tableColumn
+                      item:(id)item
+{
+    [cell setTransparent:[[item objectForKey:@"randomAction"] boolValue]];
+}
+
 - (id)tableView:(NSTableView *)tableView
     objectValueForTableColumn:(NSTableColumn *)column
                           row:(NSInteger)row
@@ -4566,6 +6343,16 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         if (row < 0 || (unsigned)row >= [sidebarItems count])
             return @"";
         return [[sidebarItems objectAtIndex:row] objectForKey:@"title"];
+    }
+    NSArray *records = [deviceTransferPanels allValues];
+    unsigned i;
+    for (i = 0; i < [records count]; ++i) {
+        NSDictionary *record = [records objectAtIndex:i];
+        if ([record objectForKey:@"table"] != tableView) continue;
+        NSArray *rows = [record objectForKey:@"rows"];
+        if (row < 0 || (unsigned)row >= [rows count]) return @"";
+        return [[rows objectAtIndex:row]
+                objectForKey:[column identifier]];
     }
     return nil;
 }
@@ -4581,6 +6368,29 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
      * artwork thumbnails): the playing row is marked by its bold font */
     if ([[column identifier] isEqualToString:@"art"])
         return nil;
+
+    if ([[column identifier] isEqualToString:@"title"]
+     && [[item objectForKey:@"rating"] unsignedIntValue] > 0) {
+        unsigned rating = [[item objectForKey:@"rating"] unsignedIntValue];
+        NSMutableString *stars = [NSMutableString string];
+        unsigned i;
+        for (i = 0; i < rating && i < 5; ++i)
+            [stars appendString:@"★"];
+        NSMutableParagraphStyle *style =
+            [[[NSMutableParagraphStyle alloc] init] autorelease];
+        CGFloat indentation = ([outlineView levelForItem:item] + 1)
+                              * [outlineView indentationPerLevel];
+        NSTextTab *tab = [[[NSTextTab alloc]
+            initWithType:NSRightTabStopType
+                location:MAX(40.0, [column width]
+                                     - indentation - 12.0)] autorelease];
+        [style setTabStops:[NSArray arrayWithObject:tab]];
+        NSString *text = [NSString stringWithFormat:@"%@\t%@",
+            [item objectForKey:@"title"] ?: @"", stars];
+        return [[[NSAttributedString alloc] initWithString:text
+            attributes:[NSDictionary dictionaryWithObject:style
+                forKey:NSParagraphStyleAttributeName]] autorelease];
+    }
 
     /* file sizes are resolved lazily (stat during the snapshot walk would
      * run disk I/O under the playlist lock) and cached per path */
@@ -4630,20 +6440,39 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
      forTableColumn:(NSTableColumn *)column
                item:(id)item
 {
+    VLCLegacyPrepareAlternatingCell(cell, outlineView,
+                                    [outlineView rowForItem:item]);
     if (VLCLegacyDarkMode() && [cell respondsToSelector:
             @selector(setTextColor:)])
         [cell setTextColor:VLCLegacyTextColor()];
     /* the playing item is bold, like the VLC 3.0 playlist */
     if (![[column identifier] isEqualToString:@"art"] && item) {
-        BOOL isCurrent =
-            [[item objectForKey:@"id"] intValue] == currentItemId;
+        BOOL insideRandomScope = NO;
+        if (currentRandomScopeId >= 0) {
+            id ancestor = item;
+            while (ancestor) {
+                if ([[ancestor objectForKey:@"id"] intValue]
+                        == currentRandomScopeId) {
+                    insideRandomScope = YES;
+                    break;
+                }
+                ancestor = [playlistTable parentForItem:ancestor];
+            }
+        }
+        BOOL isCurrent = [[item objectForKey:@"id"] intValue] == currentItemId
+            || (insideRandomScope && currentItemURI
+             && [[item objectForKey:@"uri"] isEqualToString:currentItemURI]);
         NSFont *font = [cell font];
         if (font) {
             NSFontManager *manager = [NSFontManager sharedFontManager];
-            [cell setFont:isCurrent
-                ? [manager convertFont:font toHaveTrait:NSBoldFontMask]
-                : [manager convertFont:font
-                       toNotHaveTrait:NSBoldFontMask]];
+            NSFontTraitMask traits = isCurrent ? NSBoldFontMask : 0;
+            if ([[item objectForKey:@"randomAction"] boolValue])
+                traits |= NSItalicFontMask;
+            font = [manager convertFont:font
+                         toNotHaveTrait:NSBoldFontMask | NSItalicFontMask];
+            if (traits)
+                font = [manager convertFont:font toHaveTrait:traits];
+            [cell setFont:font];
         }
     }
 }
@@ -4653,8 +6482,10 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
      forTableColumn:(NSTableColumn *)column
                 row:(NSInteger)row
 {
-    if (tableView != sidebarTable)
+    if (tableView != sidebarTable) {
+        VLCLegacyPrepareAlternatingCell(cell, tableView, row);
         return;
+    }
     NSDictionary *entry = row >= 0 && (unsigned)row < [sidebarItems count]
         ? [sidebarItems objectAtIndex:row] : nil;
     BOOL isHeader =
@@ -4692,6 +6523,17 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     NSDictionary *entry = [sidebarItems objectAtIndex:row];
     if ([[entry objectForKey:@"kind"] isEqualToString:@"header"])
         return;
+    NSDictionary *oldEntry = sidebarSelection >= 0
+        && (unsigned)sidebarSelection < [sidebarItems count]
+        ? [sidebarItems objectAtIndex:sidebarSelection] : nil;
+    NSString *oldKey = [self scrollKeyForSidebarEntry:oldEntry];
+    NSString *newKey = [self scrollKeyForSidebarEntry:entry];
+    BOOL changedView = oldKey != newKey && ![oldKey isEqualToString:newKey];
+    if (changedView && oldKey) {
+        [playlistScrollPositions setObject:
+            [NSValue valueWithPoint:[playlistTable visibleRect].origin]
+                                    forKey:oldKey];
+    }
     sidebarSelection = row;
     [viewTitleLabel setStringValue:[entry objectForKey:@"title"]];
     /* Subscribe / Unsubscribe belong to the podcast list only */
@@ -4721,7 +6563,9 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         }
         playlist_ServicesDiscoveryAdd(pl_Get(p_intf), [sd UTF8String]);
         [activatedServices addObject:sd];
-    } else if (sd && !s_sdReloadBusy) {
+    } else if (sd && ![sd isEqualToString:@"powervlc_library"]
+               && ![sd hasPrefix:@"powervlc_device{"]
+               && !s_sdReloadBusy) {
         /* an on-line service left empty (network hiccup during its
          * one-shot discovery) has no other way to retry: selecting it
          * again restarts the module, in the background (removing a
@@ -4729,8 +6573,11 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         playlist_t *p_playlist = pl_Get(p_intf);
         BOOL isEmpty = NO;
         playlist_Lock(p_playlist);
+        NSString *nodeTitle = [entry objectForKey:@"nodeTitle"]
+                            ?: [entry objectForKey:@"baseTitle"]
+                            ?: [entry objectForKey:@"title"];
         playlist_item_t *p_node = playlist_ChildSearchName(&p_playlist->root,
-            [[entry objectForKey:@"title"] UTF8String]);
+            [nodeTitle UTF8String]);
         isEmpty = VLCLegacySDNodeLooksEmpty(p_node);
         playlist_Unlock(p_playlist);
         if (isEmpty) {
@@ -4763,6 +6610,10 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         }
     }
     [self rebuildItemsSnapshot];
+    if (changedView) {
+        NSValue *saved = [playlistScrollPositions objectForKey:newKey];
+        [playlistTable scrollPoint:saved ? [saved pointValue] : NSZeroPoint];
+    }
 }
 
 /* dropping media on the sidebar Playlist / Media Library rows (3.0) */
@@ -4780,8 +6631,12 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         for (r = 0; (unsigned)r < [sidebarItems count]; r++) {
             NSString *kind = [[sidebarItems objectAtIndex:r]
                 objectForKey:@"kind"];
+            NSString *sd = [[sidebarItems objectAtIndex:r] objectForKey:@"sd"];
             if (([kind isEqualToString:@"playlist"]
-              || [kind isEqualToString:@"ml"])
+              || [kind isEqualToString:@"ml"]
+              || [kind isEqualToString:@"powerml"]
+              || ([kind isEqualToString:@"sd"]
+               && [sd hasPrefix:@"powervlc_device{"]))
              && (row == r || operation == NSTableViewDropAbove)) {
                 if (row != r)
                     continue;
@@ -4843,13 +6698,23 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     if (outlineView != playlistTable || ![draggedRows count])
         return NO;
 
+    NSMutableArray *transferable = [NSMutableArray array];
+    unsigned rowIndex;
+    for (rowIndex = 0; rowIndex < [draggedRows count]; ++rowIndex) {
+        NSDictionary *row = [draggedRows objectAtIndex:rowIndex];
+        if (![[row objectForKey:@"randomAction"] boolValue])
+            [transferable addObject:row];
+    }
+    if (![transferable count])
+        return NO;
+
     [draggedItems autorelease];
-    draggedItems = [draggedRows retain];
+    draggedItems = [transferable retain];
 
     NSMutableArray *types = [NSMutableArray
         arrayWithObject:VLCLegacyPlaylistItemPboardType];
     NSMutableArray *paths = [NSMutableArray array];
-    [self collectLocalPaths:draggedRows into:paths];
+    [self collectLocalPaths:transferable into:paths];
     if ([paths count])
         [types addObject:NSFilenamesPboardType];
 
@@ -4990,6 +6855,23 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
 {
     NSPasteboard *pboard = [info draggingPasteboard];
 
+    BOOL targetUser = [[item objectForKey:@"userPlaylistTree"] boolValue];
+    if (targetUser
+     && [[pboard types] containsObject:VLCLegacyPlaylistItemPboardType]) {
+        BOOL targetPlaylist = [[item objectForKey:@"userPlaylist"] boolValue];
+        BOOL targetFolder = [[item objectForKey:@"userPlaylistsRoot"] boolValue]
+                         || [[item objectForKey:@"userPlaylistFolder"] boolValue];
+        BOOL sourcesInside = [draggedItems count] > 0;
+        unsigned sourceIndex;
+        for (sourceIndex = 0; sourceIndex < [draggedItems count]; ++sourceIndex)
+            sourcesInside &= [[[draggedItems objectAtIndex:sourceIndex]
+                                objectForKey:@"userPlaylistTree"] boolValue];
+        if (sourcesInside)
+            return targetPlaylist || targetFolder
+                 ? NSDragOperationMove : NSDragOperationNone;
+        return targetPlaylist ? NSDragOperationCopy : NSDragOperationNone;
+    }
+
     if ([self currentRootIsReadOnly])
         return NSDragOperationNone;
 
@@ -5048,6 +6930,30 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
          childIndex:(NSInteger)index
 {
     NSPasteboard *pboard = [info draggingPasteboard];
+
+    if ([[item objectForKey:@"userPlaylistTree"] boolValue]
+     && [[pboard types] containsObject:VLCLegacyPlaylistItemPboardType]) {
+        unsigned count = [draggedItems count];
+        if (!count) return NO;
+        int *ids = calloc(count, sizeof(*ids));
+        if (!ids) return NO;
+        BOOL sourcesInside = YES;
+        unsigned i;
+        for (i = 0; i < count; ++i) {
+            NSDictionary *dragged = [draggedItems objectAtIndex:i];
+            ids[i] = [[dragged objectForKey:@"id"] intValue];
+            sourcesInside &= [[dragged objectForKey:@"userPlaylistTree"] boolValue];
+        }
+        services_discovery_playlist_drop_t request = {
+            [[item objectForKey:@"id"] intValue],
+            index == NSOutlineViewDropOnItemIndex ? -1 : (int)index,
+            count, ids, !sourcesInside
+        };
+        int result = playlist_ServicesDiscoveryControl(pl_Get(p_intf),
+            "powervlc_library", SD_CMD_POWERVLC_PLAYLIST_DROP, &request);
+        free(ids);
+        return result == VLC_SUCCESS;
+    }
 
     if ([self currentRootIsReadOnly])
         return NO;
@@ -5126,6 +7032,12 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     if (!count)
         return NO;
 
+    if ([kind isEqualToString:@"powerml"]) {
+        NSMutableArray *paths = [NSMutableArray array];
+        [self collectLocalPaths:draggedItems into:paths];
+        return [self importPathsIntoPowerLibrary:paths];
+    }
+
     playlist_t *p_playlist = pl_Get(p_intf);
     playlist_Lock(p_playlist);
     playlist_item_t *p_node =
@@ -5158,8 +7070,14 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     if (tableView == sidebarTable
      && [[pboard types] containsObject:VLCLegacyPlaylistItemPboardType]) {
         NSString *kind = @"playlist";
-        if (row >= 0 && (unsigned)row < [sidebarItems count])
-            kind = [[sidebarItems objectAtIndex:row] objectForKey:@"kind"];
+        NSDictionary *target = row >= 0 && (unsigned)row < [sidebarItems count]
+            ? [sidebarItems objectAtIndex:row] : nil;
+        if (target) kind = [target objectForKey:@"kind"];
+        NSString *service = [target objectForKey:@"sd"];
+        if ([kind isEqualToString:@"sd"]
+         && [service hasPrefix:@"powervlc_device{"]) {
+            return [self syncDraggedItems:draggedItems toDeviceService:service];
+        }
         return [self copyDraggedItemsToRootOfKind:kind];
     }
 
@@ -5169,8 +7087,15 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
 
     if (tableView == sidebarTable) {
         NSString *kind = @"playlist";
-        if (row >= 0 && (unsigned)row < [sidebarItems count])
-            kind = [[sidebarItems objectAtIndex:row] objectForKey:@"kind"];
+        NSDictionary *target = row >= 0 && (unsigned)row < [sidebarItems count]
+            ? [sidebarItems objectAtIndex:row] : nil;
+        if (target) kind = [target objectForKey:@"kind"];
+        NSString *service = [target objectForKey:@"sd"];
+        if ([kind isEqualToString:@"sd"]
+         && [service hasPrefix:@"powervlc_device{"])
+            return [self syncPaths:files toDeviceService:service];
+        if ([kind isEqualToString:@"powerml"])
+            return [self importPathsIntoPowerLibrary:files];
         if ([kind isEqualToString:@"ml"]) {
             [self addPaths:files toMediaLibrary:YES];
             return YES;
@@ -5181,6 +7106,92 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
 
     [self addPaths:files playFirst:NO];
     return YES;
+}
+
+- (BOOL)syncPaths:(NSArray *)paths toDeviceService:(NSString *)service
+{
+    if (![paths count] || ![service length]) return NO;
+    playlist_t *playlist = pl_Get(p_intf);
+    if (!playlist_IsServicesDiscoveryLoaded(playlist, [service UTF8String])
+     && playlist_ServicesDiscoveryAdd(playlist, [service UTF8String])
+                                                    != VLC_SUCCESS)
+        return NO;
+    BOOL queued = NO;
+    unsigned i;
+    for (i = 0; i < [paths count]; ++i) {
+        NSString *path = [paths objectAtIndex:i];
+        services_discovery_import_t request = {
+            [path fileSystemRepresentation], NULL, NULL, NULL, NULL
+        };
+        if (playlist_ServicesDiscoveryControl(playlist, [service UTF8String],
+                SD_CMD_POWERVLC_DEVICE_ADD, &request) == VLC_SUCCESS)
+            queued = YES;
+    }
+    return queued;
+}
+
+- (BOOL)syncDraggedItems:(NSArray *)items toDeviceService:(NSString *)service
+{
+    if (![items count] || ![service length]) return NO;
+    playlist_t *playlist = pl_Get(p_intf);
+    if (!playlist_IsServicesDiscoveryLoaded(playlist, [service UTF8String])
+     && playlist_ServicesDiscoveryAdd(playlist, [service UTF8String])
+                                                    != VLC_SUCCESS)
+        return NO;
+    NSMutableArray *inputs = [NSMutableArray array];
+    playlist_Lock(playlist);
+    for (NSUInteger entryIndex = 0; entryIndex < [items count]; ++entryIndex) {
+        NSDictionary *entry = [items objectAtIndex:entryIndex];
+        playlist_item_t *item = playlist_ItemGetById(playlist,
+                                      [[entry objectForKey:@"id"] intValue]);
+        if (item && item->p_input) {
+            input_item_Hold(item->p_input);
+            [inputs addObject:[NSValue valueWithPointer:item->p_input]];
+        }
+    }
+    playlist_Unlock(playlist);
+    BOOL queued = NO;
+    for (NSUInteger inputIndex = 0; inputIndex < [inputs count]; ++inputIndex) {
+        NSValue *value = [inputs objectAtIndex:inputIndex];
+        input_item_t *input = [value pointerValue];
+        char *uri = input_item_GetURI(input);
+        char *path = uri ? vlc_uri2path(uri) : NULL;
+        free(uri);
+        if (path) {
+            services_discovery_import_t request = {
+                path, NULL, NULL, NULL, input
+            };
+            if (playlist_ServicesDiscoveryControl(playlist,
+                    [service UTF8String], SD_CMD_POWERVLC_DEVICE_ADD,
+                    &request) == VLC_SUCCESS)
+                queued = YES;
+        }
+        free(path); input_item_Release(input);
+    }
+    return queued;
+}
+
+- (BOOL)importPathsIntoPowerLibrary:(NSArray *)paths
+{
+    if (![paths count])
+        return NO;
+    playlist_t *playlist = pl_Get(p_intf);
+    if (!playlist_IsServicesDiscoveryLoaded(playlist, "powervlc_library")
+     && playlist_ServicesDiscoveryAdd(playlist, "powervlc_library")
+                                                        != VLC_SUCCESS)
+        return NO;
+    BOOL imported = NO;
+    unsigned i;
+    for (i = 0; i < [paths count]; i++) {
+        NSString *path = [paths objectAtIndex:i];
+        services_discovery_import_t request = {
+            [path fileSystemRepresentation], NULL, NULL, NULL, NULL
+        };
+        if (playlist_ServicesDiscoveryControl(playlist, "powervlc_library",
+                SD_CMD_POWERVLC_IMPORT, &request) == VLC_SUCCESS)
+            imported = YES;
+    }
+    return imported;
 }
 
 - (void)addPaths:(NSArray *)paths toMediaLibrary:(BOOL)ml
@@ -5214,17 +7225,28 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
  * "children". Returns nil when the subtree is filtered out by the
  * search string. Must run under the playlist lock. */
 - (NSMutableDictionary *)snapshotEntryForItemLocked:(playlist_item_t *)p_item
+                                           filtering:(BOOL)filtering
 {
     if (!p_item->p_input)
         return nil;
-    BOOL isNode = p_item->i_children >= 0;
+    NSNumber *playlistId = [NSNumber numberWithInt:p_item->i_id];
+    BOOL isSearchScopeRoot = [searchScopeItemIds containsObject:playlistId];
+    filtering = filtering || isSearchScopeRoot;
+    BOOL isRandomAction =
+        VLCLegacyInputIsPowerVLCRandomAction(p_item->p_input);
+    if (filtering && [searchString length] && isRandomAction)
+        return nil;
+    /* Random XSPFs contain a private path used to choose/play the result.
+     * It is an action, not a second user-visible copy of the library tree. */
+    BOOL isNode = p_item->i_children >= 0 && !isRandomAction;
     /* directories from the file browsers (My Videos, My Music...) only
      * become nodes once browsed: show their disclosure triangle right
      * away and browse on first expansion */
-    BOOL isUnbrowsedDir = !isNode
-        && p_item->p_input->i_type == ITEM_TYPE_DIRECTORY;
+    BOOL isUnbrowsedDir = !isNode && !isRandomAction
+        && (p_item->p_input->i_type == ITEM_TYPE_DIRECTORY
+         || VLCLegacyIsPowerVLCIndexItem(p_item->p_input));
 
-    char *psz_title = input_item_GetTitleFbName(p_item->p_input);
+    char *psz_title = VLCLegacyDisplayTitle(p_item->p_input);
     NSString *title = psz_title
         ? [NSString stringWithUTF8String:psz_title] : @"";
     free(psz_title);
@@ -5235,22 +7257,24 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         int i;
         for (i = 0; i < p_item->i_children; i++) {
             NSMutableDictionary *child =
-                [self snapshotEntryForItemLocked:p_item->pp_children[i]];
+                [self snapshotEntryForItemLocked:p_item->pp_children[i]
+                                       filtering:filtering];
             if (child)
                 [children addObject:child];
         }
     }
 
-    if ([searchString length]
-     && [VLCLegacyFoldedString(title) rangeOfString:searchStringFolded].location
-            == NSNotFound) {
+    if (filtering && [searchString length]
+     && !VLCLegacyInputMatchesSearch(p_item->p_input,
+                                     searchStringFolded)) {
         /* the playing item stays visible even if a live-stream title
          * update made it stop matching the filter */
         playlist_item_t *p_now =
             playlist_CurrentPlayingItem(pl_Get(p_intf));
         BOOL isCurrent = p_now && p_now->i_id == p_item->i_id;
         /* a node stays visible while any descendant matches */
-        if (!isCurrent && (!isNode || ![children count]))
+        if (!isCurrent && !isSearchScopeRoot
+         && (!isNode || ![children count]))
             return nil;
     }
 
@@ -5259,6 +7283,32 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
             [NSNumber numberWithInt:p_item->i_id], @"id",
             title, @"title",
             nil];
+    BOOL inUserPlaylists = NO;
+    playlist_item_t *ancestor;
+    for (ancestor = p_item; ancestor; ancestor = ancestor->p_parent)
+        if (ancestor->p_input
+         && input_item_IsPowerVLCUserPlaylistsRoot(ancestor->p_input)) {
+            inUserPlaylists = YES;
+            break;
+        }
+    if (inUserPlaylists)
+        [entry setObject:[NSNumber numberWithBool:YES]
+                  forKey:@"userPlaylistTree"];
+    if (input_item_IsPowerVLCUserPlaylistsRoot(p_item->p_input))
+        [entry setObject:[NSNumber numberWithBool:YES]
+                  forKey:@"userPlaylistsRoot"];
+    if (input_item_IsPowerVLCPlaylistFolder(p_item->p_input))
+        [entry setObject:[NSNumber numberWithBool:YES]
+                  forKey:@"userPlaylistFolder"];
+    if (input_item_IsPowerVLCUserPlaylist(p_item->p_input))
+        [entry setObject:[NSNumber numberWithBool:YES]
+                  forKey:@"userPlaylist"];
+    if (input_item_IsPowerVLCDeviceStructure(p_item->p_input))
+        [entry setObject:[NSNumber numberWithBool:YES]
+                  forKey:@"deviceStructure"];
+    if (isRandomAction)
+        [entry setObject:[NSNumber numberWithBool:YES]
+                  forKey:@"randomAction"];
     if (isUnbrowsedDir) {
         [entry setObject:[NSMutableArray array] forKey:@"children"];
         [entry setObject:[NSNumber numberWithBool:YES] forKey:@"browse"];
@@ -5272,6 +7322,11 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     NSString *duration =
         timeToString(input_item_GetDuration(p_item->p_input));
     [entry setObject:duration forKey:@"duration"];
+    char *psz_rating = input_item_GetRating(p_item->p_input);
+    unsigned rating = psz_rating ? (unsigned)strtoul(psz_rating, NULL, 10) : 0;
+    free(psz_rating);
+    [entry setObject:[NSNumber numberWithUnsignedInt:rating <= 5 ? rating : 0]
+              forKey:@"rating"];
     char *psz_art = input_item_GetArtworkURL(p_item->p_input);
     if (psz_art) {
         NSString *artUrl = [NSString stringWithUTF8String:psz_art];
@@ -5349,6 +7404,13 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         return;
     [expandedItemIds addObject:itemId];
 
+    id parent = [playlistTable parentForItem:entry];
+    BOOL isLibraryCategory = parent
+        && [playlistTable parentForItem:parent] == nil;
+    if (isLibraryCategory && [pendingSearchString length]
+     && ![searchScopeItemIds containsObject:itemId])
+        [self searchChanged:searchField];
+
     /* expanding an unbrowsed directory sends it to the preparser: its
      * subitems attach to the playlist item and the next snapshot shows
      * them (the expanded state is kept by id across reloads).  A
@@ -5382,10 +7444,22 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
 
 - (void)outlineViewItemDidCollapse:(NSNotification *)notification
 {
-    NSNumber *itemId = [[[notification userInfo] objectForKey:@"NSObject"]
-        objectForKey:@"id"];
-    if (itemId)
-        [expandedItemIds removeObject:itemId];
+    NSDictionary *entry = [[notification userInfo] objectForKey:@"NSObject"];
+    NSNumber *itemId = [entry objectForKey:@"id"];
+    if (!itemId)
+        return;
+    [expandedItemIds removeObject:itemId];
+    [browseRequestedIds removeObjectForKey:itemId];
+
+    playlist_t *p_playlist = pl_Get(p_intf);
+    playlist_Lock(p_playlist);
+    playlist_item_t *p_item = playlist_ItemGetById(p_playlist,
+                                                    [itemId intValue]);
+    if (p_item && VLCLegacyIsPowerVLCIndexItem(p_item->p_input)) {
+        libvlc_MetadataCancel(p_intf->obj.libvlc, p_item);
+        playlist_NodeEmpty(p_playlist, p_item);
+    }
+    playlist_Unlock(p_playlist);
 }
 
 /* the 3.0 sidebar badges: number of children of the Playlist and Media
@@ -5461,6 +7535,28 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     if (!title)
         title = _NS("Playlist");
 
+    BOOL powerLibrary = sidebarSelection >= 0
+        && (unsigned)sidebarSelection < [sidebarItems count]
+        && [[[[sidebarItems objectAtIndex:sidebarSelection]
+                objectForKey:@"kind"] description] isEqualToString:@"powerml"];
+    if (powerLibrary
+     && var_GetBool(p_intf->obj.libvlc, PVLC_ML_SCAN_ACTIVE)) {
+        uint64_t done = (uint64_t)var_GetInteger(p_intf->obj.libvlc,
+                                                 PVLC_ML_SCAN_DONE);
+        uint64_t total = (uint64_t)var_GetInteger(p_intf->obj.libvlc,
+                                                  PVLC_ML_SCAN_TOTAL);
+        if (total > 0) {
+            unsigned percent = done >= total ? 100 : (unsigned)
+                ((double)done * 100.0 / (double)total);
+            unsigned long long remaining = done < total ? total - done : 0;
+            NSString *format = remaining == 1
+                ? _NS("Media Library — scanning %u%% · %llu file remaining")
+                : _NS("Media Library — scanning %u%% · %llu files remaining");
+            title = [NSString stringWithFormat:format, percent, remaining];
+            duration = 0;
+        }
+    }
+
     if (duration >= CLOCK_FREQ) {
         int64_t total = duration / CLOCK_FREQ;
         int sec = (int)(total % 60);
@@ -5496,7 +7592,79 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     playlist_Lock(p_playlist);
     playlist_item_t *p_current = playlist_CurrentPlayingItem(p_playlist);
     int newCurrentId = p_current ? p_current->i_id : -1;
+    NSString *newCurrentURI = nil;
+    char *currentURI = p_current && p_current->p_input
+        ? input_item_GetURI(p_current->p_input) : NULL;
+    if (currentURI) {
+        vlc_uri_decode(currentURI);
+        newCurrentURI = [[NSString alloc] initWithUTF8String:currentURI];
+        free(currentURI);
+    }
     playlist_item_t *p_root = [self currentRootLocked:p_playlist];
+    if (pendingRandomPlaybackItemId >= 0) {
+        playlist_item_t *action = playlist_ItemGetById(
+            p_playlist, pendingRandomPlaybackItemId);
+        playlist_powervlc_random_result_t resolved;
+        int previousBranch = pendingRandomBranchItemId;
+        playlist_PowerVLCRandomResolve(p_playlist, action,
+                                       pendingRandomBranchItemId, &resolved);
+        pendingRandomBranchItemId = resolved.i_branch_id;
+        if (resolved.p_track) {
+            pendingRandomPlaybackItemId = -1;
+            pendingRandomBranchItemId = -1;
+            pendingRandomRevealItemId = resolved.p_track->i_id;
+            playlist_ViewPlay(p_playlist, resolved.p_scope,
+                              resolved.p_track);
+            p_current = resolved.p_track;
+            newCurrentId = resolved.p_track->i_id;
+            [newCurrentURI release];
+            char *startedURI = input_item_GetURI(resolved.p_track->p_input);
+            if (startedURI)
+                vlc_uri_decode(startedURI);
+            newCurrentURI = startedURI
+                ? [[NSString alloc] initWithUTF8String:startedURI] : nil;
+            free(startedURI);
+        } else if (resolved.p_browse) {
+            if (previousBranch != resolved.i_branch_id)
+                libvlc_MetadataRequest(p_playlist->obj.libvlc,
+                    resolved.p_browse->p_input,
+                    META_REQUEST_OPTION_SCOPE_ANY, 120000,
+                    resolved.p_browse);
+        } else {
+            pendingRandomPlaybackItemId = -1;
+            pendingRandomBranchItemId = -1;
+        }
+    }
+    BOOL followRandomCurrent = NO;
+    int newRandomScopeId = -1;
+    if (p_current && pendingRandomRevealItemId == newCurrentId) {
+        followRandomCurrent = YES;
+        newRandomScopeId = p_current->p_parent
+                         ? p_current->p_parent->i_id : -1;
+        for (playlist_item_t *ancestor = p_current->p_parent;
+             ancestor && ancestor != p_root; ancestor = ancestor->p_parent)
+            [expandedItemIds addObject:
+                [NSNumber numberWithInt:ancestor->i_id]];
+        pendingRandomRevealItemId = -1;
+    }
+    if (p_current && p_root) {
+        NSMutableArray *randomPathIds = [NSMutableArray array];
+        playlist_item_t *ancestor;
+        for (ancestor = p_current->p_parent;
+             ancestor && ancestor != p_root;
+             ancestor = ancestor->p_parent) {
+            [randomPathIds addObject:
+                [NSNumber numberWithInt:ancestor->i_id]];
+            if (ancestor->p_input
+             && VLCLegacyInputIsPowerVLCRandomAction(ancestor->p_input)) {
+                followRandomCurrent = YES;
+                if (ancestor->p_parent)
+                    newRandomScopeId = ancestor->p_parent->i_id;
+            }
+        }
+        if (followRandomCurrent)
+            [expandedItemIds addObjectsFromArray:randomPathIds];
+    }
     if (p_root) {
         int i;
         /* keep the core-side search flags in sync with the display filter:
@@ -5506,9 +7674,18 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
          * items appended after the search (radio directory still loading)
          * are filtered too. */
         if ([searchString length]) {
-            /* the core folds the needle itself, feed it the raw string */
-            playlist_LiveSearchUpdate(p_playlist, p_root,
-                                      [searchString UTF8String], true);
+            playlist_LiveSearchUpdate(p_playlist, p_root, "", true);
+            /* Search only the categories that were open when the debounce
+             * elapsed. Closed categories keep their state and contents. */
+            NSEnumerator *scopeEnumerator = [searchScopeItemIds objectEnumerator];
+            NSNumber *scopeId;
+            while ((scopeId = [scopeEnumerator nextObject]) != nil) {
+                playlist_item_t *scope = playlist_ItemGetById(
+                    p_playlist, [scopeId intValue]);
+                if (scope)
+                    playlist_LiveSearchUpdate(p_playlist, scope,
+                                              [searchString UTF8String], true);
+            }
             searchFlagsWereSet = YES;
             /* the playing item must stay in the playback set even if a
              * live-stream title update made it stop matching */
@@ -5519,8 +7696,9 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
             searchFlagsWereSet = NO;
         }
         for (i = 0; i < p_root->i_children; i++) {
+            playlist_item_t *top = p_root->pp_children[i];
             NSMutableDictionary *entry = [self
-                snapshotEntryForItemLocked:p_root->pp_children[i]];
+                snapshotEntryForItemLocked:top filtering:NO];
             if (entry)
                 [fresh addObject:entry];
         }
@@ -5538,8 +7716,13 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     [self markBrowsableDirsInArray:fresh];
 
     /* the playing item is shown bold, so its change needs a redraw too */
-    BOOL currentChanged = newCurrentId != currentItemId;
+    BOOL currentChanged = newCurrentId != currentItemId
+        || (newCurrentURI != currentItemURI
+         && ![newCurrentURI isEqualToString:currentItemURI]);
     currentItemId = newCurrentId;
+    currentRandomScopeId = newRandomScopeId;
+    [currentItemURI release];
+    currentItemURI = newCurrentURI;
 
     /* a reload rebuilds pointer-identity rows: keep the selection by
      * playlist id, like the expanded state, or every keyboard-driven
@@ -5569,10 +7752,12 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         reloaded = YES;
     } else if (currentChanged) {
         [playlistTable reloadData];
+        if (followRandomCurrent)
+            [self restoreExpandedItems];
         reloaded = YES;
     }
 
-    if (reloaded && [selectedIds count]) {
+    if (reloaded && [selectedIds count] && !followRandomCurrent) {
         int r, rowCount = (int)[playlistTable numberOfRows];
         BOOL extend = NO;
         for (r = 0; r < rowCount; r++) {
@@ -5581,6 +7766,32 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
             if (ident && [selectedIds containsObject:ident]) {
                 VLCLegacyExtendSelectRow(playlistTable, r, extend);
                 extend = YES;
+            }
+        }
+    }
+
+    if (reloaded && followRandomCurrent) {
+        int r, rowCount = (int)[playlistTable numberOfRows];
+        for (r = 0; r < rowCount; r++) {
+            NSDictionary *rowItem = [playlistTable itemAtRow:r];
+            NSNumber *ident = [rowItem objectForKey:@"id"];
+            BOOL inScope = NO;
+            id ancestor = rowItem;
+            while (ancestor) {
+                if ([[ancestor objectForKey:@"id"] intValue]
+                        == newRandomScopeId) {
+                    inScope = YES;
+                    break;
+                }
+                ancestor = [playlistTable parentForItem:ancestor];
+            }
+            BOOL sameURI = newCurrentURI
+                && [[rowItem objectForKey:@"uri"] isEqualToString:newCurrentURI];
+            if ((ident && [ident intValue] == newCurrentId)
+             || (inScope && sameURI)) {
+                VLCLegacyExtendSelectRow(playlistTable, r, NO);
+                [playlistTable scrollRowToVisible:r];
+                break;
             }
         }
     }
@@ -5594,6 +7805,10 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
                      && ![searchString length];
     VLCLegacySetViewHidden(dropzoneView, !showDropzone);
     VLCLegacySetViewHidden(playlistScroll, showDropzone);
+
+    /* A compact node may have gained its next visible level during this
+     * rebuild. Continue resolving the first leaf in displayed order. */
+    [self playPendingVisibleNodeIfReady];
 }
 
 /* cover art of the playing item at the bottom of the sidebar (the same
@@ -5638,6 +7853,17 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
 - (void)refresh:(NSTimer *)timer
 {
     playlist_t *p_playlist = pl_Get(p_intf);
+
+    /* Reuse the existing low-cost UI timer: no extra wake-up on G3, and no
+     * playlist snapshot rebuild merely to repaint the scan percentage. */
+    BOOL scanActive = var_GetBool(p_intf->obj.libvlc, PVLC_ML_SCAN_ACTIVE);
+    if (scanActive) {
+        s_scanWasActive = YES;
+        [self updateViewTitleWithDuration:0];
+    } else if (s_scanWasActive) {
+        s_scanWasActive = NO;
+        [self updateViewTitleWithDuration:0];
+    }
 
     /* transport state */
     playlist_Lock(p_playlist);
@@ -5749,6 +7975,8 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         [(VLCLegacySeekSlider *)seekSlider
             setMediaDuration:(double)i_length / CLOCK_FREQ];
         [self updateChaptersForInput:p_input duration:i_length];
+        VLCLegacyUpdateSliderBookmarks((VLCLegacySeekSlider *)seekSlider,
+                                       p_input, i_length);
         VLCLegacyProgressSliderCell *clipCell =
             (VLCLegacyProgressSliderCell *)[seekSlider cell];
         if ([core clipCreationMode]) {
@@ -5810,6 +8038,8 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         [core updateClipModeForInput:NULL];
         [(VLCLegacySeekSlider *)seekSlider setMediaDuration:0.0];
         [self updateChaptersForInput:NULL duration:0];
+        VLCLegacyUpdateSliderBookmarks((VLCLegacySeekSlider *)seekSlider,
+                                       NULL, 0);
         [self trackResumeForInput:NULL];
         [self updateSidebarArtForInput:NULL];
         if (![[window title] isEqualToString:VLCLegacyDefaultWindowTitle()])
@@ -5867,6 +8097,7 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         refreshTicks = 0;
         [self rebuildItemsSnapshot];
     }
+    [self updatePowerVLCDeviceTransfers];
 }
 
 /*****************************************************************************
@@ -5877,6 +8108,209 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
 
 #define RESUME_DICT_KEY @"recentlyPlayedMedia"
 #define RESUME_LIST_KEY @"recentlyPlayedMediaList"
+
+- (void)cancelResumeOSD
+{
+    BOOL hadPrompt = resumeOSDTarget > 0;
+    [resumeOSDTimer invalidate];
+    resumeOSDTimer = nil;
+    [resumeOSDURI release];
+    resumeOSDURI = nil;
+    resumeOSDTarget = 0;
+    resumeOSDDeadline = 0.;
+    resumeOSDLastDraw = 0.;
+    resumeOSDLastCountdown = -1;
+    resumeOSDAutoCloseCancelled = NO;
+    resumeOSDHasMouseLocation = NO;
+
+    if (hadPrompt) {
+        input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+        if (p_input) {
+            vout_thread_t *p_vout = input_GetVout(p_input);
+            if (p_vout) {
+                vout_FlushSubpictureChannel(p_vout,
+                                             VOUT_SPU_CHANNEL_OSD);
+                vlc_object_release(p_vout);
+            }
+            vlc_object_release(p_input);
+        }
+    }
+}
+
+- (void)finishResumeOSDContinuing:(BOOL)continuePlayback
+{
+    int64_t target = resumeOSDTarget;
+    NSString *promptURI = [resumeOSDURI retain];
+    [self cancelResumeOSD];
+
+    if (continuePlayback && target > 0 && promptURI) {
+        input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+        if (p_input) {
+            char *psz_uri = input_item_GetURI(input_GetItem(p_input));
+            NSString *uri = psz_uri
+                ? [NSString stringWithUTF8String:psz_uri] : nil;
+            free(psz_uri);
+            if ([promptURI isEqualToString:uri])
+                var_SetInteger(p_input, "time", target);
+            vlc_object_release(p_input);
+        }
+    }
+    [promptURI release];
+}
+
+- (void)resumeOSDTick:(NSTimer *)timer
+{
+    (void)timer;
+    if (resumeOSDTarget <= 0 || !resumeOSDURI) {
+        [self cancelResumeOSD];
+        return;
+    }
+
+    /* A frame-packed launch rebuilds the legacy display topology before the
+     * fullscreen drawable exists.  Drawing the choice during that interval
+     * puts it in PowerVLC's ordinary window on the old desktop.  Leave both
+     * the deadline and the movie position untouched; the same OSD is drawn
+     * once the HDMI fullscreen presentation is stable. */
+    if (var_InheritBool(p_intf, "stereo3d-display-transition"))
+        return;
+
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (!p_input) {
+        [self cancelResumeOSD];
+        return;
+    }
+    char *psz_uri = input_item_GetURI(input_GetItem(p_input));
+    NSString *uri = psz_uri ? [NSString stringWithUTF8String:psz_uri] : nil;
+    free(psz_uri);
+    if (![resumeOSDURI isEqualToString:uri]) {
+        vlc_object_release(p_input);
+        [self cancelResumeOSD];
+        return;
+    }
+
+    /* Jaguar/Tiger have no tracking area suitable for the child video
+     * window. Poll the global pointer at the existing 4 Hz OSD cadence and
+     * count a real movement only when its new position lies over the video
+     * view. This also works when that child deliberately cannot become key. */
+    NSPoint mouse = [NSEvent mouseLocation];
+    BOOL mouseMoved = resumeOSDHasMouseLocation
+                   && (mouse.x != resumeOSDLastMouseLocation.x
+                    || mouse.y != resumeOSDLastMouseLocation.y);
+    resumeOSDLastMouseLocation = mouse;
+    resumeOSDHasMouseLocation = YES;
+    if (mouseMoved && !resumeOSDAutoCloseCancelled && videoView
+        && [videoView window] && [[videoView window] isVisible]) {
+        NSPoint base = [[videoView window] convertScreenToBase:mouse];
+        NSPoint local = [videoView convertPoint:base fromView:nil];
+        if (NSMouseInRect(local, [videoView bounds], [videoView isFlipped]))
+            [self noteResumeOSDUserInteraction];
+    }
+
+    vout_thread_t *p_vout = input_GetVout(p_input);
+    vlc_object_release(p_input);
+    if (!p_vout)
+        return;
+
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    int countdown = -1;
+    if (!resumeOSDAutoCloseCancelled) {
+        if (resumeOSDDeadline <= 0.)
+            resumeOSDDeadline = now + 10.;
+        countdown = (int)(resumeOSDDeadline - now + .999);
+        if (countdown <= 0) {
+            vlc_object_release(p_vout);
+            [self finishResumeOSDContinuing:NO];
+            return;
+        }
+    }
+
+    /* OSD subpictures expire. Once interaction disables the deadline, redraw
+     * quietly once a second so the choice remains visible until confirmed. */
+    if (countdown != resumeOSDLastCountdown
+        || (resumeOSDAutoCloseCancelled && now - resumeOSDLastDraw >= 1.)) {
+        resumeOSDLastCountdown = countdown;
+        resumeOSDLastDraw = now;
+        NSString *choices = resumeOSDContinueSelected
+            ? [NSString stringWithFormat:@"[ %@ ]     %@",
+                                         _NS("Continue"), _NS("Restart playback")]
+            : [NSString stringWithFormat:@"  %@     [ %@ ]",
+                                         _NS("Continue"), _NS("Restart playback")];
+        NSString *message;
+        if (resumeOSDAutoCloseCancelled)
+            message = [NSString stringWithFormat:
+                _NS("Continue at %@?\n%@\nLeft/Right: select   Enter: confirm   Esc: restart"),
+                timeToString(resumeOSDTarget), choices];
+        else
+            message = [NSString stringWithFormat:
+                _NS("Continue at %@?\n%@\nLeft/Right: select   Enter: confirm   Esc: restart   (%d)"),
+                timeToString(resumeOSDTarget), choices, countdown];
+        vout_OSDText(p_vout, VOUT_SPU_CHANNEL_OSD, 0,
+                     VLC_TICK_FROM_MS(1250), [message UTF8String]);
+    }
+    vlc_object_release(p_vout);
+}
+
+- (void)showResumeOSDForURI:(NSString *)uri target:(int64_t)target
+{
+    [self cancelResumeOSD];
+    msg_Dbg(p_intf, "showing resume choice in video OSD at %lld", target);
+    resumeOSDURI = [uri retain];
+    resumeOSDTarget = target;
+    resumeOSDContinueSelected = YES;
+    resumeOSDDeadline = 0.;
+    resumeOSDLastDraw = 0.;
+    resumeOSDLastCountdown = -1;
+    resumeOSDAutoCloseCancelled = NO;
+    resumeOSDLastMouseLocation = [NSEvent mouseLocation];
+    resumeOSDHasMouseLocation = YES;
+    resumeOSDTimer = [NSTimer scheduledTimerWithTimeInterval:.25
+                                                      target:self
+                                                    selector:@selector(resumeOSDTick:)
+                                                    userInfo:nil
+                                                     repeats:YES];
+    [self resumeOSDTick:resumeOSDTimer];
+}
+
+- (void)noteResumeOSDUserInteraction
+{
+    if (resumeOSDTarget <= 0 || resumeOSDAutoCloseCancelled)
+        return;
+
+    resumeOSDAutoCloseCancelled = YES;
+    resumeOSDDeadline = 0.;
+    resumeOSDLastCountdown = -1;
+    resumeOSDLastDraw = 0.;
+    msg_Dbg(p_intf, "resume OSD auto-close cancelled by user interaction");
+}
+
+- (BOOL)handleResumeOSDKey:(unsigned int)key
+{
+    if (resumeOSDTarget <= 0)
+        return NO;
+    [self noteResumeOSDUserInteraction];
+    switch (key) {
+        case KEY_LEFT:
+        case KEY_UP:
+            resumeOSDContinueSelected = YES;
+            resumeOSDLastCountdown = -1;
+            [self resumeOSDTick:resumeOSDTimer];
+            return YES;
+        case KEY_RIGHT:
+        case KEY_DOWN:
+            resumeOSDContinueSelected = NO;
+            resumeOSDLastCountdown = -1;
+            [self resumeOSDTick:resumeOSDTimer];
+            return YES;
+        case KEY_ENTER:
+            [self finishResumeOSDContinuing:resumeOSDContinueSelected];
+            return YES;
+        case KEY_ESC:
+            [self finishResumeOSDContinuing:NO];
+            return YES;
+        default:
+            return NO;
+    }
+}
 
 /* commit the last observed position of the tracked input to the defaults;
  * positions near the edges clear the entry instead (3.0 heuristics) */
@@ -5919,6 +8353,7 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
 - (void)trackResumeForInput:(input_thread_t *)p_input
 {
     if (!p_input) {
+        [self cancelResumeOSD];
         if (resumeTrackedURI) {
             [self storeResumePosition];
             [resumeTrackedURI release];
@@ -5933,7 +8368,40 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     NSString *uri = [NSString stringWithUTF8String:psz_uri];
     free(psz_uri);
 
+    /* A navigated Blu-ray input is a disc session, not one linear movie.
+     * Its public time/length currently describe whichever short first-play,
+     * menu-background or feature playlist happens to be active. Applying a
+     * URI-wide resume time to that changing clock can seek the studio logo to
+     * its end and leave the BD-J state machine on a black page. Never offer,
+     * store or apply ordinary file resume to a Blu-ray session. */
+    if (var_GetBool(p_input, "bluray-disc-session")) {
+        [self cancelResumeOSD];
+        [resumeTrackedURI release];
+        resumeTrackedURI = nil;
+        resumeHandled = YES;
+        resumeLastTime = 0;
+        resumeLastLength = 0;
+
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+        if ([defaults dictionaryForKey:RESUME_DICT_KEY])
+            [dict addEntriesFromDictionary:
+                [defaults dictionaryForKey:RESUME_DICT_KEY]];
+        NSMutableArray *list = [NSMutableArray array];
+        if ([defaults arrayForKey:RESUME_LIST_KEY])
+            [list addObjectsFromArray:[defaults arrayForKey:RESUME_LIST_KEY]];
+        if ([dict objectForKey:uri] != nil || [list containsObject:uri]) {
+            [dict removeObjectForKey:uri];
+            [list removeObject:uri];
+            [defaults setObject:dict forKey:RESUME_DICT_KEY];
+            [defaults setObject:list forKey:RESUME_LIST_KEY];
+            [defaults synchronize];
+        }
+        return;
+    }
+
     if (!resumeTrackedURI || ![resumeTrackedURI isEqualToString:uri]) {
+        [self cancelResumeOSD];
         [self storeResumePosition];
         [resumeTrackedURI release];
         resumeTrackedURI = [uri retain];
@@ -5962,20 +8430,8 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         return;
 
     if (setting == 0 /* Ask */) {
-        char *psz_title =
-            input_item_GetTitleFbName(input_GetItem(p_input));
-        NSString *name = psz_title
-            ? [NSString stringWithUTF8String:psz_title] : uri;
-        free(psz_title);
-        /* the input keeps playing behind the panel, like the 3.0
-         * non-blocking resume dialog */
-        int ret = NSRunAlertPanel(_NS("Continue playback?"),
-            [NSString stringWithFormat:
-                _NS("Playback of \"%@\" will continue at %@"),
-                name, timeToString(i_target)],
-            _NS("Continue"), _NS("Restart playback"), nil);
-        if (ret != NSAlertDefaultReturn)
-            return;
+        [self showResumeOSDForURI:uri target:i_target];
+        return;
     }
     var_SetInteger(p_input, "time", i_target);
 }
@@ -6002,7 +8458,7 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
         return proposedSize;
 
     if (!controlsHiddenForPlayback) {
-        if (videoActive && !VLCLegacyViewIsHidden(videoView)) {
+        if (videoViewUsers != 0 && !VLCLegacyViewIsHidden(videoView)) {
             /* the proposed size is a FRAME: the title bar comes off with
              * the content rect, the controls bar by hand */
             NSRect content = VLCLegacyContentRectForFrameRect(window,
@@ -6053,7 +8509,7 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     }
     if (!var_InheritBool(p_intf, "legacy-macosx-pause-minimized"))
         return;
-    if (videoActive && playing) {
+    if (videoViewUsers != 0 && playing) {
         [core togglePlayPause];
         pausedByMiniaturize = YES;
     }
@@ -6088,6 +8544,42 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
     SEL action = [item action];
     BOOL hasSelection = [playlistTable numberOfSelectedRows] > 0
                      || [playlistTable clickedRow] >= 0;
+    NSDictionary *context = [self userPlaylistContextEntry];
+    BOOL playlistContainer = [[context objectForKey:@"userPlaylistsRoot"] boolValue]
+                          || [[context objectForKey:@"userPlaylistFolder"] boolValue];
+    BOOL playlistObject = [[context objectForKey:@"userPlaylist"] boolValue]
+                       || [[context objectForKey:@"userPlaylistFolder"] boolValue];
+
+    if (action == @selector(createUserPlaylist:)
+     || action == @selector(createUserPlaylistFolder:)) {
+        [item setHidden:!playlistContainer];
+        return playlistContainer;
+    }
+    if (action == @selector(renameUserPlaylist:)) {
+        [item setHidden:!playlistObject];
+        return playlistObject;
+    }
+
+    if (action == @selector(setPowerVLCRating:)) {
+        NSMutableDictionary *ratings = [NSMutableDictionary dictionary];
+        NSArray *rows = VLCLegacySelectedRows(playlistTable);
+        unsigned i;
+        for (i = 0; i < [rows count]; ++i)
+            VLCLegacyCollectRatings([playlistTable itemAtRow:
+                [[rows objectAtIndex:i] intValue]], ratings);
+        NSNumber *common = nil;
+        BOOL mixed = NO;
+        NSEnumerator *ratingEnumerator = [[ratings allValues] objectEnumerator];
+        NSNumber *value;
+        while ((value = [ratingEnumerator nextObject]) != nil) {
+            if (!common) common = value;
+            else if (![common isEqualToNumber:value]) { mixed = YES; break; }
+        }
+        unsigned candidate = [[item representedObject] unsignedIntValue];
+        [item setState:(!mixed && common && [common unsignedIntValue] == candidate)
+                         ? NSOnState : NSOffState];
+        return [ratings count] > 0;
+    }
 
     if (action == @selector(recursiveExpandOrCollapseNode:)) {
         /* only meaningful when the current view has at least one node */
@@ -6097,9 +8589,15 @@ static BOOL VLCLegacyStringIsMRL(NSString *s)
                 return YES;
         return NO;
     }
+    if (action == @selector(deleteSelectedItems:)) {
+        NSString *service = [self selectedPowerVLCDeviceService];
+        if (service && [[context objectForKey:@"deviceStructure"] boolValue])
+            return NO;
+        return hasSelection;
+    }
     if (action == @selector(playSelectedItem:)
-     || action == @selector(deleteSelectedItems:)
-     || action == @selector(showItemInfo:))
+     || action == @selector(showItemInfo:)
+     || action == @selector(burnPlaylistToAudioCD:))
         return hasSelection;
     if (action == @selector(revealItemInFinder:)) {
         int row = (int)[playlistTable clickedRow];

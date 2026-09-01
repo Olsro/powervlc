@@ -23,13 +23,17 @@
 #endif
 
 #import "VLCLegacyControls.h"
+#import "VLCLegacyCoreInteraction.h"
 #import "misc.h"
 
 #include <vlc_common.h>
+#include <vlc_input.h>
 
 #define _NS(s) ((NSString *)[NSString stringWithUTF8String:vlc_gettext(s)])
 
 static BOOL b_legacy_dark = NO;
+
+extern VLCLegacyCoreInteraction *VLCLegacyGetCore(void);
 
 BOOL VLCLegacyDarkMode(void)
 {
@@ -388,6 +392,9 @@ NSButton *VLCLegacyImageButton(NSView *parent, NSString *imageName,
 {
     [chapterFractions release];
     [chapterNames release];
+    [bookmarkFractions release];
+    [bookmarkNames release];
+    [bookmarkTimes release];
     [super dealloc];
 }
 
@@ -404,6 +411,26 @@ NSButton *VLCLegacyImageButton(NSView *parent, NSString *imageName,
 }
 - (NSArray *)chapterFractions { return chapterFractions; }
 - (NSArray *)chapterNames { return chapterNames; }
+
+- (void)setBookmarkFractions:(NSArray *)fractions names:(NSArray *)names
+                       times:(NSArray *)newTimes
+{
+    if (fractions != bookmarkFractions) {
+        [bookmarkFractions release];
+        bookmarkFractions = [fractions retain];
+    }
+    if (names != bookmarkNames) {
+        [bookmarkNames release];
+        bookmarkNames = [names retain];
+    }
+    if (newTimes != bookmarkTimes) {
+        [bookmarkTimes release];
+        bookmarkTimes = [newTimes retain];
+    }
+}
+- (NSArray *)bookmarkFractions { return bookmarkFractions; }
+- (NSArray *)bookmarkNames { return bookmarkNames; }
+- (NSArray *)bookmarkTimes { return bookmarkTimes; }
 
 - (void)setClipKnobsActive:(BOOL)active { clipKnobsActive = active; }
 - (BOOL)clipKnobsActive { return clipKnobsActive; }
@@ -654,6 +681,31 @@ static void drawVerticalGradient(NSBezierPath *path, NSRect rect,
         [NSGraphicsContext restoreGraphicsState];
     }
 
+    /* Bookmarks deliberately stand out from the neutral chapter ticks. */
+    if (!volumeStyle && [bookmarkFractions count] > 0) {
+        NSRect cellBounds = [[self controlView] bounds];
+        float diameter = [self knobDiameter];
+        [[NSColor colorWithDeviceRed:0.94f green:0.36f blue:0.10f
+                               alpha:1.0f] set];
+        [NSGraphicsContext saveGraphicsState];
+        [emptyTrack addClip];
+        unsigned int bookmarkIndex;
+        for (bookmarkIndex = 0;
+             bookmarkIndex < [bookmarkFractions count]; bookmarkIndex++) {
+            float fraction = [[bookmarkFractions objectAtIndex:bookmarkIndex]
+                                 floatValue];
+            if (fraction < 0.0f || fraction > 1.0f)
+                continue;
+            float x = cellBounds.origin.x
+                    + fraction * (cellBounds.size.width - diameter)
+                    + diameter / 2.0f;
+            NSRectFill(NSMakeRect((float)floor(x) - 2.0f,
+                                  rect.origin.y + 1.0f,
+                                  4.0f, rect.size.height - 2.0f));
+        }
+        [NSGraphicsContext restoreGraphicsState];
+    }
+
     [(dark
         ? [NSColor colorWithCalibratedWhite:0.23f alpha:1.0f]
         : [NSColor colorWithCalibratedRed:0.619f green:0.624f blue:0.623f
@@ -852,13 +904,22 @@ static void drawVerticalGradient(NSBezierPath *path, NSRect rect,
 {
     NSTextField *textField;
     NSImageView *imageView;
+    NSWindow *stereoMirrorWindow;
+    NSImageView *stereoMirrorImageView;
 }
 - (void)updateWithText:(NSString *)text
                  image:(NSImage *)image
         atScreenBottom:(NSPoint)bottomCenter;
+- (void)updateStereoMirror;
 @end
 
 @implementation VLCLegacySeekTooltipWindow
+
+- (void)dealloc
+{
+    [stereoMirrorWindow release];
+    [super dealloc];
+}
 
 - (id)init
 {
@@ -936,8 +997,22 @@ static void drawVerticalGradient(NSBezierPath *path, NSRect rect,
 
     NSRect frame = NSMakeRect(bottomCenter.x - width / 2.0f, bottomCenter.y,
                               width, height);
-    /* keep the tooltip inside the screen */
-    NSScreen *screen = [self screen] ? [self screen] : [NSScreen mainScreen];
+    /* A new borderless window initially belongs to the main display. Use the
+     * seek panel's screen so HDMI fullscreen tooltips are not clamped back
+     * onto the Mac panel before their first -setFrame:. */
+    NSScreen *screen = [[self parentWindow] screen];
+    if (!screen) {
+        NSEnumerator *screens = [[NSScreen screens] objectEnumerator];
+        NSScreen *candidate;
+        while ((candidate = [screens nextObject])) {
+            if (NSPointInRect(bottomCenter, [candidate frame])) {
+                screen = candidate;
+                break;
+            }
+        }
+    }
+    if (!screen)
+        screen = [self screen] ? [self screen] : [NSScreen mainScreen];
     if (screen) {
         NSRect visible = [screen visibleFrame];
         if (NSMaxX(frame) > NSMaxX(visible))
@@ -952,6 +1027,77 @@ static void drawVerticalGradient(NSBezierPath *path, NSRect rect,
 
     if (![self isVisible])
         [self orderFront:nil];
+    [self updateStereoMirror];
+}
+
+- (void)updateStereoMirror
+{
+    intf_thread_t *intf = [VLCLegacyGetCore() intf];
+    NSScreen *screen = [self screen];
+    float height = screen ? NSHeight([screen frame]) : 0.0f;
+    float gap = 0.0f;
+    if (intf
+     && var_InheritInteger(intf, "stereo3d-fullscreen-display") > 0) {
+        if (fabs(height - 2205.0f) < 2.0f)
+            gap = 45.0f;
+        else if (fabs(height - 1470.0f) < 2.0f)
+            gap = 30.0f;
+    }
+
+    if (gap == 0.0f) {
+        [stereoMirrorWindow orderOut:nil];
+        return;
+    }
+
+    if (!stereoMirrorWindow) {
+        stereoMirrorWindow = [[NSWindow alloc]
+            initWithContentRect:[self frame]
+                      styleMask:NSBorderlessWindowMask
+                        backing:NSBackingStoreBuffered defer:NO];
+        [stereoMirrorWindow setOpaque:NO];
+        [stereoMirrorWindow setBackgroundColor:[NSColor clearColor]];
+        [stereoMirrorWindow setHasShadow:NO];
+        [stereoMirrorWindow setIgnoresMouseEvents:YES];
+        [stereoMirrorWindow setReleasedWhenClosed:NO];
+        stereoMirrorImageView = [[[NSImageView alloc]
+            initWithFrame:[[stereoMirrorWindow contentView] bounds]] autorelease];
+        [stereoMirrorImageView setImageScaling:NSScaleToFit];
+        [stereoMirrorImageView setAutoresizingMask:
+            NSViewWidthSizable | NSViewHeightSizable];
+        [[stereoMirrorWindow contentView] addSubview:stereoMirrorImageView];
+    }
+
+    NSView *content = [self contentView];
+    [content displayIfNeeded];
+    NSRect bounds = [content bounds];
+    NSBitmapImageRep *rep =
+        [content bitmapImageRepForCachingDisplayInRect:bounds];
+    if (!rep)
+        return;
+    [content cacheDisplayInRect:bounds toBitmapImageRep:rep];
+    NSImage *snapshot = [[[NSImage alloc] initWithSize:bounds.size] autorelease];
+    [snapshot addRepresentation:rep];
+    [stereoMirrorImageView setImage:snapshot];
+
+    NSRect frame = [self frame];
+    BOOL sourceIsLowerEye = NSMidY(frame) < NSMidY([screen frame]);
+    float eyeStride = (height - gap) / 2.0f + gap;
+    frame.origin.y += sourceIsLowerEye ? eyeStride : -eyeStride;
+    int depth = (int)var_InheritInteger(intf, "stereo3d-overlay-depth");
+    depth = MAX(-100, MIN(100, depth));
+    float disparity = NSWidth([screen frame]) * .04f * depth / 100.0f;
+    frame.origin.x += sourceIsLowerEye ? disparity : -disparity;
+
+    [stereoMirrorWindow setFrame:frame display:NO];
+    [stereoMirrorWindow setLevel:[self level]];
+    [stereoMirrorWindow setAlphaValue:[self alphaValue]];
+    [stereoMirrorWindow orderFront:nil];
+}
+
+- (void)orderOut:(id)sender
+{
+    [stereoMirrorWindow orderOut:sender];
+    [super orderOut:sender];
 }
 
 @end
@@ -1091,6 +1237,26 @@ static NSString *VLCLegacyHoverTimeString(double seconds)
     thumbnailDebounceTimer = nil;
 }
 
+- (void)refreshHoverForCurrentMouseLocation
+{
+    NSWindow *win = [self window];
+    if (!win || ![win isVisible]) {
+        [self hideHoverTooltip];
+        return;
+    }
+
+    NSPoint local = [self convertPoint:[win mouseLocationOutsideOfEventStream]
+                              fromView:nil];
+    if (NSMouseInRect(local, [self bounds], [self isFlipped])) {
+        if (!hoverTimer)
+            [self mouseEntered:nil];
+        else
+            [self hoverTimerFired:nil];
+    } else if (hovering) {
+        [self hideHoverTooltip];
+    }
+}
+
 
 /* Tolérance du « c'est bien la position demandée », en FRACTION de barre.
  *
@@ -1154,6 +1320,29 @@ static NSString *VLCLegacyHoverTimeString(double seconds)
         }
     }
 
+    /* An exact marker hover takes precedence over the surrounding chapter. */
+    NSArray *bookmarkFractions = [cell bookmarkFractions];
+    NSArray *bookmarkNames = [cell bookmarkNames];
+    unsigned int bookmarkCount = [bookmarkFractions count];
+    if (bookmarkCount > 0 && [bookmarkNames count] == bookmarkCount) {
+        float diameter = [cell knobDiameter];
+        float usable = [self bounds].size.width - diameter;
+        unsigned int i;
+        for (i = 0; i < bookmarkCount; i++) {
+            double mark = [[bookmarkFractions objectAtIndex:i] doubleValue];
+            float markX = [self bounds].origin.x + diameter / 2.0f
+                        + mark * usable;
+            if (fabs(markX - local.x) <= 5.0f) {
+                NSString *name = [bookmarkNames objectAtIndex:i];
+                if ([name length] > 0)
+                    text = [NSString stringWithFormat:@"%@%@%@", name,
+                        [NSString stringWithUTF8String:" \xE2\x80\x94 "],
+                        VLCLegacyHoverTimeString(mark * mediaDuration)];
+                break;
+            }
+        }
+    }
+
     /* in clip creation mode, hovering the clip range also shows the
      * clip's current total duration */
     if ([cell clipKnobsActive]) {
@@ -1172,6 +1361,11 @@ static NSString *VLCLegacyHoverTimeString(double seconds)
 
     if (!tooltipWindow)
         tooltipWindow = [[VLCLegacySeekTooltipWindow alloc] init];
+    NSWindow *hostWindow = [self window];
+    if ([tooltipWindow parentWindow] != hostWindow) {
+        [[tooltipWindow parentWindow] removeChildWindow:tooltipWindow];
+        [hostWindow addChildWindow:tooltipWindow ordered:NSWindowAbove];
+    }
     /* stay above whatever hosts the slider (the fullscreen panel floats
      * at the same level as the tooltip: +1 makes the order explicit) */
     int wantedLevel = [[self window] level] + 1;
@@ -1330,6 +1524,26 @@ static NSString *VLCLegacyHoverTimeString(double seconds)
         return;
     }
     if (![cell clipKnobsActive]) {
+        NSPoint local = [self convertPoint:[event locationInWindow]
+                                  fromView:nil];
+        NSArray *fractions = [cell bookmarkFractions];
+        float diameter = [cell knobDiameter];
+        float usable = [self bounds].size.width - diameter;
+        unsigned int i;
+        for (i = 0; i < [fractions count]; i++) {
+            double fraction = [[fractions objectAtIndex:i] doubleValue];
+            float markX = [self bounds].origin.x + diameter / 2.0f
+                        + fraction * usable;
+            if (fabs(markX - local.x) <= 5.0f
+                && [hoverDelegate respondsToSelector:
+                    @selector(seekSlider:bookmarkSelectedAtIndex:)]) {
+                [self setDoubleValue:[self minValue] + fraction
+                    * ([self maxValue] - [self minValue])];
+                [self setNeedsDisplay:YES];
+                [hoverDelegate seekSlider:self bookmarkSelectedAtIndex:(int)i];
+                return;
+            }
+        }
         [self trackPlainSeekFromEvent:event];
         return;
     }
@@ -1446,3 +1660,56 @@ static NSString *VLCLegacyHoverTimeString(double seconds)
 }
 
 @end
+
+void VLCLegacyUpdateSliderBookmarks(VLCLegacySeekSlider *slider,
+                                    input_thread_t *p_input,
+                                    int64_t duration)
+{
+    VLCLegacyProgressSliderCell *cell =
+        (VLCLegacyProgressSliderCell *)[slider cell];
+    NSArray *fractions = nil;
+    NSArray *names = nil;
+    NSArray *times = nil;
+
+    if (p_input != NULL && duration > 0) {
+        seekpoint_t **pp_bookmarks = NULL;
+        int i_bookmarks = 0;
+        if (input_Control(p_input, INPUT_GET_BOOKMARKS, &pp_bookmarks,
+                          &i_bookmarks) == VLC_SUCCESS) {
+            NSMutableArray *newFractions = [NSMutableArray
+                arrayWithCapacity:i_bookmarks];
+            NSMutableArray *newNames = [NSMutableArray
+                arrayWithCapacity:i_bookmarks];
+            NSMutableArray *newTimes = [NSMutableArray
+                arrayWithCapacity:i_bookmarks];
+            int i;
+            for (i = 0; i < i_bookmarks; i++) {
+                vlc_tick_t time = pp_bookmarks[i]->i_time_offset;
+                double fraction = (double)time / (double)duration;
+                if (fraction < 0.0) fraction = 0.0;
+                if (fraction > 1.0) fraction = 1.0;
+                [newFractions addObject:[NSNumber numberWithDouble:fraction]];
+                NSString *name = pp_bookmarks[i]->psz_name
+                    ? [NSString stringWithUTF8String:pp_bookmarks[i]->psz_name]
+                    : @"";
+                [newNames addObject:name ? name : @""];
+                [newTimes addObject:[NSNumber numberWithLongLong:time]];
+                vlc_seekpoint_Delete(pp_bookmarks[i]);
+            }
+            free(pp_bookmarks);
+            fractions = newFractions;
+            names = newNames;
+            times = newTimes;
+        }
+    }
+
+    NSArray *oldFractions = [cell bookmarkFractions];
+    NSArray *oldNames = [cell bookmarkNames];
+    NSArray *oldTimes = [cell bookmarkTimes];
+    if ((oldFractions == fractions || [oldFractions isEqualToArray:fractions])
+        && (oldNames == names || [oldNames isEqualToArray:names])
+        && (oldTimes == times || [oldTimes isEqualToArray:times]))
+        return;
+    [cell setBookmarkFractions:fractions names:names times:times];
+    [slider setNeedsDisplay:YES];
+}

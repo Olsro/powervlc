@@ -31,7 +31,7 @@ OPTIONS:
    -D <win_path> Create PDB files during the build, map the VLC sources to <win_path>
                  e.g.: -D c:/sources/vlc
    -x            Add extra checks when compiling
-   -S <sdkver>   Use maximum Windows API version (0x05020000 by default XP SP1)
+   -S <sdkver>   Use maximum Windows API version (XP for win32, Vista for win64)
    -u            Use the Universal C Runtime (instead of msvcrt)
    -w            Restrict to Windows Store APIs
    -z            Build without GUI (libvlc only)
@@ -304,8 +304,13 @@ if [ -n "$NTDDI" ]; then
     VLC_CPPFLAGS="$VLC_CPPFLAGS -DNTDDI_VERSION=$NTDDI"
 fi
 if [ -z "$WINVER" ]; then
-    # The current minimum for VLC 3.0 is Windows XP SP1
-    WINVER=0x0502
+    # Preserve the 32-bit XP floor. The 64-bit package has always advertised
+    # Vista as its floor, and current libplacebo uses Vista's SRW locks and
+    # condition variables, so expose the matching SDK surface there.
+    case "$ARCH" in
+        x86_64) WINVER=0x0600 ;;
+        *)      WINVER=0x0502 ;;
+    esac
 fi
 VLC_CPPFLAGS="$VLC_CPPFLAGS -D_WIN32_WINNT=${WINVER} -DWINVER=${WINVER}"
 
@@ -452,6 +457,12 @@ if ! ls ../$CONTRIB_PREFIX/bin/libbdplus*.dll >/dev/null 2>&1; then
     make .bdplus
 fi
 
+# PowerVLC carries libbluray patches for MVC subpaths and BD-J compatibility.
+# A persistent Docker contrib volume may otherwise keep an older installed
+# libbluray whose stamp is newer than a freshly copied source snapshot.
+rm -rf bluray .bluray
+make .bluray
+
 # The Qt "Connect to Server" dialog exposes SMB on Windows as well as on
 # macOS and Linux. libsmb2 is optional in upstream's contrib selection and is
 # therefore not pulled in automatically for MinGW targets; build it explicitly
@@ -544,6 +555,23 @@ ${SCRIPT_PATH}/configure.sh --host=$TRIPLET --with-contrib=../contrib/$CONTRIB_P
 
 info "Compiling"
 make -j$JOBS
+
+# Release packages always carry PowerVLC's own minimal amuled.  Build it only
+# after the contrib prefix is complete (it reuses zlib from that prefix), but
+# before package.mak validates and embeds POWERVLC_AMULED.  Keeping this here
+# also makes direct build.sh and Docker builds behave like the friendly wrapper.
+if [ -n "$INSTALLER" ] && [ -z "${POWERVLC_AMULED:-}" ]; then
+    info "Building the private aMule engine"
+    AMULE_TARGET="windows-$ARCH"
+    AMULE_DEPS="$VLC_ROOT_PATH/contrib/$CONTRIB_PREFIX"
+    AMULE_DEP_PREFIX="$AMULE_DEPS" \
+    AMULE_CPPFLAGS="-I$AMULE_DEPS/include" \
+    AMULE_LDFLAGS="-L$AMULE_DEPS/lib" \
+    AMULE_CMAKE_ARGS="-DZLIB_INCLUDE_DIR=$AMULE_DEPS/include -DZLIB_LIBRARY=$AMULE_DEPS/lib/libz.a" \
+        "$VLC_ROOT_PATH/extras/package/build-amule-engine.sh" "$AMULE_TARGET"
+    POWERVLC_AMULED="$VLC_ROOT_PATH/build/dependencies/amule/$AMULE_TARGET/prefix/bin/amuled.exe"
+    export POWERVLC_AMULED
+fi
 
 if [ "$INSTALLER" = "n" ]; then
 make package-win32-debug-7zip

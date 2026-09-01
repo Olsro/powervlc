@@ -1,0 +1,60 @@
+From: PowerVLC
+Subject: [PATCH] Expose metadata for a named clip
+
+Stereoscopic extension clips live outside the current main title clip list.
+Expose a locked accessor that returns an owned CLPI copy by five-character
+clip id, allowing the player to align the base and dependent STC timelines.
+
+--- a/src/libbluray/bluray.c
++++ b/src/libbluray/bluray.c
+@@ -4360,6 +4360,30 @@ struct clpi_cl *bd_get_clpi(BLURAY *bd, unsigned clip_ref)
+     return result;
+ }
+ 
++struct clpi_cl *bd_get_clip_clpi(BLURAY *bd, const char *clip_id)
++{
++    struct clpi_cl *result = NULL;
++    const struct clpi_cl *cached = NULL;
++    char filename[11];
++
++    if (bd == NULL || clip_id == NULL || strlen(clip_id) < 5) {
++        return NULL;
++    }
++    if (snprintf(filename, sizeof(filename), "%.5s.clpi", clip_id) != 10) {
++        return NULL;
++    }
++
++    bd_mutex_lock(&bd->mutex);
++    cached = clpi_get(bd->disc, filename);
++    if (cached != NULL) {
++        result = clpi_copy(cached);
++        clpi_unref(&cached);
++    }
++    bd_mutex_unlock(&bd->mutex);
++
++    return result;
++}
++
+ struct clpi_cl *bd_read_clpi(const char *path)
+ {
+     return clpi_parse(path);
+--- a/src/libbluray/bluray.h
++++ b/src/libbluray/bluray.h
+@@ -1227,5 +1227,17 @@ struct mobj_objects;
+  */
+ BD_PUBLIC struct clpi_cl *bd_get_clpi(BLURAY *bd, unsigned clip_ref);
+ 
++/**
++ * Get a copy of clip information by five-character clip id.
++ *
++ * Unlike bd_get_clpi(), this can address a stereoscopic extension clip that
++ * is not part of the current main-path clip list.
++ *
++ * @param bd BLURAY object
++ * @param clip_id five-character clip id, for example "00001"
++ * @return allocated CLPI_CL object on success, NULL on error
++ */
++BD_PUBLIC struct clpi_cl *bd_get_clip_clpi(BLURAY *bd, const char *clip_id);
++
+ /** Testing/debugging: Parse clip information (CLPI) file */
+ BD_PUBLIC struct clpi_cl *bd_read_clpi(const char *clpi_file);

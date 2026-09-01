@@ -54,7 +54,13 @@
  * used for the on-track separators and the hover tooltip. */
 @property (nonatomic, copy) NSArray *chapterFractions;
 @property (nonatomic, copy) NSArray *chapterNames;
+@property (nonatomic, copy) NSArray *bookmarkFractions;
+@property (nonatomic, copy) NSArray *bookmarkNames;
+@property (nonatomic, copy) NSArray *bookmarkTimes;
 @property (nonatomic) double mediaDuration;
+
+/* Reload the current title's persistent bookmarks from the input. */
+- (void)reloadBookmarks;
 
 @property (nonatomic, weak) id<VLCSliderHoverDelegate> hoverDelegate;
 
@@ -65,6 +71,17 @@
 /* Drop the tooltip right away (the host is going away: autohidden
  * fullscreen panel, closed window, …). */
 - (void)hideHoverTooltip;
+
+/* Re-evaluate the hover from the current pointer position. The MVC
+ * fullscreen controller can move the real panel underneath a stationary
+ * pointer, in which case AppKit sends no matching mouse event. */
+- (void)refreshHoverForCurrentMouseLocation;
+
+/* Show the hover tooltip for a point expressed in this slider's host-window
+ * coordinates. The frame-packed fullscreen mirror receives the physical
+ * mouse event in the other eye and maps its identical local coordinates
+ * through this entry point. */
+- (void)refreshHoverForHostWindowPoint:(NSPoint)point;
 
 - (void)setSliderStyleLight;
 - (void)setSliderStyleDark;

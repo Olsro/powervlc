@@ -36,6 +36,7 @@ return {
     mode_playlists = "Listas de reproducción",
     btn_search = "Buscar",
     btn_open = "Abrir la selección",
+    btn_open_channel = "Abrir el canal del elemento seleccionado",
     btn_change_instance = "< Instancia",
     msg_enter_query = "Escriba algo que buscar",
     msg_searching = "Buscando…",
@@ -46,7 +47,13 @@ return {
     msg_target_found = "Dirección reconocida — se abre directamente",
     msg_search_fail = "Error en la búsqueda: ",
     msg_select_result = "Seleccione antes un resultado en la lista",
+    msg_channel_unavailable = "El canal vinculado a esta selección no está disponible",
     lbl_quality = "Calidad:",
+    lbl_audio_track = "Pista de audio:",
+    audio_default = "Audio predeterminado",
+    audio_original = "original",
+    lbl_subtitles = "Subtítulos:",
+    subtitles_none = "Ninguno",
     lbl_by = "de",
     audio_only = "Solo audio",
     combined = "audio+vídeo",
@@ -173,4 +180,17 @@ return {
           .. "PowerVLC</strong> coloca en su navegador una pequeña extensión "
           .. "que se encarga sola — sin marcador, sin clics, en todas las "
           .. "páginas.",
+    web_addon_lead = "¿Extensión instalada? No hay nada que arrastrar ni que "
+                   .. "pulsar: simplemente abra la instancia de abajo y supere su "
+                   .. "verificación. Esta página le avisará cuando se establezca "
+                   .. "el enlace.",
+    web_steps_title = "Sin la extensión: el marcador",
+    web_relay_on_addon = "Conectado a PowerVLC mediante la extensión del navegador. "
+                       .. "No hay nada que pulsar: deje abiertas esta ventana y la "
+                       .. "pestaña de la instancia.",
+    web_m_taking = "PowerVLC está reproduciendo este vídeo. La pestaña se ha "
+                 .. "vaciado de inmediato a propósito: dejar que el reproductor "
+                 .. "del sitio termine de cargarse aquí le costaría a la máquina "
+                 .. "una segunda descodificación y una segunda descarga, y "
+                 .. "sometería la instancia a una carga innecesaria. Déjela abierta.",
 }

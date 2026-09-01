@@ -1,0 +1,214 @@
+--- a/edge264/edge264.h
++++ b/edge264/edge264.h
+@@ -70,6 +70,16 @@ Edge264Decoder *edge264_alloc(int n_threads, Edge264LogCb log_cb, void *log_arg,
+ void edge264_flush(Edge264Decoder *dec);
+ void edge264_free(Edge264Decoder **pdec);
+ void edge264_set_timestamp(Edge264Decoder *dec, int64_t timestamp);
++void edge264_set_external_base(Edge264Decoder *dec, int enabled);
++int edge264_inject_external_base(Edge264Decoder *dec,
++                                 const uint8_t *const samples[3],
++                                 const int strides[3]);
++int edge264_inject_external_base_nv12(Edge264Decoder *dec,
++                                      const uint8_t *y, const uint8_t *uv,
++                                      int stride_y, int stride_uv);
++int edge264_inject_external_base_uyvy(Edge264Decoder *dec,
++                                      const uint8_t *uyvy, int stride);
++int32_t edge264_get_last_external_base_frame_id(Edge264Decoder *dec);
+ int edge264_decode_NAL(Edge264Decoder *dec, const uint8_t *buf, const uint8_t *end, Edge264UnrefCb unref_cb, void *unref_arg);
+ int edge264_get_frame(Edge264Decoder *dec, Edge264Frame *out, int borrow);
+ // SyLC motion export (2026-08-04): per-macroblock motion field of a frame
+--- a/edge264/src/edge264_internal.h
++++ b/edge264/src/edge264_internal.h
+@@ -440,4 +440,8 @@ typedef struct Edge264Decoder {
+ 	void *log_arg;
+ 	uint16_t log_pos; // next writing position in log_buf
+ 	char log_buf[9416];
++	/* Keep extension fields after all SIMD-addressed members: inserting one
++	 * earlier changes the ABI alignment of the vector unions above. */
++	int external_base;
++	int32_t last_external_base_frame_id;
+ } Edge264Decoder;
+--- a/edge264/src/edge264_headers.c
++++ b/edge264/src/edge264_headers.c
+@@ -1567,3 +1567,7 @@ static int ADD_VARIANT(parse_slice_header)(Edge264Decoder *dec, Edge264UnrefCb u
+ 		t->FilterOffsetB = 0;
+ 	}
++	/* Non-reference dependent pictures cannot introduce reference drift. */
++	if (dec->external_base && non_base_view && !dec->nal_ref_idc)
++		t->disable_deblocking_filter_idc = 1;
++
+ 	// add the new frame into the DPB if not done already (C.4.5)
+@@ -1615,6 +1615,14 @@ static int ADD_VARIANT(parse_slice_header)(Edge264Decoder *dec, Edge264UnrefCb u
+ 	}
+ 	
+ 	// prepare the task and signal it
++	if (dec->external_base && dec->nal_unit_type != 20) {
++		/* Keep header/POC/DPB parsing above, but leave reconstruction to the
++		 * external AVC decoder. currPic remains the base slot until injection,
++		 * including for pictures split across several slice NAL units. */
++		if (unref_cb)
++			unref_cb(0, unref_arg);
++		return print_dec(dec, "  decode_NAL_result: %s\n", 0);
++	}
+ 	initialize_task(dec, sps, t);
+ 	return print_dec(dec, "  decode_NAL_result: %s\n", 0);
+ }
+--- a/edge264/src/edge264.c
++++ b/edge264/src/edge264.c
+@@ -286,6 +286,156 @@ void edge264_set_timestamp(Edge264Decoder *dec, int64_t timestamp) {
+ 		pthread_mutex_unlock(&dec->lock);
+ }
+ 
++void edge264_set_external_base(Edge264Decoder *dec, int enabled) {
++	if (dec == NULL)
++		return;
++	if (dec->n_threads)
++		pthread_mutex_lock(&dec->lock);
++	dec->external_base = !!enabled;
++	if (enabled)
++		dec->last_external_base_frame_id = -1;
++	if (dec->n_threads)
++		pthread_mutex_unlock(&dec->lock);
++}
++
++int32_t edge264_get_last_external_base_frame_id(Edge264Decoder *dec) {
++	if (dec == NULL)
++		return -1;
++	if (dec->n_threads)
++		pthread_mutex_lock(&dec->lock);
++	int32_t frame_id = dec->last_external_base_frame_id;
++	if (dec->n_threads)
++		pthread_mutex_unlock(&dec->lock);
++	return frame_id;
++}
++
++int edge264_inject_external_base(Edge264Decoder *dec,
++		const uint8_t *const samples[3], const int strides[3]) {
++	if (dec == NULL || samples == NULL || strides == NULL ||
++		!samples[0] || !samples[1] || !samples[2])
++		return EINVAL;
++	if (dec->n_threads)
++		pthread_mutex_lock(&dec->lock);
++	int ret = EINVAL;
++	int pic = dec->currPic;
++	if (dec->external_base && pic >= 0 &&
++		!(dec->non_base_frames >> pic & 1) && dec->samples_buffers[pic]) {
++		uint8_t *dstY = dec->samples_buffers[pic];
++		uint8_t *dstCb = dstY + dec->plane_size_Y;
++		uint8_t *dstCr = dstCb + (dec->out.stride_C >> 1);
++		for (int y = 0; y < dec->out.height_Y; ++y)
++			memcpy(dstY + y * dec->out.stride_Y,
++			       samples[0] + y * strides[0], dec->out.width_Y);
++		for (int y = 0; y < dec->out.height_C; ++y) {
++			memcpy(dstCb + y * dec->out.stride_C,
++			       samples[1] + y * strides[1], dec->out.width_C);
++			memcpy(dstCr + y * dec->out.stride_C,
++			       samples[2] + y * strides[2], dec->out.width_C);
++		}
++		dec->remaining_mbs[pic] = 0;
++		dec->next_deblock_addr[pic] = INT_MAX;
++		dec->last_external_base_frame_id = dec->FrameIds[pic];
++		unset_currPic(dec);
++		bump_frame(dec, 0, 0);
++		ret = 0;
++	}
++	if (dec->n_threads) {
++		/* ready_frames() is a DPB-slot mask, not a worker-task mask. Using it
++		 * here wakes a worker on an uninitialised task whenever the matching
++		 * frame bit is set. Re-evaluate the actual pending task dependencies. */
++		dec->ready_tasks = ready_tasks(dec);
++		pthread_cond_broadcast(&dec->task_ready);
++		pthread_mutex_unlock(&dec->lock);
++	}
++	return ret;
++}
++
++int edge264_inject_external_base_nv12(Edge264Decoder *dec,
++		const uint8_t *y, const uint8_t *uv, int stride_y, int stride_uv) {
++	if (dec == NULL || y == NULL || uv == NULL || stride_y <= 0 || stride_uv <= 0)
++		return EINVAL;
++	if (dec->n_threads)
++		pthread_mutex_lock(&dec->lock);
++	int ret = EINVAL;
++	int pic = dec->currPic;
++	if (dec->external_base && pic >= 0 &&
++		!(dec->non_base_frames >> pic & 1) && dec->samples_buffers[pic]) {
++		uint8_t *dstY = dec->samples_buffers[pic];
++		uint8_t *dstCb = dstY + dec->plane_size_Y;
++		uint8_t *dstCr = dstCb + (dec->out.stride_C >> 1);
++		for (int row = 0; row < dec->out.height_Y; ++row)
++			memcpy(dstY + row * dec->out.stride_Y,
++			       y + row * stride_y, dec->out.width_Y);
++		for (int row = 0; row < dec->out.height_C; ++row) {
++			const uint8_t *restrict src = uv + row * stride_uv;
++			uint8_t *restrict cb = dstCb + row * dec->out.stride_C;
++			uint8_t *restrict cr = dstCr + row * dec->out.stride_C;
++			for (int x = 0; x < dec->out.width_C; ++x) {
++				cb[x] = src[2 * x];
++				cr[x] = src[2 * x + 1];
++			}
++		}
++		dec->remaining_mbs[pic] = 0;
++		dec->next_deblock_addr[pic] = INT_MAX;
++		dec->last_external_base_frame_id = dec->FrameIds[pic];
++		unset_currPic(dec);
++		bump_frame(dec, 0, 0);
++		ret = 0;
++	}
++	if (dec->n_threads) {
++		dec->ready_tasks = ready_tasks(dec);
++		pthread_cond_broadcast(&dec->task_ready);
++		pthread_mutex_unlock(&dec->lock);
++	}
++	return ret;
++}
++
++int edge264_inject_external_base_uyvy(Edge264Decoder *dec,
++		const uint8_t *uyvy, int stride) {
++	if (dec == NULL || uyvy == NULL || stride <= 0)
++		return EINVAL;
++	if (dec->n_threads)
++		pthread_mutex_lock(&dec->lock);
++	int ret = EINVAL;
++	int pic = dec->currPic;
++	if (dec->external_base && pic >= 0 &&
++		!(dec->non_base_frames >> pic & 1) && dec->samples_buffers[pic]) {
++		uint8_t *dstY = dec->samples_buffers[pic];
++		uint8_t *dstCb = dstY + dec->plane_size_Y;
++		uint8_t *dstCr = dstCb + (dec->out.stride_C >> 1);
++		for (int row = 0; row < dec->out.height_Y; ++row) {
++			const uint8_t *restrict src = uyvy + row * stride;
++			uint8_t *restrict dy = dstY + row * dec->out.stride_Y;
++			for (int x = 0; x < dec->out.width_Y; x += 2) {
++				dy[x] = src[2 * x + 1];
++				dy[x + 1] = src[2 * x + 3];
++			}
++		}
++		for (int row = 0; row < dec->out.height_C; ++row) {
++			const uint8_t *restrict a = uyvy + (2 * row) * stride;
++			const uint8_t *restrict b = a + stride;
++			uint8_t *restrict cb = dstCb + row * dec->out.stride_C;
++			uint8_t *restrict cr = dstCr + row * dec->out.stride_C;
++			for (int x = 0; x < dec->out.width_C; ++x) {
++				cb[x] = ((unsigned)a[4 * x] + b[4 * x] + 1) >> 1;
++				cr[x] = ((unsigned)a[4 * x + 2] + b[4 * x + 2] + 1) >> 1;
++			}
++		}
++		dec->remaining_mbs[pic] = 0;
++		dec->next_deblock_addr[pic] = INT_MAX;
++		dec->last_external_base_frame_id = dec->FrameIds[pic];
++		unset_currPic(dec);
++		bump_frame(dec, 0, 0);
++		ret = 0;
++	}
++	if (dec->n_threads) {
++		dec->ready_tasks = ready_tasks(dec);
++		pthread_cond_broadcast(&dec->task_ready);
++		pthread_mutex_unlock(&dec->lock);
++	}
++	return ret;
++}
++
+ 
+ 
+ void edge264_free(Edge264Decoder **pdec) {

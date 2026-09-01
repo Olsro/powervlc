@@ -33,6 +33,7 @@
 #endif
 
 #include <vlc_common.h>
+#include <vlc_dialog.h>
 #include <vlc_vout_display.h>
 
 #include <windows.h>
@@ -74,6 +75,34 @@ static unsigned int GetPictureWidth(const vout_display_t *vd)
 static unsigned int GetPictureHeight(const vout_display_t *vd)
 {
     return vd->fmt.i_height;
+}
+
+bool CommonShouldSwitchToStereoDisplay(vout_display_t *vd)
+{
+    const int policy = var_InheritInteger(vd, "stereo3d-display-mode");
+    if (policy != 1)
+        return policy == 0;
+
+    vlc_object_t *vout = vd->obj.parent;
+    static const char decision_var[] = "stereo3d-display-prompt-result";
+    if (vout != NULL &&
+        (var_Type(vout, decision_var) & VLC_VAR_CLASS) == VLC_VAR_INTEGER)
+        return var_GetInteger(vout, decision_var) == 1;
+
+    const int answer = vlc_dialog_wait_question(
+        vd, VLC_DIALOG_QUESTION_NORMAL,
+        _("Keep current mode"), _("Change mode"), NULL,
+        _("Blu-ray 3D video detected"), "%s",
+        _("Switch the HDMI display to the standardized frame-packed 3D "
+          "raster and enter full screen? The current mode will be restored "
+          "after playback."));
+
+    if (vout != NULL)
+    {
+        var_Create(vout, decision_var, VLC_VAR_INTEGER);
+        var_SetInteger(vout, decision_var, answer == 1 ? 1 : 0);
+    }
+    return answer == 1;
 }
 
 /* */
@@ -229,6 +258,19 @@ void UpdateRects(vout_display_t *vd,
 
     vout_display_place_t place;
     vout_display_PlacePicture(&place, source, &place_cfg, false);
+
+#if defined(MODULE_NAME_IS_glwin32)
+    /* HDMI frame packing is itself the complete display raster.  Letterboxing
+     * it as if it were a 16:9 picture would shrink the two eyes and destroy
+     * the CEA-861 45/30-line active-space separation. */
+    if (var_GetBool(vd, "win32-framepacked-output"))
+    {
+        place.x = 0;
+        place.y = 0;
+        place.width = window_width;
+        place.height = window_height;
+    }
+#endif
 
 #if !VLC_WINSTORE_APP
     if (likely(sys->event)) // internal rendering

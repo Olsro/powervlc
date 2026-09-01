@@ -66,9 +66,13 @@ static int poll_once (struct pollfd *fds, unsigned nfds, int timeout)
             errno = EINVAL;
             return -1;
         }
-        if (fds[i].events & POLLRDNORM)
+        /* Darwin keeps POLLIN (0x0001) and POLLRDNORM (0x0040) distinct.
+         * Treating only POLLRDNORM as readable made every ordinary POLLIN
+         * caller time out in the select()-based compatibility layer used on
+         * Jaguar (notably SSDP discovery). */
+        if (fds[i].events & (POLLIN | POLLRDNORM))
             FD_SET (fd, rdset);
-        if (fds[i].events & POLLWRNORM)
+        if (fds[i].events & (POLLOUT | POLLWRNORM))
             FD_SET (fd, wrset);
         if (fds[i].events & POLLPRI)
             FD_SET (fd, exset);
@@ -105,8 +109,10 @@ static int poll_once (struct pollfd *fds, unsigned nfds, int timeout)
     for (unsigned i = 0; i < nfds; i++)
     {
         int fd = fds[i].fd;
-        fds[i].revents = (FD_ISSET (fd, rdset) ? POLLRDNORM : 0)
-                       | (FD_ISSET (fd, wrset) ? POLLWRNORM : 0)
+        fds[i].revents = (FD_ISSET (fd, rdset)
+                          ? fds[i].events & (POLLIN | POLLRDNORM) : 0)
+                       | (FD_ISSET (fd, wrset)
+                          ? fds[i].events & (POLLOUT | POLLWRNORM) : 0)
                        | (FD_ISSET (fd, exset) ? POLLPRI : 0);
     }
     return val;

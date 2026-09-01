@@ -194,8 +194,6 @@ static int VLCLegacyRevealControlsCallback(vlc_object_t *p_this,
  * theirs. */
 - (void)osdDisplayVolume
 {
-    if (!b_controlsHiddenForPlayback)
-        return;
     input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
     if (!p_input)
         return;
@@ -203,10 +201,24 @@ static int VLCLegacyRevealControlsCallback(vlc_object_t *p_this,
     vlc_object_release(p_input);
     if (!p_vout)
         return;
+    if (!b_controlsHiddenForPlayback && !var_GetBool(p_vout, "fullscreen")) {
+        vlc_object_release(p_vout);
+        return;
+    }
     float volume = playlist_VolumeGet(pl_Get(p_intf));
     if (volume >= 0.) {
+        /* A subpicture channel retains one ephemeral OSD at a time.  Putting
+         * the text immediately after the slider on the shared channel
+         * replaced the slider before the vout could draw it. */
+        static vout_thread_t *s_slider_vout = NULL;
+        static int s_slider_channel = 0;
+        if (s_slider_vout != p_vout) {
+            s_slider_vout = p_vout;
+            s_slider_channel = vout_RegisterSubpictureChannel(p_vout);
+        }
+        vout_FlushSubpictureChannel(p_vout, s_slider_channel);
         long percent = lroundf(volume * 100.f);
-        vout_OSDSlider(p_vout, VOUT_SPU_CHANNEL_OSD,
+        vout_OSDSlider(p_vout, s_slider_channel,
                        (int)percent, OSD_VERT_SLIDER);
         vout_OSDMessage(p_vout, VOUT_SPU_CHANNEL_OSD, _("Volume %ld%%"),
                         percent);
@@ -216,8 +228,6 @@ static int VLCLegacyRevealControlsCallback(vlc_object_t *p_this,
 
 - (void)osdDisplayIcon:(short)icon
 {
-    if (!b_controlsHiddenForPlayback)
-        return;
     input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
     if (!p_input)
         return;
@@ -225,14 +235,25 @@ static int VLCLegacyRevealControlsCallback(vlc_object_t *p_this,
     vlc_object_release(p_input);
     if (!p_vout)
         return;
-    vout_OSDIcon(p_vout, VOUT_SPU_CHANNEL_OSD, icon);
+    if (!b_controlsHiddenForPlayback && !var_GetBool(p_vout, "fullscreen")) {
+        vlc_object_release(p_vout);
+        return;
+    }
+    /* Keep transport feedback independent from position/text OSD queued by
+     * the state transition itself. */
+    static vout_thread_t *s_icon_vout = NULL;
+    static int s_icon_channel = 0;
+    if (s_icon_vout != p_vout) {
+        s_icon_vout = p_vout;
+        s_icon_channel = vout_RegisterSubpictureChannel(p_vout);
+    }
+    vout_FlushSubpictureChannel(p_vout, s_icon_channel);
+    vout_OSDIcon(p_vout, s_icon_channel, icon);
     vlc_object_release(p_vout);
 }
 
 - (void)osdDisplayMessage:(const char *)message
 {
-    if (!b_controlsHiddenForPlayback)
-        return;
     input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
     if (!p_input)
         return;
@@ -240,6 +261,10 @@ static int VLCLegacyRevealControlsCallback(vlc_object_t *p_this,
     vlc_object_release(p_input);
     if (!p_vout)
         return;
+    if (!b_controlsHiddenForPlayback && !var_GetBool(p_vout, "fullscreen")) {
+        vlc_object_release(p_vout);
+        return;
+    }
     vout_OSDMessage(p_vout, VOUT_SPU_CHANNEL_OSD, "%s", message);
     vlc_object_release(p_vout);
 }
@@ -284,15 +309,13 @@ static int VLCLegacyRevealControlsCallback(vlc_object_t *p_this,
     /* NOTE: Play/Pause deliberately does NOT skip the video-cache-mb
      * fill wait (it used to, via INPUT_SET_VIDEO_CACHE_SKIP): playback
      * must never start before the look-ahead cache reached its
-     * threshold. A pause during the wait is harmless -- the cache
+    * threshold. A pause during the wait is harmless -- the cache
      * keeps filling while paused. */
     int64_t state = -1;
-    if (b_controlsHiddenForPlayback) {
-        input_thread_t *p_input = playlist_CurrentInput(p_playlist);
-        if (p_input) {
-            state = var_GetInteger(p_input, "state");
-            vlc_object_release(p_input);
-        }
+    input_thread_t *p_input = playlist_CurrentInput(p_playlist);
+    if (p_input) {
+        state = var_GetInteger(p_input, "state");
+        vlc_object_release(p_input);
     }
     playlist_TogglePause(p_playlist);
     if (state != -1)
@@ -328,9 +351,31 @@ static int VLCLegacyRevealControlsCallback(vlc_object_t *p_this,
     input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
     if (!p_input)
         return;
-    if (var_GetBool(p_input, "can-seek"))
+    if (var_GetBool(p_input, "can-seek")) {
+        int64_t length = var_GetInteger(p_input, "length");
+        int64_t time = var_GetInteger(p_input, "time");
         var_SetInteger(p_input, "time-offset",
                        (int64_t)seconds * CLOCK_FREQ);
+        vout_thread_t *p_vout = input_GetVout(p_input);
+        if (p_vout && length > 0) {
+            int64_t target = time + (int64_t)seconds * CLOCK_FREQ;
+            if (target < 0)
+                target = 0;
+            else if (target > length)
+                target = length;
+            static vout_thread_t *s_position_vout = NULL;
+            static int s_position_channel = 0;
+            if (s_position_vout != p_vout) {
+                s_position_vout = p_vout;
+                s_position_channel = vout_RegisterSubpictureChannel(p_vout);
+            }
+            vout_FlushSubpictureChannel(p_vout, s_position_channel);
+            vout_OSDSlider(p_vout, s_position_channel,
+                           (int)(target * 100 / length), OSD_HOR_SLIDER);
+        }
+        if (p_vout)
+            vlc_object_release(p_vout);
+    }
     vlc_object_release(p_input);
 }
 
@@ -929,6 +974,7 @@ static int VLCLegacyRevealControlsCallback(vlc_object_t *p_this,
 - (void)setVolume:(float)volume
 {
     playlist_VolumeSet(pl_Get(p_intf), volume);
+    [self osdDisplayVolume];
 }
 
 /*****************************************************************************

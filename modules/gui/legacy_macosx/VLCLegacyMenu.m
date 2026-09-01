@@ -49,10 +49,72 @@
 #include <vlc_aout.h>
 #include <vlc_actions.h>
 #include <vlc_configuration.h>
+#include <vlc_services_discovery.h>
 #include <vlc_url.h>
 #include <math.h>
 
 #define _NS(s) ((NSString *)[NSString stringWithUTF8String:vlc_gettext(s)])
+
+static BOOL VLCLegacyDeviceTransferIsActive(intf_thread_t *intf)
+{
+    playlist_t *playlist = pl_Get(intf);
+    unsigned index;
+    for (index = 0; index < 64; ++index) {
+        NSString *service = [NSString stringWithFormat:
+            @"powervlc_device{index=%u}", index];
+        if (!playlist_IsServicesDiscoveryLoaded(playlist, [service UTF8String]))
+            continue;
+        services_discovery_transfer_status_t status = { 0 };
+        int result = playlist_ServicesDiscoveryControl(playlist,
+            [service UTF8String], SD_CMD_POWERVLC_DEVICE_TRANSFERS, &status);
+        BOOL active = result == VLC_SUCCESS && status.b_synchronizing;
+        size_t i;
+        for (i = 0; i < status.i_count; ++i) {
+            free(status.p_items[i].psz_source);
+            free(status.p_items[i].psz_destination);
+        }
+        free(status.p_items);
+        if (active) return YES;
+    }
+    return NO;
+}
+
+static BOOL VLCLegacyDeviceHasPendingChanges(intf_thread_t *intf)
+{
+    playlist_t *playlist = pl_Get(intf);
+    unsigned index;
+    for (index = 0; index < 64; ++index) {
+        NSString *service = [NSString stringWithFormat:
+            @"powervlc_device{index=%u}", index];
+        if (!playlist_IsServicesDiscoveryLoaded(playlist, [service UTF8String]))
+            continue;
+        services_discovery_transfer_status_t status = { 0 };
+        int result = playlist_ServicesDiscoveryControl(playlist,
+            [service UTF8String], SD_CMD_POWERVLC_DEVICE_TRANSFERS, &status);
+        BOOL pending = result == VLC_SUCCESS && status.b_pending_changes;
+        size_t i;
+        for (i = 0; i < status.i_count; ++i) {
+            free(status.p_items[i].psz_source);
+            free(status.p_items[i].psz_destination);
+        }
+        free(status.p_items);
+        if (pending) return YES;
+    }
+    return NO;
+}
+
+static void VLCLegacyPendingChangesControl(intf_thread_t *intf, int command)
+{
+    playlist_t *playlist = pl_Get(intf);
+    unsigned index;
+    for (index = 0; index < 64; ++index) {
+        NSString *service = [NSString stringWithFormat:
+            @"powervlc_device{index=%u}", index];
+        if (playlist_IsServicesDiscoveryLoaded(playlist, [service UTF8String]))
+            playlist_ServicesDiscoveryControl(playlist, [service UTF8String],
+                                               command);
+    }
+}
 
 static NSString *keyString(unichar c)
 {
@@ -72,6 +134,33 @@ enum {
 #define EXT_MENU_MAP(action, index) ((((int)(action)) << 16) | (int)(index))
 #define EXT_MENU_ACTION(tag) ((int)(((tag) >> 16) & 0xFFFF))
 #define EXT_MENU_INDEX(tag)  ((int)((tag) & 0xFFFF))
+
+typedef struct {
+    extension_t *extension;
+    int index;
+} VLCLegacyExtensionMenuEntry;
+
+static NSString *VLCLegacyExtensionTitle(extension_t *extension)
+{
+    NSString *title = [NSString stringWithUTF8String:
+        extension->psz_title ? extension->psz_title : "?"];
+    return title ? title : @"?";
+}
+
+static int VLCLegacyCompareExtensionMenuEntries(const void *leftValue,
+                                                 const void *rightValue)
+{
+    const VLCLegacyExtensionMenuEntry *left = leftValue;
+    const VLCLegacyExtensionMenuEntry *right = rightValue;
+    NSString *leftTitle = VLCLegacyExtensionTitle(left->extension);
+    NSString *rightTitle = VLCLegacyExtensionTitle(right->extension);
+    NSComparisonResult result = [leftTitle caseInsensitiveCompare:rightTitle];
+    if (result == NSOrderedSame)
+        result = [leftTitle compare:rightTitle];
+    if (result == NSOrderedSame)
+        return left->index < right->index ? -1 : left->index > right->index;
+    return result == NSOrderedAscending ? -1 : 1;
+}
 
 /* Two small user-defaults backed lists. The stream key is deliberately the
  * same as the modern macOS interface so switching interfaces keeps it. */
@@ -1504,12 +1593,29 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
         return;
 
     vlc_mutex_lock(&p_extensions_manager->lock);
-    extension_t *p_ext = NULL;
-    int i_ext = 0;
-    FOREACH_ARRAY(p_ext, p_extensions_manager->extensions) {
+    size_t extensionCount = p_extensions_manager->extensions.i_size;
+    VLCLegacyExtensionMenuEntry *entries =
+        calloc(extensionCount, sizeof(*entries));
+    if (extensionCount > 0 && entries == NULL) {
+        vlc_mutex_unlock(&p_extensions_manager->lock);
+        return;
+    }
+    size_t index;
+    for (index = 0; index < extensionCount; ++index) {
+        entries[index].extension =
+            ARRAY_VAL(p_extensions_manager->extensions, index);
+        entries[index].index = (int)index;
+    }
+    if (extensionCount > 1)
+        qsort(entries, extensionCount, sizeof(*entries),
+              VLCLegacyCompareExtensionMenuEntries);
+
+    size_t position;
+    for (position = 0; position < extensionCount; ++position) {
+        extension_t *p_ext = entries[position].extension;
+        int i_ext = entries[position].index;
         bool b_active = extension_IsActivated(p_extensions_manager, p_ext);
-        NSString *title = [NSString stringWithUTF8String:
-            p_ext->psz_title ? p_ext->psz_title : "?"];
+        NSString *title = VLCLegacyExtensionTitle(p_ext);
 
         if (b_active && extension_HasMenu(p_extensions_manager, p_ext)) {
             NSMenu *submenu = [[[NSMenu alloc] initWithTitle:title]
@@ -1548,9 +1654,8 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
              && b_active)
                 [entry setState:NSOnState];
         }
-        i_ext++;
     }
-    FOREACH_END()
+    free(entries);
     vlc_mutex_unlock(&p_extensions_manager->lock);
 }
 
@@ -1623,7 +1728,31 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
  * functions used here are thread-safe core primitives.
  *****************************************************************************/
 
-- (void)quit:(id)sender               { libvlc_Quit(p_intf->obj.libvlc); }
+- (void)quit:(id)sender
+{
+    if (VLCLegacyDeviceTransferIsActive(p_intf)) {
+        NSInteger answer = NSRunAlertPanel(_NS("Synchronization in progress"),
+            @"%@", _NS("Continue Synchronization"), _NS("Quit Anyway"), nil,
+            _NS("A portable player is still being synchronized. Quitting now will interrupt the current transfer."));
+        if (answer != NSAlertAlternateReturn) return;
+    }
+    if (VLCLegacyDeviceHasPendingChanges(p_intf)) {
+        NSInteger answer = NSRunAlertPanel(
+            _NS("Portable-player changes are pending"), @"%@",
+            _NS("Finalize Changes"), _NS("Quit Without Finalizing"),
+            _NS("Cancel"),
+            _NS("One or more iPods contain changes that have not been validated. Validate them before quitting, or discard them."));
+        if (answer == NSAlertDefaultReturn) {
+            VLCLegacyPendingChangesControl(p_intf,
+                                           SD_CMD_POWERVLC_DEVICE_COMMIT);
+            return;
+        }
+        if (answer != NSAlertAlternateReturn) return;
+        VLCLegacyPendingChangesControl(p_intf,
+                                       SD_CMD_POWERVLC_DEVICE_DISCARD);
+    }
+    libvlc_Quit(p_intf->obj.libvlc);
+}
 
 - (void)switchInterface:(id)sender
 {

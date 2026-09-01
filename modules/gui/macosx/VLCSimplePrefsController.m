@@ -26,6 +26,7 @@
 
 #import "CompatibilityFixes.h"
 #import "VLCSimplePrefsController.h"
+#import "VLCPowerVLCPreferences.h"
 #import "prefs.h"
 #import <vlc_actions.h>
 #import <vlc_interface.h>
@@ -134,6 +135,8 @@ static NSString* VLCVideoSettingToolbarIdentifier = @"Video Settings Item Identi
 static NSString* VLCOSDSettingToolbarIdentifier = @"Subtitles Settings Item Identifier";
 static NSString* VLCInputSettingToolbarIdentifier = @"Input Settings Item Identifier";
 static NSString* VLCHotkeysSettingToolbarIdentifier = @"Hotkeys Settings Item Identifier";
+static NSString* VLCMediaLibrarySettingToolbarIdentifier = @"PowerVLC Media Library Settings Item Identifier";
+static NSString* VLCPortablePlayersSettingToolbarIdentifier = @"PowerVLC Portable Players Settings Item Identifier";
 
 @interface VLCSimplePrefsController() <NSToolbarDelegate, NSWindowDelegate>
 {
@@ -150,6 +153,20 @@ static NSString* VLCHotkeysSettingToolbarIdentifier = @"Hotkeys Settings Item Id
     NSTextField *_video_cacheMbTextField;
     NSTextField *_video_cacheFillTextField;
     NSTextField *_video_cacheSecondsTextField;
+
+    NSBox *_intf_stereo3DBox;
+    NSPopUpButton *_intf_stereo3DPopup;
+    NSPopUpButton *_intf_stereo3DInputPopup;
+    NSPopUpButton *_intf_stereo3DDepthPopup;
+    NSBox *_audio_passthroughBox;
+    NSButton *_audio_passthroughCheckbox;
+    NSButton *_audio_passthroughAC3Checkbox;
+    NSButton *_audio_passthroughEAC3Checkbox;
+    NSButton *_audio_passthroughTrueHDCheckbox;
+    NSButton *_audio_passthroughDTSCheckbox;
+    NSButton *_audio_passthroughDTSHDCheckbox;
+
+    VLCPowerVLCPreferences *_powerPreferences;
 
     NSOpenPanel *_selectFolderPanel;
     NSArray *_hotkeyDescriptions;
@@ -293,10 +310,161 @@ static NSString* VLCHotkeysSettingToolbarIdentifier = @"Hotkeys Settings Item Id
                 multiplier:1. constant:10.]];
 }
 
+/* Add a small fork-specific group below an Auto Layout driven preference
+ * pane, replacing whichever stock box previously owned the bottom edge. */
+- (void)appendBox:(NSBox *)box height:(CGFloat)height toPane:(NSView *)pane
+{
+    NSMutableArray *bottomHuggers = [NSMutableArray array];
+    for (NSLayoutConstraint *c in [[pane constraints] copy]) {
+        NSView *other = nil;
+        if (c.firstItem == pane && c.firstAttribute == NSLayoutAttributeBottom
+         && [c.secondItem isKindOfClass:[NSView class]]
+         && c.secondAttribute == NSLayoutAttributeBottom)
+            other = c.secondItem;
+        else if (c.secondItem == pane
+              && c.secondAttribute == NSLayoutAttributeBottom
+              && [c.firstItem isKindOfClass:[NSView class]]
+              && c.firstAttribute == NSLayoutAttributeBottom)
+            other = c.firstItem;
+        if (other) {
+            [bottomHuggers addObject:other];
+            [pane removeConstraint:c];
+        }
+    }
+
+    [box setTranslatesAutoresizingMaskIntoConstraints:NO];
+    [pane addSubview:box];
+    [pane addConstraint:[NSLayoutConstraint constraintWithItem:box
+        attribute:NSLayoutAttributeLeading relatedBy:NSLayoutRelationEqual
+        toItem:pane attribute:NSLayoutAttributeLeading multiplier:1. constant:20.]];
+    [pane addConstraint:[NSLayoutConstraint constraintWithItem:pane
+        attribute:NSLayoutAttributeTrailing relatedBy:NSLayoutRelationEqual
+        toItem:box attribute:NSLayoutAttributeTrailing multiplier:1. constant:20.]];
+    [pane addConstraint:[NSLayoutConstraint constraintWithItem:pane
+        attribute:NSLayoutAttributeBottom relatedBy:NSLayoutRelationEqual
+        toItem:box attribute:NSLayoutAttributeBottom multiplier:1. constant:12.]];
+    [box addConstraint:[NSLayoutConstraint constraintWithItem:box
+        attribute:NSLayoutAttributeHeight relatedBy:NSLayoutRelationEqual
+        toItem:nil attribute:NSLayoutAttributeNotAnAttribute multiplier:1.
+        constant:height]];
+    for (NSView *hugger in bottomHuggers)
+        [pane addConstraint:[NSLayoutConstraint constraintWithItem:box
+            attribute:NSLayoutAttributeTop relatedBy:NSLayoutRelationGreaterThanOrEqual
+            toItem:hugger attribute:NSLayoutAttributeBottom multiplier:1.
+            constant:10.]];
+}
+
+- (void)setupStereo3DAndPassthroughBoxes
+{
+    _intf_stereo3DBox = [[NSBox alloc] initWithFrame:NSZeroRect];
+    [_intf_stereo3DBox setTitle:_NS("Stereoscopic 3D")];
+    NSView *intfContent = [_intf_stereo3DBox contentView];
+    NSTextField *label = [[NSTextField alloc]
+        initWithFrame:NSMakeRect(0., 69., 340., 20.)];
+    [label setEditable:NO];
+    [label setBordered:NO];
+    [label setDrawsBackground:NO];
+    [label setAlignment:NSTextAlignmentRight];
+    [label setStringValue:_NS("Change display mode for 3D video")];
+    [intfContent addSubview:label];
+    _intf_stereo3DPopup = [[NSPopUpButton alloc]
+        initWithFrame:NSMakeRect(348., 65., 190., 26.) pullsDown:NO];
+    [_intf_stereo3DPopup setTarget:self];
+    [_intf_stereo3DPopup setAction:@selector(interfaceSettingChanged:)];
+    [intfContent addSubview:_intf_stereo3DPopup];
+
+    NSTextField *inputLabel = [[NSTextField alloc]
+        initWithFrame:NSMakeRect(0., 39., 340., 20.)];
+    [inputLabel setEditable:NO];
+    [inputLabel setBordered:NO];
+    [inputLabel setDrawsBackground:NO];
+    [inputLabel setAlignment:NSTextAlignmentRight];
+    [inputLabel setStringValue:_NS("Stereoscopic input layout")];
+    [intfContent addSubview:inputLabel];
+    _intf_stereo3DInputPopup = [[NSPopUpButton alloc]
+        initWithFrame:NSMakeRect(348., 35., 190., 26.) pullsDown:NO];
+    [_intf_stereo3DInputPopup setTarget:self];
+    [_intf_stereo3DInputPopup
+        setAction:@selector(interfaceSettingChanged:)];
+    [intfContent addSubview:_intf_stereo3DInputPopup];
+
+    NSTextField *depthLabel = [[NSTextField alloc]
+        initWithFrame:NSMakeRect(0., 9., 340., 20.)];
+    [depthLabel setEditable:NO];
+    [depthLabel setBordered:NO];
+    [depthLabel setDrawsBackground:NO];
+    [depthLabel setAlignment:NSTextAlignmentRight];
+    [depthLabel setStringValue:
+        _NS("3D depth for subtitles, OSD and controls")];
+    [intfContent addSubview:depthLabel];
+    _intf_stereo3DDepthPopup = [[NSPopUpButton alloc]
+        initWithFrame:NSMakeRect(348., 5., 190., 26.) pullsDown:NO];
+    [_intf_stereo3DDepthPopup setTarget:self];
+    [_intf_stereo3DDepthPopup setAction:@selector(interfaceSettingChanged:)];
+    [intfContent addSubview:_intf_stereo3DDepthPopup];
+    [self appendBox:_intf_stereo3DBox height:118. toPane:_intfView];
+
+    _audio_passthroughBox = [[NSBox alloc] initWithFrame:NSZeroRect];
+    [_audio_passthroughBox setTitle:_NS("HDMI audio")];
+    _audio_passthroughCheckbox = [[NSButton alloc]
+        initWithFrame:NSMakeRect(16., 101., 520., 24.)];
+    [_audio_passthroughCheckbox setButtonType:NSSwitchButton];
+    [_audio_passthroughCheckbox setTitle:
+        _NS("Use HDMI/S/PDIF audio passthrough when available")];
+    [_audio_passthroughCheckbox setTarget:self];
+    [_audio_passthroughCheckbox setAction:@selector(audioSettingChanged:)];
+    [[_audio_passthroughBox contentView] addSubview:_audio_passthroughCheckbox];
+
+    NSTextField *formatsLabel = [[NSTextField alloc]
+        initWithFrame:NSMakeRect(30., 80., 510., 18.)];
+    [formatsLabel setEditable:NO];
+    [formatsLabel setBordered:NO];
+    [formatsLabel setDrawsBackground:NO];
+    [formatsLabel setStringValue:_NS("Formats supported by the connected equipment")];
+    [[_audio_passthroughBox contentView] addSubview:formatsLabel];
+
+#define ADD_PASSTHROUGH_CHECKBOX(ivar, title, x, y) \
+    ivar = [[NSButton alloc] initWithFrame:NSMakeRect(x, y, 245., 24.)]; \
+    [ivar setButtonType:NSSwitchButton]; \
+    [ivar setTitle:title]; \
+    [ivar setTarget:self]; \
+    [ivar setAction:@selector(audioSettingChanged:)]; \
+    [[_audio_passthroughBox contentView] addSubview:ivar]
+    ADD_PASSTHROUGH_CHECKBOX(_audio_passthroughAC3Checkbox,
+                             _NS("AC-3 (Dolby Digital)"), 30., 53.);
+    ADD_PASSTHROUGH_CHECKBOX(_audio_passthroughEAC3Checkbox,
+                             _NS("E-AC-3 (Dolby Digital Plus)"), 30., 27.);
+    ADD_PASSTHROUGH_CHECKBOX(_audio_passthroughTrueHDCheckbox,
+                             _NS("Dolby TrueHD"), 30., 1.);
+    ADD_PASSTHROUGH_CHECKBOX(_audio_passthroughDTSCheckbox,
+                             _NS("DTS"), 285., 53.);
+    ADD_PASSTHROUGH_CHECKBOX(_audio_passthroughDTSHDCheckbox,
+                             _NS("DTS-HD (DTS core on macOS)"), 285., 27.);
+    [_audio_passthroughDTSHDCheckbox setToolTip:
+        _NS("macOS does not expose a native DTS-HD HDMI carrier. When DTS is "
+            "also enabled, PowerVLC sends the compatible DTS core without "
+            "decoding it.")];
+#undef ADD_PASSTHROUGH_CHECKBOX
+
+    [self appendBox:_audio_passthroughBox height:148. toPane:_audioView];
+}
+
+- (void)updatePassthroughFormatControls
+{
+    BOOL enabled = [_audio_passthroughCheckbox state] == NSOnState;
+    [_audio_passthroughAC3Checkbox setEnabled:enabled];
+    [_audio_passthroughEAC3Checkbox setEnabled:enabled];
+    [_audio_passthroughTrueHDCheckbox setEnabled:enabled];
+    [_audio_passthroughDTSCheckbox setEnabled:enabled];
+    [_audio_passthroughDTSHDCheckbox setEnabled:enabled];
+}
+
 - (void)windowDidLoad
 {
     [self initStrings];
     [self setupVideoCacheBox];
+    [self setupStereo3DAndPassthroughBoxes];
+    _powerPreferences = [[VLCPowerVLCPreferences alloc] initWithInterface:p_intf];
 
 #ifdef HAVE_SPARKLE
     [_intf_updateCheckbox bind:@"value"
@@ -374,6 +542,10 @@ create_toolbar_item(NSString *itemIdent, NSString *name, NSString *desc, NSStrin
         CreateToolbarItem(_NS(INPUT_TITLE), _NS("Input & Codec Settings"), @"VLCInputCone", showInputSettings);
     } else if ([itemIdent isEqual: VLCHotkeysSettingToolbarIdentifier]) {
         CreateToolbarItem(_NS("Hotkeys"), _NS("Hotkeys settings"), @"VLCHotkeysCone", showHotkeySettings);
+    } else if ([itemIdent isEqual: VLCMediaLibrarySettingToolbarIdentifier]) {
+        CreateToolbarItem(_NS("Media Library"), _NS("Media Library Settings"), @"VLCInputCone", showMediaLibrarySettings);
+    } else if ([itemIdent isEqual: VLCPortablePlayersSettingToolbarIdentifier]) {
+        CreateToolbarItem(_NS("Portable Players"), _NS("Portable Player Settings"), @"VLCAudioCone", showPortablePlayersSettings);
     }
 
     return toolbarItem;
@@ -382,21 +554,27 @@ create_toolbar_item(NSString *itemIdent, NSString *name, NSString *desc, NSStrin
 - (NSArray *)toolbarDefaultItemIdentifiers: (NSToolbar *)toolbar
 {
     return [NSArray arrayWithObjects:VLCIntfSettingToolbarIdentifier, VLCAudioSettingToolbarIdentifier, VLCVideoSettingToolbarIdentifier,
-             VLCOSDSettingToolbarIdentifier, VLCInputSettingToolbarIdentifier, VLCHotkeysSettingToolbarIdentifier,
+             VLCOSDSettingToolbarIdentifier, VLCInputSettingToolbarIdentifier,
+             VLCMediaLibrarySettingToolbarIdentifier, VLCPortablePlayersSettingToolbarIdentifier,
+             VLCHotkeysSettingToolbarIdentifier,
              NSToolbarFlexibleSpaceItemIdentifier, nil];
 }
 
 - (NSArray *)toolbarAllowedItemIdentifiers: (NSToolbar *)toolbar
 {
     return [NSArray arrayWithObjects:VLCIntfSettingToolbarIdentifier, VLCAudioSettingToolbarIdentifier, VLCVideoSettingToolbarIdentifier,
-             VLCOSDSettingToolbarIdentifier, VLCInputSettingToolbarIdentifier, VLCHotkeysSettingToolbarIdentifier,
+             VLCOSDSettingToolbarIdentifier, VLCInputSettingToolbarIdentifier,
+             VLCMediaLibrarySettingToolbarIdentifier, VLCPortablePlayersSettingToolbarIdentifier,
+             VLCHotkeysSettingToolbarIdentifier,
              NSToolbarFlexibleSpaceItemIdentifier, nil];
 }
 
 - (NSArray *)toolbarSelectableItemIdentifiers:(NSToolbar *)toolbar
 {
     return [NSArray arrayWithObjects:VLCIntfSettingToolbarIdentifier, VLCAudioSettingToolbarIdentifier, VLCVideoSettingToolbarIdentifier,
-             VLCOSDSettingToolbarIdentifier, VLCInputSettingToolbarIdentifier, VLCHotkeysSettingToolbarIdentifier, nil];
+             VLCOSDSettingToolbarIdentifier, VLCInputSettingToolbarIdentifier,
+             VLCMediaLibrarySettingToolbarIdentifier, VLCPortablePlayersSettingToolbarIdentifier,
+             VLCHotkeysSettingToolbarIdentifier, nil];
 }
 
 - (void)initStrings
@@ -674,6 +852,8 @@ static inline const char * __config_GetLabel(vlc_object_t *p_this, const char *p
     int i, y = 0;
     char *psz_tmp;
 
+    [_powerPreferences reload];
+
     /**********************
      * interface settings *
      **********************/
@@ -690,6 +870,9 @@ static inline const char * __config_GetLabel(vlc_object_t *p_this, const char *p
     [_intf_languagePopup selectItemAtIndex:sel];
 
     [self setupButton:_intf_continueplaybackPopup forIntList: "macosx-continue-playback"];
+    [self setupButton:_intf_stereo3DPopup forIntList: "stereo3d-display-mode"];
+    [self setupButton:_intf_stereo3DInputPopup forIntList: "stereo3d-input-mode"];
+    [self setupButton:_intf_stereo3DDepthPopup forIntList: "stereo3d-overlay-depth"];
     if (!var_InheritBool(p_intf, "macosx-recentitems")) {
         [_intf_continueplaybackPopup setEnabled: NO];
         [_intf_continueplaybackPopup setToolTip: _NS("Media files cannot be resumed because keeping recent media items is disabled.")];
@@ -739,6 +922,13 @@ static inline const char * __config_GetLabel(vlc_object_t *p_this, const char *p
      * audio settings *
      ******************/
     [self setupButton:_audio_enableCheckbox forBoolValue: "audio"];
+    [self setupButton:_audio_passthroughCheckbox forBoolValue: "spdif"];
+    [self setupButton:_audio_passthroughAC3Checkbox forBoolValue: "spdif-ac3"];
+    [self setupButton:_audio_passthroughEAC3Checkbox forBoolValue: "spdif-eac3"];
+    [self setupButton:_audio_passthroughTrueHDCheckbox forBoolValue: "spdif-truehd"];
+    [self setupButton:_audio_passthroughDTSCheckbox forBoolValue: "spdif-dts"];
+    [self setupButton:_audio_passthroughDTSHDCheckbox forBoolValue: "spdif-dtshd"];
+    [self updatePassthroughFormatControls];
 
     if (config_GetInt(p_intf, "volume-save")) {
         [_audio_autosavevol_yesButtonCell setState: NSOnState];
@@ -1069,6 +1259,8 @@ static inline void save_string_list(intf_thread_t * p_intf, id object, const cha
 #define SaveStringList(object, name) save_string_list(p_intf, object, name)
 #define SaveModuleList(object, name) SaveStringList(object, name)
 
+    [_powerPreferences save];
+
     /**********************
      * interface settings *
      **********************/
@@ -1080,6 +1272,9 @@ static inline void save_string_list(intf_thread_t * p_intf, id object, const cha
         [defaults synchronize];
 
         config_PutInt(p_intf, "metadata-network-access", [_intf_artCheckbox state]);
+        SaveIntList(_intf_stereo3DPopup, "stereo3d-display-mode");
+        SaveIntList(_intf_stereo3DInputPopup, "stereo3d-input-mode");
+        SaveIntList(_intf_stereo3DDepthPopup, "stereo3d-overlay-depth");
 
         config_PutInt(p_intf, "macosx-hover-thumbnails", [_intf_hoverThumbnailsCheckbox state]);
         config_PutInt(p_intf, "macosx-appleremote", [_intf_appleremoteCheckbox state]);
@@ -1109,6 +1304,12 @@ static inline void save_string_list(intf_thread_t * p_intf, id object, const cha
      ******************/
     if (_audioSettingChanged) {
         config_PutInt(p_intf, "audio", [_audio_enableCheckbox state]);
+        config_PutInt(p_intf, "spdif", [_audio_passthroughCheckbox state]);
+        config_PutInt(p_intf, "spdif-ac3", [_audio_passthroughAC3Checkbox state]);
+        config_PutInt(p_intf, "spdif-eac3", [_audio_passthroughEAC3Checkbox state]);
+        config_PutInt(p_intf, "spdif-truehd", [_audio_passthroughTrueHDCheckbox state]);
+        config_PutInt(p_intf, "spdif-dts", [_audio_passthroughDTSCheckbox state]);
+        config_PutInt(p_intf, "spdif-dtshd", [_audio_passthroughDTSHDCheckbox state]);
         config_PutInt(p_intf, "volume-save", [_audio_autosavevol_yesButtonCell state]);
         var_SetBool(p_intf, "volume-save", [_audio_autosavevol_yesButtonCell state]);
         if ([_audio_volTextField isEnabled])
@@ -1260,6 +1461,16 @@ static inline void save_string_list(intf_thread_t * p_intf, id object, const cha
     [_contentView addConstraints:constraints];
 
     [_scrollView layoutSubtreeIfNeeded];
+
+    /* Always reveal the beginning of a pane when switching categories.  The
+     * clip view is flipped, while some preference panes (including the two
+     * PowerVLC panes created in code) use the standard AppKit coordinates. */
+    NSRect topEdge = categoryView.bounds;
+    topEdge.origin.y = categoryView.isFlipped ? NSMinY(categoryView.bounds)
+                                               : NSMaxY(categoryView.bounds) - 1.;
+    topEdge.size.height = 1.;
+    [categoryView scrollRectToVisible:topEdge];
+
     [_scrollView flashScrollers];
 }
 
@@ -1306,6 +1517,9 @@ static inline void save_string_list(intf_thread_t * p_intf, id object, const cha
 
 - (IBAction)audioSettingChanged:(id)sender
 {
+    if (sender == _audio_passthroughCheckbox)
+        [self updatePassthroughFormatControls];
+
     if (sender == _audio_volSlider)
         [_audio_volTextField setIntValue: [_audio_volSlider intValue]];
 
@@ -1334,6 +1548,16 @@ static inline void save_string_list(intf_thread_t * p_intf, id object, const cha
 - (void)showAudioSettings
 {
     [self showSettingsForCategory:_audioView];
+}
+
+- (void)showMediaLibrarySettings
+{
+    [self showSettingsForCategory:_powerPreferences.mediaLibraryView];
+}
+
+- (void)showPortablePlayersSettings
+{
+    [self showSettingsForCategory:_powerPreferences.portablePlayersView];
 }
 
 - (IBAction)videoSettingChanged:(id)sender

@@ -434,6 +434,7 @@ static void VariablesInit( playlist_t *p_playlist )
 
     var_Create( p_playlist, "playlist-item-append", VLC_VAR_ADDRESS );
     var_Create( p_playlist, "playlist-item-deleted", VLC_VAR_ADDRESS );
+    var_Create( p_playlist, "playlist-item-tree-update", VLC_VAR_BOOL );
 
     var_Create( p_playlist, "input-current", VLC_VAR_ADDRESS );
 
@@ -502,4 +503,3 @@ int playlist_Status( playlist_t * p_playlist )
         return PLAYLIST_PAUSED;
     return PLAYLIST_RUNNING;
 }
-

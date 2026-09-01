@@ -1,0 +1,110 @@
+From 6f6c0dcc9dd80ffc052b4d4fa7bd48d22551dedc Mon Sep 17 00:00:00 2001
+From: PowerVLC <powervlc@localhost>
+Date: Fri, 28 Aug 2026 22:45:00 +0200
+Subject: [PATCH] bdj: expose the profile-5 graphics offset sequence control
+
+Some Sony 3D menu Xlets require GraphicsOffsetSequenceControl while setting
+up their coherent screen configuration. Returning null aborts the graphics
+path after the correct menu background playlist has already started, leaving
+an indefinitely looping background with no buttons.
+
+Retain the selected sequence id and implement the listener contract. The
+actual per-frame disparity continues to be delivered through the profile-5
+graphics configuration and ARGB overlay offset path.
+---
+ .../GraphicsOffsetSequenceControlImpl.java    | 64 ++++++++++++++++++++
+ .../media/content/playlist/Handler.java       |  3 +-
+ 2 files changed, 66 insertions(+), 1 deletion(-)
+ create mode 100644 src/libbluray/bdj/java/org/videolan/media/content/playlist/GraphicsOffsetSequenceControlImpl.java
+
+diff --git a/src/libbluray/bdj/java/org/videolan/media/content/playlist/GraphicsOffsetSequenceControlImpl.java b/src/libbluray/bdj/java/org/videolan/media/content/playlist/GraphicsOffsetSequenceControlImpl.java
+new file mode 100644
+--- /dev/null
++++ b/src/libbluray/bdj/java/org/videolan/media/content/playlist/GraphicsOffsetSequenceControlImpl.java
+@@ -0,0 +1,64 @@
++/*
++ * This file is part of libbluray.
++ * Copyright (C) 2026 PowerVLC authors
++ *
++ * This library is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU Lesser General Public License as published by
++ * the Free Software Foundation; either version 2.1 of the License, or (at
++ * your option) any later version.
++ */
++
++package org.videolan.media.content.playlist;
++
++import java.awt.Component;
++
++import org.blurayx.s3d.media.GraphicsOffsetSequenceChangeEvent;
++import org.blurayx.s3d.media.GraphicsOffsetSequenceChangeListener;
++import org.blurayx.s3d.media.GraphicsOffsetSequenceControl;
++import org.videolan.BDJListeners;
++
++/**
++ * Profile-5 discs use this control to select the authored graphics-plane
++ * offset sequence for the current playlist. libbluray does not yet expose
++ * the sequence table itself, but retaining the selection is preferable to
++ * returning null: several Sony menu Xlets abort their graphics setup when
++ * the mandatory control is missing.
++ */
++public class GraphicsOffsetSequenceControlImpl
++        implements GraphicsOffsetSequenceControl {
++    protected GraphicsOffsetSequenceControlImpl(Handler player) {
++    }
++
++    public Component getControlComponent() {
++        return null;
++    }
++
++    public synchronized int getSequenceId() {
++        return sequenceId;
++    }
++
++    public void setSequenceId(int id) throws IllegalArgumentException {
++        if (id < 0)
++            throw new IllegalArgumentException("negative graphics offset sequence");
++
++        synchronized (this) {
++            if (sequenceId == id)
++                return;
++            sequenceId = id;
++        }
++        listeners.putCallback(new GraphicsOffsetSequenceChangeEvent(this, id));
++    }
++
++    public void addOffsetSequenceChangeListener(
++            GraphicsOffsetSequenceChangeListener listener) {
++        listeners.add(listener);
++    }
++
++    public void removeOffsetSequenceChangeListener(
++            GraphicsOffsetSequenceChangeListener listener) {
++        listeners.remove(listener);
++    }
++
++    private int sequenceId;
++    private BDJListeners listeners = new BDJListeners();
++}
+diff --git a/src/libbluray/bdj/java/org/videolan/media/content/playlist/Handler.java b/src/libbluray/bdj/java/org/videolan/media/content/playlist/Handler.java
+--- a/src/libbluray/bdj/java/org/videolan/media/content/playlist/Handler.java
++++ b/src/libbluray/bdj/java/org/videolan/media/content/playlist/Handler.java
+@@ -53,7 +53,7 @@ import org.videolan.media.content.control.SecondaryGainControlImpl;
+ 
+ public class Handler extends BDHandler {
+     public Handler() {
+-        controls = new Control[18];
++        controls = new Control[19];
+         controls[0] = new AngleControlImpl(this);
+         controls[1] = new AudioMetadataControlImpl();
+         controls[2] = new BackgroundVideoPresentationControlImpl(this);
+@@ -72,6 +72,7 @@ public class Handler extends BDHandler {
+         controls[15] = new SubtitlingControlImpl(this);
+         controls[16] = new UOMaskTableControlImpl(this);
+         controls[17] = new VideoFormatControlImpl(this);
++        controls[18] = new GraphicsOffsetSequenceControlImpl(this);
+     }
+ 
+     public void setSource(DataSource source) throws IOException, IncompatibleSourceException {
+-- 
+2.50.1

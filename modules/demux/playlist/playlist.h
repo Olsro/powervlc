@@ -40,6 +40,8 @@ int Import_podcast ( vlc_object_t * );
 int Import_xspf ( vlc_object_t * );
 void Close_xspf ( vlc_object_t * );
 
+int Import_PowerVLCIndex ( vlc_object_t * );
+
 int Import_Shoutcast ( vlc_object_t * );
 
 int Import_ASX ( vlc_object_t * );

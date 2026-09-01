@@ -1,0 +1,17 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -581,4 +581,3 @@
+ 	target_compile_definitions (muleappcommon
+ 		PRIVATE wxUSE_GUI=0
+-		PRIVATE WXUSINGDLL
+ 	)
+@@ -669,4 +668,3 @@
+ 	target_compile_definitions (muleappcore
+ 		PRIVATE wxUSE_GUI=0
+-		PRIVATE WXUSINGDLL
+ 	)
+@@ -744,3 +742,2 @@
+ 	target_compile_definitions (muleappgui
+-		PRIVATE WXUSINGDLL
+ 	)

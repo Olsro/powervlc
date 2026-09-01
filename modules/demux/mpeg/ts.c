@@ -125,6 +125,9 @@ static void Close ( vlc_object_t * );
 
 #define PCR_TEXT N_("Trust in-stream PCR")
 #define PCR_LONGTEXT N_("Use the stream PCR as a reference.")
+#define PCR_AUTOFALLBACK_TEXT N_("Fall back from a distant PCR")
+#define PCR_AUTOFALLBACK_LONGTEXT N_("Derive the program clock from DTS when " \
+    "the authored PCR is several seconds away from the first media timestamp.")
 
 static const char *const ts_standards_list[] =
     { "auto", "mpeg", "dvb", "arib", "atsc", "tdmb" };
@@ -146,6 +149,9 @@ vlc_module_begin ()
 
     add_string( "ts-extra-pmt", NULL, PMT_TEXT, PMT_LONGTEXT, true )
     add_bool( "ts-trust-pcr", true, PCR_TEXT, PCR_LONGTEXT, true )
+        change_safe()
+    add_bool( "ts-pcr-autofallback", false, PCR_AUTOFALLBACK_TEXT,
+              PCR_AUTOFALLBACK_LONGTEXT, true )
         change_safe()
     add_bool( "ts-es-id-pid", true, PID_TEXT, PID_LONGTEXT, true )
         change_safe()
@@ -442,6 +448,7 @@ static int Open( vlc_object_t *p_this )
 
     p_sys->b_trust_pcr = var_CreateGetBool( p_demux, "ts-trust-pcr" );
     p_sys->b_check_pcr_offset = p_sys->b_trust_pcr && var_CreateGetBool(p_demux, "ts-pcr-offsetfix" );
+    p_sys->b_pcr_autofallback = var_CreateGetBool( p_demux, "ts-pcr-autofallback" );
 
     /* We handle description of an extra PMT */
     char* psz_string = var_CreateGetString( p_demux, "ts-extra-pmt" );
@@ -1579,6 +1586,7 @@ static void SendDataChain( demux_t *p_demux, ts_es_t *p_es, block_t *p_chain )
 static void ParsePESDataChain( demux_t *p_demux, ts_pid_t *pid, block_t *p_pes,
                                ts_90khz_t i_append_pcr )
 {
+    demux_sys_t *p_sys = p_demux->p_sys;
     uint8_t header[34];
     unsigned i_pes_size = 0;
     unsigned i_skip = 0;
@@ -1715,6 +1723,33 @@ static void ParsePESDataChain( demux_t *p_demux, ts_pid_t *pid, block_t *p_pes,
             block_t *p_block = p_chain;
             p_chain = p_chain->p_next;
             p_block->p_next = NULL;
+
+            /* Some Blu-ray playlists carry a perfectly stable PCR (Albator),
+             * while others begin their PES timeline more than ten seconds
+             * away from it (Dragons). Disabling PCR for the whole disc made
+             * LPCM and MVC video chase an unstable DTS-derived clock; always
+             * trusting it makes the malformed playlist miss its first clip.
+             *
+             * Decide from the first real media timestamp. A five-second gap
+             * is far beyond legal decoder buffering, but leaves ample room
+             * for ordinary Blu-ray presentation lead. Reset before emitting
+             * this block so the input never observes both clock domains. */
+            if( p_sys->b_pcr_autofallback && !p_pmt->pcr.b_disable &&
+                p_pmt->pcr.i_current != VLC_TICK_INVALID &&
+                p_block->i_dts != VLC_TICK_INVALID &&
+                llabs( p_block->i_dts - p_pmt->pcr.i_current ) >
+                    VLC_TICK_FROM_SEC(5) )
+            {
+                msg_Warn( p_demux, "authored PCR is %"PRId64
+                          " us from pid %d DTS; deriving the Blu-ray clock",
+                          p_block->i_dts - p_pmt->pcr.i_current, pid->i_pid );
+                p_pmt->i_pid_pcr = pid->i_pid;
+                p_pmt->pcr.b_disable = true;
+                p_pmt->pcr.b_fix_done = true;
+                es_out_Control( p_demux->out, ES_OUT_RESET_PCR );
+                ProgramSetPCR( p_demux, p_pmt,
+                               p_block->i_dts - VLC_TICK_FROM_MS(120) );
+            }
 
             if( !p_pmt->pcr.b_fix_done ) /* Not seen yet */
                 PCRFixHandle( p_demux, p_pmt, p_block );

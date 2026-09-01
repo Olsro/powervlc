@@ -65,6 +65,48 @@ static FILE *VLCLegacyGridTrace(void);
  * itself gives one on 10.2-10.5. */
 #define VLC_LEGACY_HEADER_H 17.f
 
+/* Keep extension-dialog updates synchronous while the UI is alive, but make
+ * a not-yet-started update cancellable. Otherwise application teardown can
+ * join the Lua worker on the main thread while that worker waits for AppKit,
+ * deadlocking both forever. This uses VLC primitives available on Jaguar. */
+typedef struct
+{
+    vlc_mutex_t lock;
+    vlc_cond_t cond;
+    extension_dialog_t *dialog;
+    unsigned refs;
+    bool running;
+    bool done;
+    bool cancelled;
+} VLCLegacyExtensionDialogRequest;
+
+static VLCLegacyExtensionDialogRequest *
+VLCLegacyDialogRequestCreate(extension_dialog_t *dialog)
+{
+    VLCLegacyExtensionDialogRequest *request = calloc(1, sizeof(*request));
+    if (!request)
+        return NULL;
+    vlc_mutex_init(&request->lock);
+    vlc_cond_init(&request->cond);
+    request->dialog = dialog;
+    request->refs = 2;
+    return request;
+}
+
+static void VLCLegacyDialogRequestRelease(
+    VLCLegacyExtensionDialogRequest *request)
+{
+    bool destroy;
+    vlc_mutex_lock(&request->lock);
+    destroy = --request->refs == 0;
+    vlc_mutex_unlock(&request->lock);
+    if (destroy) {
+        vlc_cond_destroy(&request->cond);
+        vlc_mutex_destroy(&request->lock);
+        free(request);
+    }
+}
+
 /*****************************************************************************
  * widget-carrying controls
  *****************************************************************************/
@@ -124,6 +166,8 @@ static FILE *VLCLegacyGridTrace(void);
     NSArray *columnWeights;      /* natural width of each column's content */
     BOOL layingOut;
     NSTimeInterval filledAt;     /* when the list last got its content */
+    NSTimeInterval lastWidthFit; /* expensive ATSU measurement throttle */
+    unsigned widthFitRows;
     NSArray *promisedNames;      /* file names promised by the drag under way */
     NSArray *promisedIds;        /* value ids of the rows being dragged */
 }
@@ -162,9 +206,12 @@ static FILE *VLCLegacyGridTrace(void);
 @interface VLCLegacyDialogWindow : NSWindow
 {
     extension_dialog_t *dialog;
+    void *extensionOwner;
 }
 - (extension_dialog_t *)dialog;
 - (void)setDialog:(extension_dialog_t *)aDialog;
+- (void *)extensionOwner;
+- (void)setExtensionOwner:(void *)owner;
 @end
 
 @implementation VLCLegacyDialogButton
@@ -190,6 +237,21 @@ VLC_LEGACY_WIDGET_ACCESSORS
 @implementation VLCLegacyDialogWindow
 - (extension_dialog_t *)dialog { return dialog; }
 - (void)setDialog:(extension_dialog_t *)aDialog { dialog = aDialog; }
+- (void *)extensionOwner { return extensionOwner; }
+- (void)setExtensionOwner:(void *)owner { extensionOwner = owner; }
+- (void)cancelOperation:(id)sender { [self performClose:sender]; }
+- (void)sendEvent:(NSEvent *)event
+{
+    if ([event type] == NSKeyDown) {
+        NSString *characters = [event charactersIgnoringModifiers];
+        if ([characters length] == 1
+         && [characters characterAtIndex:0] == 0x1b) {
+            [self performClose:self];
+            return;
+        }
+    }
+    [super sendEvent:event];
+}
 @end
 
 /* qsort-style comparator for -sortUsingFunction:context: -- blocks do not
@@ -372,35 +434,46 @@ VLC_LEGACY_WIDGET_ACCESSORS
     if ([columns count] == 0)
         return;
 
+    unsigned rowCount = (unsigned)[contentArray count];
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    /* Progress and speed updates replace every row but almost never change
+     * the natural columns. On Jaguar, measuring their text through ATSU is
+     * slower than the refresh interval itself. Refit immediately for a new
+     * list, then only when its row count changed and at most once per two
+     * seconds while search results are arriving. */
+    if (columnWeights != nil && [columnWeights count] == [columns count]) {
+        if (rowCount == widthFitRows || now - lastWidthFit < 2.0) {
+            [self layoutColumns];
+            return;
+        }
+    }
+
     NSFont *font = [[[columns objectAtIndex:0] dataCell] font];
     if (font == nil)
         font = [NSFont systemFontOfSize:12.f];
-    NSDictionary *attributes =
-        [NSDictionary dictionaryWithObject:font forKey:NSFontAttributeName];
+    NSTextFieldCell *measurer = [[[NSTextFieldCell alloc] init] autorelease];
+    [measurer setFont:font];
 
     /* Measuring every cell of a listing of several thousand rows is a
      * text layout per cell, redone on every refill -- with a search box
      * that refills as the user types, that is the whole cost of the
      * list on a slow machine. A spread-out sample gives the same
      * column widths in practice for a fraction of the work. */
-    unsigned rowCount = (unsigned)[contentArray count];
     unsigned stride = (rowCount / VLC_LEGACY_WIDTH_SAMPLE) + 1;
 
     NSMutableArray *weights = [NSMutableArray array];
     unsigned i, n;
     for (i = 0; i < [columns count]; i++) {
         float widest = 0.f;
-        if ([self headerView] != nil) {
-            NSString *title =
-                [[[columns objectAtIndex:i] headerCell] stringValue];
-            widest = [title sizeWithAttributes:attributes].width;
-        }
+        if ([self headerView] != nil)
+            widest = [[[columns objectAtIndex:i] headerCell] cellSize].width;
         for (n = 0; n < rowCount; n += stride) {
             NSDictionary *row = [contentArray objectAtIndex:n];
             NSArray *cells = [row objectForKey:@"cells"];
             NSString *text = (i < [cells count])
                 ? [cells objectAtIndex:i] : [row objectForKey:@"text"];
-            float width = [text sizeWithAttributes:attributes].width;
+            [measurer setStringValue:text ? text : @""];
+            float width = [measurer cellSize].width;
             if (width > widest)
                 widest = width;
         }
@@ -409,6 +482,8 @@ VLC_LEGACY_WIDGET_ACCESSORS
     [weights retain];
     [columnWeights release];
     columnWeights = weights;
+    widthFitRows = rowCount;
+    lastWidthFit = now;
     [self layoutColumns];
 }
 
@@ -906,23 +981,12 @@ static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
             if (size.width > 420)
                 size.width = 420;
         }
-        /* A rounded bezel clips its last glyph at the fitted width. How
-         * much it eats is not the same on every release -- on 10.2 the
-         * cell's own answer left "< Retour" cut -- so rather than pad a
-         * guess, measure the title with the font it is drawn in and keep
-         * room for the two end caps. */
+        /* The cell already measures its title.  Calling NSString's drawing
+         * measurement a second time corrupts ATSU run-feature storage on
+         * Jaguar for some translated labels while an extension builds a
+         * newly authenticated screen. */
         if ([view isKindOfClass:[NSButton class]]) {
-            NSButton *button = (NSButton *)view;
-            NSFont *font = [button font];
-            NSString *title = [button title];
-            size.width += 16;
-            if (font != nil && [title length] > 0) {
-                NSDictionary *attrs = [NSDictionary
-                    dictionaryWithObject:font forKey:NSFontAttributeName];
-                float needed = [title sizeWithAttributes:attrs].width + 32.f;
-                if (size.width < needed)
-                    size.width = needed;
-            }
+            size.width += 24;
         }
     } else {
         size = [view frame].size;
@@ -975,6 +1039,17 @@ static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
 - (BOOL)isFlipped
 {
     return YES;   /* row 0 at the top, like the grid the extension describes */
+}
+
+- (BOOL)isOpaque
+{
+    return YES;
+}
+
+- (void)drawRect:(NSRect)dirtyRect
+{
+    [[NSColor windowBackgroundColor] set];
+    NSRectFill(dirtyRect);
 }
 
 - (NSMutableDictionary *)cellForView:(NSView *)view
@@ -1621,17 +1696,70 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
      * default mode holds the update until the click is over. The
      * extension thread waits those few milliseconds longer; it holds no
      * lock of ours while it does, so nothing else is held up. */
-    if (provider)
-        [provider performSelectorOnMainThread:@selector(updateExtensionDialog:)
-                                   withObject:[NSValue valueWithPointer:
-                                                   p_ext_dialog]
-                                waitUntilDone:YES
-                                        modes:[NSArray arrayWithObject:
-                                                   NSDefaultRunLoopMode]];
+    if (provider) {
+        VLCLegacyExtensionDialogRequest *request =
+            VLCLegacyDialogRequestCreate(p_ext_dialog);
+        if (request) {
+            [provider performSelectorOnMainThread:
+                          @selector(runExtensionDialogRequest:)
+                                       withObject:[NSValue valueWithPointer:
+                                                       request]
+                                    waitUntilDone:NO
+                                            modes:[NSArray arrayWithObject:
+                                                       NSDefaultRunLoopMode]];
+            mtime_t deadline = mdate() + 2 * CLOCK_FREQ;
+            vlc_mutex_lock(&request->lock);
+            while (!request->done) {
+                /* Never turn this into an unbounded wait once AppKit has
+                 * picked the request up. Jaguar can consume the condition
+                 * signal while its timed-wait compatibility path is moving
+                 * between semaphores. During quit the main thread then waits
+                 * for the dialog-provider lock held above us, forever.
+                 *
+                 * The request has one reference for this producer and one
+                 * for the main-thread selector. If the selector really is
+                 * still running it may safely finish after we stop waiting;
+                 * if it has not started, cancellation keeps it away from a
+                 * dialog the extension may subsequently destroy. */
+                if (vlc_cond_timedwait(&request->cond, &request->lock,
+                                       deadline) != 0) {
+                    if (!request->running && !request->done)
+                        request->cancelled = true;
+                    break;
+                }
+            }
+            vlc_mutex_unlock(&request->lock);
+            VLCLegacyDialogRequestRelease(request);
+        }
+    }
     [pool release];
 }
 
 @implementation VLCLegacyExtensionsDialogProvider
+
+- (void)runExtensionDialogRequest:(NSValue *)value
+{
+    VLCLegacyExtensionDialogRequest *request = [value pointerValue];
+    vlc_mutex_lock(&request->lock);
+    if (request->cancelled) {
+        request->done = true;
+        vlc_cond_signal(&request->cond);
+        vlc_mutex_unlock(&request->lock);
+        VLCLegacyDialogRequestRelease(request);
+        return;
+    }
+    request->running = true;
+    vlc_mutex_unlock(&request->lock);
+
+    [self updateExtensionDialog:[NSValue valueWithPointer:request->dialog]];
+
+    vlc_mutex_lock(&request->lock);
+    request->running = false;
+    request->done = true;
+    vlc_cond_signal(&request->cond);
+    vlc_mutex_unlock(&request->lock);
+    VLCLegacyDialogRequestRelease(request);
+}
 
 - (id)initWithIntf:(intf_thread_t *)intf
 {
@@ -1946,9 +2074,15 @@ static NSAttributedString *VLCLegacyWithBaseFont(NSAttributedString *text,
 
     case EXTENSION_WIDGET_LIST:
     {
+        NSScrollView *scrollView = (NSScrollView *)control;
         VLCLegacyDialogList *list =
-            (VLCLegacyDialogList *)[(NSScrollView *)control documentView];
+            (VLCLegacyDialogList *)[scrollView documentView];
+        BOOL hadContent = [[list contentArray] count] > 0;
+        NSPoint scrollOrigin = [[scrollView contentView] bounds].origin;
+        int previousSortColumn = [list sortColumn];
+        BOOL previousSortAscending = [list sortAscending];
         NSMutableArray *array = [NSMutableArray array];
+        NSMutableSet *selectedIds = [NSMutableSet set];
         struct extension_widget_value_t *value;
 
         /* tab-separated headers in the widget text = native columns */
@@ -1992,34 +2126,56 @@ static NSAttributedString *VLCLegacyWithBaseFont(NSAttributedString *text,
                     [entry setObject:dragname forKey:@"dragname"];
             }
             [array addObject:entry];
+            if (value->b_selected)
+                [selectedIds addObject:[NSNumber numberWithInt:value->i_id]];
         }
         [list setProgrammaticSelection:YES];
         [list setContentArray:array];
-        [list resetSort];   /* fresh content, extension's order */
-        /* ...unless the script asked for a column order, in which case
-         * it is sorted here, by the very comparison a click on that
-         * header uses -- so that both give the same thing */
+        /* The script's explicit order wins. Otherwise keep the user's
+         * header-click order across progressive refills. */
         if (widget->i_sort_column > 0)
             [list sortByColumn:widget->i_sort_column - 1
                      ascending:widget->b_sort_ascending];
+        else if (previousSortColumn >= 0
+              && (unsigned)previousSortColumn < [[list tableColumns] count])
+            [list sortByColumn:previousSortColumn
+                     ascending:previousSortAscending];
+        else
+            [list resetSort];
         [list reloadData];
         [list fitColumnsToContent];
 
         /* restore the selection the extension asked for */
-        int row = 0;
+        unsigned row = 0;
         [list deselectAll:nil];
-        for (value = widget->p_values; value != NULL;
-             value = value->p_next, row++) {
-            if (value->b_selected)
+        for (row = 0; row < [[list contentArray] count]; row++) {
+            NSDictionary *entry = [[list contentArray] objectAtIndex:row];
+            if ([selectedIds containsObject:[entry objectForKey:@"id"]])
                 [list selectRow:row byExtendingSelection:YES];
         }
 
-        /* Fresh content is read from its first row: keeping the scroll of
-         * whatever was in the list before leaves the user looking at the
-         * middle of something else. */
-        if ([array count] > 0)
+        /* A live search refills this same list as peers answer. Preserve the
+         * user's viewport instead of jumping to row zero every time; only a
+         * genuinely new/empty list starts at the top. */
+        if (hadContent) {
+            NSClipView *clip = [scrollView contentView];
+            [clip scrollToPoint:[clip constrainScrollPoint:scrollOrigin]];
+            [scrollView reflectScrolledClipView:clip];
+        } else if ([array count] > 0) {
             [list showTopOfList];
+        }
         [list setProgrammaticSelection:NO];
+
+        /* updateWidgets: deliberately skips the expensive full dialog
+         * relayout when only an existing control's value changed.  On the
+         * old AppKit shipped with Jaguar, reloadData does not reliably
+         * invalidate an NSTableView embedded in an NSScrollView by itself;
+         * the rows then remain visually stale until another window repaint.
+         * Invalidate only this list and its clip view so progressive search
+         * results remain visible without bringing back the global relayout. */
+        [list setNeedsDisplay:YES];
+        [[scrollView contentView] setNeedsDisplay:YES];
+        [scrollView setNeedsDisplay:YES];
         break;
     }
 
@@ -2273,13 +2429,14 @@ static void VLCLegacyDropControl(NSView *control)
 }
 
 /* Note: the caller holds p_dialog->lock. */
-- (void)updateWidgets:(extension_dialog_t *)p_dialog
+- (BOOL)updateWidgets:(extension_dialog_t *)p_dialog
 {
     VLCLegacyDialogWindow *window =
         (VLCLegacyDialogWindow *)p_dialog->p_sys_intf;
     VLCLegacyDialogGridView *grid =
         (VLCLegacyDialogGridView *)[window contentView];
     extension_widget_t *widget;
+    BOOL needsGeometry = NO;
 
     FOREACH_ARRAY(widget, p_dialog->widgets) {
         if (!widget)
@@ -2296,10 +2453,12 @@ static void VLCLegacyDropControl(NSView *control)
                                                               object:control];
                 VLCLegacyDropControl(control);
                 widget->p_sys_intf = NULL;
+                needsGeometry = YES;
             }
             continue;
         }
 
+        BOOL created = control == nil;
         if (!control) {
             control = [self createControlForWidget:widget];
             if (!control)
@@ -2307,32 +2466,53 @@ static void VLCLegacyDropControl(NSView *control)
             widget->p_sys_intf = control;   /* the grid holds it too; we own
                                              * the +1 from the constructor */
             update = YES;
+            needsGeometry = YES;
         }
 
         if (update) {
+            BOOL wasHidden = VLCLegacyViewIsHidden(control);
             [self updateControl:control forWidget:widget];
             VLCLegacySetViewHidden(control, widget->b_hide ? YES : NO);
 
-            int row = widget->i_row - 1;
-            int col = widget->i_column - 1;
-            if (row < 0) {
-                /* unplaced widgets stack under the grid, as in the Qt one */
-                row = 0;
-                col = 0;
+            if (wasHidden != (widget->b_hide ? YES : NO))
+                needsGeometry = YES;
+            else if (!created
+                  && ![control isKindOfClass:[NSScrollView class]]) {
+                /* Existing lists, entry fields and status labels already own
+                 * their grid rectangle. A value-only refresh can repaint in
+                 * place. Grow only if genuinely new content no longer fits;
+                 * shrinking is deliberately left to the user's window. */
+                NSSize preferred = VLCLegacyPreferredSize(control, widget);
+                NSSize frame = [control frame].size;
+                if (preferred.width > frame.width + 1.f
+                 || preferred.height > frame.height + 1.f)
+                    needsGeometry = YES;
             }
-            if (col < 0)
-                col = 0;
-            [grid setSubview:control
-                       atRow:row
-                      column:col
-                     rowSpan:widget->i_vert_span
-                     colSpan:widget->i_horiz_span];
+
+            if (created) {
+                int row = widget->i_row - 1;
+                int col = widget->i_column - 1;
+                if (row < 0) {
+                    /* unplaced widgets stack under the grid, as in Qt */
+                    row = 0;
+                    col = 0;
+                }
+                if (col < 0)
+                    col = 0;
+                [grid setSubview:control
+                           atRow:row
+                          column:col
+                         rowSpan:widget->i_vert_span
+                         colSpan:widget->i_horiz_span];
+            }
             widget->b_update = false;
         }
     }
     FOREACH_END()
 
-    [grid layoutGrid];
+    if (needsGeometry)
+        [grid layoutGrid];
+    return needsGeometry;
 }
 
 /* Width may be squeezed: columns give some of theirs, text wraps or is
@@ -2367,9 +2547,25 @@ static void VLCLegacyDropControl(NSView *control)
     [window setReleasedWhenClosed:NO];
     [window setDelegate:(id)self];
     [window setDialog:p_dialog];
+    [window setExtensionOwner:p_dialog->p_sys];
     [window setTitle:p_dialog->psz_title
         ? [NSString stringWithUTF8String:p_dialog->psz_title] : @""];
     VLCLegacyDenyNativeFullscreen(window);
+
+    /* A screen change is represented by a new extension_dialog_t.  On 10.2
+     * the kill notification for the old one can be delivered a run-loop turn
+     * later, leaving both windows visible.  Hide the predecessor immediately;
+     * its normal destroy callback still owns and releases all of its widgets. */
+    NSArray *applicationWindows = [[NSApp windows] copy];
+    unsigned windowIndex;
+    for (windowIndex = 0; windowIndex < [applicationWindows count]; windowIndex++) {
+        id other = [applicationWindows objectAtIndex:windowIndex];
+        if (other != window
+         && [other isKindOfClass:[VLCLegacyDialogWindow class]]
+         && [(VLCLegacyDialogWindow *)other extensionOwner] == p_dialog->p_sys)
+            [other orderOut:nil];
+    }
+    [applicationWindows release];
 
     VLCLegacyDialogGridView *grid = [[[VLCLegacyDialogGridView alloc]
         initWithFrame:NSMakeRect(0, 0, 320, 200)] autorelease];
@@ -2442,6 +2638,7 @@ static void VLCLegacyDropControl(NSView *control)
     FOREACH_END()
 
     [window setDelegate:nil];
+    [window setDialog:NULL];
     [window close];
     /* deferred for the same reason the controls are: the window is the
      * object AppKit is dispatching the current event through */
@@ -2492,45 +2689,46 @@ static void VLCLegacyDropControl(NSView *control)
         } else
             [window orderOut:nil];
     } else if (!p_dialog->b_kill && window) {
-        [self updateWidgets:p_dialog];
+        BOOL needsGeometry = [self updateWidgets:p_dialog];
         /* The window was only sized at creation. A long status message or
          * a freshly filled list widens the natural size afterwards; grow,
          * or every track past the window edge is drawn clipped. */
-        VLCLegacyDialogGridView *grid =
-            (VLCLegacyDialogGridView *)[window contentView];
-        NSSize wanted = [grid preferredSize];
-        CGFloat widest = VLCLegacyMaxAutoWidth(window);
-        if (wanted.width > widest)
-            wanted.width = widest;  /* absurd texts must not eat the screen */
-        NSSize current = [[window contentView] frame].size;
-        if (wanted.width < current.width)
-            wanted.width = current.width;   /* the user may have widened it */
-        VLCLegacyClampToScreen(window, &wanted);
-        wanted.height = [grid preferredSizeForWidth:wanted.width].height;
-        VLCLegacyClampToScreen(window, &wanted);
-        if (wanted.width > current.width || wanted.height > current.height) {
-            NSSize grown = NSMakeSize(
-                wanted.width > current.width ? wanted.width : current.width,
-                wanted.height > current.height ? wanted.height
-                                               : current.height);
-            [window setContentSize:grown];
+        if (needsGeometry) {
+            VLCLegacyDialogGridView *grid =
+                (VLCLegacyDialogGridView *)[window contentView];
+            NSSize wanted = [grid preferredSize];
+            CGFloat widest = VLCLegacyMaxAutoWidth(window);
+            if (wanted.width > widest)
+                wanted.width = widest;
+            NSSize current = [[window contentView] frame].size;
+            if (wanted.width < current.width)
+                wanted.width = current.width;
+            VLCLegacyClampToScreen(window, &wanted);
+            wanted.height = [grid preferredSizeForWidth:wanted.width].height;
+            VLCLegacyClampToScreen(window, &wanted);
+            if (wanted.width > current.width || wanted.height > current.height) {
+                NSSize grown = NSMakeSize(
+                    wanted.width > current.width ? wanted.width : current.width,
+                    wanted.height > current.height ? wanted.height
+                                                   : current.height);
+                [window setContentSize:grown];
+            }
+            [self updateMinimumSizeOfWindow:window forContent:wanted];
+            [grid layoutGrid];
         }
-        /* widgets came or went: what the content needs vertically changed
-         * with them */
-        [self updateMinimumSizeOfWindow:window forContent:wanted];
-        /* Measuring is only a measurement now, but the widgets that just
-         * changed still need to be placed against the size we settled on. */
-        [grid layoutGrid];
         if (p_dialog->psz_title) {
             NSString *title = [NSString stringWithUTF8String:
                                    p_dialog->psz_title];
             if (title && ![[window title] isEqualToString:title])
                 [window setTitle:title];
         }
-        if (!p_dialog->b_hide)
-            [window makeKeyAndOrderFront:self];
-        else
+        /* A routine widget refresh (for example streaming progress) must
+         * preserve the user's foreground window. Only raise this dialog
+         * when it is actually being shown again. */
+        if (p_dialog->b_hide)
             [window orderOut:nil];
+        else if (![window isVisible])
+            [window makeKeyAndOrderFront:self];
     } else if (p_dialog->b_kill) {
         [self destroyExtensionDialog:p_dialog];
     }

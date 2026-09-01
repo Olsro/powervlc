@@ -74,6 +74,7 @@ libmacosx_plugin_la_SOURCES = \
 	gui/macosx/VLCPopupPanelController.h gui/macosx/VLCPopupPanelController.m \
 	gui/macosx/VLCTextfieldPanelController.h gui/macosx/VLCTextfieldPanelController.m \
 	gui/macosx/VLCSimplePrefsController.h gui/macosx/VLCSimplePrefsController.m \
+	gui/macosx/VLCPowerVLCPreferences.h gui/macosx/VLCPowerVLCPreferences.m \
 	gui/macosx/VLCSimplePrefsWindow.h gui/macosx/VLCSimplePrefsWindow.m \
 	gui/macosx/VLCHotkeyChangeWindow.h gui/macosx/VLCHotkeyChangeWindow.m \
 	gui/macosx/SPMediaKeyTap.h gui/macosx/SPMediaKeyTap.m \

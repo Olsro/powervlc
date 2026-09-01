@@ -1,0 +1,104 @@
+diff --git a/configure b/configure
+--- a/configure
++++ b/configure
+@@ -23408,10 +23408,2 @@ main ()
+-            #if defined(__MAC_OS_X_VERSION_MIN_REQUIRED)
+-            #if __MAC_OS_X_VERSION_MIN_REQUIRED < 101000
+-            #error macOS versions < 10.10 are not supported.
+-            #endif
+-            #if __MAC_OS_X_VERSION_MAX_ALLOWED < 101100
+-            #error macOS SDK version is too low, 10.11 or later is required.
+-            #endif
+-            #elif !defined(__IPHONE_OS_VERSION_MIN_REQUIRED)
+-            #error unrecognized platform
+-            #endif
++            /* PowerVLC builds wxBase only. The Cocoa platform/version
++               validation does not apply to this headless build. */
+diff --git a/include/wx/stdpaths.h b/include/wx/stdpaths.h
+--- a/include/wx/stdpaths.h
++++ b/include/wx/stdpaths.h
+@@ -216 +216,6 @@ protected:
+-    #if defined(__WINDOWS__)
++    #if defined(POWERVLC_WXBASE_JAGUAR)
++        // amuled uses the portable Unix wxBase backend, not Cocoa.
++        #include "wx/unix/stdpaths.h"
++        #define wxHAS_NATIVE_STDPATHS
++        #define wxHAS_STDPATHS_INSTALL_PREFIX
++    #elif defined(__WINDOWS__)
+diff --git a/src/common/datetime.cpp b/src/common/datetime.cpp
+--- a/src/common/datetime.cpp
++++ b/src/common/datetime.cpp
+@@ -596 +596 @@ bool wxDateTime::GetFirstWeekDay(wxDateTime::WeekDay *firstDay)
+-#elif defined(__APPLE__)
++#elif defined(__APPLE__) && !defined(POWERVLC_WXBASE_JAGUAR)
+diff --git a/src/common/strconv.cpp b/src/common/strconv.cpp
+--- a/src/common/strconv.cpp
++++ b/src/common/strconv.cpp
+@@ -45 +45 @@
+-#ifdef __DARWIN__
++#if defined(__DARWIN__) && !defined(POWERVLC_WXBASE_JAGUAR)
+@@ -3039 +3039 @@ wxMBConv *wxCSConv::DoCreate() const
+-#ifdef __DARWIN__
++#if defined(__DARWIN__) && !defined(POWERVLC_WXBASE_JAGUAR)
+@@ -3301 +3301 @@ WXDLLIMPEXP_DATA_BASE(wxMBConv *) wxConvCurrent = wxGet_wxConvLibcPtr();
+-#ifdef __DARWIN__
++#if defined(__DARWIN__) && !defined(POWERVLC_WXBASE_JAGUAR)
+@@ -3309 +3309 @@ static wxMBConvD_cf wxConvMacUTF8DObj(wxFONTENCODING_UTF8);
+-#ifdef __DARWIN__
++#if defined(__DARWIN__) && !defined(POWERVLC_WXBASE_JAGUAR)
+diff --git a/src/unix/threadpsx.cpp b/src/unix/threadpsx.cpp
+--- a/src/unix/threadpsx.cpp
++++ b/src/unix/threadpsx.cpp
+@@ -164 +164 @@ static wxCondition *gs_condAllDeleted = NULL;
+-#ifndef __DARWIN__
++#if !defined(__DARWIN__) || defined(POWERVLC_WXBASE_JAGUAR)
+@@ -1201 +1201 @@ void wxThreadInternal::Wait()
+-#ifdef __DARWIN__
++#if defined(__DARWIN__) && !defined(POWERVLC_WXBASE_JAGUAR)
+@@ -1240 +1240 @@ void wxThreadInternal::Wait()
+-#ifndef __DARWIN__
++#if !defined(__DARWIN__) || defined(POWERVLC_WXBASE_JAGUAR)
+@@ -1713 +1713 @@ bool wxThread::SetNameForCurrent(const wxString &name)
+-#if defined(__DARWIN__)
++#if defined(__DARWIN__) && !defined(POWERVLC_WXBASE_JAGUAR)
+@@ -1875 +1875 @@ bool wxThread::IsPaused() const
+-#ifdef __DARWIN__
++#if defined(__DARWIN__) && !defined(POWERVLC_WXBASE_JAGUAR)
+@@ -1906 +1906 @@ bool wxThreadModule::OnInit()
+-#ifdef __DARWIN__
++#if defined(__DARWIN__) && !defined(POWERVLC_WXBASE_JAGUAR)
+@@ -1963 +1963 @@ void wxThreadModule::OnExit()
+-#ifdef __DARWIN__
++#if defined(__DARWIN__) && !defined(POWERVLC_WXBASE_JAGUAR)
+@@ -2017 +2017 @@ static void DeleteThread(wxThread *This)
+-#ifndef __DARWIN__
++#if !defined(__DARWIN__) || defined(POWERVLC_WXBASE_JAGUAR)
+diff --git a/src/unix/uilocale.cpp b/src/unix/uilocale.cpp
+--- a/src/unix/uilocale.cpp
++++ b/src/unix/uilocale.cpp
+@@ -24,3 +24,7 @@
+ #ifdef HAVE_LANGINFO_H
+     #include <langinfo.h>
+ #endif
++#ifdef HAVE_XLOCALE_H
++    // Darwin keeps its extended locale declarations in this header.
++    #include <xlocale.h>
++#endif
+diff --git a/src/unix/utilsunx.cpp b/src/unix/utilsunx.cpp
+--- a/src/unix/utilsunx.cpp
++++ b/src/unix/utilsunx.cpp
+@@ -225 +225 @@ void wxSecureZeroMemory(void* v, size_t n)
+-#elif defined(__DARWIN__) || defined(__STDC_LIB_EXT1__)
++#elif (defined(__DARWIN__) && !defined(POWERVLC_WXBASE_JAGUAR)) || defined(__STDC_LIB_EXT1__)
+@@ -495 +495 @@ private:
+-#if defined(__DARWIN__) && !defined(__WXOSX_IPHONE__)
++#if defined(__DARWIN__) && !defined(__WXOSX_IPHONE__) && !defined(POWERVLC_WXBASE_JAGUAR)
+@@ -620 +620 @@ long wxExecute(const char* const* argv, int flags, wxProcess* process,
+-#if defined(__DARWIN__) && !defined(__WXOSX_IPHONE__)
++#if defined(__DARWIN__) && !defined(__WXOSX_IPHONE__) && !defined(POWERVLC_WXBASE_JAGUAR)
+@@ -1135 +1135 @@ wxString wxGetNativeCpuArchitectureName()
+-#if defined(__DARWIN__)
++#if defined(__DARWIN__) && !defined(POWERVLC_WXBASE_JAGUAR)
+@@ -1213 +1213 @@ wxLinuxDistributionInfo wxGetLinuxDistributionInfo()
+-#ifndef __DARWIN__
++#if !defined(__DARWIN__) || defined(POWERVLC_WXBASE_JAGUAR)

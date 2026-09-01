@@ -95,6 +95,35 @@ void playlist_NodeDelete( playlist_t *p_playlist, playlist_item_t *p_root )
         PLAYLIST_DELETE_STOP_IF_CURRENT );
 }
 
+void playlist_NodeDeleteBatch( playlist_t *p_playlist,
+                               playlist_item_t *p_root )
+{
+    playlist_NodeDeleteExplicit( p_playlist, p_root,
+        PLAYLIST_DELETE_STOP_IF_CURRENT | PLAYLIST_DELETE_BATCH );
+}
+
+void playlist_NodeEmpty( playlist_t *p_playlist, playlist_item_t *p_root )
+{
+    PL_ASSERT_LOCKED;
+    if( p_root == NULL ) return;
+
+    while( p_root->i_children > 0 )
+    {
+        int i_before = p_root->i_children;
+        playlist_NodeDeleteExplicit( p_playlist,
+            p_root->pp_children[i_before - 1],
+            PLAYLIST_DELETE_FORCE | PLAYLIST_DELETE_STOP_IF_CURRENT );
+        /* FORCE normally makes this impossible. Keep the core safe from an
+         * infinite loop if a damaged tree ever violates that invariant. */
+        if( p_root->i_children >= i_before )
+        {
+            msg_Err( p_playlist, "could not empty playlist node `%s'",
+                     p_root->p_input ? p_root->p_input->psz_name : "" );
+            break;
+        }
+    }
+}
+
 void playlist_NodeDeleteExplicit( playlist_t *p_playlist,
     playlist_item_t *p_root, int flags )
 {
@@ -108,12 +137,14 @@ void playlist_NodeDeleteExplicit( playlist_t *p_playlist,
     /* Delete the children */
     for( int i = p_root->i_children - 1 ; i >= 0; i-- )
         playlist_NodeDeleteExplicit( p_playlist,
-            p_root->pp_children[i], flags | PLAYLIST_DELETE_FORCE );
+            p_root->pp_children[i], flags | PLAYLIST_DELETE_FORCE
+            | ((flags & PLAYLIST_DELETE_BATCH) ? PLAYLIST_DELETE_SILENT : 0) );
 
     pl_priv(p_playlist)->b_reset_currently_playing = true;
 
     int i;
-    var_SetAddress( p_playlist, "playlist-item-deleted", p_root );
+    if( !(flags & PLAYLIST_DELETE_SILENT) )
+        var_SetAddress( p_playlist, "playlist-item-deleted", p_root );
 
     if( p_root->i_children == -1 ) {
         ARRAY_BSEARCH( p_playlist->items,->i_id, int, p_root->i_id, i );

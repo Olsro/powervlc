@@ -1,0 +1,70 @@
+--- a/edge264/src/edge264.c
++++ b/edge264/src/edge264.c
+@@ -402,10 +402,20 @@
+ 
+ 
+ 
+-// MVC base/dependent output is emitted as one Edge264Frame. Pairing by waiting on
+-// POC inside get_frame would hold the lagging view's DPB slot and can deadlock
+-// deblocking, so the two per-view output queues advance in lockstep here. The host
+-// receives and retains the resulting stereo pair atomically.
++// MVC base/dependent output is emitted as one Edge264Frame. The two view DPBs
++// do not necessarily bump in the same order: a typical GOP can make the base
++// queue expose 0,1,2,3... while the dependent queue exposes 0,3,1,2.... Pair
++// the oldest base picture with the dependent picture carrying the same POC;
++// advancing the two FIFO heads in lockstep produces temporal rivalry between
++// the eyes. Queue entries removed from the middle are compacted so the SIMD
++// empty-slot mask remains a contiguous suffix.
++
++static void remove_queued_picture(Edge264Decoder *dec, int view, int index,
++                                  int count) {
++	for (int i = index; i + 1 < count; ++i)
++		dec->get_frame_queue[view][i] = dec->get_frame_queue[view][i + 1];
++	dec->get_frame_queue[view][count - 1] = -1;
++}
+ 
+ /**
+  * By default all frames with POC lower or equal with the last non-reference
+@@ -419,12 +429,28 @@
+ 		return EINVAL;
+ 	if (dec->n_threads)
+ 		pthread_mutex_lock(&dec->lock);
+-	int idx0 = __builtin_ctz(movemask(dec->get_frame_queue_v[0]) | 1 << 16) - 1;
+-	int idx1 = __builtin_ctz(movemask(dec->get_frame_queue_v[1]) | 1 << 16) - 1;
++	int count0 = __builtin_ctz(movemask(dec->get_frame_queue_v[0]) | 1 << 16);
++	int count1 = __builtin_ctz(movemask(dec->get_frame_queue_v[1]) | 1 << 16);
++	int idx0 = count0 - 1;
++	int idx1 = -1;
+ 	int pic0, pic1, res = ENOMSG;
+-	if (idx0 >= 0 && dec->next_deblock_addr[pic0 = dec->get_frame_queue[0][idx0]] == INT_MAX &&
+-		(dec->ssps.BitDepth_Y == 0 || (idx1 >= 0 && dec->next_deblock_addr[pic1 = dec->get_frame_queue[1][idx1]] == INT_MAX))) {
+-		dec->get_frame_queue[0][idx0] = -1;
++	if (idx0 >= 0) {
++		pic0 = dec->get_frame_queue[0][idx0];
++		if (dec->ssps.BitDepth_Y != 0) {
++			int poc = dec->FieldOrderCnt[0][pic0];
++			for (int i = count1 - 1; i >= 0; --i) {
++				int candidate = dec->get_frame_queue[1][i];
++				if (dec->FieldOrderCnt[0][candidate] == poc) {
++					idx1 = i;
++					break;
++				}
++			}
++		}
++	}
++	if (idx0 >= 0 && dec->next_deblock_addr[pic0] == INT_MAX &&
++		(dec->ssps.BitDepth_Y == 0 ||
++		 (idx1 >= 0 && dec->next_deblock_addr[pic1 = dec->get_frame_queue[1][idx1]] == INT_MAX))) {
++		remove_queued_picture(dec, 0, idx0, count0);
+ 		memcpy(out, &dec->out, sizeof(*out)); // GCC-14 crashes on dec->out = format
+ 		int top = dec->out.frame_crop_offsets[0];
+ 		int left = dec->out.frame_crop_offsets[3];
+@@ -441,7 +467,7 @@
+ 		out->PictureOrderCnt = dec->FieldOrderCnt[0][pic0];
+ 		out->return_arg = (void *)((uintptr_t)1 << pic0);
+ 		if (idx1 >= 0) {
+-			dec->get_frame_queue[1][idx1] = -1;
++			remove_queued_picture(dec, 1, idx1, count1);
+ 			assert(dec->to_get_frames & dec->output_frames & 1 << pic1);
+ 			dec->to_get_frames ^= 1 << pic1;
+ 			out->samples_mvc[0] = dec->samples_buffers[pic1] + offY;

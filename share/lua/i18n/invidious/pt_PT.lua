@@ -37,6 +37,7 @@ return {
     mode_playlists = "Listas de reprodução",
     btn_search = "Pesquisar",
     btn_open = "Abrir a seleção",
+    btn_open_channel = "Abrir o canal do item selecionado",
     btn_change_instance = "< Instância",
     msg_enter_query = "Escreva algo para pesquisar",
     msg_searching = "A pesquisar…",
@@ -47,7 +48,13 @@ return {
     msg_target_found = "Endereço reconhecido — a abrir diretamente",
     msg_search_fail = "A pesquisa falhou: ",
     msg_select_result = "Selecione primeiro um resultado na lista",
+    msg_channel_unavailable = "O canal associado a esta seleção não está disponível",
     lbl_quality = "Qualidade:",
+    lbl_audio_track = "Faixa de áudio:",
+    audio_default = "Áudio predefinido",
+    audio_original = "original",
+    lbl_subtitles = "Legendas:",
+    subtitles_none = "Nenhuma",
     lbl_by = "de",
     audio_only = "Apenas áudio",
     combined = "áudio+vídeo",
@@ -172,4 +179,18 @@ return {
           .. "Instalar a extensão PowerVLC</strong> coloca no seu navegador uma "
           .. "pequena extensão que trata disso sozinha — sem marcador, sem "
           .. "cliques, em todas as páginas.",
+    web_addon_lead = "Extensão instalada? Não tem de arrastar nem clicar em "
+                  .. "nada: basta abrir a instância abaixo e passar a "
+                  .. "verificação. Esta página indicar-lhe-á quando a ligação "
+                  .. "estiver estabelecida.",
+    web_steps_title = "Sem a extensão: o marcador",
+    web_relay_on_addon = "Ligado ao PowerVLC através da extensão do navegador. "
+                      .. "Não tem de clicar em nada: deixe esta janela e o "
+                      .. "separador da instância abertos.",
+    web_m_taking = "O PowerVLC está a reproduzir este vídeo. O separador foi "
+                .. "esvaziado de propósito logo no início: deixar o leitor do "
+                .. "site acabar de carregar aqui custaria à máquina uma "
+                .. "segunda descodificação e uma segunda transferência, além "
+                .. "de sobrecarregar a instância sem necessidade. Deixe-o "
+                .. "aberto.",
 }

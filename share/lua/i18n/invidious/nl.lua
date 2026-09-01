@@ -37,6 +37,7 @@ return {
     mode_playlists = "Afspeellijsten",
     btn_search = "Zoeken",
     btn_open = "Selectie openen",
+    btn_open_channel = "Kanaal van het geselecteerde item openen",
     btn_change_instance = "< Instantie",
     msg_enter_query = "Typ iets om te zoeken",
     msg_searching = "Bezig met zoeken…",
@@ -47,7 +48,13 @@ return {
     msg_target_found = "Adres herkend — het wordt meteen geopend",
     msg_search_fail = "Zoeken mislukt: ",
     msg_select_result = "Selecteer eerst een resultaat in de lijst",
+    msg_channel_unavailable = "Het kanaal dat aan deze selectie is gekoppeld, is niet beschikbaar",
     lbl_quality = "Kwaliteit:",
+    lbl_audio_track = "Audiotrack:",
+    audio_default = "Standaardaudio",
+    audio_original = "origineel",
+    lbl_subtitles = "Ondertitels:",
+    subtitles_none = "Geen",
     lbl_by = "van",
     audio_only = "Alleen geluid",
     combined = "geluid+video",
@@ -170,4 +177,17 @@ return {
           .. "<strong>Help &gt; PowerVLC-extensie installeren</strong> een "
           .. "kleine extensie in uw browser die dit vanzelf doet — geen "
           .. "bladwijzer, geen klikken, op elke pagina.",
+    web_addon_lead = "Extensie geïnstalleerd? U hoeft niets te slepen en "
+                  .. "nergens op te klikken: open gewoon de instantie "
+                  .. "hieronder en doorsta de controle. Deze pagina laat "
+                  .. "u weten wanneer de verbinding tot stand is gebracht.",
+    web_steps_title = "Zonder de extensie: de bladwijzer",
+    web_relay_on_addon = "Via de browserextensie verbonden met PowerVLC. "
+                      .. "U hoeft nergens op te klikken: laat dit venster "
+                      .. "en het tabblad van de instantie open.",
+    web_m_taking = "PowerVLC speelt deze video af. Het tabblad is meteen "
+                .. "met opzet leeggemaakt: de speler van de site hier "
+                .. "verder laten laden zou de machine een tweede decodering "
+                .. "en een tweede download kosten en de instantie voor "
+                .. "niets belasten. Laat het open.",
 }

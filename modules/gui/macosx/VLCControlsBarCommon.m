@@ -142,7 +142,12 @@
                                              selector:@selector(chaptersPossiblyChanged:)
                                                  name:VLCInputTitleChangedNotification
                                                object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(bookmarksPossiblyChanged:)
+                                                 name:VLCBookmarksChangedNotification
+                                               object:nil];
     [self updateChapters];
+    [self.timeSlider reloadBookmarks];
 
     [self.timeSlider setHoverDelegate:self];
 }
@@ -167,6 +172,12 @@
 - (void)chaptersPossiblyChanged:(NSNotification *)aNotification
 {
     [self updateChapters];
+    [self.timeSlider reloadBookmarks];
+}
+
+- (void)bookmarksPossiblyChanged:(NSNotification *)aNotification
+{
+    [self.timeSlider reloadBookmarks];
 }
 
 /* chapter separators on the seek bar and names for its hover tooltip,
@@ -604,6 +615,19 @@
 
     [self.forwardButton setEnabled: (b_seekable || b_plmul || b_chapters)];
     [self.backwardButton setEnabled: (b_seekable || b_plmul || b_chapters)];
+
+    /* Stop is also the cancellation control while an input is being opened.
+     * Make that explicit: on a slow portable player OPENING_S can last long
+     * enough that users otherwise assume the application is irrecoverable. */
+    if ([self respondsToSelector:@selector(stopButton)]) {
+        NSButton *stopButton = [self valueForKey:@"stopButton"];
+        if (stopButton) {
+            NSString *label = b_buffering ? _NS("Cancel loading") : _NS("Stop");
+            [stopButton setToolTip:label];
+            [[stopButton cell] accessibilitySetOverrideValue:label
+                                                forAttribute:NSAccessibilityDescriptionAttribute];
+        }
+    }
 }
 
 - (void)setPause

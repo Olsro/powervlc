@@ -57,6 +57,7 @@ ${LangFileString} Action_OnArrivalSVCDMovie "Produciraj SVCD film"
 ${LangFileString} Action_OnArrivalVideoFiles "Produciraj video datoteke"
 ${LangFileString} Action_OnArrivalMusicFiles "Produciraj zvučne datoteke"
 ${LangFileString} Action_OnArrivalDVDAudio "Produciraj zvučni DVD"
+${LangFileString} Action_OnArrivalBluray "Produciraj Blu-ray"
 ${LangFileString} License_NextText "Sada ste svjesni svojih prava. Kliknite Sljedeće za nastavak."
 
 ${LangFileString} Detail_CheckProcesses "Provjeravam procese..."

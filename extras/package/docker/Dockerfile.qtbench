@@ -33,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ( apt-get build-dep -y vlc || echo "WARN: build-dep vlc failed; some modules may be disabled" ) \
     && apt-get install -y --no-install-recommends \
       qtbase5-dev qtbase5-private-dev libqt5svg5-dev libqt5x11extras5-dev \
+      libgpod-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # The bench proper: a headless X server, a window manager (without one

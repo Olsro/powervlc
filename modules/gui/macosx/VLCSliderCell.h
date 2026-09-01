@@ -63,6 +63,8 @@
 /* chapter start positions (NSNumber, normalized 0..1), drawn as thin
  * separators on the track like the Qt seek slider */
 @property (nonatomic, copy) NSArray *chapterFractions;
+/* persistent bookmark positions (NSNumber, normalized 0..1) */
+@property (nonatomic, copy) NSArray *bookmarkFractions;
 
 - (NSRect)clipEndKnobRect;
 

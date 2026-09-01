@@ -34,15 +34,19 @@
 
 #include <QWidget>
 #include <QModelIndexList>
+#include <QSet>
 
 #include <vlc_playlist.h> /* playlist_item_t */
+#include <vlc_services_discovery.h>
 
 class QSignalMapper;
 class QWheelEvent;
 class QStackedLayout;
 class QModelIndex;
+class QTimer;
 
 class QAbstractItemView;
+class QAction;
 class QTreeView;
 class PlIconView;
 class PlListView;
@@ -94,12 +98,39 @@ private:
 
     int lastActivatedPLItemId;
     int currentRootIndexPLId;
+    bool listOnly;
+    QList<QAction *> viewActions;
+
+    QTimer *searchDelayTimer;
+    QTimer *searchLoadTimer;
+    QString pendingSearchText;
+    QSet<int> searchExpandedIds;
+    QSet<int> searchScopeIds;
+    QSet<int> requestedSearchScopeIds;
+    QSet<int> searchProtectedIds;
+    unsigned searchLoadRetries;
+    bool searchUsesMemoryIndex;
+    uint64_t searchBucketMasks[SD_POWERVLC_LIBRARY_VIEW_COUNT];
+    struct SearchBranchMatch
+    {
+        unsigned view;
+        unsigned bucket;
+        QString primary;
+        QString secondary;
+    };
+    QList<SearchBranchMatch> searchBranchMatches;
 
     void createTreeView();
     void createIconView();
     void createListView();
     void createCoverView();
     void updateZoom( int i_zoom );
+    QSet<int> openLibraryCategoryIds() const;
+    void collapsePreviousSearchExpansion();
+    void restoreProtectedSearchExpansion();
+    bool requestSearchScopeLoading();
+    bool requestSearchLoadingInIndex( const QModelIndex & );
+    void expandSearchMatches( const QModelIndex & );
     virtual bool eventFilter ( QObject * watched, QEvent * event ) Q_DECL_OVERRIDE;
 
     /* Wait spinner */
@@ -129,11 +160,15 @@ private slots:
     void popupPlView( const QPoint & );
     void popupSelectColumn( QPoint );
     void popupAction( QAction * );
+    void burnAudioCD();
     void increaseZoom() { updateZoom( 1 ); };
     void decreaseZoom() { updateZoom( -1 ); };
     void toggleColumnShown( int );
 
     void updateViewport(); /* spinner */
+    void applyDelayedLibrarySearch();
+    void finishDelayedLibrarySearch();
+    void libraryCategoryExpanded( const QModelIndex & );
 
 signals:
     void viewChanged( const QModelIndex& );

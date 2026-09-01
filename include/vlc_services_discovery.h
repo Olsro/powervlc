@@ -46,6 +46,8 @@ struct services_discovery_owner_t
     void (*item_added)(struct services_discovery_t *sd, input_item_t *parent,
                        input_item_t *item, const char *category);
     void (*item_removed)(struct services_discovery_t *sd, input_item_t *item);
+    void (*item_tree_added)(struct services_discovery_t *sd,
+                            input_item_t *parent, input_item_node_t *tree);
 };
 
 /**
@@ -89,8 +91,196 @@ enum services_discovery_category_e
 enum services_discovery_command_e
 {
     SD_CMD_SEARCH = 1,          /**< arg1 = query */
-    SD_CMD_DESCRIPTOR           /**< arg1 = services_discovery_descriptor_t* */
+    SD_CMD_DESCRIPTOR,          /**< arg1 = services_discovery_descriptor_t* */
+
+    /* PowerVLC lightweight media-library extensions.  Kept on the service
+     * discovery API so every interface (Qt and both Cocoa interfaces) can
+     * drive the same background engine without depending on a GUI toolkit. */
+    SD_CMD_POWERVLC_RESCAN,     /**< no argument */
+    SD_CMD_POWERVLC_IMPORT,     /**< arg1 = services_discovery_import_t* */
+    SD_CMD_POWERVLC_SET_RATING, /**< arg1 = services_discovery_rating_t* */
+    SD_CMD_POWERVLC_SET_RATINGS,/**< arg1 = services_discovery_ratings_t* */
+    SD_CMD_POWERVLC_DEVICE_RESERVED, /**< unused; preserves command ABI */
+    SD_CMD_POWERVLC_DEVICE_ADD, /**< arg1 = services_discovery_import_t* */
+    SD_CMD_POWERVLC_DEVICE_BACKUP, /**< arg1 = destination directory */
+    SD_CMD_POWERVLC_DEVICE_TRANSFERS, /**< arg1 = services_discovery_transfer_status_t* */
+    SD_CMD_POWERVLC_DEVICE_CANCEL_TRANSFER, /**< arg1 = services_discovery_transfer_cancel_t* */
+    SD_CMD_POWERVLC_DEVICE_CANCEL_ALL, /**< no argument */
+    SD_CMD_POWERVLC_DEVICE_RESOLVE_DELETE, /**< arg1 = services_discovery_device_delete_resolve_t* */
+    SD_CMD_POWERVLC_DEVICE_DELETE, /**< arg1 = services_discovery_device_delete_t* */
+    SD_CMD_POWERVLC_DEVICE_COMMIT, /**< commit pending portable-player changes */
+    SD_CMD_POWERVLC_DEVICE_DISCARD, /**< discard pending portable-player changes */
+    SD_CMD_POWERVLC_PLAYLIST_CREATE, /**< arg1 = services_discovery_playlist_create_t* */
+    SD_CMD_POWERVLC_PLAYLIST_RENAME, /**< arg1 = services_discovery_playlist_rename_t* */
+    SD_CMD_POWERVLC_PLAYLIST_DELETE, /**< arg1 = services_discovery_playlist_item_t* */
+    SD_CMD_POWERVLC_PLAYLIST_DROP, /**< arg1 = services_discovery_playlist_drop_t* */
+    SD_CMD_POWERVLC_PLAYLIST_REMOVE, /**< arg1 = services_discovery_playlist_remove_t* */
+    SD_CMD_POWERVLC_LIBRARY_SEARCH, /**< arg1 = services_discovery_library_search_t* */
+    SD_CMD_POWERVLC_LIBRARY_RELOAD_SMART /**< reload smart playlists; no scan */
 };
+
+/** Metadata supplied when an interface imports media into the PowerVLC
+ * auto-managed library. All values are borrowed for the duration of the
+ * control call. p_item is optional and preserves input options (notably an
+ * Audio-CD track's sector range) when the source is not a regular file. */
+typedef struct services_discovery_import_t
+{
+    const char *psz_path;
+    const char *psz_title;
+    const char *psz_artist;
+    const char *psz_album;
+    input_item_t *p_item;
+} services_discovery_import_t;
+
+/** User rating stored by the PowerVLC media library. A zero rating clears it. */
+typedef struct services_discovery_rating_t
+{
+    const char *psz_path;
+    unsigned i_rating;          /**< 0 (unrated) through 5 stars */
+} services_discovery_rating_t;
+
+/** Batch rating update. Paths are borrowed for the duration of the call. */
+typedef struct services_discovery_ratings_t
+{
+    const char *const *ppsz_paths;
+    size_t i_count;
+    unsigned i_rating;          /**< 0 (unrated) through 5 stars */
+} services_discovery_ratings_t;
+
+/** Persistent playlists shown inside the PowerVLC media library. Playlist
+ * item ids are valid for the duration of a control call only. */
+typedef struct services_discovery_playlist_create_t
+{
+    int i_parent_id;             /**< Playlists root or playlist-folder id */
+    const char *psz_name;
+    bool b_folder;               /**< false creates a playlist */
+} services_discovery_playlist_create_t;
+
+typedef struct services_discovery_playlist_rename_t
+{
+    int i_item_id;
+    const char *psz_name;
+} services_discovery_playlist_rename_t;
+
+typedef struct services_discovery_playlist_item_t
+{
+    int i_item_id;
+} services_discovery_playlist_item_t;
+
+typedef struct services_discovery_playlist_drop_t
+{
+    int i_parent_id;             /**< target folder or playlist */
+    int i_index;                 /**< insertion position, -1 appends */
+    size_t i_count;
+    const int *p_item_ids;
+    bool b_copy;                 /**< copy media; move playlist objects */
+} services_discovery_playlist_drop_t;
+
+typedef struct services_discovery_playlist_remove_t
+{
+    int i_parent_id;
+    size_t i_count;
+    const int *p_item_ids;
+} services_discovery_playlist_remove_t;
+
+/* The order mirrors the nine music categories exposed by the PowerVLC
+ * library service.  A search returns the lazy index buckets which can
+ * contain matches, allowing interfaces to load only those local XSPF files
+ * instead of recursively opening the complete library. */
+#define SD_POWERVLC_LIBRARY_VIEW_COUNT 9
+typedef struct services_discovery_library_match_t
+{
+    unsigned i_view;
+    unsigned i_bucket;
+    char *psz_primary;
+    char *psz_secondary;
+} services_discovery_library_match_t;
+
+typedef struct services_discovery_library_search_t
+{
+    const char *psz_query;
+    uint64_t i_view_mask;
+    uint64_t p_bucket_masks[SD_POWERVLC_LIBRARY_VIEW_COUNT];
+    /* Exact lazy branches containing matches. The caller owns the array and
+     * both strings in every entry. This prevents interfaces from opening an
+     * entire letter (potentially thousands of rows) merely to find one
+     * matching album. */
+    size_t i_match_count;
+    services_discovery_library_match_t *p_matches;
+} services_discovery_library_search_t;
+
+/** Current step of a portable-player transfer. */
+typedef enum services_discovery_transfer_stage_e
+{
+    SD_TRANSFER_QUEUED = 0,
+    SD_TRANSFER_COPYING,
+    SD_TRANSFER_TRANSCODING,
+    SD_TRANSFER_COMPLETED,
+    SD_TRANSFER_FAILED,
+    SD_TRANSFER_CANCELLED,
+} services_discovery_transfer_stage_e;
+
+/** One entry in the session transfer history. Strings are allocated by the
+ * service and must be freed by the caller together with the item array. */
+typedef struct services_discovery_transfer_item_t
+{
+    char *psz_source;
+    char *psz_destination;
+    uint64_t i_id; /**< stable session identifier used for cancellation */
+    services_discovery_transfer_stage_e i_stage;
+    unsigned i_progress; /**< exact integer percentage, 0 through 100 */
+    bool b_cancel_requested; /**< internal state, also useful to interfaces */
+} services_discovery_transfer_item_t;
+
+/** Snapshot returned by SD_CMD_POWERVLC_DEVICE_TRANSFERS. The caller owns
+ * p_items and both strings in every item. */
+typedef struct services_discovery_transfer_status_t
+{
+    bool b_synchronizing;
+    bool b_pending_changes;
+    /** The last requested database validation failed. Pending edits are kept
+     * in memory so that the user can reconnect the player and retry. */
+    bool b_commit_failed;
+    size_t i_count;
+    services_discovery_transfer_item_t *p_items;
+    unsigned i_activity;
+    uint64_t i_total_bytes;
+    uint64_t i_free_bytes;
+} services_discovery_transfer_status_t;
+
+enum
+{
+    SD_DEVICE_IDLE = 0,
+    SD_DEVICE_LOADING_CONTENTS,
+    SD_DEVICE_LOADING_ITUNESDB,
+    SD_DEVICE_UPDATING_ITUNESDB,
+    SD_DEVICE_DELETING,
+};
+
+typedef struct services_discovery_device_delete_t
+{
+    const char *const *ppsz_paths;
+    size_t i_count;
+    const int *p_item_ids;       /**< selected tree nodes, optional */
+    size_t i_item_count;
+} services_discovery_device_delete_t;
+
+/** Resolve selected device-tree rows to physical media paths.  This expands
+ * PowerVLC's local lazy index without materialising thousands of outline
+ * rows or touching the portable player.  The caller owns every returned
+ * string and the array. */
+typedef struct services_discovery_device_delete_resolve_t
+{
+    const int *p_item_ids;
+    size_t i_item_count;
+    char **ppsz_paths;
+    size_t i_count;
+} services_discovery_device_delete_resolve_t;
+
+typedef struct services_discovery_transfer_cancel_t
+{
+    uint64_t i_id;
+} services_discovery_transfer_cancel_t;
 
 /**
  * Service discovery capabilities
@@ -182,6 +372,28 @@ static inline void services_discovery_AddSubItem(services_discovery_t *sd,
                                                  input_item_t *item)
 {
     sd->owner.item_added(sd, parent, item, NULL);
+}
+
+static inline void services_discovery_AddItemTreeFallback(
+    services_discovery_t *sd, input_item_t *parent, input_item_node_t *tree)
+{
+    for (int i = 0; i < tree->i_children; ++i)
+    {
+        input_item_node_t *child = tree->pp_children[i];
+        sd->owner.item_added(sd, parent, child->p_item, NULL);
+        services_discovery_AddItemTreeFallback(sd, child->p_item, child);
+    }
+}
+
+/** Adds a complete input tree in one owner transaction. */
+static inline void services_discovery_AddItemTree(services_discovery_t *sd,
+                                                  input_item_t *parent,
+                                                  input_item_node_t *tree)
+{
+    if (sd->owner.item_tree_added != NULL)
+        sd->owner.item_tree_added(sd, parent, tree);
+    else
+        services_discovery_AddItemTreeFallback(sd, parent, tree);
 }
 
 /**

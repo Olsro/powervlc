@@ -134,6 +134,11 @@ void vlc_demux_chained_Send(vlc_demux_chained_t *dc, block_t *block)
     vlc_stream_fifo_Queue(dc->fifo, block);
 }
 
+size_t vlc_demux_chained_GetBytes(vlc_demux_chained_t *dc)
+{
+    return vlc_stream_fifo_GetBytes(dc->fifo);
+}
+
 int vlc_demux_chained_ControlVa(vlc_demux_chained_t *dc, int query, va_list ap)
 {
     switch (query)

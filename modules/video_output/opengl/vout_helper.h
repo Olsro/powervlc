@@ -241,11 +241,6 @@ static const char * const dither_text[] = {
     add_module ("glconv", "glconv", NULL, GLCONV_TEXT, GLCONV_LONGTEXT, true) \
     add_glopts_placebo ()
 
-static const vlc_fourcc_t gl_subpicture_chromas[] = {
-    VLC_CODEC_RGBA,
-    0
-};
-
 typedef struct vout_display_opengl_t vout_display_opengl_t;
 
 /* True when the current context is served by a software rasteriser (llvmpipe,
@@ -260,6 +255,14 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
                                                const vlc_viewpoint_t *viewpoint);
 void vout_display_opengl_Delete(vout_display_opengl_t *vgl);
 
+/* Present a packed SBS/TB source as an HDMI frame-packed raster. The source
+ * texture stays untouched (and can therefore remain hardware-decoded); only
+ * its texture coordinates and the output geometry are changed. */
+void vout_display_opengl_SetFramePackingOutput(vout_display_opengl_t *vgl,
+                                               bool enabled,
+                                               unsigned eye_width,
+                                               unsigned eye_height);
+
 picture_pool_t *vout_display_opengl_GetPool(vout_display_opengl_t *vgl, unsigned);
 
 int vout_display_opengl_SetViewpoint(vout_display_opengl_t *vgl, const vlc_viewpoint_t*);
@@ -269,6 +272,15 @@ void vout_display_opengl_SetWindowAspectRatio(vout_display_opengl_t *vgl,
 
 void vout_display_opengl_Viewport(vout_display_opengl_t *vgl, int x, int y,
                                   unsigned width, unsigned height);
+
+/* Notify renderers which wrap the default framebuffer of its real backing
+ * dimensions. The legacy GL path obtains this state through glViewport. */
+void vout_display_opengl_SetDrawableSize(vout_display_opengl_t *vgl,
+                                         unsigned width, unsigned height);
+
+/* EDR brightness available above normalized SDR white (1.0). */
+void vout_display_opengl_SetDisplayHeadroom(vout_display_opengl_t *vgl,
+                                            float headroom);
 
 int vout_display_opengl_Prepare(vout_display_opengl_t *vgl,
                                 picture_t *picture, subpicture_t *subpicture);

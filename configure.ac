@@ -32,7 +32,7 @@ AC_SUBST(PKGDIR)
 CONFIGURE_LINE="`echo "$0 $ac_configure_args" | sed -e 's/\\\/\\\\\\\/g'`"
 CODENAME="Vetinari"
 dnl PowerVLC product version, distinct from the VLC core version above
-POWERVLC_VERSION="1.4.0"
+POWERVLC_VERSION="2.0.0"
 AC_SUBST(POWERVLC_VERSION)
 dnl Split for the Win32 VERSIONINFO resources, which want a numeric 4-tuple.
 dnl Without these the file properties, the Add/Remove Programs entry and the
@@ -514,6 +514,8 @@ AS_IF([test "${HAVE_OSX}" = "1"], [
     AS_IF([test -z "${vda_sdk_root}"], [vda_sdk_root=`xcrun --show-sdk-path 2>/dev/null`])
     AS_IF([test -d "${vda_sdk_root}/System/Library/Frameworks/VideoDecodeAcceleration.framework"], [
         have_vda_framework="yes"
+        AC_DEFINE([HAVE_VDA_FRAMEWORK], [1],
+                  [Define if the SDK provides VideoDecodeAcceleration.framework])
     ])
 ])
 AM_CONDITIONAL(HAVE_VDA_FRAMEWORK, [test "${have_vda_framework}" = "yes"])
@@ -3161,6 +3163,14 @@ dnl
 PKG_ENABLE_MODULES_VLC([DAV1D], [], [dav1d], [AV1 decoder (default auto)])
 
 dnl
+dnl  H.264/MVC decoder plugin (Blu-ray 3D)
+dnl
+PKG_ENABLE_MODULES_VLC([EDGE264], [mvc], [edge264], [H.264/MVC stereoscopic decoder (default auto)])
+
+dnl Intel Media SDK 1.x hardware MVC decoder (Windows x86/x64)
+PKG_ENABLE_MODULES_VLC([MFXMVC], [mfx_mvc], [libmfx], [Intel Media SDK hardware MVC decoder (default auto)])
+
+dnl
 dnl libvpx decoder plugin
 dnl
 AC_ARG_ENABLE(vpx,
@@ -4718,10 +4728,22 @@ dnl
 dnl MTP devices services discovery
 PKG_ENABLE_MODULES_VLC([MTP], [mtp access_mtp], [libmtp >= 1.0.0], [MTP devices support], [auto])
 
+dnl Apple iPod database support for the PowerVLC portable-player service.
+PKG_WITH_MODULES([GPOD], [libgpod-1.0 >= 0.8.3], [
+  AC_DEFINE([HAVE_LIBGPOD], [1], [Define to 1 for Apple iPod support via libgpod.])
+], [
+  AS_IF([test x"$enable_gpod" = "xyes"],
+    [AC_MSG_ERROR([libgpod >= 0.8.3 is required for Apple iPod support])],
+    [AC_MSG_WARN([libgpod not found: Apple iPod synchronization is disabled])])
+], [Apple iPod synchronization through libgpod], [auto])
+
 dnl
 dnl UPnP Plugin (Intel SDK)
 dnl
-PKG_ENABLE_MODULES_VLC([UPNP], [upnp], [libupnp], [Intel UPNP SDK],[auto])
+dnl PowerVLC uses its small in-core SSDP/IGD client for extension port
+dnl mappings. Keep VLC's legacy ContentDirectory browser opt-in so normal
+dnl PowerVLC builds do not package the much larger libupnp/libixml stack.
+PKG_ENABLE_MODULES_VLC([UPNP], [upnp], [libupnp], [Intel UPNP SDK], [no])
 
 dnl
 dnl mDNS using libmicrodns
@@ -4883,16 +4905,24 @@ AC_ARG_ENABLE(libplacebo,
       [disable libplacebo support (default auto)])])
 
 AS_IF([test "$enable_libplacebo" != "no"], [
-  PKG_CHECK_MODULES([LIBPLACEBO], [libplacebo >= 0.2.1 libplacebo < 6], [
-    AC_DEFINE([HAVE_LIBPLACEBO], [1], [Define to 1 if libplacebo is enabled.])
+  PKG_CHECK_MODULES([LIBPLACEBO_NEXT], [libplacebo >= 7.371.0], [
+    AC_DEFINE([HAVE_LIBPLACEBO_NEXT], [1],
+      [Define to 1 for the libplacebo renderer with Dolby Vision FEL support.])
+    have_libplacebo_next="yes"
   ], [
-    AS_IF([test -n "${enable_libplacebo}"], [
-      AC_MSG_ERROR([${LIBPLACEBO_PKG_ERRORS}.])
+    PKG_CHECK_MODULES([LIBPLACEBO], [libplacebo >= 0.2.1 libplacebo < 6], [
+      AC_DEFINE([HAVE_LIBPLACEBO], [1], [Define to 1 if legacy libplacebo is enabled.])
+      have_libplacebo_legacy="yes"
+    ], [
+      AS_IF([test "$enable_libplacebo" = "yes"], [
+        AC_MSG_ERROR([Neither libplacebo >= 7.371.0 nor libplacebo >= 0.2.1 < 6 was found.])
+      ])
+      enable_libplacebo="no"
     ])
-    enable_libplacebo="no"
   ])
 ])
-AM_CONDITIONAL(HAVE_LIBPLACEBO, [test "$enable_libplacebo" != "no"])
+AM_CONDITIONAL(HAVE_LIBPLACEBO, [test "$have_libplacebo_legacy" = "yes"])
+AM_CONDITIONAL(HAVE_LIBPLACEBO_NEXT, [test "$have_libplacebo_next" = "yes"])
 
 
 dnl

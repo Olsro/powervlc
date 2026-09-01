@@ -391,6 +391,25 @@ vlc_dialog_provider_set_callbacks(vlc_object_t *p_obj,
 #define vlc_dialog_provider_set_callbacks(a, b, c) \
     vlc_dialog_provider_set_callbacks(VLC_OBJECT(a), b, c)
 
+/** Native directory selector used by extension and interface helpers.
+ * The callback returns a malloc() allocated UTF-8 path, or NULL on cancel. */
+typedef char *(*vlc_dialog_select_directory_cb)(void *p_data,
+                                                const char *psz_title,
+                                                const char *psz_initial);
+
+VLC_API void
+vlc_dialog_provider_set_directory_callback(
+    vlc_object_t *p_obj, vlc_dialog_select_directory_cb pf_select,
+    void *p_data);
+#define vlc_dialog_provider_set_directory_callback(a, b, c) \
+    vlc_dialog_provider_set_directory_callback(VLC_OBJECT(a), b, c)
+
+VLC_API char *
+vlc_dialog_select_directory(vlc_object_t *p_obj, const char *psz_title,
+                            const char *psz_initial) VLC_USED;
+#define vlc_dialog_select_directory(a, b, c) \
+    vlc_dialog_select_directory(VLC_OBJECT(a), b, c)
+
 /**
  * Associate an opaque pointer with the dialog id
  */

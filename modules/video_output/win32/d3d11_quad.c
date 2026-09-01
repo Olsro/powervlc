@@ -559,6 +559,7 @@ bool D3D11_UpdateQuadPosition( vlc_object_t *o, d3d11_device_t *d3d_dev, d3d_qua
     {
     case PROJECTION_MODE_RECTANGULAR:
         SetupQuadFlat(dst_data, output, quad, triangle_pos, orientation);
+        memcpy(quad->flatVertices, dst_data, sizeof(quad->flatVertices));
         break;
     case PROJECTION_MODE_EQUIRECTANGULAR:
         SetupQuadSphere(dst_data, output, quad, triangle_pos);
@@ -575,6 +576,43 @@ bool D3D11_UpdateQuadPosition( vlc_object_t *o, d3d11_device_t *d3d_dev, d3d_qua
     ID3D11DeviceContext_Unmap(d3d_dev->d3dcontext, (ID3D11Resource *)quad->pVertexBuffer, 0);
 
     return result;
+}
+
+#undef D3D11_UpdateQuadTextureCoords
+bool D3D11_UpdateQuadTextureCoords(vlc_object_t *o,
+                                   d3d11_device_t *d3d_dev,
+                                   d3d_quad_t *quad, float left, float top,
+                                   float right, float bottom)
+{
+    if (unlikely(quad->pVertexBuffer == NULL || quad->vertexCount != 4))
+        return false;
+
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    HRESULT hr = ID3D11DeviceContext_Map(d3d_dev->d3dcontext,
+                                         (ID3D11Resource *)quad->pVertexBuffer,
+                                         0, D3D11_MAP_WRITE_DISCARD, 0,
+                                         &mapped);
+    if (FAILED(hr))
+    {
+        msg_Err(o, "Failed to select a stereo eye in the vertex buffer "
+                   "(hr=0x%lX)", hr);
+        return false;
+    }
+
+    d3d_vertex_t *vertices = mapped.pData;
+    memcpy(vertices, quad->flatVertices, sizeof(quad->flatVertices));
+    vertices[0].texture.x = left;
+    vertices[0].texture.y = bottom;
+    vertices[1].texture.x = right;
+    vertices[1].texture.y = bottom;
+    vertices[2].texture.x = right;
+    vertices[2].texture.y = top;
+    vertices[3].texture.x = left;
+    vertices[3].texture.y = top;
+
+    ID3D11DeviceContext_Unmap(d3d_dev->d3dcontext,
+                              (ID3D11Resource *)quad->pVertexBuffer, 0);
+    return true;
 }
 
 static bool D3D11_ShaderUpdateConstants(vlc_object_t *o, d3d11_device_t *d3d_dev, d3d_quad_t *quad)

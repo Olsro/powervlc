@@ -1350,6 +1350,21 @@ static int OpenDecoder(vlc_object_t *p_this)
     if (!var_InheritBool(p_dec, "videotoolbox"))
         return VLC_EGENERIC;
 
+    /* VideoToolbox does not expose the Dolby Vision RPU or enhancement layer
+     * to VLC. Let the avcodec decoder keep these data attached to each
+     * picture so the libplacebo output can apply the dynamic reshaping and,
+     * for profile 7, merge the EL residual. */
+    const vlc_fourcc_t original = p_dec->fmt_in.i_original_fourcc;
+    if (p_dec->fmt_in.video.dovi.rpu_present ||
+        original == VLC_FOURCC('d', 'v', 'h', 'e') ||
+        original == VLC_FOURCC('d', 'v', 'h', '1') ||
+        original == VLC_FOURCC('d', 'v', 'a', 'v') ||
+        original == VLC_FOURCC('d', 'v', 'a', '1'))
+    {
+        msg_Dbg(p_dec, "Dolby Vision stream delegated to avcodec to preserve RPU/EL metadata");
+        return VLC_EGENERIC;
+    }
+
 #if TARGET_OS_IPHONE
     if (unlikely([[UIDevice currentDevice].systemVersion floatValue] < 8.0)) {
         msg_Warn(p_dec, "decoder skipped as OS is too old");

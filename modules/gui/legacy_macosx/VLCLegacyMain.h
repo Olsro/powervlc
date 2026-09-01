@@ -77,6 +77,7 @@
 
 /* dialog trampolines (main thread) for the dialog provider */
 - (void)dismissDialog:(NSValue *)idValue;
+- (void)displayLogin:(NSArray *)dialogData;
 - (void)displayQuestion:(NSArray *)dialogData;
 
 /* Must run on the main thread */

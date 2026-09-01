@@ -38,6 +38,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)reloadSidebar;
 - (BOOL)addNetworkLocation:(NSString *)mrl;
 - (IBAction)ejectNetworkLocation:(id)sender;
+- (nullable NSString *)selectedPowerDeviceService;
 
 @end
 

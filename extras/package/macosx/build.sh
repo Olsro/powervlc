@@ -510,7 +510,7 @@ export XCODE_FLAGS="MACOSX_DEPLOYMENT_TARGET=$MINIMAL_OSX_VERSION -sdk macosx WA
 
 # VLC 3 keeps libsmb2 opt-in. PowerVLC exposes SMB in Connect to Server, so
 # ensure every packaged architecture has the corresponding client library.
-CONTRIBFLAGS="--enable-smb2"
+CONTRIBFLAGS="--enable-smb2 --enable-libgpod"
 if [ "$PACKAGETYPE" = "u" ]; then
     # release package should have sparkle, breakpad, growl
     CONTRIBFLAGS="$CONTRIBFLAGS --enable-sparkle --enable-breakpad --enable-growl"
@@ -641,6 +641,13 @@ make .bdplus
 info "Making sure the DVD contribs are current"
 make .dvdnav
 
+# Edge264 is added by PowerVLC for Blu-ray MVC. Existing contrib prefixes are
+# otherwise treated as complete, so a developer adding the package to an
+# already-built arm64/x86_64/i686 tree would configure VLC without the decoder.
+case "$ACTUAL_ARCH" in
+    arm64|x86_64|i686) make .edge264 ;;
+esac
+
 # Keep the native AFP client current as well.  In particular, the PowerPC
 # builds carry a select()-based fallback because pselect() is declared by the
 # 10.4 SDK but is absent from Jaguar's libSystem.  The VLC module links the
@@ -661,6 +668,12 @@ if [ -n "$VLCBUILDDIR" ]; then
               "$AFPCLIENT_VLC_BUILD/modules/.libs/libafp_plugin.dylib"
     fi
 fi
+
+# libgpod is opt-in above and therefore appears in `make list`, but a reused
+# contrib prefix is not populated by the non-`-c` path. Keep it current just
+# like AFP so a first build after enabling portable players does not reach
+# VLC's configure step without libgpod-1.0.pc.
+make .libgpod
 
 # libcrystalhd for the same reason, and with a sharper failure mode than the
 # rest. Its patches do not merely build the library: they define the ioctl
@@ -848,7 +861,7 @@ fi
 # vlc/configure
 #
 
-CONFIGFLAGS="--enable-smb2"
+CONFIGFLAGS="--enable-smb2 --enable-gpod"
 
 # VLC's configure turns AltiVec on for every host_cpu matching powerpc*, which
 # is wrong for the G3 (750): it has no vector unit, and this target is built
@@ -1253,11 +1266,32 @@ case "$MINIMAL_OSX_VERSION" in
 esac
 
 # VLC-debug.app and the strip both moved up, ahead of add-dylib-toc.py.
-if [ "$PACKAGETYPE" = "u" ]; then
-if [ "$BUILD_TRIPLET" = "$HOST_TRIPLET" ]; then
+if [ "$PACKAGETYPE" = "u" ] && [ "$BUILD_TRIPLET" = "$HOST_TRIPLET" ]; then
     bin/powervlc-cache-gen VLC.app/Contents/MacOS/plugins
 fi
 
+# HotSpot is loaded in-process for BD-J. On Apple Silicon the JIT permission
+# is taken from the main executable, not libjvm.dylib; an otherwise valid
+# ad-hoc development bundle therefore compiles a few megabytes and then
+# reports a false full CodeCache. Sign the main executable (after the plugin
+# cache) with the same hardened-runtime entitlements as a release build.  Do
+# not seal the outer bundle here: this legacy layout intentionally keeps Lua,
+# headers and BD-J resources below Contents/MacOS, while current codesign
+# requires every regular file there to be independently signed as code.  The
+# JIT permission is taken from the executable's signature, and every bundled
+# Mach-O is already re-signed above after stripping. Keep legacy GCC bundles
+# untouched: their Java 5 VM predates MAP_JIT and their target codesign
+# implementations do not understand the runtime option.
+if [ -z "$LEGACY_GCC" ]; then
+    signed_main=".powervlc-signed-main.$$"
+    cp -p VLC.app/Contents/MacOS/PowerVLC "$signed_main" || exit 1
+    codesign --force --sign - --identifier powervlc-osx --options runtime \
+        --entitlements "${vlcroot}/extras/package/macosx/vlc-hardening.entitlements" \
+        "$signed_main" || exit 1
+    mv "$signed_main" VLC.app/Contents/MacOS/PowerVLC || exit 1
+fi
+
+if [ "$PACKAGETYPE" = "u" ]; then
     info "Building VLC release archive"
     make package-macosx-release
     shasum -a 512 vlc-*-release.zip

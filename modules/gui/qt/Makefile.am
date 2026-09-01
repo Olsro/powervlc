@@ -90,6 +90,8 @@ libqt_plugin_la_SOURCES = \
 	gui/qt/components/complete_preferences.hpp \
 	gui/qt/components/simple_preferences.cpp \
 	gui/qt/components/simple_preferences.hpp \
+	gui/qt/components/powervlc_media_preferences.cpp \
+	gui/qt/components/powervlc_media_preferences.hpp \
 	gui/qt/components/open_panels.cpp gui/qt/components/open_panels.hpp \
 	gui/qt/components/interface_widgets.cpp \
 	gui/qt/components/interface_widgets.hpp \

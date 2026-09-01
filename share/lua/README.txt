@@ -193,11 +193,13 @@ Net
 ----------------------------------------------------------------
 net.url_parse( url ): Deprecated alias for strings.url_parse().
   Will be removed in VLC 4.x.
-net.listen_tcp( host, port ): Listen to TCP connections. This returns an
-  object with an accept and an fds method. accept is blocking (Poll on the
+net.listen_tcp( host, port ): Listen to TCP connections. Port may be 0 to let
+  the system select a free port. This returns an object with accept, fds,
+  port and close methods. accept is blocking (Poll on the
   fds with the net.POLLIN flag if you want to be non blocking).
   The fds method returns a list of fds you can call poll on before using
-  the accept method. For example:
+  the accept method. port returns the effective listening port and close
+  releases the listener immediately. For example:
 local l = vlc.net.listen_tcp( "localhost", 1234 )
 while true do
   local fd = l:accept()
@@ -206,11 +208,23 @@ while true do
     net.close( fd )
   end
 end
-net.connect_tcp( host, port ): open a connection to the given host:port (TCP).
+net.connect_tcp( host, port, [timeout_ms] ): open a connection to the given
+  host:port (TCP). The optional timeout is clamped between 50 and 60000 ms;
+  without it, the normal core network timeout is used.
 net.close( fd ): Close file descriptor.
 net.send( fd, string, [length] ): Send data on fd.
 net.recv( fd, [max length] ): Receive data from fd.
-net.poll( { fd = events } ): Implement poll function.
+net.upnp_discover( [timeout_ms] ): discover a UPnP Internet Gateway Device
+  using SSDP. Returns its device-description URL and the local IPv4 address
+  used to reach it, or nil and an error. The timeout defaults to 1600 ms and
+  is clamped between 200 and 5000 ms.
+net.ssdp_discover( target_or_target_table, [timeout_ms] ): send SSDP M-SEARCH
+  requests and return every unique response as a table containing location,
+  st, usn and server fields. This shared primitive has no libupnp/libixml
+  dependency. The timeout is clamped between 200 and 10000 ms.
+net.poll( { fd = events }, [timeout_ms] ): Implement poll function. The
+  optional timeout is -1 (wait indefinitely) by default; use 0 for a
+  non-blocking poll.
   Returns the numbers of file descriptors with a non 0 revent. The function
   modifies the input table to { fd = revents }. See "man poll". This function
   is not available on Windows.
@@ -411,6 +425,11 @@ strings.convert_xml_special_chars( [str1, [str2, [...]]] ): Do the inverse
   operation.
 strings.from_charset( charset, str ): convert a string from a specified
   character encoding into UTF-8; return an empty string on error.
+strings.md5( str ): return the lowercase hexadecimal MD5 digest of a byte
+  string.
+strings.inflate( str, [maximum_size] ): decompress a zlib-wrapped byte string.
+  The optional output ceiling defaults to 64 MiB and is always capped at
+  128 MiB. Returns nil and an error when the input is invalid or too large.
 
 Variables
 ---------

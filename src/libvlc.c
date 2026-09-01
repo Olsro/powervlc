@@ -503,6 +503,13 @@ int vlc_MetadataRequest(libvlc_int_t *libvlc, input_item_t *item,
     {
         vlc_mutex_lock( &item->lock );
         item->b_preparse_interact = true;
+        item->b_preparse_skip_art = i_options & META_REQUEST_OPTION_NO_ART;
+        vlc_mutex_unlock( &item->lock );
+    }
+    else if( i_options & META_REQUEST_OPTION_NO_ART )
+    {
+        vlc_mutex_lock( &item->lock );
+        item->b_preparse_skip_art = true;
         vlc_mutex_unlock( &item->lock );
     }
     playlist_preparser_Push( priv->parser, item, i_options, timeout, id );
@@ -529,6 +536,8 @@ int libvlc_MetadataRequest(libvlc_int_t *libvlc, input_item_t *item,
         item->i_preparse_depth = 1;
     if( i_options & META_REQUEST_OPTION_DO_INTERACT )
         item->b_preparse_interact = true;
+    if( i_options & META_REQUEST_OPTION_NO_ART )
+        item->b_preparse_skip_art = true;
     vlc_mutex_unlock( &item->lock );
     playlist_preparser_Push( priv->parser, item, i_options, timeout, id );
     return VLC_SUCCESS;

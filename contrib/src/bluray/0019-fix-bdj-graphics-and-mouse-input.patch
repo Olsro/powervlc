@@ -1,0 +1,201 @@
+From: PowerVLC <powervlc@example.invalid>
+Subject: [PATCH] fix BD-J graphics compositing and desktop mouse input
+
+Some Disney authoring engines draw translucent SRC artwork after their menu text.
+Treating transparent pixels as destructive SRC clears labels already rendered.
+Scope the SRC_OVER compatibility behavior by disc and menu region so native
+button replacement states elsewhere remain visually distinct.
+
+Also advertise the real desktop pointer and dispatch mouse events to the AWT
+component under it. The old implementation targeted the keyboard focus owner
+with window-relative coordinates, preventing standards-compliant BD-J mouse
+listeners from receiving usable hover and click events.
+---
+
+--- a/src/libbluray/bdj/java/java/awt/BDGraphicsBase.java
++++ b/src/libbluray/bdj/java/java/awt/BDGraphicsBase.java
+@@ -42,6 +42,10 @@
+ 
+ abstract class BDGraphicsBase extends DVBGraphics implements ConstrainableGraphics {
+     private static final Color DEFAULT_COLOR = Color.BLACK;
++    private static final String FROZEN_3D_DISC =
++        "00000000000038354e30303035314231";
++    private static final String FRANKENWEENIE_3D_DISC =
++        "00000000375235303031343842312e32";
+     private static Font DEFAULT_FONT;
+ 
+     private int width;
+@@ -1328,6 +1332,43 @@
+         int   stride   = bdImage.width;
+         int[] rgbArray = bdImage.getBdBackBuffer();
+         int   bgColor  = 0;
++        AlphaComposite savedComposite = null;
++
++        /*
++         * Some BD-J authoring engines use Src for translucent menu artwork.
++         * Strict Src semantics make the transparent part of such an image erase
++         * labels painted immediately below it.  This is an authoring-engine quirk,
++         * not a generally valid interpretation of Src: applying it to other discs
++         * can make their selected and normal button states indistinguishable.
++         */
++        String discId = System.getProperty("bluray.disc.id");
++        boolean needsSrcOver = FROZEN_3D_DISC.equals(discId) ||
++            (FRANKENWEENIE_3D_DISC.equals(discId) && sw == 547 && sh == 649);
++        if (needsSrcOver &&
++            composite.getRule() == AlphaComposite.SRC) {
++            boolean hasOpaque = false;
++            boolean hasTranslucent = false;
++            int x0 = Math.max(0, sx);
++            int y0 = Math.max(0, sy);
++            int x1 = Math.min(bdImage.width, sx + sw);
++            int y1 = Math.min(bdImage.height, sy + sh);
++            for (int yy = y0; yy < y1 && !hasOpaque; yy++) {
++                for (int xx = x0; xx < x1; xx++) {
++                    int alpha = rgbArray[yy * stride + xx] >>> 24;
++                    if (alpha == 255) {
++                        hasOpaque = true;
++                        break;
++                    }
++                    if (alpha != 0)
++                        hasTranslucent = true;
++                }
++            }
++            if (!hasOpaque && hasTranslucent) {
++                savedComposite = composite;
++                composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER,
++                                                        composite.getAlpha());
++            }
++        }
+ 
+         if (bg != null) {
+             bgColor = bg.getRGB();
+@@ -1342,6 +1383,8 @@
+         if (dw != sw || dh != sh) {
+             drawResizeBilinear(rgbArray, (sy * stride) + sx, stride, sw, sh,
+                                dx, dy, dw, dh, flipX, flipY);
++            if (savedComposite != null)
++                composite = savedComposite;
+             return true;
+         }
+ 
+@@ -1356,6 +1399,9 @@
+             }
+         }
+ 
++        if (savedComposite != null)
++            composite = savedComposite;
++
+         return true;
+     }
+ 
+--- a/src/libbluray/bdj/java/java/awt/BDJHelper.java
++++ b/src/libbluray/bdj/java/java/awt/BDJHelper.java
+@@ -76,11 +76,27 @@
+      */
+ 
+     private static int mouseX = 0, mouseY = 0, mouseMask = 0;
++    private static Component mouseTarget = null;
+ 
+     public static boolean postMouseEvent(int x, int y) {
+         mouseX = x;
+         mouseY = y;
+-        return postMouseEventImpl(MouseEvent.MOUSE_MOVED, MouseEvent.NOBUTTON);
++        Component oldTarget = mouseTarget;
++        mouseTarget = findMouseTarget();
++
++        boolean result = false;
++        if (oldTarget != mouseTarget) {
++            if (oldTarget != null)
++                result = postMouseEventImpl(oldTarget, MouseEvent.MOUSE_EXITED,
++                                            MouseEvent.NOBUTTON) || result;
++            if (mouseTarget != null)
++                result = postMouseEventImpl(mouseTarget, MouseEvent.MOUSE_ENTERED,
++                                            MouseEvent.NOBUTTON) || result;
++        }
++        if (mouseTarget != null)
++            result = postMouseEventImpl(mouseTarget, MouseEvent.MOUSE_MOVED,
++                                        MouseEvent.NOBUTTON) || result;
++        return result;
+     }
+ 
+     public static boolean postMouseEvent(int id) {
+@@ -89,7 +105,10 @@
+         if (id == MouseEvent.MOUSE_PRESSED)
+             mouseMask = MouseEvent.BUTTON1_MASK;
+ 
+-        r = postMouseEventImpl(id, MouseEvent.BUTTON1);
++        if (mouseTarget == null)
++            mouseTarget = findMouseTarget();
++        r = mouseTarget != null &&
++            postMouseEventImpl(mouseTarget, id, MouseEvent.BUTTON1);
+ 
+         if (id == MouseEvent.MOUSE_RELEASED)
+             mouseMask = 0;
+@@ -97,14 +116,39 @@
+         return r;
+     }
+ 
+-    private static boolean postMouseEventImpl(int id, int button) {
+-        Component focusOwner = KeyboardFocusManager.getCurrentKeyboardFocusManager().getGlobalFocusOwner();
+-        if (focusOwner != null) {
+-            EventQueue eq = BDToolkit.getEventQueue(focusOwner);
++    private static Component findMouseTarget() {
++        KeyboardFocusManager manager =
++            KeyboardFocusManager.getCurrentKeyboardFocusManager();
++        Component root = manager.getFocusedWindow();
++        if (root == null) {
++            root = manager.getGlobalFocusOwner();
++            while (root != null && root.getParent() != null)
++                root = root.getParent();
++        }
++        if (root instanceof Container) {
++            Component target = ((Container)root).findComponentAt(mouseX, mouseY);
++            if (target != null)
++                return target;
++        }
++        return root;
++    }
++
++    private static boolean postMouseEventImpl(Component target, int id,
++                                              int button) {
++        if (target != null) {
++            EventQueue eq = BDToolkit.getEventQueue(target);
+             if (eq != null) {
+                 long when = System.currentTimeMillis();
+                 try {
+-                    eq.postEvent(new MouseEvent(focusOwner, id, when, mouseMask, mouseX, mouseY,
++                    int x = mouseX;
++                    int y = mouseY;
++                    Component child = target;
++                    while (child != null && !(child instanceof Window)) {
++                        x -= child.getX();
++                        y -= child.getY();
++                        child = child.getParent();
++                    }
++                    eq.postEvent(new MouseEvent(target, id, when, mouseMask, x, y,
+                                                 (id == MouseEvent.MOUSE_CLICKED) ? 1 : 0, false, button));
+                     return true;
+                 } catch (Exception e) {
+--- a/src/libbluray/bdj/java/org/havi/ui/event/HMouseCapabilities.java
++++ b/src/libbluray/bdj/java/org/havi/ui/event/HMouseCapabilities.java
+@@ -24,6 +24,9 @@
+     }
+ 
+     public static boolean getInputDeviceSupported() {
+-        return false;
++        /* Desktop libbluray front-ends feed real pointer coordinates through
++         * BDJ_EVENT_MOUSE.  Advertising no device makes applications such as
++         * Disney's language selector deliberately omit all mouse listeners. */
++        return true;
+     }
+ }
+--- a/src/libbluray/bdj/java/org/videolan/Libbluray.java
++++ b/src/libbluray/bdj/java/org/videolan/Libbluray.java
+@@ -291,6 +291,7 @@
+ 
+         Libbluray.nativePointer = nativePointer;
+         DiscManager.getDiscManager().setCurrentDisc(discID);
++        System.setProperty("bluray.disc.id", discID);
+ 
+         BDJActionManager.createInstance();
+ 

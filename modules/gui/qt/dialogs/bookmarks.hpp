@@ -26,11 +26,13 @@
 #define QVLC_BOOKMARKS_H_ 1
 
 #include "util/qvlcframe.hpp"
+#include <vlc_input.h>
 #include <QStandardItemModel>
 #include <QTreeView>
 #include <QTreeWidget>
 #include "util/singleton.hpp"
 class QPushButton;
+class QTimer;
 
 class BookmarksDialog : public QVLCFrame, public Singleton<BookmarksDialog>
 {
@@ -44,15 +46,24 @@ private:
     QTreeWidget *bookmarksList;
     QPushButton *clearButton;
     QPushButton *delButton;
+    QPushButton *clipButton;
+    QPushButton *exportButton;
     bool b_ignore_updates;
+    input_clip_export_t *p_clipExport;
+    QTimer *clipExportTimer;
 
 private slots:
     void update();
     void add();
     void del();
     void clear();
+    void clearAll();
+    void exportCurrent();
+    void exportAll();
+    void importFile();
+    void makeClip();
+    void pollClipExport();
     void edit( QTreeWidgetItem *item, int column );
-    void extract();
     void activateItem( QModelIndex index );
     void updateButtons();
 
@@ -60,4 +71,3 @@ private slots:
 };
 
 #endif
-

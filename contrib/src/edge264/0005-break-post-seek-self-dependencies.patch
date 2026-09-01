@@ -1,0 +1,61 @@
+From: PowerVLC contributors
+Subject: [PATCH] edge264: break post-seek DPB self-dependencies
+
+The missing-reference concealment path deliberately aliases an absent
+reference to the current picture's allocated buffer. This prevents an invalid
+memory access, but refs_to_mask() then treated the alias as a decoded-picture
+dependency. Every slice of that picture waited for the picture itself, filling
+the MVC DPB and freezing video while audio continued.
+
+The current picture is never a conforming already-decoded H.264 reference, so
+exclude it from the worker dependency mask. Also let the two capacity
+fast-paths invoke the existing stalled-frame recovery before returning
+ENOBUFS; otherwise they can bypass recovery when a random-access point leaves
+an orphaned partial picture in a completely full DPB.
+
+diff --git a/edge264/src/edge264_headers.c b/edge264/src/edge264_headers.c
+--- a/edge264/src/edge264_headers.c
++++ b/edge264/src/edge264_headers.c
+@@ -1374,6 +1374,13 @@ int ADD_VARIANT(parse_slice_layer_without_partitioning)(Edge264Decoder *dec, Ed
+ 		if (non_existing > _room)
+ 			non_existing = _room > 0 ? _room : 0;
+-		if (non_existing + __builtin_popcount(reference_frames | dec->to_get_frames | dec->output_frames) > 32)
++		if (non_existing + __builtin_popcount(reference_frames | dec->to_get_frames | dec->output_frames) > 32) {
++			/* A random-access start can leave an orphaned partial picture in
++			 * the DPB: it has no runnable task, yet every queued task depends
++			 * on it. Do not bypass the ordinary stalled-frame recovery merely
++			 * because every DPB slot is currently accounted for. */
++			if (!feeder_can_make_progress(dec))
++				force_complete_stalled_frames(dec);
+ 			return ENOBUFS; // exit here if we must wait for get_frame to consume and return enough frames
++		}
+ 		// wait until enough empty slots are undepended
+ 		unsigned unavail;
+@@ -1418,6 +1425,10 @@ int ADD_VARIANT(parse_slice_layer_without_partitioning)(Edge264Decoder *dec, Ed
+ 	if (dec->currPic < 0) {
+ 		unsigned reference_frames = dec->prev_short_term_frames | dec->prev_long_term_frames;
+-		if (__builtin_popcount(reference_frames | dec->to_get_frames | dec->output_frames) == 32)
++		if (__builtin_popcount(reference_frames | dec->to_get_frames | dec->output_frames) == 32) {
++			/* Same full-DPB recovery as the frame-gap path above. */
++			if (!feeder_can_make_progress(dec))
++				force_complete_stalled_frames(dec);
+ 			return ENOBUFS; // exit here if we must wait for get_frame to consume and return a frame slot
++		}
+ 		// wait until at least one empty slot is undepended (or returned in the meantime)
+ 		unsigned unavail;
+@@ -1603,7 +1614,12 @@ int ADD_VARIANT(parse_slice_layer_without_partitioning)(Edge264Decoder *dec, Ed
+ 	MTTRACE("feeder SUBMIT task=%d pic=%d deps=%08x readyfr=%08x", task_id, dec->currPic, dec->task_dependencies[task_id], ready_frames(dec));
+ 	dec->busy_tasks |= 1 << task_id;
+ 	dec->pending_tasks |= 1 << task_id;
+-	dec->task_dependencies[task_id] = refs_to_mask(t);
++	/* Missing-reference concealment may point at currPic's allocated buffer
++	 * solely to keep motion compensation memory-safe. That alias is not a
++	 * decoded-frame dependency: waiting for it would make every slice depend
++	 * on its own unfinished picture and deadlock the DPB. */
++	dec->task_dependencies[task_id] = refs_to_mask(t) &
++						  ~(1u << dec->currPic);
+ 	dec->ready_tasks |= ((dec->task_dependencies[task_id] & ~ready_frames(dec)) == 0) << task_id;
+ 	dec->taskPics[task_id] = dec->currPic;
+ 	ret = print_dec(dec, dec->n_threads || dec->worker_loop != worker_loop_log ?
+-- 
+2.39.5

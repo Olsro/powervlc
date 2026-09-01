@@ -186,7 +186,19 @@ typedef struct input_thread_private_t
 
     vlc_thread_t thread;
     vlc_interrupt_t interrupt;
+
+    /* Keep newly added state at the tail: incremental builds containing an
+     * older input object then retain the offsets of all established fields. */
+    int         i_bookmark_title; /* sets are isolated per disc title */
+    bool        b_bookmarks_ready;
+    bool        b_bookmarks_loading;
 } input_thread_private_t;
+
+/* Persistent, per-content bookmark storage (bookmarks.c). */
+void input_BookmarksInitialize( input_thread_t * );
+void input_BookmarksPersist( input_thread_t * );
+void input_BookmarksSwitchTitle( input_thread_t *, int );
+void input_UpdateBookmarksOption( input_thread_t * );
 
 static inline input_thread_private_t *input_priv(input_thread_t *input)
 {

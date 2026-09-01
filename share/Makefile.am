@@ -61,6 +61,11 @@ nobase_vlclib_DATA =
 
 nobase_dist_vlcdata_DATA =
 
+# Original libretro programs and resources.  The runtime validates complete
+# pass chains and exposes only presets which are exact on the active GPU.
+retroarch_shader_files = $(shell cd $(srcdir) && find retroarch-shaders -type f -print | LC_ALL=C sort)
+nobase_dist_vlcdata_DATA += $(retroarch_shader_files)
+
 #
 # Browser add-on
 #
@@ -86,6 +91,7 @@ DIST_icons = \
 DIST_skins2 = \
 	skins2/fonts/FreeSans.ttf \
 	skins2/fonts/FreeSansBold.ttf \
+	skins2/fonts/PowerVLCUnicode.ttf \
 	skins2/skin.dtd \
 	skins2/skin.catalog \
 	skins2/winamp2.xml
@@ -138,9 +144,16 @@ nobase_vlclib_DATA += \
 	lua/extensions/Podcasts-Discovery-iTunes.luac \
 	lua/extensions/Twitch.luac \
 	lua/extensions/VLSub.luac \
+	lua/extensions/audiobookshelf.luac \
+	lua/extensions/crt_display_controller.luac \
+	lua/extensions/emule.luac \
 	lua/extensions/invidious.luac \
+	lua/extensions/internetarchive.luac \
 	lua/extensions/jellyfin.luac \
+	lua/extensions/peertube.luac \
+	lua/extensions/soulseek.luac \
 	lua/extensions/subsonic.luac \
+	lua/extensions/yt-dlp.luac \
 	lua/intf/cli.luac \
 	lua/intf/dummy.luac \
 	lua/intf/dumpmeta.luac \
@@ -156,7 +169,11 @@ nobase_vlclib_DATA += \
 	lua/meta/reader/filename.luac \
 	lua/modules/common.luac \
 	lua/modules/dkjson.luac \
+	lua/modules/pvlc_download.luac \
+	lua/modules/pvlc_folder_picker.luac \
+	lua/modules/pvlc_upnp.luac \
 	lua/modules/pvlc_i18n.luac \
+	lua/modules/pvlc_ec.luac \
 	lua/modules/sandbox.luac \
 	lua/modules/simplexml.luac \
 	lua/playlist/anevia_streams.luac \
@@ -177,6 +194,7 @@ nobase_vlclib_DATA += \
 	lua/playlist/radiobrowser.luac \
 	lua/sd/icecast.luac \
 	lua/sd/jamendo.luac \
+	lua/sd/powervlc_upnp.luac \
 	lua/sd/radiobrowser.luac \
 	$(NULL)
 
@@ -214,6 +232,42 @@ nobase_dist_vlcdata_DATA += \
 	lua/i18n/invidious/uk.lua \
 	lua/i18n/invidious/zh_CN.lua \
 	lua/i18n/invidious/zh_TW.lua \
+	lua/i18n/internetarchive/ca.lua \
+	lua/i18n/internetarchive/de.lua \
+	lua/i18n/internetarchive/en.lua \
+	lua/i18n/internetarchive/es.lua \
+	lua/i18n/internetarchive/fr.lua \
+	lua/i18n/internetarchive/it.lua \
+	lua/i18n/internetarchive/nl.lua \
+	lua/i18n/internetarchive/pt_BR.lua \
+	lua/i18n/internetarchive/pt_PT.lua \
+	lua/i18n/peertube/ca.lua \
+	lua/i18n/peertube/de.lua \
+	lua/i18n/peertube/en.lua \
+	lua/i18n/peertube/es.lua \
+	lua/i18n/peertube/fr.lua \
+	lua/i18n/peertube/it.lua \
+	lua/i18n/peertube/nl.lua \
+	lua/i18n/peertube/pt_BR.lua \
+	lua/i18n/peertube/pt_PT.lua \
+	lua/i18n/audiobookshelf/ca.lua \
+	lua/i18n/audiobookshelf/de.lua \
+	lua/i18n/audiobookshelf/en.lua \
+	lua/i18n/audiobookshelf/es.lua \
+	lua/i18n/audiobookshelf/fr.lua \
+	lua/i18n/audiobookshelf/it.lua \
+	lua/i18n/audiobookshelf/nl.lua \
+	lua/i18n/audiobookshelf/pt_BR.lua \
+	lua/i18n/audiobookshelf/pt_PT.lua \
+	lua/i18n/emule/ca.lua \
+	lua/i18n/emule/de.lua \
+	lua/i18n/emule/en.lua \
+	lua/i18n/emule/es.lua \
+	lua/i18n/emule/fr.lua \
+	lua/i18n/emule/it.lua \
+	lua/i18n/emule/nl.lua \
+	lua/i18n/emule/pt_BR.lua \
+	lua/i18n/emule/pt_PT.lua \
 	lua/i18n/jellyfin/cs.lua \
 	lua/i18n/jellyfin/de.lua \
 	lua/i18n/jellyfin/en.lua \
@@ -250,6 +304,15 @@ nobase_dist_vlcdata_DATA += \
 	lua/i18n/podcasts/uk.lua \
 	lua/i18n/podcasts/zh_CN.lua \
 	lua/i18n/podcasts/zh_TW.lua \
+	lua/i18n/soulseek/ca.lua \
+	lua/i18n/soulseek/de.lua \
+	lua/i18n/soulseek/en.lua \
+	lua/i18n/soulseek/es.lua \
+	lua/i18n/soulseek/fr.lua \
+	lua/i18n/soulseek/it.lua \
+	lua/i18n/soulseek/nl.lua \
+	lua/i18n/soulseek/pt_BR.lua \
+	lua/i18n/soulseek/pt_PT.lua \
 	lua/i18n/subsonic/cs.lua \
 	lua/i18n/subsonic/de.lua \
 	lua/i18n/subsonic/en.lua \
@@ -270,6 +333,15 @@ nobase_dist_vlcdata_DATA += \
 	lua/i18n/subsonic/zh_TW.lua \
 	lua/i18n/twitch/en.lua \
 	lua/i18n/twitch/fr.lua \
+	lua/i18n/ytdlp/ca.lua \
+	lua/i18n/ytdlp/de.lua \
+	lua/i18n/ytdlp/en.lua \
+	lua/i18n/ytdlp/es.lua \
+	lua/i18n/ytdlp/fr.lua \
+	lua/i18n/ytdlp/it.lua \
+	lua/i18n/ytdlp/nl.lua \
+	lua/i18n/ytdlp/pt_BR.lua \
+	lua/i18n/ytdlp/pt_PT.lua \
 	$(NULL)
 
 nobase_doc_DATA = \
@@ -289,6 +361,7 @@ nobase_doc_DATA = \
 	lua/sd/README.txt \
 	lua/sd/icecast.lua \
 	lua/sd/icast.lua \
+	lua/sd/powervlc_upnp.lua \
 	$(NULL)
 
 nobase_dist_vlcdata_DATA += \
@@ -360,9 +433,16 @@ EXTRA_DIST += \
 	lua/extensions/Podcasts-Discovery-iTunes.lua \
 	lua/extensions/Twitch.lua \
 	lua/extensions/VLSub.lua \
+	lua/extensions/audiobookshelf.lua \
+	lua/extensions/crt_display_controller.lua \
+	lua/extensions/emule.lua \
 	lua/extensions/invidious.lua \
+	lua/extensions/internetarchive.lua \
 	lua/extensions/jellyfin.lua \
+	lua/extensions/peertube.lua \
+	lua/extensions/soulseek.lua \
 	lua/extensions/subsonic.lua \
+	lua/extensions/yt-dlp.lua \
 	lua/intf/README.txt \
 	lua/intf/cli.lua \
 	lua/intf/dummy.lua \
@@ -383,7 +463,11 @@ EXTRA_DIST += \
 	lua/meta/reader/filename.lua \
 	lua/modules/common.lua \
 	lua/modules/dkjson.lua \
+	lua/modules/pvlc_download.lua \
+	lua/modules/pvlc_folder_picker.lua \
+	lua/modules/pvlc_upnp.lua \
 	lua/modules/pvlc_i18n.lua \
+	lua/modules/pvlc_ec.lua \
 	lua/modules/sandbox.lua \
 	lua/modules/simplexml.lua \
 	lua/playlist/README.txt \
@@ -417,6 +501,7 @@ EXTRA_DIST += \
 	lua/sd/icecast.lua \
 	lua/sd/icast.lua \
 	lua/sd/jamendo.lua \
+	lua/sd/powervlc_upnp.lua \
 	lua/sd/radiobrowser.lua
 DIST_solid = \
 	solid/vlc-openbd.desktop \

@@ -57,6 +57,7 @@ ${LangFileString} Action_OnArrivalSVCDMovie "Reproducir película SVCD"
 ${LangFileString} Action_OnArrivalVideoFiles "Reproducir ficheros de videu"
 ${LangFileString} Action_OnArrivalMusicFiles "Reproducir ficheros d'audiu"
 ${LangFileString} Action_OnArrivalDVDAudio "Reproducir DVD d'audiu"
+${LangFileString} Action_OnArrivalBluray "Reproducir Blu-ray"
 ${LangFileString} License_NextText "Agora que yes consciente de los tos drechos, calca Siguiente pa siguir."
 
 ${LangFileString} Detail_CheckProcesses "Comprobando procesos..."

@@ -39,6 +39,48 @@
  * to feel immediate. */
 #define VLC_EXTENSION_TEXT_DEBOUNCE 0.3
 
+/* A synchronous performSelectorOnMainThread deadlocks during application
+ * teardown: the main thread joins the Lua extension worker while that worker
+ * is waiting for the main thread to repaint its dialog. Keep the dialog
+ * descriptor alive through a small cancellable request instead. Ordinary
+ * updates still wait for AppKit (preserving widget lifetime); an update that
+ * has not started after two seconds is cancelled safely. */
+typedef struct
+{
+    vlc_mutex_t lock;
+    vlc_cond_t cond;
+    extension_dialog_t *dialog;
+    unsigned refs;
+    bool running;
+    bool done;
+    bool cancelled;
+} VLCExtensionDialogRequest;
+
+static VLCExtensionDialogRequest *VLCDialogRequestCreate(extension_dialog_t *dialog)
+{
+    VLCExtensionDialogRequest *request = calloc(1, sizeof(*request));
+    if (!request)
+        return NULL;
+    vlc_mutex_init(&request->lock);
+    vlc_cond_init(&request->cond);
+    request->dialog = dialog;
+    request->refs = 2; /* extension worker + queued main-thread selector */
+    return request;
+}
+
+static void VLCDialogRequestRelease(VLCExtensionDialogRequest *request)
+{
+    bool destroy;
+    vlc_mutex_lock(&request->lock);
+    destroy = --request->refs == 0;
+    vlc_mutex_unlock(&request->lock);
+    if (destroy) {
+        vlc_cond_destroy(&request->cond);
+        vlc_mutex_destroy(&request->lock);
+        free(request);
+    }
+}
+
 /*****************************************************************************
  * VLCExtensionsDialogProvider implementation
  *****************************************************************************/
@@ -54,7 +96,17 @@ static NSView *createControlFromWidget(extension_widget_t *widget, id self)
             case EXTENSION_WIDGET_HTML:
             {
                 WebView *webView = [[WebView alloc] initWithFrame:NSMakeRect (0,0,1,1)];
-                [webView setAutoresizingMask:NSViewHeightSizable | NSViewWidthSizable];
+                /* An explicit height makes a rich-text area a compact,
+                 * scrollable excerpt (user biographies, notes) instead of
+                 * competing equally with the main results list. */
+                if (widget->i_width > 0 || widget->i_height > 0) {
+                    NSSize size = NSMakeSize(widget->i_width > 0 ? widget->i_width : 1,
+                                             widget->i_height > 0 ? widget->i_height : 1);
+                    [webView setFrameSize:size];
+                }
+                [webView setAutoresizingMask:widget->i_height > 0
+                    ? NSViewWidthSizable
+                    : (NSViewHeightSizable | NSViewWidthSizable)];
                 [webView setDrawsBackground:NO];
                 return webView;
             }
@@ -290,6 +342,10 @@ static void updateControlFromWidget(NSView *control, extension_widget_t *widget,
                 NSScrollView *scrollView = (NSScrollView *)control;
                 assert([[scrollView documentView] isKindOfClass:[VLCDialogList class]]);
                 VLCDialogList *list = (VLCDialogList *)[scrollView documentView];
+                BOOL hadContent = [list.contentArray count] > 0;
+                NSPoint scrollOrigin = [[scrollView contentView] bounds].origin;
+                NSInteger previousSortColumn = list.sortColumn;
+                BOOL previousSortAscending = list.sortAscending;
 
                 /* The widget's own text carries tab-separated column headers;
                  * without one the list stays a plain headerless column. */
@@ -299,6 +355,7 @@ static void updateControlFromWidget(NSView *control, extension_widget_t *widget,
                 [list setColumnHeaders:headers];
 
                 NSMutableArray *contentArray = [NSMutableArray array];
+                NSMutableSet *selectedIds = [NSMutableSet set];
                 struct extension_widget_value_t *value;
                 for (value = widget->p_values; value != NULL; value = value->p_next)
                 {
@@ -326,25 +383,46 @@ static void updateControlFromWidget(NSView *control, extension_widget_t *widget,
                         [entry setObject:toNSStr(value->psz_dragname)
                                   forKey:@"dragname"];
                     [contentArray addObject:entry];
+                    if (value->b_selected)
+                        [selectedIds addObject:[NSNumber numberWithInt:value->i_id]];
                 }
                 list.contentArray = contentArray;
-                /* fresh content comes in the extension's order */
-                [list setSortColumn:-1];
                 [list setProgrammaticSelection:YES];
-                /* ...unless the script asked for a column order, in
-                 * which case it is sorted here, by the very comparison
-                 * a click on that header uses -- so that both give the
-                 * same thing */
+                /* The extension's requested order wins. Otherwise preserve
+                 * the column the user clicked while progressive results are
+                 * added to this same list. */
                 if (widget->i_sort_column > 0)
                     [list sortByColumn:widget->i_sort_column - 1
                              ascending:widget->b_sort_ascending];
+                else if (previousSortColumn >= 0
+                      && (NSUInteger)previousSortColumn < [[list tableColumns] count])
+                    [list sortByColumn:previousSortColumn
+                             ascending:previousSortAscending];
+                else
+                    [list setSortColumn:-1];
                 [list reloadData];
                 [list fitColumnsToContent];
-                /* and is read from its first row: keeping the scroll of
-                 * the list that was there before leaves the user looking
-                 * at the middle of something else */
-                if ([contentArray count] > 0)
+                [list deselectAll:nil];
+                NSMutableIndexSet *selectedRows = [NSMutableIndexSet indexSet];
+                for (NSUInteger row = 0; row < [list.contentArray count]; row++) {
+                    NSNumber *rowId = [[list.contentArray objectAtIndex:row]
+                                          objectForKey:@"id"];
+                    if ([selectedIds containsObject:rowId])
+                        [selectedRows addIndex:row];
+                }
+                [list selectRowIndexes:selectedRows byExtendingSelection:NO];
+                /* Progressive searches refill the same widget repeatedly.
+                 * Keep the viewport where the user left it; forcing the top
+                 * on each newly arrived result made long eMule and Soulseek
+                 * lists effectively impossible to browse. A genuinely new
+                 * list still starts at its first row. */
+                if (hadContent) {
+                    NSClipView *clip = [scrollView contentView];
+                    [clip scrollToPoint:[clip constrainScrollPoint:scrollOrigin]];
+                    [scrollView reflectScrolledClipView:clip];
+                } else if ([contentArray count] > 0) {
                     [list showTopOfList];
+                }
                 [list setProgrammaticSelection:NO];
                 break;
             }
@@ -584,8 +662,23 @@ static void extensionDialogCallback(extension_dialog_t *p_ext_dialog,
         return;
     VLCDialogList *list = sender;
     extension_widget_t *widget = [list widget];
-    if (!widget || [list clickedRow] < 0)
+    NSInteger clickedRow = [list clickedRow];
+    if (!widget || clickedRow < 0
+     || (NSUInteger)clickedRow >= [list.contentArray count])
         return;
+
+    /* Do not rely on tableViewSelectionDidChange: having run before the
+     * activation callback.  A live search can refill the list between the
+     * two clicks and clear its selection even though clickedRow still names
+     * the row the user activated.  Snapshot that row's stable value id into
+     * the extension model immediately before dispatching the double-click. */
+    NSNumber *clickedId = [[list.contentArray objectAtIndex:clickedRow]
+                              objectForKey:@"id"];
+    vlc_mutex_lock(&widget->p_dialog->lock);
+    for (struct extension_widget_value_t *value = widget->p_values;
+         value != NULL; value = value->p_next)
+        value->b_selected = (value->i_id == [clickedId intValue]);
+    vlc_mutex_unlock(&widget->p_dialog->lock);
 
     /* unlocked, see -triggerClick: -- and a double-click runs inside the
      * table's own event tracking, the worst possible moment to hold a
@@ -906,10 +999,15 @@ static id VLCDialogCornerKey(extension_dialog_t *p_dialog)
             [dialogWindow setHas_lock:NO];
 
             BOOL visible = !p_dialog->b_hide;
-            if (visible)
-                [dialogWindow makeKeyAndOrderFront:self];
-            else
+            /* Updating a label or a progress value must not steal the
+             * foreground from the video window (or another application).
+             * Only order an existing dialog when it is transitioning from
+             * hidden to visible; otherwise preserve its current z-order and
+             * key-window state. */
+            if (!visible)
                 [dialogWindow orderOut:nil];
+            else if (![dialogWindow isVisible])
+                [dialogWindow makeKeyAndOrderFront:self];
         }
         else if (p_dialog->b_kill) {
             [self destroyExtensionDialog:p_dialog];
@@ -933,7 +1031,15 @@ static id VLCDialogCornerKey(extension_dialog_t *p_dialog)
 {
     assert(p_dialog);
 
-    NSValue *o_value = [NSValue valueWithPointer:p_dialog];
+    if ([NSThread isMainThread]) {
+        [self updateExtensionDialog:[NSValue valueWithPointer:p_dialog]];
+        return;
+    }
+
+    VLCExtensionDialogRequest *request = VLCDialogRequestCreate(p_dialog);
+    if (!request)
+        return;
+    NSValue *o_value = [NSValue valueWithPointer:request];
     /* The default run loop mode, and no other. Without naming modes,
      * Foundation queues this in the COMMON modes, which AppKit has added
      * event tracking to -- so a dialog rebuilt in answer to a click ran
@@ -943,10 +1049,49 @@ static id VLCDialogCornerKey(extension_dialog_t *p_dialog)
      * a 10.2 crash report); here it is the same re-entrancy. Holding the
      * update until the click is over costs the extension thread a few
      * milliseconds and it holds no lock of ours meanwhile. */
-    [self performSelectorOnMainThread:@selector(updateExtensionDialog:)
+    [self performSelectorOnMainThread:@selector(runExtensionDialogRequest:)
                            withObject:o_value
-                        waitUntilDone:YES
+                        waitUntilDone:NO
                                 modes:@[NSDefaultRunLoopMode]];
+
+    mtime_t deadline = mdate() + 2 * CLOCK_FREQ;
+    vlc_mutex_lock(&request->lock);
+    while (!request->done) {
+        if (request->running) {
+            vlc_cond_wait(&request->cond, &request->lock);
+        } else if (vlc_cond_timedwait(&request->cond, &request->lock,
+                                      deadline) != 0) {
+            if (!request->running && !request->done)
+                request->cancelled = true;
+            break;
+        }
+    }
+    vlc_mutex_unlock(&request->lock);
+    VLCDialogRequestRelease(request);
+}
+
+- (void)runExtensionDialogRequest:(NSValue *)value
+{
+    VLCExtensionDialogRequest *request = [value pointerValue];
+    vlc_mutex_lock(&request->lock);
+    if (request->cancelled) {
+        request->done = true;
+        vlc_cond_signal(&request->cond);
+        vlc_mutex_unlock(&request->lock);
+        VLCDialogRequestRelease(request);
+        return;
+    }
+    request->running = true;
+    vlc_mutex_unlock(&request->lock);
+
+    [self updateExtensionDialog:[NSValue valueWithPointer:request->dialog]];
+
+    vlc_mutex_lock(&request->lock);
+    request->running = false;
+    request->done = true;
+    vlc_cond_signal(&request->cond);
+    vlc_mutex_unlock(&request->lock);
+    VLCDialogRequestRelease(request);
 }
 
 @end

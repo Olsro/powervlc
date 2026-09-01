@@ -33,6 +33,7 @@
 
 #import "CompatibilityFixes.h"
 #import "VLCMain.h"
+#import "VLCInputManager.h"
 #import "VLCVoutView.h"
 #import "VLCCoreInteraction.h"
 #import "VLCMainMenu.h"
@@ -40,6 +41,18 @@
 #import <QuartzCore/QuartzCore.h>
 
 #import <vlc_actions.h>
+#import <vlc_playlist.h>
+#import <vlc_input.h>
+
+static BOOL VLCModernInputIsBluRayDiscSession(void)
+{
+    input_thread_t *input = playlist_CurrentInput(pl_Get(getIntf()));
+    if (input == NULL)
+        return NO;
+    const BOOL disc = var_GetBool(input, "bluray-disc-session");
+    vlc_object_release(input);
+    return disc;
+}
 
 
 /*****************************************************************************
@@ -147,6 +160,12 @@
 
 - (void)keyDown:(NSEvent *)o_event
 {
+    /* Any keyboard activity means that the user has noticed the resume
+     * question. Cancel its deadline even for modified or unrelated keys,
+     * which must still follow their normal path below. */
+    [[[VLCMain sharedInstance] inputManager]
+        noteResumeOSDUserInteraction];
+
     unichar key = 0;
     vlc_value_t val;
     unsigned int i_pressed_modifiers = 0;
@@ -168,6 +187,12 @@
         key = [[characters lowercaseString] characterAtIndex: 0];
 
         if (key) {
+            unsigned int vlcKey = CocoaKeyToVLC(key);
+            if ((val.i_int & KEY_MODIFIER) == 0 &&
+                [[[VLCMain sharedInstance] inputManager]
+                    handleResumeOSDKey:vlcKey])
+                return;
+
             /* Escape should always get you out of fullscreen */
             if (key == (unichar) 0x1b) {
                 playlist_t * p_playlist = pl_Get(getIntf());
@@ -178,8 +203,17 @@
             else if (key == 'f' && i_pressed_modifiers & NSControlKeyMask && i_pressed_modifiers & NSCommandKeyMask)
                 [[VLCCoreInteraction sharedInstance] toggleFullscreen];
             else if (p_vout) {
-                val.i_int |= (int)CocoaKeyToVLC(key);
+                val.i_int |= (int)vlcKey;
                 var_Set(p_vout->obj.libvlc, "key-pressed", val);
+                if ((val.i_int & KEY_MODIFIER) == 0 &&
+                    !VLCModernInputIsBluRayDiscSession()) {
+                    VLCCoreInteraction *core =
+                        [VLCCoreInteraction sharedInstance];
+                    if (vlcKey == KEY_UP || vlcKey == KEY_DOWN)
+                        [core scheduleVolumeOSD];
+                    else if (vlcKey == KEY_LEFT || vlcKey == KEY_RIGHT)
+                        [core schedulePositionOSD];
+                }
             }
             else
                 msg_Dbg(getIntf(), "could not send keyevent to VLC core");
@@ -199,15 +233,11 @@
 {
     if (([o_event type] == NSLeftMouseDown) && (! ([o_event modifierFlags] &  NSControlKeyMask))) {
         if ([o_event clickCount] == 2) {
-            /* while the controls are auto-hidden, the double click brings
-             * them back instead of toggling fullscreen (a plain click only
-             * focuses the window; dragging moves it) */
-            NSWindow *window = [self window];
-            if ([window isKindOfClass:[VLCVideoWindowCommon class]]
-                && [(VLCVideoWindowCommon *)window controlsHiddenForPlayback])
-                [(VLCVideoWindowCommon *)window revealControlsForPlayback];
-            else
-                [[VLCCoreInteraction sharedInstance] toggleFullscreen];
+            /* A double click on the picture always toggles fullscreen.  The
+             * previous auto-hide special case swallowed every double click
+             * in HDMI 3D because the windowed controls remain classified as
+             * hidden behind the dedicated fullscreen panel. */
+            [[VLCCoreInteraction sharedInstance] toggleFullscreen];
         }
 
     } else if (([o_event type] == NSRightMouseDown) ||
@@ -237,8 +267,11 @@
 - (void)mouseMoved:(NSEvent *)o_event
 {
     NSPoint ml = [self convertPoint: [o_event locationInWindow] fromView: nil];
-    if ([self mouse: ml inRect: [self bounds]])
+    if ([self mouse: ml inRect: [self bounds]]) {
+        [[[VLCMain sharedInstance] inputManager]
+            noteResumeOSDUserInteraction];
         [[VLCMain sharedInstance] showFullscreenController];
+    }
 
     [super mouseMoved: o_event];
 }

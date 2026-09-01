@@ -57,6 +57,7 @@
 #include <QWindow>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QLabel>
 #include <QStackedWidget>
 #include <QScreen>
@@ -76,6 +77,7 @@
 #include <QTimer>
 
 #include <vlc_actions.h>                    /* Wheel event */
+#include <vlc_services_discovery.h>
 #include <vlc_vout_display.h>               /* vout_thread_t and VOUT_ events */
 
 // #define DEBUG_INTF
@@ -1177,6 +1179,14 @@ bool MainInterface::addNetworkLocation( const QString& mrl )
         if( added ) dialog->show();
     }
     return added;
+}
+
+void MainInterface::reloadPowerDevices()
+{
+    if( playlistWidget )
+        playlistWidget->reloadPowerDevices();
+    else
+        PlaylistDialog::getInstance( p_intf )->reloadPowerDevices();
 }
 
 void MainInterface::togglePlaylist()
@@ -2392,6 +2402,73 @@ void MainInterface::wheelEvent( QWheelEvent *e )
 
 void MainInterface::closeEvent( QCloseEvent *e )
 {
+    bool transferActive = false;
+    bool pendingChanges = false;
+    for( int index = 0; index < 64; ++index )
+    {
+        QByteArray service = QString( "powervlc_device{index=%1}" )
+                                 .arg( index ).toUtf8();
+        if( !playlist_IsServicesDiscoveryLoaded( THEPL, service.constData() ) )
+            continue;
+        services_discovery_transfer_status_t status = {};
+        if( playlist_ServicesDiscoveryControl( THEPL, service.constData(),
+                SD_CMD_POWERVLC_DEVICE_TRANSFERS, &status ) == VLC_SUCCESS )
+        {
+            transferActive |= status.b_synchronizing;
+            pendingChanges |= status.b_pending_changes;
+        }
+        for( size_t i = 0; i < status.i_count; ++i )
+        {
+            free( status.p_items[i].psz_source );
+            free( status.p_items[i].psz_destination );
+        }
+        free( status.p_items );
+    }
+    if( transferActive )
+    {
+        QMessageBox warning( QMessageBox::Warning,
+            qtr( "Synchronization in progress" ),
+            qtr( "A portable player is still being synchronized. Quitting "
+                 "now will interrupt the current transfer." ),
+            QMessageBox::NoButton, this );
+        QPushButton *keep = warning.addButton( qtr( "Continue Synchronization" ),
+                                               QMessageBox::RejectRole );
+        QPushButton *quit = warning.addButton( qtr( "Quit Anyway" ),
+                                               QMessageBox::DestructiveRole );
+        warning.setDefaultButton( keep );
+        warning.exec();
+        if( warning.clickedButton() != quit ) { e->ignore(); return; }
+    }
+    if( pendingChanges )
+    {
+        QMessageBox warning( QMessageBox::Warning,
+            qtr( "Portable-player changes are pending" ),
+            qtr( "One or more iPods contain changes that have not been "
+                 "validated. Validate them before quitting, or discard them." ),
+            QMessageBox::NoButton, this );
+        QPushButton *commit = warning.addButton( qtr( "Finalize Changes" ),
+                                                 QMessageBox::AcceptRole );
+        QPushButton *discard = warning.addButton( qtr( "Quit Without Finalizing" ),
+                                                  QMessageBox::DestructiveRole );
+        QPushButton *cancel = warning.addButton( qtr( "Cancel" ),
+                                                 QMessageBox::RejectRole );
+        warning.setDefaultButton( commit );
+        warning.exec();
+        if( warning.clickedButton() == cancel ) { e->ignore(); return; }
+        int command = warning.clickedButton() == commit
+                    ? SD_CMD_POWERVLC_DEVICE_COMMIT
+                    : SD_CMD_POWERVLC_DEVICE_DISCARD;
+        for( int index = 0; index < 64; ++index )
+        {
+            QByteArray service = QString( "powervlc_device{index=%1}" )
+                                     .arg( index ).toUtf8();
+            if( playlist_IsServicesDiscoveryLoaded( THEPL,
+                                                     service.constData() ) )
+                playlist_ServicesDiscoveryControl( THEPL, service.constData(),
+                                                   command );
+        }
+        if( warning.clickedButton() == commit ) { e->ignore(); return; }
+    }
 //  hide();
     if ( b_minimalView )
         setMinimalView( false );

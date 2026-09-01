@@ -32,6 +32,10 @@
 #include "input_manager.hpp"                 /* MainInputManager, for podcast */
 
 #include <QApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QInputDialog>
 #include <QMessageBox>
 #include <QMimeData>
@@ -43,11 +47,47 @@
 #include <QScrollBar>
 #include <QResource>
 #include <QMenu>
+#include <QDialog>
+#include <QHeaderView>
+#include <QTableWidget>
+#include <QTimer>
 #include <QUrl>
+#include <QVBoxLayout>
+#include <QVector>
 #include <assert.h>
 
 #include <vlc_playlist.h>
 #include <vlc_services_discovery.h>
+#include <vlc_url.h>
+
+#define PVLC_ML_SCAN_ACTIVE "powervlc-ml-scan-active"
+#define PVLC_ML_SCAN_DONE   "powervlc-ml-scan-done"
+#define PVLC_ML_SCAN_TOTAL  "powervlc-ml-scan-total"
+
+static void clearTransferStatus( services_discovery_transfer_status_t *status )
+{
+    for( size_t i = 0; i < status->i_count; ++i )
+    {
+        free( status->p_items[i].psz_source );
+        free( status->p_items[i].psz_destination );
+    }
+    free( status->p_items );
+    memset( status, 0, sizeof( *status ) );
+}
+
+static QString transferStageText( services_discovery_transfer_stage_e stage )
+{
+    switch( stage )
+    {
+        case SD_TRANSFER_QUEUED: return qtr( "Queued" );
+        case SD_TRANSFER_COPYING: return qtr( "Copying" );
+        case SD_TRANSFER_TRANSCODING: return qtr( "Transcoding" );
+        case SD_TRANSFER_COMPLETED: return qtr( "Completed" );
+        case SD_TRANSFER_FAILED: return qtr( "Failed" );
+        case SD_TRANSFER_CANCELLED: return qtr( "Cancelled" );
+    }
+    return QString();
+}
 
 /* Reloading a services discovery joins its thread, which may sit in a
  * network fetch: never do it on the UI thread. */
@@ -154,7 +194,8 @@ void PLSelItem::addAction( ItemAction act, const QString& tooltip )
 
 
 PLSelector::PLSelector( QWidget *p, intf_thread_t *_p_intf )
-           : QTreeWidget( p ), p_intf(_p_intf)
+           : QTreeWidget( p ), p_intf(_p_intf), powerLibraryItem( NULL ),
+             powerDevicesRoot( NULL ), powerDeviceBusy( false )
 {
     /* Properties */
     setFrameStyle( QFrame::NoFrame );
@@ -206,6 +247,10 @@ PLSelector::PLSelector( QWidget *p, intf_thread_t *_p_intf )
              this, &PLSelector::setSource );
     connect( this, &QTreeWidget::customContextMenuRequested,
              this, &PLSelector::showContextMenu );
+    QTimer *deviceTimer = new QTimer( this );
+    connect( deviceTimer, &QTimer::timeout, this,
+             &PLSelector::updatePowerDeviceTransfers );
+    deviceTimer->start( 250 );
 }
 
 PLSelector::~PLSelector()
@@ -283,15 +328,27 @@ void PLSelector::createItems()
     /* ML */
     if( THEPL->p_media_library )
     {
-        PLSelItem *ml = putPLData( addItem( PL_ITEM_TYPE, N_("Media Library"), true ),
+        PLSelItem *ml = putPLData( addItem( PL_ITEM_TYPE,
+                                           N_("Catch-all Media Library"), true ),
           THEPL->p_media_library );
         ml->treeItem()->setData( 0, SPECIAL_ROLE, QVariant( IS_ML ) );
         ml->treeItem()->setData( 0, Qt::DecorationRole, QIcon( ":/sidebar/library.svg" ) );
     }
 
+    /* The PowerVLC library is a first-class source, next to Playlist and the
+     * legacy catch-all node, rather than a generic My Computer service. */
+    PLSelItem *powerLibrary = addItem( SD_TYPE, N_("Media Library"), true );
+    powerLibraryItem = powerLibrary->treeItem();
+    powerLibrary->treeItem()->setData( 0, SPECIAL_ROLE, QVariant( IS_POWER_ML ) );
+    powerLibrary->treeItem()->setData( 0, SD_CATEGORY_ROLE, SD_CAT_MYCOMPUTER );
+    powerLibrary->treeItem()->setData( 0, Qt::DecorationRole,
+                                       QIcon( ":/sidebar/library.svg" ) );
+    putSDData( powerLibrary, "powervlc_library", N_("PowerVLC Media Library") );
+
     /* SD nodes */
     myComputerItem = addItem( CATEGORY_TYPE, N_("My Computer"), false, true )->treeItem();
     QTreeWidgetItem *devices = addItem( CATEGORY_TYPE, N_("Devices"), false, true )->treeItem();
+    powerDevicesRoot = devices;
     QTreeWidgetItem *lan = addItem( CATEGORY_TYPE, N_("Local Network"), false, true )->treeItem();
     QTreeWidgetItem *internet = addItem( CATEGORY_TYPE, N_("Internet"), false, true )->treeItem();
 
@@ -318,6 +375,13 @@ void PLSelector::createItems()
         PLSelItem *selItem;
         QIcon icon;
         QString name( *ppsz_name );
+        if( name == "powervlc_library" )
+        {
+            free( *ppsz_name );
+            free( *ppsz_longname );
+            continue;
+        }
+        const bool powerDevice = name.startsWith( "powervlc_device{" );
         switch( *p_category )
         {
         case SD_CAT_INTERNET:
@@ -346,13 +410,20 @@ void PLSelector::createItems()
             break;
         case SD_CAT_DEVICES:
             name = name.mid( 0, name.indexOf( '{' ) );
-            selItem = addItem( SD_TYPE, *ppsz_longname, false, false, devices );
+            selItem = addItem( SD_TYPE, *ppsz_longname, powerDevice, false,
+                               name == "disc" ? myComputerItem : devices );
             if ( name == "xcb_apps" )
                 icon = QIcon( ":/sidebar/screen.svg" );
             else if ( name == "mtp" )
                 icon = QIcon( ":/sidebar/mtp.svg" );
             else if ( name == "disc" )
+            {
                 icon = QIcon( ":/sidebar/disc.svg" );
+                selItem->treeItem()->setData( 0, SPECIAL_ROLE,
+                                              QVariant( IS_AUDIO_CD ) );
+            }
+            else if ( powerDevice )
+                icon = QIcon( ":/sidebar/mtp.svg" );
             else
                 icon = QIcon( ":/sidebar/capture.svg" );
             break;
@@ -377,6 +448,9 @@ void PLSelector::createItems()
         }
 
         selItem->treeItem()->setData( 0, SD_CATEGORY_ROLE, *p_category );
+        if( powerDevice )
+            selItem->treeItem()->setData( 0, SPECIAL_ROLE,
+                                          QVariant( IS_POWER_DEVICE ) );
         putSDData( selItem, *ppsz_name, *ppsz_longname );
         if ( ! icon.isNull() )
             selItem->treeItem()->setData( 0, Qt::DecorationRole, icon );
@@ -390,9 +464,40 @@ void PLSelector::createItems()
 
     /* Keep My Computer even when no local SD is available: live network
      * locations are attached here by Connect to Server. */
-    if( devices->childCount() == 0 ) delete devices;
+    /* Keep the Devices group alive: portable-player profiles can be added
+     * from Preferences without restarting the interface. */
     if( lan->childCount() == 0 ) delete lan;
     if( internet->childCount() == 0 ) delete internet;
+}
+
+void PLSelector::reloadPowerDevices()
+{
+    if( powerDevicesRoot == NULL ) return;
+    for( int i = powerDevicesRoot->childCount() - 1; i >= 0; --i )
+    {
+        QTreeWidgetItem *item = powerDevicesRoot->child( i );
+        if( item->data( 0, SPECIAL_ROLE ).toInt() == IS_POWER_DEVICE )
+            delete powerDevicesRoot->takeChild( i );
+    }
+    char **longnames = NULL; int *categories = NULL;
+    char **names = vlc_sd_GetNames( THEPL, &longnames, &categories );
+    if( names == NULL ) return;
+    for( int i = 0; names[i] != NULL; ++i )
+    {
+        QString chain = qfu( names[i] );
+        if( chain.startsWith( "powervlc_device{" ) )
+        {
+            PLSelItem *entry = addItem( SD_TYPE, longnames[i], true, false,
+                                        powerDevicesRoot );
+            entry->setIcon( QIcon( ":/sidebar/mtp.svg" ), QSize( 16, 16 ) );
+            putSDData( entry, names[i], longnames[i] );
+            entry->treeItem()->setData( 0, SPECIAL_ROLE, IS_POWER_DEVICE );
+            entry->treeItem()->setData( 0, SD_CATEGORY_ROLE, SD_CAT_DEVICES );
+        }
+        free( names[i] ); free( longnames[i] );
+    }
+    free( names ); free( longnames ); free( categories );
+    powerDevicesRoot->setExpanded( true );
 }
 
 bool PLSelector::addNetworkLocation( const QString& mrl )
@@ -477,15 +582,302 @@ void PLSelector::networkRemove( PLSelItem *network )
     delete item;
 }
 
+void PLSelector::updatePowerDeviceTransfers()
+{
+    if( powerLibraryItem != NULL )
+    {
+        QString title = qtr( "Media Library" );
+        if( var_GetBool( p_intf->obj.libvlc, PVLC_ML_SCAN_ACTIVE ) )
+        {
+            const uint64_t done = var_GetInteger( p_intf->obj.libvlc,
+                                                   PVLC_ML_SCAN_DONE );
+            const uint64_t total = var_GetInteger( p_intf->obj.libvlc,
+                                                    PVLC_ML_SCAN_TOTAL );
+            if( total > 0 )
+            {
+                const uint64_t remaining = total > done ? total - done : 0;
+                title = qtr( remaining == 1
+                    ? "Media Library — scanning %1% · %2 file remaining"
+                    : "Media Library — scanning %1% · %2 files remaining" )
+                    .arg( qMin<uint64_t>( 100, done * 100 / total ) )
+                    .arg( remaining );
+            }
+            else title = qtr( "Media Library — scanning…" );
+        }
+        PLSelItem *widget = itemWidget( powerLibraryItem );
+        if( widget && widget->text() != title ) widget->setText( title );
+        powerLibraryItem->setText( 0, title );
+    }
+    if( powerDevicesRoot == NULL ) return;
+    bool selectedDeviceDeleting = false;
+    for( int i = 0; i < powerDevicesRoot->childCount(); ++i )
+    {
+        QTreeWidgetItem *item = powerDevicesRoot->child( i );
+        if( item->data( 0, SPECIAL_ROLE ).toInt() != IS_POWER_DEVICE ) continue;
+        const QString service = item->data( 0, NAME_ROLE ).toString();
+        const QString base = item->data( 0, LONGNAME_ROLE ).toString();
+        bool active = false;
+        bool pendingChanges = false;
+        bool commitFailed = false;
+        unsigned activity = SD_DEVICE_IDLE;
+        uint64_t totalBytes = 0, freeBytes = 0;
+        if( playlist_IsServicesDiscoveryLoaded( THEPL, qtu( service ) ) )
+        {
+            services_discovery_transfer_status_t status = {};
+            if( playlist_ServicesDiscoveryControl( THEPL, qtu( service ),
+                    SD_CMD_POWERVLC_DEVICE_TRANSFERS, &status ) == VLC_SUCCESS ) {
+                active = status.b_synchronizing;
+                pendingChanges = status.b_pending_changes;
+                commitFailed = status.b_commit_failed;
+                activity = status.i_activity;
+                totalBytes = status.i_total_bytes;
+                freeBytes = status.i_free_bytes;
+            }
+            clearTransferStatus( &status );
+        }
+        QString operation;
+        if( activity == SD_DEVICE_LOADING_ITUNESDB ) operation = qtr( "Loading iTunesDB…" );
+        else if( activity == SD_DEVICE_LOADING_CONTENTS ) operation = qtr( "Loading contents…" );
+        else if( activity == SD_DEVICE_UPDATING_ITUNESDB ) operation = qtr( "Updating iTunesDB…" );
+        else if( activity == SD_DEVICE_DELETING ) operation = qtr( "Deleting…" );
+        else if( active ) operation = qtr( "Synchronizing" );
+        else if( commitFailed ) operation = qtr( "Finalization failed — changes still pending" );
+        else if( pendingChanges ) operation = qtr( "Changes pending finalization" );
+        QString title = operation.isEmpty() ? base : base + " (" + operation + ")";
+        if( totalBytes > 0 )
+            title += qtr( " — %1 GB free of %2 GB (%3%)" )
+                .arg( (double)freeBytes / 1000000000., 0, 'f', 1 )
+                .arg( (double)totalBytes / 1000000000., 0, 'f', 1 )
+                .arg( (unsigned)((freeBytes * 100) / totalBytes) );
+        PLSelItem *widget = itemWidget( item );
+        if( widget && widget->text() != title ) widget->setText( title );
+        item->setText( 0, title );
+        if( item == currentItem() && activity == SD_DEVICE_DELETING )
+            selectedDeviceDeleting = true;
+    }
+    if( selectedDeviceDeleting != powerDeviceBusy )
+    {
+        powerDeviceBusy = selectedDeviceDeleting;
+        emit powerDeviceBusyChanged( powerDeviceBusy );
+    }
+}
+
+QString PLSelector::currentPowerDeviceService() const
+{
+    QTreeWidgetItem *item = currentItem();
+    return item && item->data( 0, SPECIAL_ROLE ).toInt() == IS_POWER_DEVICE
+         ? item->data( 0, NAME_ROLE ).toString() : QString();
+}
+
+void PLSelector::showPowerDeviceTransfers( const QString &service,
+                                           const QString &deviceName )
+{
+    QDialog *dialog = new QDialog( this );
+    dialog->setAttribute( Qt::WA_DeleteOnClose );
+    dialog->setWindowTitle( qtr( "Transfer History — %1" ).arg( deviceName ) );
+    dialog->resize( 780, 380 );
+    QVBoxLayout *layout = new QVBoxLayout( dialog );
+    QTableWidget *table = new QTableWidget( dialog );
+    table->setColumnCount( 4 );
+    table->setHorizontalHeaderLabels( QStringList() << qtr( "File" )
+        << qtr( "Destination" ) << qtr( "Step" ) << qtr( "Progress" ) );
+    table->horizontalHeader()->setStretchLastSection( false );
+    table->horizontalHeader()->setSectionResizeMode( 0, QHeaderView::ResizeToContents );
+    table->horizontalHeader()->setSectionResizeMode( 1, QHeaderView::Stretch );
+    table->horizontalHeader()->setSectionResizeMode( 2, QHeaderView::ResizeToContents );
+    table->horizontalHeader()->setSectionResizeMode( 3, QHeaderView::ResizeToContents );
+    table->setEditTriggers( QAbstractItemView::NoEditTriggers );
+    table->setAlternatingRowColors( true );
+    layout->addWidget( table );
+    QHBoxLayout *actions = new QHBoxLayout;
+    QPushButton *cancelSelected = new QPushButton(
+                                    qtr( "Cancel Selected Transfer" ), dialog );
+    QPushButton *cancelAll = new QPushButton( qtr( "Cancel All Transfers" ),
+                                              dialog );
+    actions->addWidget( cancelSelected ); actions->addWidget( cancelAll );
+    actions->addStretch(); layout->addLayout( actions );
+
+    QTimer *timer = new QTimer( dialog );
+    auto refresh = [this, service, table]() {
+        qulonglong selectedId = 0;
+        if( table->currentRow() >= 0 && table->item( table->currentRow(), 0 ) )
+            selectedId = table->item( table->currentRow(), 0 )
+                              ->data( Qt::UserRole ).toULongLong();
+        services_discovery_transfer_status_t status = {};
+        if( playlist_ServicesDiscoveryControl( THEPL, qtu( service ),
+                SD_CMD_POWERVLC_DEVICE_TRANSFERS, &status ) != VLC_SUCCESS )
+            return;
+        table->setRowCount( (int)status.i_count );
+        for( size_t n = 0; n < status.i_count; ++n )
+        {
+            services_discovery_transfer_item_t *item =
+                &status.p_items[status.i_count - n - 1];
+            QString source = QFileInfo( QFile::decodeName(
+                                        item->psz_source ) ).fileName();
+            QTableWidgetItem *sourceItem = new QTableWidgetItem( source );
+            sourceItem->setData( Qt::UserRole,
+                                 QVariant::fromValue<qulonglong>( item->i_id ) );
+            table->setItem( (int)n, 0, sourceItem );
+            if( selectedId && selectedId == item->i_id )
+                table->setCurrentCell( (int)n, 0 );
+            table->setItem( (int)n, 1, new QTableWidgetItem(
+                            QFile::decodeName( item->psz_destination ) ) );
+            table->setItem( (int)n, 2, new QTableWidgetItem(
+                            transferStageText( item->i_stage ) ) );
+            table->setItem( (int)n, 3, new QTableWidgetItem(
+                            QStringLiteral( "%1 %" ).arg( item->i_progress ) ) );
+        }
+        clearTransferStatus( &status );
+    };
+    connect( cancelSelected, &QPushButton::clicked, dialog,
+             [this, service, table, refresh]() {
+        int row = table->currentRow();
+        QTableWidgetItem *item = row >= 0 ? table->item( row, 0 ) : NULL;
+        if( item == NULL ) return;
+        services_discovery_transfer_cancel_t request = {
+            item->data( Qt::UserRole ).toULongLong()
+        };
+        playlist_ServicesDiscoveryControl( THEPL, qtu( service ),
+            SD_CMD_POWERVLC_DEVICE_CANCEL_TRANSFER, &request );
+        refresh();
+    } );
+    connect( cancelAll, &QPushButton::clicked, dialog,
+             [this, service, refresh]() {
+        playlist_ServicesDiscoveryControl( THEPL, qtu( service ),
+                                            SD_CMD_POWERVLC_DEVICE_CANCEL_ALL );
+        refresh();
+    } );
+    connect( timer, &QTimer::timeout, dialog, refresh );
+    refresh(); timer->start( 250 ); dialog->show();
+}
+
 void PLSelector::showContextMenu( const QPoint& point )
 {
     QTreeWidgetItem *item = itemAt( point );
-    if( item == NULL || item->data( 0, SPECIAL_ROLE ).toInt() != IS_NETWORK )
-        return;
+    if( item == NULL ) return;
+    const int special = item->data( 0, SPECIAL_ROLE ).toInt();
     QMenu menu( this );
-    QAction *eject = menu.addAction( qtr( "Eject" ) );
-    if( menu.exec( viewport()->mapToGlobal( point ) ) == eject )
-        networkRemove( itemWidget( item ) );
+    if( special == IS_NETWORK )
+    {
+        QAction *eject = menu.addAction( qtr( "Eject" ) );
+        if( menu.exec( viewport()->mapToGlobal( point ) ) == eject )
+            networkRemove( itemWidget( item ) );
+        return;
+    }
+    if( special == IS_AUDIO_CD )
+    {
+        setSource( item );
+        QAction *import = menu.addAction( qtr( "Import Audio CD into Media Library" ) );
+        if( menu.exec( viewport()->mapToGlobal( point ) ) == import )
+            importAudioCD( item );
+        return;
+    }
+    if( special != IS_POWER_ML && special != IS_POWER_DEVICE ) return;
+
+    setSource( item );
+    const QString name = item->data( 0, NAME_ROLE ).toString();
+    if( !playlist_IsServicesDiscoveryLoaded( THEPL, qtu( name ) ) ) return;
+    if( special == IS_POWER_ML )
+    {
+        QAction *rescan = menu.addAction( qtr( "Rescan Media Library" ) );
+        if( menu.exec( viewport()->mapToGlobal( point ) ) == rescan )
+            playlist_ServicesDiscoveryControl( THEPL, qtu( name ),
+                                               SD_CMD_POWERVLC_RESCAN );
+        return;
+    }
+
+    QAction *commit = menu.addAction( qtr( "Finalize Changes" ) );
+    services_discovery_transfer_status_t commitStatus = {};
+    const bool commitStatusOK = playlist_ServicesDiscoveryControl(
+        THEPL, qtu( name ), SD_CMD_POWERVLC_DEVICE_TRANSFERS,
+        &commitStatus ) == VLC_SUCCESS;
+    commit->setEnabled( commitStatusOK && commitStatus.b_pending_changes
+                                      && !commitStatus.b_synchronizing );
+    clearTransferStatus( &commitStatus );
+    menu.addSeparator();
+    QAction *history = menu.addAction( qtr( "Transfer History…" ) );
+    menu.addSeparator();
+    QAction *backup = menu.addAction( qtr( "Back Up…" ) );
+    QAction *refresh = menu.addAction( qtr( "Refresh" ) );
+    QAction *selected = menu.exec( viewport()->mapToGlobal( point ) );
+    if( selected == commit )
+    {
+        if( playlist_ServicesDiscoveryControl( THEPL, qtu( name ),
+                SD_CMD_POWERVLC_DEVICE_COMMIT ) != VLC_SUCCESS )
+            QMessageBox::warning( this, qtr( "Unable to Finalize Changes" ),
+                qtr( "The portable player is unavailable. Your changes remain pending and can be validated after reconnecting it." ) );
+    }
+    else if( selected == history )
+        showPowerDeviceTransfers( name, item->data( 0, LONGNAME_ROLE ).toString() );
+    else if( selected == refresh )
+        playlist_ServicesDiscoveryControl( THEPL, qtu( name ),
+                                           SD_CMD_POWERVLC_RESCAN );
+    else if( selected == backup )
+    {
+        QString target = QFileDialog::getExistingDirectory(
+            this, qtr( "Choose Backup Folder" ), QDir::homePath() );
+        if( !target.isEmpty() )
+            playlist_ServicesDiscoveryControl( THEPL, qtu( name ),
+                SD_CMD_POWERVLC_DEVICE_BACKUP, qtu( target ) );
+    }
+}
+
+static void collectAudioCDTracks( playlist_item_t *node,
+                                  QVector<input_item_t *> &tracks )
+{
+    if( node == NULL ) return;
+    if( node->i_children > 0 )
+    {
+        for( int i = 0; i < node->i_children; ++i )
+            collectAudioCDTracks( node->pp_children[i], tracks );
+        return;
+    }
+    if( node->p_input == NULL ) return;
+    char *uri = input_item_GetURI( node->p_input );
+    bool track = uri && !strncmp( uri, "cdda://", 7 )
+              && input_item_GetDuration( node->p_input ) > 0;
+    free( uri );
+    if( track ) tracks.append( input_item_Hold( node->p_input ) );
+}
+
+void PLSelector::importAudioCD( QTreeWidgetItem *item )
+{
+    QVector<input_item_t *> tracks;
+    playlist_item_t *root = item->data( 0, PL_ITEM_ROLE )
+                                 .value<playlist_item_t *>();
+    playlist_Lock( THEPL );
+    collectAudioCDTracks( root, tracks );
+    playlist_Unlock( THEPL );
+    if( tracks.isEmpty() )
+    {
+        QMessageBox::information( this, qtr( "Import Audio CD" ),
+            qtr( "Open the Audio CD once so its tracks are displayed, then run the import again." ) );
+        return;
+    }
+    if( !playlist_IsServicesDiscoveryLoaded( THEPL, "powervlc_library" )
+     && playlist_ServicesDiscoveryAdd( THEPL, "powervlc_library" ) != VLC_SUCCESS )
+    {
+        for( input_item_t *track : tracks ) input_item_Release( track );
+        return;
+    }
+    int imported = 0;
+    for( input_item_t *track : tracks )
+    {
+        char *uri = input_item_GetURI( track );
+        char *title = input_item_GetTitleFbName( track );
+        char *artist = input_item_GetMeta( track, vlc_meta_Artist );
+        char *album = input_item_GetMeta( track, vlc_meta_Album );
+        services_discovery_import_t request = {
+            uri, title, artist, album, track
+        };
+        if( playlist_ServicesDiscoveryControl( THEPL, "powervlc_library",
+                SD_CMD_POWERVLC_IMPORT, &request ) == VLC_SUCCESS ) imported++;
+        free( uri ); free( title ); free( artist ); free( album );
+        input_item_Release( track );
+    }
+    QMessageBox::information( this, qtr( "Import Audio CD" ),
+        qtr( "%1 tracks are being imported as lossless FLAC files in the managed library." )
+            .arg( imported ) );
 }
 
 void PLSelector::setSource( QTreeWidgetItem *item )
@@ -542,7 +934,9 @@ void PLSelector::setSource( QTreeWidgetItem *item )
                 }
             }
             playlist_Unlock( THEPL );
-            if( b_empty && !b_sd_reload_busy )
+            const int special = item->data( 0, SPECIAL_ROLE ).toInt();
+            if( b_empty && special != IS_POWER_ML
+             && special != IS_POWER_DEVICE && !b_sd_reload_busy )
             {
                 /* reclaim the previous, finished reload thread (there is
                  * no detached variant in this core) */
@@ -610,7 +1004,9 @@ void PLSelector::setSource( QTreeWidgetItem *item )
     /* */
     if( pl_item )
     {
-        emit categoryActivated( pl_item, false );
+        int special = item->data( 0, SPECIAL_ROLE ).toInt();
+        emit categoryActivated( pl_item, special == IS_POWER_ML
+                                      || special == IS_POWER_DEVICE );
         int i_cat = item->data( 0, SD_CATEGORY_ROLE ).toInt();
         emit SDCategorySelected( i_cat == SD_CAT_INTERNET
                                  || i_cat == SD_CAT_LAN );
@@ -666,7 +1062,7 @@ PLSelItem *PLSelector::addPodcastItem( playlist_item_t *p_item )
 QStringList PLSelector::mimeTypes() const
 {
     QStringList types;
-    types << "vlc/qt-input-items";
+    types << "vlc/qt-input-items" << "text/uri-list";
     return types;
 }
 
@@ -679,7 +1075,84 @@ bool PLSelector::dropMimeData ( QTreeWidgetItem * parent, int,
     if( type == QVariant() ) return false;
 
     int i_truth = parent->data( 0, SPECIAL_ROLE ).toInt();
-    if( i_truth != IS_PL && i_truth != IS_ML ) return false;
+    if( i_truth != IS_PL && i_truth != IS_ML && i_truth != IS_POWER_ML
+     && i_truth != IS_POWER_DEVICE )
+        return false;
+
+    if( i_truth == IS_POWER_DEVICE )
+    {
+        const QString service = parent->data( 0, NAME_ROLE ).toString();
+        if( !playlist_IsServicesDiscoveryLoaded( THEPL, qtu( service ) )
+         && playlist_ServicesDiscoveryAdd( THEPL, qtu( service ) )
+                                                        != VLC_SUCCESS )
+            return false;
+        bool queued = false;
+        const PlMimeData *plMimeData = qobject_cast<const PlMimeData *>( data );
+        if( plMimeData )
+            for( input_item_t *input : plMimeData->inputItems() )
+            {
+                char *uri = input_item_GetURI( input );
+                char *path = uri ? vlc_uri2path( uri ) : NULL;
+                free( uri );
+                if( path == NULL ) continue;
+                services_discovery_import_t request = {
+                    path, NULL, NULL, NULL, input
+                };
+                queued |= playlist_ServicesDiscoveryControl( THEPL,
+                    qtu( service ), SD_CMD_POWERVLC_DEVICE_ADD, &request )
+                    == VLC_SUCCESS;
+                free( path );
+            }
+        for( const QUrl &url : data->urls() )
+        {
+            if( !url.isLocalFile() ) continue;
+            QByteArray path = QFile::encodeName( url.toLocalFile() );
+            services_discovery_import_t request = {
+                path.constData(), NULL, NULL, NULL, NULL
+            };
+            queued |= playlist_ServicesDiscoveryControl( THEPL,
+                qtu( service ), SD_CMD_POWERVLC_DEVICE_ADD, &request )
+                == VLC_SUCCESS;
+        }
+        return queued;
+    }
+
+    if( i_truth == IS_POWER_ML )
+    {
+        const QString service = parent->data( 0, NAME_ROLE ).toString();
+        if( !playlist_IsServicesDiscoveryLoaded( THEPL, qtu( service ) )
+         && playlist_ServicesDiscoveryAdd( THEPL, qtu( service ) ) != VLC_SUCCESS )
+            return false;
+        bool imported = false;
+        const PlMimeData *plMimeData = qobject_cast<const PlMimeData *>( data );
+        if( plMimeData )
+        {
+            const QList<input_item_t *> inputItems = plMimeData->inputItems();
+            for( input_item_t *input : inputItems )
+            {
+                char *uri = input_item_GetURI( input );
+                char *path = uri ? vlc_uri2path( uri ) : NULL;
+                free( uri );
+                if( path == NULL ) continue;
+                char *title = input_item_GetTitle( input );
+                char *artist = input_item_GetArtist( input );
+                char *album = input_item_GetAlbum( input );
+                services_discovery_import_t request = { path, title, artist, album, NULL };
+                imported |= playlist_ServicesDiscoveryControl( THEPL,
+                    qtu( service ), SD_CMD_POWERVLC_IMPORT, &request ) == VLC_SUCCESS;
+                free( path ); free( title ); free( artist ); free( album );
+            }
+        }
+        for( const QUrl &url : data->urls() )
+        {
+            if( !url.isLocalFile() ) continue;
+            QByteArray path = QFile::encodeName( url.toLocalFile() );
+            services_discovery_import_t request = { path.constData(), NULL, NULL, NULL, NULL };
+            imported |= playlist_ServicesDiscoveryControl( THEPL,
+                qtu( service ), SD_CMD_POWERVLC_IMPORT, &request ) == VLC_SUCCESS;
+        }
+        return imported;
+    }
 
     bool to_pl = ( i_truth == IS_PL );
 

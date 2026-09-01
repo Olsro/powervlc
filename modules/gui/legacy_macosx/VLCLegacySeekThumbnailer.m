@@ -343,6 +343,32 @@ static NSData *VLCFirstPNGFrame(NSData *data)
     return nil;
 }
 
+/* MVC sort les deux yeux empilés. Le décodeur met toujours l'œil gauche en
+ * premier, même quand la vue AVC de base est la droite : la moitié haute est
+ * donc la seule vignette utile. Le test de rapport très serré protège les
+ * vraies vidéos verticales. Compatible avec l'API de dessin de Mac OS X 10.4. */
+static NSImage *VLCLegacyLeftEyeThumbnail(NSImage *image)
+{
+    NSSize size = [image size];
+    NSSize eyeSize;
+    NSImage *leftEye;
+
+    if (size.width <= 0. || size.height <= 0.
+     || fabs(size.height / size.width - 9. / 8.) > .02)
+        return image;
+
+    eyeSize = NSMakeSize(size.width, floor(size.height / 2.));
+    leftEye = [[[NSImage alloc] initWithSize:eyeSize] autorelease];
+    [leftEye lockFocus];
+    [image drawInRect:NSMakeRect(0., 0., eyeSize.width, eyeSize.height)
+             fromRect:NSMakeRect(0., size.height - eyeSize.height,
+                                 size.width, eyeSize.height)
+            operation:NSCompositeCopy
+             fraction:1.];
+    [leftEye unlockFocus];
+    return leftEye;
+}
+
 - (NSImage *)renderThumbnailWithIntf:(intf_thread_t *)intf
                                  URI:(NSString *)uri
                            atSeconds:(double)seconds
@@ -430,9 +456,11 @@ static NSData *VLCFirstPNGFrame(NSData *data)
     input_item_Release(p_item);
 
     NSData *pngData = [NSData dataWithContentsOfFile:pngPath];
-    if ([pngData length] > 0)
-        image = [[[NSImage alloc]
-                     initWithData:VLCFirstPNGFrame(pngData)] autorelease];
+    if ([pngData length] > 0) {
+        NSImage *decoded = [[[NSImage alloc]
+            initWithData:VLCFirstPNGFrame(pngData)] autorelease];
+        image = VLCLegacyLeftEyeThumbnail(decoded);
+    }
     return image;
 }
 

@@ -41,6 +41,25 @@
  *****************************************************************************/
 static void *Thread   ( void * );
 
+static bool playlist_IsClosedAlbumScope( playlist_t *p_playlist )
+{
+    playlist_item_t *node = get_current_status_node( p_playlist );
+    return node && node->p_input
+        && input_item_IsPowerVLCAlbumScope( node->p_input );
+}
+
+/* A PowerVLC Random action makes its random choice while generating its
+ * private XSPF.  The resulting scope is an ordinary ordered queue; applying
+ * VLC's global shuffle a second time would scramble the selected album. */
+static bool playlist_ShouldShuffleCurrent( playlist_t *p_playlist )
+{
+    playlist_item_t *node = get_current_status_node( p_playlist );
+    return var_GetBool( p_playlist, "random" )
+        && !playlist_IsClosedAlbumScope( p_playlist )
+        && !( node && node->p_input
+           && input_item_IsPowerVLCRandomAction( node->p_input ) );
+}
+
 /*****************************************************************************
  * Main functions for the global thread
  *****************************************************************************/
@@ -168,7 +187,8 @@ void ResetCurrentlyPlaying( playlist_t *p_playlist,
     PL_DEBUG("rebuild done - %i items, index %i", p_playlist->current.i_size,
                                                   p_playlist->i_current_index);
 
-    if( var_GetBool( p_playlist, "random" ) && ( p_playlist->current.i_size > 0 ) )
+    if( playlist_ShouldShuffleCurrent( p_playlist )
+     && ( p_playlist->current.i_size > 0 ) )
     {
         /* Shuffle the array */
         for( unsigned j = p_playlist->current.i_size - 1; j > 0; j-- )
@@ -179,6 +199,20 @@ void ResetCurrentlyPlaying( playlist_t *p_playlist,
             p_tmp = ARRAY_VAL(p_playlist->current, i);
             ARRAY_VAL(p_playlist->current,i) = ARRAY_VAL(p_playlist->current,j);
             ARRAY_VAL(p_playlist->current,j) = p_tmp;
+        }
+        /* i_current_index was computed before the shuffle.  Keeping that
+         * numeric position would silently select whichever item was moved
+         * there (notably a random track instead of track 1 for PowerVLC's
+         * preselected random album). Re-find the requested leaf afterwards. */
+        if( p_cur != NULL )
+        {
+            p_playlist->i_current_index = -1;
+            for( int i = 0; i < p_playlist->current.i_size; ++i )
+                if( ARRAY_VAL( p_playlist->current, i ) == p_cur )
+                {
+                    p_playlist->i_current_index = i;
+                    break;
+                }
         }
     }
     p_sys->b_reset_currently_playing = false;
@@ -313,18 +347,21 @@ static playlist_item_t *NextItem( playlist_t *p_playlist )
             if( p_new != NULL )
             {
                 p_new = playlist_GetNextLeaf( p_playlist, p_new, NULL, true, false );
+                /* A node activation explicitly means its first playable
+                 * descendant. It is not a relative +1 request. */
+                if( p_new != NULL ) i_skip = 0;
                 for( int i = 0; i < p_playlist->current.i_size; i++ )
                 {
                     if( p_new == ARRAY_VAL( p_playlist->current, i ) )
                     {
                         p_playlist->i_current_index = i;
-                        i_skip = 0;
                     }
                 }
             }
         }
 
-        if( p_sys->b_reset_currently_playing )
+        if( p_sys->b_reset_currently_playing
+         || ( i_skip != 0 && playlist_IsClosedAlbumScope( p_playlist ) ) )
             /* A bit too bad to reset twice ... */
             ResetCurrentlyPlaying( p_playlist, p_new );
         else if( p_new )
@@ -341,9 +378,15 @@ static playlist_item_t *NextItem( playlist_t *p_playlist )
                 p_playlist->i_current_index++;
                 if( p_playlist->i_current_index >= p_playlist->current.i_size )
                 {
+                    if( playlist_IsClosedAlbumScope( p_playlist ) )
+                    {
+                        p_playlist->i_current_index =
+                            p_playlist->current.i_size - 1;
+                        return NULL;
+                    }
                     PL_DEBUG( "looping - restarting at beginning of node" );
                     /* reshuffle playlist when end is reached */
-                    if( var_GetBool( p_playlist, "random" ) ) {
+                    if( playlist_ShouldShuffleCurrent( p_playlist ) ) {
                         PL_DEBUG( "reshuffle playlist" );
                         ResetCurrentlyPlaying( p_playlist,
                                 get_current_status_item( p_playlist ) );
@@ -363,7 +406,7 @@ static playlist_item_t *NextItem( playlist_t *p_playlist )
                 {
                     PL_DEBUG( "looping - restarting at end of node" );
                     /* reshuffle playlist when beginning is reached */
-                    if( var_GetBool( p_playlist, "random" ) ) {
+                    if( playlist_ShouldShuffleCurrent( p_playlist ) ) {
                         PL_DEBUG( "reshuffle playlist" );
                         ResetCurrentlyPlaying( p_playlist,
                                 get_current_status_item( p_playlist ) );
@@ -407,10 +450,11 @@ static playlist_item_t *NextItem( playlist_t *p_playlist )
         assert( p_playlist->i_current_index <= p_playlist->current.i_size );
         if( p_playlist->i_current_index == p_playlist->current.i_size )
         {
-            if( !b_loop || p_playlist->current.i_size == 0 )
+            if( playlist_IsClosedAlbumScope( p_playlist )
+             || !b_loop || p_playlist->current.i_size == 0 )
                 return NULL;
             /* reshuffle after last item has been played */
-            if( var_GetBool( p_playlist, "random" ) ) {
+            if( playlist_ShouldShuffleCurrent( p_playlist ) ) {
                 PL_DEBUG( "reshuffle playlist" );
                 ResetCurrentlyPlaying( p_playlist,
                                        get_current_status_item( p_playlist ) );

@@ -94,7 +94,11 @@ typedef enum {
 @property (readonly) BOOL nativeFullscreenMode;
 @property (readwrite) BOOL nonembedded;
 
-@property (readonly) VLCFSPanelController* fspanel;
+/* The fullscreen-panel controller is created during nib loading and must stay
+ * alive for the lifetime of the main window.  The default ownership for an
+ * object property is `assign`; on Lion that allowed the controller to begin
+ * deallocation while -windowDidLoad was installing its weak slider delegate. */
+@property (readonly, strong) VLCFSPanelController* fspanel;
 
 @property (readwrite, strong) VLCSidebarDataSource *sidebarDataSource;
 

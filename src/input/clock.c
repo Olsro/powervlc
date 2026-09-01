@@ -143,6 +143,7 @@ struct input_clock_t
 {
     /* */
     vlc_mutex_t lock;
+    vlc_object_t *p_log;
 
     /* Last point
      * It is used to detect unexpected stream discontinuities */
@@ -188,13 +189,14 @@ static vlc_tick_t ClockGetTsOffset( input_clock_t * );
 /*****************************************************************************
  * input_clock_New: create a new clock
  *****************************************************************************/
-input_clock_t *input_clock_New( int i_rate )
+input_clock_t *input_clock_New( vlc_object_t *p_log, int i_rate )
 {
     input_clock_t *cl = malloc( sizeof(*cl) );
     if( !cl )
         return NULL;
 
     vlc_mutex_init( &cl->lock );
+    cl->p_log = p_log;
     cl->b_has_reference = false;
     cl->ref = clock_point_Create( VLC_TICK_INVALID, VLC_TICK_INVALID );
     cl->b_has_external_clock = false;
@@ -277,6 +279,11 @@ void input_clock_Update( input_clock_t *cl, vlc_object_t *p_log,
         cl->b_has_reference = true;
         cl->ref = clock_point_Create( i_ck_stream,
                                       __MAX( cl->i_ts_max + CR_MEAN_PTS_GAP, i_ck_system ) );
+        msg_Warn( cl->p_log, "clock %p reference reset: stream=%"PRId64
+                  " system=%"PRId64" input_system=%"PRId64
+                  " ts_max=%"PRId64,
+                  (void *)cl, cl->ref.i_stream, cl->ref.i_system,
+                  i_ck_system, cl->i_ts_max );
         cl->b_has_external_clock = false;
     }
 
@@ -333,6 +340,11 @@ void input_clock_Reset( input_clock_t *cl )
 {
     vlc_mutex_lock( &cl->lock );
 
+    msg_Warn( cl->p_log, "clock %p reset: had_reference=%d stream=%"PRId64
+              " system=%"PRId64,
+              (void *)cl, cl->b_has_reference,
+              cl->ref.i_stream, cl->ref.i_system );
+
     cl->b_has_reference = false;
     cl->ref = clock_point_Create( VLC_TICK_INVALID, VLC_TICK_INVALID );
     cl->b_has_external_clock = false;
@@ -348,6 +360,9 @@ void input_clock_ChangeRate( input_clock_t *cl, int i_rate )
 {
     vlc_mutex_lock( &cl->lock );
 
+    const vlc_tick_t i_before = cl->ref.i_system;
+    const int i_old_rate = cl->i_rate;
+
     if( cl->b_has_reference )
     {
         /* Move the reference point (as if we were playing at the new rate
@@ -355,6 +370,11 @@ void input_clock_ChangeRate( input_clock_t *cl, int i_rate )
         cl->ref.i_system = cl->last.i_system - (cl->last.i_system - cl->ref.i_system) * i_rate / cl->i_rate;
     }
     cl->i_rate = i_rate;
+
+    msg_Warn( cl->p_log, "clock %p rate change: old_origin=%"PRId64
+              " new_origin=%"PRId64" old_rate=%d new_rate=%d last=%"PRId64,
+              (void *)cl, i_before, cl->ref.i_system, i_old_rate,
+              i_rate, cl->last.i_system );
 
     vlc_mutex_unlock( &cl->lock );
 }
@@ -366,6 +386,8 @@ void input_clock_ChangePause( input_clock_t *cl, bool b_paused, vlc_tick_t i_dat
 {
     vlc_mutex_lock( &cl->lock );
     assert( (!cl->b_paused) != (!b_paused) );
+
+    const vlc_tick_t i_before = cl->ref.i_system;
 
     if( cl->b_paused )
     {
@@ -379,6 +401,10 @@ void input_clock_ChangePause( input_clock_t *cl, bool b_paused, vlc_tick_t i_dat
     }
     cl->i_pause_date = i_date;
     cl->b_paused = b_paused;
+
+    msg_Warn( cl->p_log, "clock %p pause change: paused=%d date=%"PRId64
+              " old_origin=%"PRId64" new_origin=%"PRId64,
+              (void *)cl, b_paused, i_date, i_before, cl->ref.i_system );
 
     vlc_mutex_unlock( &cl->lock );
 }
@@ -517,8 +543,14 @@ void input_clock_ChangeSystemOrigin( input_clock_t *cl, bool b_absolute, vlc_tic
         i_offset = i_system - cl->i_external_clock;
     }
 
+    const vlc_tick_t i_before = cl->ref.i_system;
     cl->ref.i_system += i_offset;
     cl->last.i_system += i_offset;
+
+    msg_Warn( cl->p_log, "clock %p system origin change: absolute=%d value=%"PRId64
+              " offset=%"PRId64" old_origin=%"PRId64" new_origin=%"PRId64,
+              (void *)cl, b_absolute, i_system, i_offset,
+              i_before, cl->ref.i_system );
 
     vlc_mutex_unlock( &cl->lock );
 }
@@ -528,8 +560,13 @@ void input_clock_OffsetSystemOrigin( input_clock_t *cl, vlc_tick_t i_offset )
     vlc_mutex_lock( &cl->lock );
 
     assert( cl->b_has_reference );
+    const vlc_tick_t i_before = cl->ref.i_system;
     cl->ref.i_system += i_offset;
     cl->last.i_system += i_offset;
+
+    msg_Warn( cl->p_log, "clock %p system origin offset: value=%"PRId64
+              " old_origin=%"PRId64" new_origin=%"PRId64,
+              (void *)cl, i_offset, i_before, cl->ref.i_system );
 
     vlc_mutex_unlock( &cl->lock );
 }
@@ -545,6 +582,26 @@ void input_clock_GetSystemOrigin( input_clock_t *cl, vlc_tick_t *pi_system, vlc_
         *pi_delay  = cl->i_pts_delay;
 
     vlc_mutex_unlock( &cl->lock );
+}
+
+vlc_tick_t input_clock_GetCurrentStream( input_clock_t *cl,
+                                         vlc_tick_t i_system )
+{
+    vlc_mutex_lock( &cl->lock );
+
+    vlc_tick_t stream = VLC_TICK_INVALID;
+    if( cl->b_has_reference )
+    {
+        /* input_clock_ConvertTS() presents a stream timestamp at
+         * ClockStreamToSystem(stream + drift) + pts_delay. Invert that
+         * mapping so disc overlays can follow the picture actually reaching
+         * the display instead of the demuxer's read-ahead position. */
+        stream = ClockSystemToStream( cl, i_system - cl->i_pts_delay )
+               - AvgGet( &cl->drift );
+    }
+
+    vlc_mutex_unlock( &cl->lock );
+    return stream;
 }
 
 #warning "input_clock_SetJitter needs more work"

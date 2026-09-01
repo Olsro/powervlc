@@ -1,0 +1,11 @@
+--- a/src/powerpc/darwin_closure.S
++++ b/src/powerpc/darwin_closure.S
+@@ -34,7 +34,7 @@
+ #define MODE_CHOICE(x, y) x
+ #endif
+ 
+-#define machine_choice	MODE_CHOICE(ppc7400,ppc64)
++#define machine_choice	MODE_CHOICE(ppc750,ppc64)
+ 
+ ; Define some pseudo-opcodes for size-independent load & store of GPRs ...
+ #define lgu		MODE_CHOICE(lwzu, ldu)

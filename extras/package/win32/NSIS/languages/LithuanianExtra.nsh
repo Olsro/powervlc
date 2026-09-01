@@ -57,6 +57,7 @@ ${LangFileString} Action_OnArrivalSVCDMovie "Žiūrėti SVCD filmą"
 ${LangFileString} Action_OnArrivalVideoFiles "Žiūrėti video failus"
 ${LangFileString} Action_OnArrivalMusicFiles "Klausytis garso failų"
 ${LangFileString} Action_OnArrivalDVDAudio "Klausytis garso DVD"
+${LangFileString} Action_OnArrivalBluray "Žiūrėti „Blu-ray“"
 ${LangFileString} License_NextText "Dabar jau žinote savo teises. Jei norite tęsti, spustelėkite mygtuką Toliau"
 
 ${LangFileString} Detail_CheckProcesses "Tikrinami procesai..."

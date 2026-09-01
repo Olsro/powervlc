@@ -10,6 +10,7 @@ SUBDIRS = compat doc po share src modules lib bin test
 DIST_SUBDIRS = m4 $(SUBDIRS)
 
 EXTRA_DIST = \
+	CRT-FILTER.md \
 	extras/package/macosx/package.mak \
 	extras/package/win32/package.mak \
 	extras/package/npapi.am

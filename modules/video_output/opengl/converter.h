@@ -54,7 +54,7 @@
 
 #ifdef HAVE_LIBPLACEBO
 # include <libplacebo/config.h>
-# if PL_API_VER >= 157
+# if defined(HAVE_LIBPLACEBO) && PL_API_VER >= 157
 #  include <libplacebo/log.h>
 #  include <libplacebo/shaders.h>
 # endif
@@ -101,6 +101,12 @@ typedef void (APIENTRY *PFNGLTEXPARAMETERFPROC) (GLenum target, GLenum pname, GL
 typedef void (APIENTRY *PFNGLTEXPARAMETERIPROC) (GLenum target, GLenum pname, GLint param);
 typedef void (APIENTRY *PFNGLTEXSUBIMAGE2DPROC) (GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void *pixels);
 typedef void (APIENTRY *PFNGLVIEWPORTPROC) (GLint x, GLint y, GLsizei width, GLsizei height);
+typedef void (APIENTRY *PFNGLBINDFRAMEBUFFERPROC) (GLenum target, GLuint framebuffer);
+typedef GLenum (APIENTRY *PFNGLCHECKFRAMEBUFFERSTATUSPROC) (GLenum target);
+typedef void (APIENTRY *PFNGLDELETEFRAMEBUFFERSPROC) (GLsizei n, const GLuint *framebuffers);
+typedef void (APIENTRY *PFNGLFRAMEBUFFERTEXTURE2DPROC) (GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+typedef void (APIENTRY *PFNGLGENFRAMEBUFFERSPROC) (GLsizei n, GLuint *framebuffers);
+typedef void (APIENTRY *PFNGLGENERATEMIPMAPPROC) (GLenum target);
 
 /* The following are defined in glext.h but not for GLES2 or on Apple systems */
 #if defined(USE_OPENGL_ES2) || defined(__APPLE__)
@@ -274,6 +280,12 @@ typedef struct {
     PFNGLDELETEBUFFERSPROC DeleteBuffers;
 
     /* Framebuffers commands */
+    PFNGLBINDFRAMEBUFFERPROC BindFramebuffer; /* can be NULL */
+    PFNGLCHECKFRAMEBUFFERSTATUSPROC CheckFramebufferStatus; /* can be NULL */
+    PFNGLDELETEFRAMEBUFFERSPROC DeleteFramebuffers; /* can be NULL */
+    PFNGLFRAMEBUFFERTEXTURE2DPROC FramebufferTexture2D; /* can be NULL */
+    PFNGLGENFRAMEBUFFERSPROC GenFramebuffers; /* can be NULL */
+    PFNGLGENERATEMIPMAPPROC GenerateMipmap; /* can be NULL */
     PFNGLGETFRAMEBUFFERATTACHMENTPARAMETERIVPROC GetFramebufferAttachmentParameteriv;
 
     /* Commands used for PBO and/or Persistent mapping */
@@ -319,7 +331,7 @@ struct opengl_tex_converter_t
     /* Pointer to object gl, set by the caller */
     vlc_gl_t *gl;
 
-# if PL_API_VER >= 157
+# if defined(HAVE_LIBPLACEBO) && PL_API_VER >= 157
     pl_log pl_ctx;
 # else
     /* libplacebo context, created by the caller (optional) */

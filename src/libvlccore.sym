@@ -43,6 +43,11 @@ block_mmap_Alloc
 block_shm_Alloc
 block_Realloc
 block_TryRealloc
+input_BookmarksClearAll
+input_BookmarksExport
+input_BookmarksExportAll
+input_BookmarksImport
+input_BookmarksImportAll
 config_AddIntf
 config_ChainCreate
 config_ChainDestroy
@@ -92,6 +97,7 @@ vlc_demux_chained_New
 vlc_demux_chained_Send
 vlc_demux_chained_ControlVa
 vlc_demux_chained_Delete
+vlc_demux_chained_GetBytes
 EndMD5
 es_format_Clean
 es_format_Copy
@@ -190,6 +196,7 @@ input_item_GetURI
 input_item_HasErrorWhenReading
 input_item_IsArtFetched
 input_item_IsPreparsed
+input_item_SetPreparsed
 input_item_MetaMatch
 input_item_MergeInfos
 input_item_NewExt
@@ -354,6 +361,9 @@ playlist_NodeAddCopy
 playlist_NodeAddInput
 playlist_NodeCreate
 playlist_NodeDelete
+playlist_NodeDeleteBatch
+playlist_NodeEmpty
+playlist_PowerVLCRandomResolve
 playlist_RecursiveNodeSort
 playlist_ServicesDiscoveryAdd
 playlist_ServicesDiscoveryControl
@@ -424,6 +434,7 @@ vlc_stream_fifo_New
 vlc_stream_fifo_Queue
 vlc_stream_fifo_Write
 vlc_stream_fifo_Close
+vlc_stream_fifo_GetBytes
 vlc_strfinput
 vlc_strftime
 subpicture_Delete
@@ -554,6 +565,8 @@ vlc_dialog_id_post_login
 vlc_dialog_id_set_context
 vlc_dialog_is_cancelled
 vlc_dialog_provider_set_callbacks
+vlc_dialog_provider_set_directory_callback
+vlc_dialog_select_directory
 vlc_dialog_provider_set_ext_callback
 vlc_dialog_release
 vlc_dialog_update_progress
@@ -712,10 +725,13 @@ vlm_MessageNew
 vlm_MessageSimpleNew
 vlm_New
 vout_ChangeAspectRatio
+vout_ChangeInteractiveOverlay
+vout_ChangeStaticFrameHold
 vout_Close
 vout_GetPicture
 vout_PutPicture
 vout_PutSubpicture
+vout_RefreshSubpicture
 vout_RegisterSubpictureChannel
 vout_FlushSubpictureChannel
 vout_GetSnapshot

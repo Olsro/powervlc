@@ -127,6 +127,13 @@ NSString *VLCLegacyRunTextPrompt(NSString *title, NSString *subtitle,
                                  NSString *okTitle, NSString *cancelTitle,
                                  NSString *initialValue);
 
+/* App-modal username/password prompt used by the core credential dialog.
+ * Empty passwords are valid. Returns NO only when the user cancels. */
+BOOL VLCLegacyRunLoginPrompt(NSString *title, NSString *subtitle,
+                             NSString *initialUsername, BOOL askStore,
+                             NSString **username, NSString **password,
+                             BOOL *store);
+
 /* App-modal prompt with one popup (VLCPopupPanelController equivalent).
  * Returns the selected index, or -1 when cancelled. */
 NSInteger VLCLegacyRunPopupPrompt(NSString *title, NSString *subtitle,

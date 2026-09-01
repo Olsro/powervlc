@@ -1,0 +1,96 @@
+--- a/src/itdb_hashAB.c
++++ b/src/itdb_hashAB.c
+@@ -31,42 +31,26 @@
+ 
+ #include <glib/gstdio.h>
+ 
+-#include <gmodule.h>
+-
+ #include "itdb_device.h"
+ #include "db-itunes-parser.h"
+ #include "itdb_private.h"
+ 
+-typedef void (*calcHashAB_t)(unsigned char target[57], const unsigned char sha1[20], const unsigned char uuid[20], const unsigned char rnd_bytes[23]);
+-static calcHashAB_t calc_hashAB = NULL;
++/* HashAB is now built into libgpod.  Prefix every external symbol from the
++ * public-domain implementation so none of its intentionally generic helper
++ * names (hash, reduce, expand...) leak from libgpod or collide with clients. */
++#define calcHashAB           powervlc_hashab_calculate
++#define stage1_cipher        powervlc_hashab_stage1_cipher
++#define stage2_cipher        powervlc_hashab_stage2_cipher
++#define stage1_profile       powervlc_hashab_stage1_profile
++#define stage2_profile       powervlc_hashab_stage2_profile
++#define stage1_initial_chain powervlc_hashab_stage1_initial_chain
++#define EdonR256Init         powervlc_hashab_edonr256_init
++#define EdonR256Compress     powervlc_hashab_edonr256_compress
++#define expand               powervlc_hashab_expand
++#define hash                 powervlc_hashab_hash
++#define reduce               powervlc_hashab_reduce
++#include "hashab/calcHashAB.h"
+ 
+-static gboolean load_libhashab()
+-{
+-	gchar *path;
+-	GModule *handle;
+-
+-	if (!g_module_supported()) {
+-		return FALSE;
+-	}
+-	path = g_module_build_path(LIBGPOD_BLOB_DIR, "hashab");
+-	handle = g_module_open(path, G_MODULE_BIND_LAZY);
+-	g_free(path);
+-	if (!handle) {
+-		return FALSE;
+-	}
+-
+-	if (!g_module_symbol(handle, "calcHashAB", (void**)&calc_hashAB)) {
+-		g_module_close(handle);
+-		g_warning("symbol 'calcHashAB' not found");
+-		return FALSE;
+-	}
+-	g_module_make_resident(handle);
+-
+-	printf("***** hashAB support successfully loaded *****\n");
+-
+-	return TRUE;
+-}
+-
+ static void itdb_hashAB_compute_itunesdb_sha1 (unsigned char *itdb_data, 
+ 					       gsize itdb_len,
+ 					       unsigned char sha1[20])
+@@ -111,20 +95,27 @@ gboolean itdb_hashAB_compute_hash_for_sha1 (const Itdb_Device *device,
+     unsigned char uuid[20];
+     unsigned char rndpart[23] = "ABCDEFGHIJKLMNOPQRSTUVW";
+ 
+-    if (calc_hashAB == NULL) {
+-	if (!load_libhashab()) {
+-	    g_set_error (error, 0, -1, "Unsupported checksum type");
+-	    return FALSE;
+-	}
++    if (!itdb_device_get_hex_uuid(device, uuid)) {
++        g_set_error (error, 0, -1, "Couldn't find the iPod firewire ID");
++        return FALSE;
+     }
+ 
+-    if (!itdb_device_get_hex_uuid(device, uuid)) return FALSE;
+-
+-    calc_hashAB(signature, sha1, uuid, rndpart);
++    calcHashAB(signature, sha1, uuid, rndpart);
+ 
+     return TRUE;
+ }
+ 
++/* Keep HashAB in this translation unit so libgpod's generated automake files
++ * do not need to know about the imported implementation.  The source order
++ * mirrors HashAB's own native build. */
++#include "hashab/edonr.c"
++#include "hashab/cipher_tables.c"
++#include "hashab/cipher.c"
++#include "hashab/expand.c"
++#include "hashab/hash.c"
++#include "hashab/reduce.c"
++#include "hashab/calcHashAB.c"
++
+ gboolean itdb_hashAB_write_hash (const Itdb_Device *device,
+ 				 unsigned char *itdb_data,
+ 				 gsize itdb_len,

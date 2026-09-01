@@ -35,6 +35,7 @@ return {
   mode_playlists = "Spellistor",
   btn_search = "Sök",
   btn_open = "Öppna markerat",
+  btn_open_channel = "Öppna kanalen för det markerade objektet",
   btn_change_instance = "< Instans",
   msg_enter_query = "Skriv något att söka efter",
   msg_searching = "Söker…",
@@ -45,7 +46,14 @@ return {
   msg_target_found = "Adressen känns igen — den öppnas direkt",
   msg_search_fail = "Sökningen misslyckades: ",
   msg_select_result = "Välj först ett resultat i listan",
+  msg_channel_unavailable = "Kanalen som hör till det här valet är inte "
+                          .. "tillgänglig",
   lbl_quality = "Kvalitet:",
+  lbl_audio_track = "Ljudspår:",
+  audio_default = "Standardljud",
+  audio_original = "original",
+  lbl_subtitles = "Undertexter:",
+  subtitles_none = "Inga",
   lbl_by = "av",
   audio_only = "Endast ljud",
   combined = "ljud+video",
@@ -167,4 +175,17 @@ return {
             .. "PowerVLC-tillägget</strong> in ett litet tillägg i webbläsaren "
             .. "som sköter det själv — inget bokmärke, inga klick, på varje "
             .. "sida.",
+  web_addon_lead = "Är tillägget installerat? Då finns inget att dra och "
+                 .. "inget att klicka på: öppna bara instansen nedan och "
+                 .. "klara dess kontroll. Den här sidan talar om när "
+                 .. "förbindelsen är upprättad.",
+  web_steps_title = "Utan tillägget: bokmärket",
+  web_relay_on_addon = "Ansluten till PowerVLC genom webbläsartillägget. "
+                     .. "Inget att klicka på: låt det här fönstret och "
+                     .. "instansens flik vara öppna.",
+  web_m_taking = "PowerVLC spelar upp den här videon. Fliken tömdes genast "
+               .. "med flit: att låta webbplatsens spelare ladda klart här "
+               .. "skulle kosta maskinen en andra avkodning och en andra "
+               .. "nedladdning och belasta instansen i onödan. Låt den vara "
+               .. "öppen.",
 }

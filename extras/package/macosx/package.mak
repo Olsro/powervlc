@@ -114,6 +114,10 @@ if BUILD_LUA
 	cp -r "$(prefix)/share/vlc/lua" $@/Contents/MacOS/share/
 	cp -r "$(prefix)/lib/vlc/lua" $@/Contents/MacOS/share/
 endif
+	## Exact RetroArch GLSL data used by the OpenGL CRT backend.
+	if test -d "$(prefix)/share/vlc/retroarch-shaders"; then \
+		cp -r "$(prefix)/share/vlc/retroarch-shaders" $@/Contents/MacOS/share/; \
+	fi
 	## HRTFs
 	cp -r $(srcdir)/share/hrtfs $@/Contents/MacOS/share/
 	## fontconfig configuration: the contrib library's compiled-in default
@@ -210,6 +214,14 @@ endif
 	find "$(CONTRIB_DIR)/share/java/" -name 'libbluray*.jar' -maxdepth 1 -exec cp -a {} $@/Contents/MacOS/plugins \; || true
 	## Install binary
 	cp $(prefix)/bin/powervlc $@/Contents/MacOS/PowerVLC
+	## Mavericks' Ivy Bridge framebuffer needs the internal LVDS scanout to
+	## be stopped before selecting a 1920x2205 HDMI frame-packing mode.  The
+	## video output launches this narrowly-scoped helper through Authorization
+	## Services and keeps its pipe open for the lifetime of the 3D mode.
+	$(CC) $(CPPFLAGS) $(CFLAGS) \
+		-o $@/Contents/MacOS/powervlc-clamshell-helper \
+		$(srcdir)/extras/package/macosx/powervlc-clamshell-helper.c \
+		-framework CoreFoundation -framework IOKit
 	## Generate plugin cache
 	if test "$(build)" = "$(host)"; then \
 		bin/powervlc-cache-gen $@/Contents/MacOS/plugins ; \
@@ -288,11 +300,25 @@ package-translations:
 
 EXTRA_DIST += \
 	extras/package/macosx/build.sh \
+	extras/package/macosx/build-powervlc.sh \
+	extras/package/build-amule-engine.sh \
+	extras/package/macosx/build-amule-engine-ppc.sh \
+	extras/package/macosx/embed-amule-engine.sh \
+	extras/package/macosx/amule-helper-Info.plist \
+	extras/package/amule-engine-NOTICE.txt \
+	extras/package/macosx/amule-ppc/toolchain-powerpc-jaguar.cmake \
+	extras/package/macosx/amule-ppc/wxwidgets-jaguar.patch \
+	extras/package/macosx/amule-ppc/amule-download-only-jaguar.patch \
+	extras/package/macosx/jaguar-compat/dlcompat.c \
+	extras/package/macosx/jaguar-compat/libc102.c \
+	extras/package/macosx/jaguar-compat/objc102.c \
+	extras/package/macosx/jaguar-compat/poll.c \
 	extras/package/macosx/codesign.sh \
 	extras/package/macosx/configure.sh \
 	extras/package/macosx/dmg/dmg_settings.py \
 	extras/package/macosx/dmg/disk_image.icns \
 	extras/package/macosx/dmg/background.tiff \
 	extras/package/macosx/asset_sources/vlc_app_icon.svg \
+	extras/package/macosx/powervlc-clamshell-helper.c \
 	extras/package/macosx/VLC.entitlements \
 	extras/package/macosx/vlc.xcodeproj/project.pbxproj

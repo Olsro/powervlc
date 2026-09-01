@@ -1,0 +1,15 @@
+diff --git a/glib/gstdio.c b/glib/gstdio.c
+--- a/glib/gstdio.c
++++ b/glib/gstdio.c
+@@ -493,7 +493,11 @@ g_stat (const gchar *filename,
+       (!g_path_is_absolute (filename) || len > g_path_skip_root (filename) - filename))
+     wfilename[len] = '\0';
+ 
++#ifdef __MINGW32__
++  retval = wstat (wfilename, buf);
++#else
+   retval = _wstat (wfilename, buf);
++#endif
+   save_errno = errno;
+ 
+   g_free (wfilename);

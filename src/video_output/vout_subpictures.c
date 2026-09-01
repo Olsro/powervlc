@@ -98,6 +98,23 @@ struct spu_private_t {
     vout_thread_t       *vout;
 };
 
+typedef struct
+{
+    unsigned count;
+    vlc_tick_t sources;
+    vlc_tick_t lock;
+    vlc_tick_t select;
+    vlc_tick_t update;
+    vlc_tick_t render;
+    vlc_tick_t total;
+} spu_phase_profile_t;
+
+#ifdef thread_local
+static thread_local spu_phase_profile_t spu_phase_profile;
+#else
+static spu_phase_profile_t spu_phase_profile;
+#endif
+
 /*****************************************************************************
  * heap management
  *****************************************************************************/
@@ -966,6 +983,7 @@ static void SpuRenderRegion(spu_t *spu,
         dst->i_x       = x_offset;
         dst->i_y       = y_offset;
         dst->i_align   = 0;
+        dst->i_stereo_offset = region->i_stereo_offset;
         if (dst->p_picture)
             picture_Release(dst->p_picture);
         dst->p_picture = picture_Hold(region_picture);
@@ -1016,8 +1034,19 @@ static subpicture_t *SpuRenderSubpictures(spu_t *spu,
     /* Count the number of regions and subtitle regions */
     unsigned int subtitle_region_count = 0;
     unsigned int region_count          = 0;
+    uint64_t composite_order = UINT64_C(1469598103934665603);
+    bool dynamic_content = false;
     for (unsigned i = 0; i < i_subpicture; i++) {
         const subpicture_t *subpic = pp_subpicture[i];
+
+        /* i_order of only the last active SPU is not a content key: a
+         * persistent cursor can sort after a changing volume OSD and mask
+         * all of its updates.  Fold every contributing SPU into the key.
+         * Updater/fade-driven SPUs may change pixels without changing their
+         * own order, so make those composites unique for each render date. */
+        composite_order ^= (uint64_t)subpic->i_order;
+        composite_order *= UINT64_C(1099511628211);
+        dynamic_content |= subpic->updater.pf_update != NULL || subpic->b_fade;
 
         unsigned count = 0;
         for (subpicture_region_t *r = subpic->p_region; r != NULL; r = r->p_next)
@@ -1034,7 +1063,11 @@ static subpicture_t *SpuRenderSubpictures(spu_t *spu,
     subpicture_t *output = subpicture_New(NULL);
     if (!output)
         return NULL;
-    output->i_order = pp_subpicture[i_subpicture - 1]->i_order;
+    if (dynamic_content) {
+        composite_order ^= (uint64_t)render_osd_date;
+        composite_order *= UINT64_C(1099511628211);
+    }
+    output->i_order = (int64_t)composite_order;
     output->i_original_picture_width  = fmt_dst->i_visible_width;
     output->i_original_picture_height = fmt_dst->i_visible_height;
     subpicture_region_t **output_last_ptr = &output->p_region;
@@ -1532,6 +1565,8 @@ subpicture_t *spu_Render(spu_t *spu,
                          bool ignore_osd)
 {
     spu_private_t *sys = spu->p;
+    const bool profile_on = getenv("VLC_VOUT_PROF") != NULL;
+    const vlc_tick_t profile_start = profile_on ? mdate() : 0;
 
     /* Update sub-source chain */
     vlc_mutex_lock(&sys->lock);
@@ -1559,6 +1594,7 @@ subpicture_t *spu_Render(spu_t *spu,
     /* Run subpicture sources */
     filter_chain_SubSource(sys->source_chain, spu, render_osd_date);
     vlc_mutex_unlock(&sys->source_chain_lock);
+    const vlc_tick_t profile_sources_done = profile_on ? mdate() : 0;
 
     /* These lists say which region chromas the CPU blender downstream can
      * take as a SOURCE, so they must not name one it cannot. blend.cpp only
@@ -1587,7 +1623,9 @@ subpicture_t *spu_Render(spu_t *spu,
         chroma_list = vlc_fourcc_IsYUV(fmt_dst->i_chroma) ? chroma_list_default_yuv
                                                           : chroma_list_default_rgb;
 
+    const vlc_tick_t profile_lock_start = profile_on ? mdate() : 0;
     vlc_mutex_lock(&sys->lock);
+    const vlc_tick_t profile_lock_done = profile_on ? mdate() : 0;
 
     unsigned int subpicture_count;
     subpicture_t *subpicture_array[VOUT_MAX_SUBPICTURES];
@@ -1599,6 +1637,7 @@ subpicture_t *spu_Render(spu_t *spu,
         vlc_mutex_unlock(&sys->lock);
         return NULL;
     }
+    const vlc_tick_t profile_select_done = profile_on ? mdate() : 0;
 
     /* Updates the subpictures */
     for (unsigned i = 0; i < subpicture_count; i++) {
@@ -1607,6 +1646,7 @@ subpicture_t *spu_Render(spu_t *spu,
                           fmt_src, fmt_dst,
                           subpic->b_subtitle ? render_subtitle_date : render_osd_date);
     }
+    const vlc_tick_t profile_update_done = profile_on ? mdate() : 0;
 
     /* Now order the subpicture array
      * XXX The order is *really* important for overlap subtitles positionning */
@@ -1621,6 +1661,28 @@ subpicture_t *spu_Render(spu_t *spu,
                                                 render_subtitle_date,
                                                 render_osd_date);
     vlc_mutex_unlock(&sys->lock);
+
+    if (profile_on) {
+        const vlc_tick_t profile_done = mdate();
+        spu_phase_profile.count++;
+        spu_phase_profile.sources += profile_sources_done - profile_start;
+        spu_phase_profile.lock += profile_lock_done - profile_lock_start;
+        spu_phase_profile.select += profile_select_done - profile_lock_done;
+        spu_phase_profile.update += profile_update_done - profile_select_done;
+        spu_phase_profile.render += profile_done - profile_update_done;
+        spu_phase_profile.total += profile_done - profile_start;
+        if (spu_phase_profile.count == 120) {
+            msg_Dbg(spu, "SPU profile (120 frames): sources %d, lock %d, "
+                    "select %d, update %d, render %d, total %d us/f",
+                    (int)(spu_phase_profile.sources / 120),
+                    (int)(spu_phase_profile.lock / 120),
+                    (int)(spu_phase_profile.select / 120),
+                    (int)(spu_phase_profile.update / 120),
+                    (int)(spu_phase_profile.render / 120),
+                    (int)(spu_phase_profile.total / 120));
+            memset(&spu_phase_profile, 0, sizeof(spu_phase_profile));
+        }
+    }
 
     return render;
 }
@@ -1723,4 +1785,3 @@ void spu_ChangeMargin(spu_t *spu, int margin)
     sys->margin = margin;
     vlc_mutex_unlock(&sys->lock);
 }
-

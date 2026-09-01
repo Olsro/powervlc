@@ -33,6 +33,7 @@ return {
   mode_playlists = "播放列表",
   btn_search = "搜索",
   btn_open = "打开所选项",
+  btn_open_channel = "打开所选项的频道",
   btn_change_instance = "< 实例",
   msg_enter_query = "请输入要搜索的内容",
   msg_searching = "正在搜索…",
@@ -43,7 +44,13 @@ return {
   msg_target_found = "已识别地址 — 直接打开",
   msg_search_fail = "搜索失败: ",
   msg_select_result = "请先在列表中选择一条结果",
+  msg_channel_unavailable = "与所选项关联的频道不可用",
   lbl_quality = "画质:",
+  lbl_audio_track = "音轨:",
+  audio_default = "默认音频",
+  audio_original = "原声",
+  lbl_subtitles = "字幕:",
+  subtitles_none = "无",
   lbl_by = "—",
   audio_only = "仅音频",
   combined = "音频+视频",
@@ -135,4 +142,11 @@ return {
             .. "之前的所有浏览器，都拒绝在带有安全策略的页面上运行书签脚本，而每个实例都会发送这样的策略: "
             .. "在那里点击书签毫无作用。在播放器中选择<strong>帮助 &gt; 安装 PowerVLC "
             .. "扩展</strong>，会在浏览器里装上一个小扩展，由它自动完成同样的事 — 无需书签、无需点击，在所有页面上都有效。",
+  web_addon_lead = "已安装扩展？无需拖放，也无需点击: 只需打开下面的实例并通过验证。"
+                 .. "连接建立后，本页会提示您。",
+  web_steps_title = "不使用扩展: 书签",
+  web_relay_on_addon = "已通过浏览器扩展连接到 PowerVLC。无需点击: 请让这个窗口和实例的标签页保持打开。",
+  web_m_taking = "PowerVLC 正在播放这个视频。标签页是一开始就故意清空的: "
+               .. "让网站的播放器在这里完成加载，会让这台机器多解码一次、多下载一次，还会白白增加实例的负担。"
+               .. "请让它保持打开。",
 }

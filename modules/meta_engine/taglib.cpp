@@ -65,6 +65,7 @@
 #include <fileref.h>
 #include <tag.h>
 #include <tbytevector.h>
+#include <tpropertymap.h>
 
 /* Support for stream-based metadata */
 #if TAGLIB_VERSION >= TAGLIB_VERSION_1_11
@@ -80,6 +81,9 @@
 #include <mpcfile.h>
 #include <mpegfile.h>
 #include <mp4file.h>
+#include <mp4tag.h>
+#include <mp4item.h>
+#include <mp4coverart.h>
 #include <oggfile.h>
 #include <oggflacfile.h>
 #include <opusfile.h>
@@ -189,7 +193,10 @@ static VLCTagLib::ExtResolver<MPEG::File> aacresolver(".aac");
 #endif
 static bool b_extensions_registered = false;
 
-// taglib is not thread safe
+/* Resolver registration and writes touch TagLib process-wide state. Reading
+ * separate FileRef/IOStream instances is independent in TagLib 1.13 and is
+ * intentionally allowed in parallel so a media-library scan can hide network
+ * latency. */
 static vlc_mutex_t taglib_lock = VLC_STATIC_MUTEX;
 
 // Local functions
@@ -458,6 +465,8 @@ static void ReadMetaFromAPE( APE::Tag* tag, demux_meta_t* p_demux_meta, vlc_meta
     SET( "LANGUAGE", Language );
     SET( "PUBLISHER", Publisher );
     SET( "MUSICBRAINZ_TRACKID", TrackID );
+    SET( "ALBUMARTIST", AlbumArtist );
+    SET( "ALBUM ARTIST", AlbumArtist );
 
     SET_EXTRA( "MUSICBRAINZ_ALBUMID", VLC_META_EXTRA_MB_ALBUMID );
 
@@ -514,7 +523,9 @@ static void ReadMetaFromASF( ASF::Tag* tag, demux_meta_t* p_demux_meta, vlc_meta
     }
 
     SET("MusicBrainz/Track Id", TrackID );
+    SET("WM/AlbumArtist", AlbumArtist );
     SET_EXTRA("MusicBrainz/Album Id", VLC_META_EXTRA_MB_ALBUMID );
+    SET_EXTRA("WM/Composer", "COMPOSER" );
 
 #undef SET
 #undef SET_EXTRA
@@ -776,6 +787,7 @@ static void ReadMetaFromId3v2( ID3v2::Tag* tag, demux_meta_t* p_demux_meta, vlc_
     SET( "TLAN", Language );
     SET( "TPUB", Publisher );
     SET( "TPE2", AlbumArtist );
+    SET_EXTRA( "TCOM", "COMPOSER" );
     SET_EXTRA( "USLT", "Lyrics" );
 
 #undef SET_EXTRA
@@ -837,6 +849,7 @@ static void ReadMetaFromXiph( Ogg::XiphComment* tag, demux_meta_t* p_demux_meta,
     SET( "DISCNUMBER", DiscNumber );
 
     SET_EXTRA( "MUSICBRAINZ_ALBUMID", VLC_META_EXTRA_MB_ALBUMID );
+    SET_EXTRA( "COMPOSER", "COMPOSER" );
 #undef SET
 #undef SET_EXTRA
 
@@ -884,6 +897,29 @@ static void ReadMetaFromXiph( Ogg::XiphComment* tag, demux_meta_t* p_demux_meta,
         {
             vlc_meta_SetTrackTotal( p_meta, (*track_total_list.begin()).toCString( true ) );
         }
+    }
+
+    /* Keep vendor and catalog fields for portable-player transcodes instead
+     * of discarding every tag without a dedicated vlc_meta_type_t. */
+    const Ogg::FieldListMap fields = tag->fieldListMap();
+    for( Ogg::FieldListMap::ConstIterator it = fields.begin();
+         it != fields.end(); ++it )
+    {
+        const String key = it->first.upper();
+        if( key == "TITLE" || key == "ARTIST" || key == "ALBUM"
+         || key == "GENRE" || key == "COPYRIGHT"
+         || key == "ORGANIZATION" || key == "DATE" || key == "ENCODER"
+         || key == "RATING" || key == "LANGUAGE"
+         || key == "MUSICBRAINZ_TRACKID" || key == "MUSICBRAINZ_ALBUMID"
+         || key == "ALBUMARTIST" || key == "DISCNUMBER"
+         || key == "TRACKNUMBER" || key == "TRACKTOTAL"
+         || key == "TOTALTRACKS" || key == "COMPOSER"
+         || key == "METADATA_BLOCK_PICTURE" || key == "COVERART" )
+            continue;
+        const String value = it->second.toString( " / " );
+        if( !value.isEmpty() )
+            vlc_meta_AddExtra( p_meta, key.toCString( true ),
+                              value.toCString( true ) );
     }
 
     // Taglib extracts if(key == "METADATA_BLOCK_PICTURE" || key == "COVERART")
@@ -985,7 +1021,6 @@ static bool isSchemeCompatible( const char *psz_uri )
  */
 static int ReadMeta( vlc_object_t* p_this)
 {
-    vlc_mutex_locker locker (&taglib_lock);
     demux_meta_t*   p_demux_meta = (demux_meta_t *)p_this;
     vlc_meta_t*     p_meta;
     FileRef f;
@@ -1002,12 +1037,15 @@ static int ReadMeta( vlc_object_t* p_this)
         return VLC_EGENERIC;
     }
 
-    if( !b_extensions_registered )
     {
+        vlc_mutex_locker locker (&taglib_lock);
+        if( !b_extensions_registered )
+        {
 #if TAGLIB_VERSION >= TAGLIB_VERSION_1_11
-        FileRef::addFileTypeResolver( &aacresolver );
+            FileRef::addFileTypeResolver( &aacresolver );
 #endif
-        b_extensions_registered = true;
+            b_extensions_registered = true;
+        }
     }
 
 #if TAGLIB_VERSION >= TAGLIB_VERSION_1_11
@@ -1330,6 +1368,104 @@ static void WriteMetaToXiph( Ogg::XiphComment* tag, input_item_t* p_item )
 #undef WRITE
 }
 
+static bool ReadArtworkFile( input_item_t *p_item, ByteVector &data,
+                             String &mime )
+{
+    char *url = input_item_GetArtworkURL( p_item );
+    if( url == NULL ) return false;
+    char *path = vlc_uri2path( url );
+    free( url );
+    if( path == NULL ) return false;
+
+    struct stat st;
+    FILE *file = vlc_fopen( path, "rb" );
+    if( file == NULL || vlc_stat( path, &st ) != 0 || st.st_size <= 0
+     || st.st_size > 10485760 )
+    {
+        if( file ) fclose( file );
+        free( path );
+        return false;
+    }
+    free( path );
+
+    char *buffer = new (std::nothrow) char[st.st_size];
+    if( buffer == NULL ) { fclose( file ); return false; }
+    if( fread( buffer, 1, st.st_size, file ) != (size_t)st.st_size )
+    {
+        fclose( file );
+        delete[] buffer;
+        return false;
+    }
+    fclose( file );
+    data = ByteVector( buffer, st.st_size );
+    delete[] buffer;
+
+    if( data.size() >= 3 && (unsigned char)data[0] == 0xff
+     && (unsigned char)data[1] == 0xd8 && (unsigned char)data[2] == 0xff )
+        mime = "image/jpeg";
+    else if( data.size() >= 4 && (unsigned char)data[0] == 0x89
+          && data.mid( 1, 3 ) == ByteVector( "PNG", 3 ) )
+        mime = "image/png";
+    else if( data.size() >= 2 && data.mid( 0, 2 ) == ByteVector( "BM", 2 ) )
+        mime = "image/bmp";
+    else if( data.size() >= 3 && data.mid( 0, 3 ) == ByteVector( "GIF", 3 ) )
+        mime = "image/gif";
+    else return false;
+    return true;
+}
+
+static void WriteArtworkToMP4( MP4::Tag *tag, input_item_t *p_item )
+{
+    ByteVector data;
+    String mime;
+    if( !ReadArtworkFile( p_item, data, mime ) ) return;
+    MP4::CoverArt::Format format = mime == "image/jpeg" ? MP4::CoverArt::JPEG
+                                 : mime == "image/png" ? MP4::CoverArt::PNG
+                                 : mime == "image/bmp" ? MP4::CoverArt::BMP
+                                 : mime == "image/gif" ? MP4::CoverArt::GIF
+                                                        : MP4::CoverArt::Unknown;
+    if( format == MP4::CoverArt::Unknown ) return;
+
+    MP4::CoverArtList covers;
+    covers.append( MP4::CoverArt( format, data ) );
+    tag->setItem( "covr", MP4::Item( covers ) );
+}
+
+static void WriteExtrasToMP4( MP4::Tag *tag, input_item_t *p_item )
+{
+    vlc_mutex_lock( &p_item->lock );
+    char **names = p_item->p_meta
+                 ? vlc_meta_CopyExtraNames( p_item->p_meta ) : NULL;
+    for( size_t i = 0; names && names[i]; ++i )
+    {
+        const char *value = vlc_meta_GetExtra( p_item->p_meta, names[i] );
+        if( value && *value )
+        {
+            String key( "----:com.apple.iTunes:", String::UTF8 );
+            key += String( names[i], String::UTF8 );
+            tag->setItem( key, MP4::Item( StringList(
+                          String( value, String::UTF8 ) ) ) );
+        }
+        free( names[i] );
+    }
+    free( names );
+    vlc_mutex_unlock( &p_item->lock );
+}
+
+static void WriteArtworkToFLAC( FLAC::File *file, input_item_t *p_item )
+{
+    ByteVector data;
+    String mime;
+    if( !ReadArtworkFile( p_item, data, mime ) ) return;
+    FLAC::Picture *picture = new FLAC::Picture;
+    picture->setType( FLAC::Picture::FrontCover );
+    picture->setMimeType( mime );
+    picture->setDescription( "Front cover" );
+    picture->setData( data );
+    file->removePictures();
+    file->addPicture( picture );
+}
+
 
 /**
  * Set the tags to the file using TagLib
@@ -1416,6 +1552,15 @@ static int WriteMeta( vlc_object_t *p_this )
             WriteMetaToId3v2( flac->ID3v2Tag(), p_item );
         else if( flac->xiphComment() )
             WriteMetaToXiph( flac->xiphComment(), p_item );
+        WriteArtworkToFLAC( flac, p_item );
+    }
+    else if( MP4::File *mp4 = dynamic_cast<MP4::File*>(f.file()) )
+    {
+        if( mp4->tag() )
+        {
+            WriteArtworkToMP4( mp4->tag(), p_item );
+            WriteExtrasToMP4( mp4->tag(), p_item );
+        }
     }
     else if( MPC::File* mpc = dynamic_cast<MPC::File*>(f.file()) )
     {
@@ -1463,6 +1608,61 @@ static int WriteMeta( vlc_object_t *p_this )
         if( wavpack->APETag() )
             WriteMetaToAPE( wavpack->APETag(), p_item );
     }
+
+    /* Tag::setTitle()/setArtist()/… only covers the oldest common subset.
+     * Portable-player transcodes need the rest of the textual catalog too,
+     * especially album artist and disc numbering.  PropertyMap translates
+     * these canonical keys to the native representation of MP3, MP4/AAC,
+     * FLAC and the other formats supported by TagLib. */
+    PropertyMap properties = f.file()->properties();
+#define SET_PROPERTY(metaName, propertyName) do {                         \
+        char *value = input_item_GetMeta( p_item, vlc_meta_##metaName );  \
+        if( value && *value )                                             \
+            properties.replace( propertyName,                            \
+                                StringList( String( value, String::UTF8 ) ) ); \
+        free( value );                                                    \
+    } while( 0 )
+    SET_PROPERTY( Title, "TITLE" );
+    SET_PROPERTY( Artist, "ARTIST" );
+    SET_PROPERTY( AlbumArtist, "ALBUMARTIST" );
+    SET_PROPERTY( Album, "ALBUM" );
+    SET_PROPERTY( Genre, "GENRE" );
+    SET_PROPERTY( Copyright, "COPYRIGHT" );
+    SET_PROPERTY( TrackNumber, "TRACKNUMBER" );
+    SET_PROPERTY( TrackTotal, "TRACKTOTAL" );
+    SET_PROPERTY( DiscNumber, "DISCNUMBER" );
+    SET_PROPERTY( DiscTotal, "DISCTOTAL" );
+    SET_PROPERTY( Description, "COMMENT" );
+    SET_PROPERTY( Rating, "RATING" );
+    SET_PROPERTY( Date, "DATE" );
+    SET_PROPERTY( Setting, "GROUPING" );
+    SET_PROPERTY( URL, "URL" );
+    SET_PROPERTY( Language, "LANGUAGE" );
+    SET_PROPERTY( Publisher, "PUBLISHER" );
+    SET_PROPERTY( EncodedBy, "ENCODEDBY" );
+    SET_PROPERTY( TrackID, "MUSICBRAINZ_TRACKID" );
+    SET_PROPERTY( Director, "DIRECTOR" );
+    SET_PROPERTY( Season, "SEASONNUMBER" );
+    SET_PROPERTY( Episode, "EPISODENUMBER" );
+    SET_PROPERTY( ShowName, "SHOW" );
+    SET_PROPERTY( Actors, "ACTOR" );
+#undef SET_PROPERTY
+    vlc_mutex_lock( &p_item->lock );
+    if( p_item->p_meta )
+    {
+        char **names = vlc_meta_CopyExtraNames( p_item->p_meta );
+        for( size_t i = 0; names && names[i]; ++i )
+        {
+            const char *value = vlc_meta_GetExtra( p_item->p_meta, names[i] );
+            if( value && *value )
+                properties.replace( String( names[i], String::UTF8 ).upper(),
+                                    StringList( String( value, String::UTF8 ) ) );
+            free( names[i] );
+        }
+        free( names );
+    }
+    vlc_mutex_unlock( &p_item->lock );
+    f.file()->setProperties( properties );
 
     // Save the meta data
     f.save();

@@ -110,6 +110,24 @@ static void PictureDestroyContext( picture_t *p_picture )
     }
 }
 
+static void PictureDestroyDolbyVision( picture_t *p_picture )
+{
+    free( p_picture->p_dovi );
+    p_picture->p_dovi = NULL;
+
+    if( p_picture->p_dovi_rpu != NULL )
+    {
+        block_Release( p_picture->p_dovi_rpu );
+        p_picture->p_dovi_rpu = NULL;
+    }
+
+    if( p_picture->p_enhancement_layer != NULL )
+    {
+        picture_Release( p_picture->p_enhancement_layer );
+        p_picture->p_enhancement_layer = NULL;
+    }
+}
+
 /**
  * Destroys a picture allocated by picture_NewFromResource() but without
  * a custom destruction callback.
@@ -142,6 +160,7 @@ void picture_Reset( picture_t *p_picture )
     p_picture->i_nb_fields = 2;
     p_picture->b_top_field_first = false;
     PictureDestroyContext( p_picture );
+    PictureDestroyDolbyVision( p_picture );
 }
 
 /*****************************************************************************
@@ -320,6 +339,7 @@ void picture_Release( picture_t *p_picture )
         return;
 
     PictureDestroyContext( p_picture );
+    PictureDestroyDolbyVision( p_picture );
     assert( priv->gc.destroy != NULL );
     priv->gc.destroy( p_picture );
 }
@@ -364,12 +384,31 @@ void plane_CopyPixels( plane_t *p_dst, const plane_t *p_src )
 
 void picture_CopyProperties( picture_t *p_dst, const picture_t *p_src )
 {
+    if( p_dst == p_src )
+        return;
+
+    PictureDestroyDolbyVision( p_dst );
+
     p_dst->date = p_src->date;
     p_dst->b_force = p_src->b_force;
 
     p_dst->b_progressive = p_src->b_progressive;
     p_dst->i_nb_fields = p_src->i_nb_fields;
     p_dst->b_top_field_first = p_src->b_top_field_first;
+
+    if( p_src->p_dovi != NULL )
+    {
+        p_dst->p_dovi = malloc( sizeof(*p_dst->p_dovi) );
+        if( p_dst->p_dovi != NULL )
+            *p_dst->p_dovi = *p_src->p_dovi;
+    }
+
+    if( p_src->p_dovi_rpu != NULL )
+        p_dst->p_dovi_rpu = block_Duplicate( p_src->p_dovi_rpu );
+
+    if( p_src->p_enhancement_layer != NULL )
+        p_dst->p_enhancement_layer =
+            picture_Hold( p_src->p_enhancement_layer );
 }
 
 void picture_CopyPixels( picture_t *p_dst, const picture_t *p_src )
@@ -418,6 +457,8 @@ picture_t *picture_Clone(picture_t *picture)
 
         if (picture->context != NULL)
             clone->context = picture->context->copy(picture->context);
+
+        picture_CopyProperties(clone, picture);
     }
     return clone;
 }

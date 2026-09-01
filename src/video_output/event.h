@@ -132,6 +132,14 @@ static inline void vout_SendEventMouseReleased(vout_thread_t *vout, int button)
 }
 static inline void vout_SendEventMouseDoubleClick(vout_thread_t *vout)
 {
+    /* Exclusive HDMI stereo has an in-picture controller.  Two quick presses
+     * on one of its seek buttons are two commands, not a request to leave
+     * fullscreen.  The display marks only hits inside that controller. */
+    if (var_Type(vout, "stereo-controls-double-click-until") != 0 &&
+        mdate() < var_GetInteger(vout,
+                                "stereo-controls-double-click-until"))
+        return;
+
     /* While an interface auto-hides its windowed controls (it then holds
      * the libvlc "intf-controls-hidden" bool up), a double click means
      * "bring the controls back", not "toggle fullscreen". */

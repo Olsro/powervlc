@@ -66,6 +66,15 @@ enum {
     VOUT_CONTROL_CROP_AUTO,             /* -- */
     VOUT_CONTROL_CROP_FORGET,           /* -- */
     VOUT_CONTROL_VIEWPOINT,             /* viewpoint */
+
+    /* Keep PowerVLC additions at the end.  Some producers of these internal
+     * commands live in separate objects, and an incremental build can briefly
+     * combine objects compiled against different revisions of this header.
+     * Inserting values above the legacy commands then turns (for example) a
+     * -1 subpicture margin into a string command and free(0xffffffff). */
+    VOUT_CONTROL_REFRESH_SUBPICTURE,
+    VOUT_CONTROL_STATIC_FRAME_HOLD,      /* boolean */
+    VOUT_CONTROL_INTERACTIVE_OVERLAY,    /* boolean */
 };
 
 typedef struct {

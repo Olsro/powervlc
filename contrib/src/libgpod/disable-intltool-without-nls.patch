@@ -1,0 +1,17 @@
+--- a/configure
++++ b/configure
+@@ -16642,7 +16642,14 @@ esac
+ 
+ INTLTOOL_REQUIRED_VERSION_AS_INT=`echo 0.21 | awk -F. '{ print $ 1 * 1000 + $ 2 * 100 + $ 3; }'`
+-INTLTOOL_APPLIED_VERSION=`intltool-update --version | head -1 | cut -d" " -f3`
++if test "$USE_NLS" = no; then
++    INTLTOOL_APPLIED_VERSION=0.51.0
++    ac_cv_path_INTLTOOL_UPDATE=/usr/bin/true
++    ac_cv_path_INTLTOOL_MERGE=/usr/bin/true
++    ac_cv_path_INTLTOOL_EXTRACT=/usr/bin/true
++else
++    INTLTOOL_APPLIED_VERSION=`intltool-update --version | head -1 | cut -d" " -f3`
++fi
+ INTLTOOL_APPLIED_VERSION_AS_INT=`echo $INTLTOOL_APPLIED_VERSION | awk -F. '{ print $ 1 * 1000 + $ 2 * 100 + $ 3; }'`
+ if test -n "0.21"; then
+     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for intltool >= 0.21" >&5

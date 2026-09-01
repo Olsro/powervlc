@@ -337,6 +337,22 @@ static CVReturn DisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTimeSt
         }
     }
 
+    /* persistent bookmarks are deliberately colored and thicker than
+     * chapter separators: they are interactive destinations, not divisions */
+    NSUInteger bookmarkCount = [_bookmarkFractions count];
+    if (bookmarkCount > 0) {
+        CGFloat knobThickness = self.knobThickness;
+        [[NSColor colorWithCalibratedRed:0.93 green:0.36 blue:0.25 alpha:1.0] setFill];
+        for (NSUInteger i = 0; i < bookmarkCount; i++) {
+            double fraction = [[_bookmarkFractions objectAtIndex:i] doubleValue];
+            if (fraction < 0. || fraction > 1.)
+                continue;
+            CGFloat x = NSMinX(rect) + (NSWidth(rect) - knobThickness) * fraction
+                + (knobThickness / 2);
+            NSRectFill(NSMakeRect(x - 2.0, NSMinY(rect), 4.0, NSHeight(rect)));
+        }
+    }
+
     [_trackStrokeColor setStroke];
     emptyTrackPath.lineWidth = 1;
     [emptyTrackPath stroke];

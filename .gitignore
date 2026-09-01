@@ -14,6 +14,8 @@
 *.class
 *.dmg
 .DS_Store
+__pycache__/
+*.py[cod]
 .deps
 .libs
 .dirstamp
@@ -48,8 +50,8 @@ patches/*
 
 include/vlc/libvlc_version.h
 
-# Ignore build dirs
-build*/
+# All out-of-tree build products live below this single root.
+/build/
 contrib-*
 install-*
 !extras/package/apple/build.sh

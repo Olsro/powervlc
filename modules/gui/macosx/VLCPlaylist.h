@@ -52,6 +52,9 @@
 - (void)playbackModeUpdated;
 
 - (void)currentlyPlayingItemChanged;
+- (void)scheduleRandomSelectionRetry;
+- (BOOL)restoreRandomActionSelection;
+- (void)searchUpdate:(NSString *)searchText;
 
 - (BOOL)isSelectionEmpty;
 
@@ -63,6 +66,7 @@
 - (IBAction)showInfoPanel:(id)sender;
 - (IBAction)addFilesToPlaylist:(id)sender;
 - (IBAction)shufflePlaylist:(id)sender;
+- (IBAction)burnPlaylistToAudioCD:(id)sender;
 
 - (NSArray *)draggedItems;
 

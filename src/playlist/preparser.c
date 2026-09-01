@@ -35,17 +35,23 @@ struct playlist_preparser_t
 {
     vlc_object_t* owner;
     playlist_fetcher_t* fetcher;
-    struct background_worker* worker;
+    struct background_worker** workers;
+    unsigned worker_count;
+    atomic_uint next_worker;
     atomic_bool deactivated;
 };
 
 static int InputEvent( vlc_object_t* obj, const char* varname,
-    vlc_value_t old, vlc_value_t cur, void* worker )
+    vlc_value_t old, vlc_value_t cur, void* opaque )
 {
     VLC_UNUSED( obj ); VLC_UNUSED( varname ); VLC_UNUSED( old );
 
     if( cur.i_int == INPUT_EVENT_DEAD )
-        background_worker_RequestProbe( worker );
+    {
+        playlist_preparser_t *preparser = opaque;
+        for( unsigned i = 0; i < preparser->worker_count; ++i )
+            background_worker_RequestProbe( preparser->workers[i] );
+    }
 
     return VLC_SUCCESS;
 }
@@ -53,23 +59,47 @@ static int InputEvent( vlc_object_t* obj, const char* varname,
 static int PreparserOpenInput( void* preparser_, void* item_, void** out )
 {
     playlist_preparser_t* preparser = preparser_;
+    input_item_t *item = item_;
+    char *name = input_item_GetName( item );
+    if( input_item_IsPowerVLCLazyIndex( item ) )
+    {
+        char *uri = input_item_GetURI( item );
+        vlc_mutex_lock( &item->lock );
+        msg_Dbg( preparser->owner,
+                 "opening lazy index node '%s' (%s) with %d options",
+                 name ? name : "", uri ? uri : "", item->i_options );
+        for( int i = 0; i < item->i_options; ++i )
+            msg_Dbg( preparser->owner, "lazy option: %s (0x%x)",
+                     item->ppsz_options[i], item->optflagv[i] );
+        vlc_mutex_unlock( &item->lock );
+        free( uri );
+    }
 
     input_thread_t* input = input_CreatePreparser( preparser->owner, item_ );
     if( !input )
     {
+        if( input_item_IsPowerVLCLazyIndex( item ) )
+            msg_Err( preparser->owner, "cannot create lazy index input '%s'",
+                     name ? name : "" );
+        free( name );
         input_item_SignalPreparseEnded( item_, ITEM_PREPARSE_FAILED );
         return VLC_EGENERIC;
     }
 
-    var_AddCallback( input, "intf-event", InputEvent, preparser->worker );
+    var_AddCallback( input, "intf-event", InputEvent, preparser );
     if( input_Start( input ) )
     {
-        var_DelCallback( input, "intf-event", InputEvent, preparser->worker );
+        if( input_item_IsPowerVLCLazyIndex( item ) )
+            msg_Err( preparser->owner, "cannot start lazy index input '%s'",
+                     name ? name : "" );
+        free( name );
+        var_DelCallback( input, "intf-event", InputEvent, preparser );
         input_Close( input );
         input_item_SignalPreparseEnded( item_, ITEM_PREPARSE_FAILED );
         return VLC_EGENERIC;
     }
 
+    free( name );
     *out = input;
     return VLC_SUCCESS;
 }
@@ -87,7 +117,7 @@ static void PreparserCloseInput( void* preparser_, void* input_ )
     input_thread_t* input = input_;
     input_item_t* item = input_priv(input)->p_item;
 
-    var_DelCallback( input, "intf-event", InputEvent, preparser->worker );
+    var_DelCallback( input, "intf-event", InputEvent, preparser );
 
     int status;
     switch( input_GetState( input ) )
@@ -102,10 +132,21 @@ static void PreparserCloseInput( void* preparser_, void* input_ )
             status = ITEM_PREPARSE_TIMEOUT;
     }
 
+    if( input_item_IsPowerVLCLazyIndex( item ) )
+    {
+        char *name = input_item_GetName( item );
+        msg_Dbg( preparser->owner, "lazy index node '%s' finished with status %d",
+                 name ? name : "", status );
+        free( name );
+    }
+
     input_Stop( input );
     input_Close( input );
 
-    if( preparser->fetcher )
+    vlc_mutex_lock( &item->lock );
+    bool skip_art = item->b_preparse_skip_art;
+    vlc_mutex_unlock( &item->lock );
+    if( preparser->fetcher && !skip_art )
     {
         if( !playlist_fetcher_Push( preparser->fetcher, item, 0, status ) )
             return;
@@ -120,7 +161,7 @@ static void InputItemHold( void* item ) { input_item_Hold( item ); }
 
 playlist_preparser_t* playlist_preparser_New( vlc_object_t *parent )
 {
-    playlist_preparser_t* preparser = malloc( sizeof *preparser );
+    playlist_preparser_t* preparser = calloc( 1, sizeof *preparser );
 
     struct background_worker_config conf = {
         .default_timeout = var_InheritInteger( parent, "preparse-timeout" ),
@@ -131,17 +172,46 @@ playlist_preparser_t* playlist_preparser_New( vlc_object_t *parent )
         .pf_hold = InputItemHold };
 
 
-    if( likely( preparser ) )
-        preparser->worker = background_worker_New( preparser, &conf );
+    if( unlikely( !preparser ) )
+        return NULL;
 
-    if( unlikely( !preparser || !preparser->worker ) )
+    /* Metadata requests used to share one strictly serial background worker.
+     * That made a high-latency media library advance roughly one file per
+     * round trip regardless of the host CPU. Keep the pool deliberately
+     * bounded: enough lanes to hide NAS latency, without turning a rotating
+     * disk or an old PowerPC machine into an I/O storm. */
+    unsigned cpus = vlc_GetCPUCount();
+    if( cpus == 0 ) cpus = 1;
+    /* Metadata scanning is latency-bound on removable and network media.
+     * Give modern machines a few more in-flight requests than CPU cores,
+     * while a one- or two-core legacy Mac keeps exactly its CPU count. */
+    preparser->worker_count = cpus >= 4 ? cpus + 4 : cpus;
+    if( preparser->worker_count > 16 ) preparser->worker_count = 16;
+    preparser->workers = calloc( preparser->worker_count,
+                                 sizeof( *preparser->workers ) );
+    if( preparser->workers )
+        for( unsigned i = 0; i < preparser->worker_count; ++i )
+        {
+            preparser->workers[i] = background_worker_New( preparser, &conf );
+            if( preparser->workers[i] == NULL )
+            {
+                preparser->worker_count = i;
+                break;
+            }
+        }
+    else
+        preparser->worker_count = 0;
+
+    if( unlikely( preparser->worker_count == 0 ) )
     {
+        free( preparser->workers );
         free( preparser );
         return NULL;
     }
 
     preparser->owner = parent;
     preparser->fetcher = playlist_fetcher_New( parent );
+    atomic_init( &preparser->next_worker, 0 );
     atomic_init( &preparser->deactivated, false );
 
     if( unlikely( !preparser->fetcher ) )
@@ -175,7 +245,10 @@ void playlist_preparser_Push( playlist_preparser_t *preparser,
             return;
     }
 
-    if( background_worker_Push( preparser->worker, item, id, timeout ) )
+    unsigned worker = atomic_fetch_add( &preparser->next_worker, 1 )
+                    % preparser->worker_count;
+    if( background_worker_Push( preparser->workers[worker], item, id,
+                                timeout ) )
         input_item_SignalPreparseEnded( item, ITEM_PREPARSE_FAILED );
 }
 
@@ -188,18 +261,22 @@ void playlist_preparser_fetcher_Push( playlist_preparser_t *preparser,
 
 void playlist_preparser_Cancel( playlist_preparser_t *preparser, void *id )
 {
-    background_worker_Cancel( preparser->worker, id );
+    for( unsigned i = 0; i < preparser->worker_count; ++i )
+        background_worker_Cancel( preparser->workers[i], id );
 }
 
 void playlist_preparser_Deactivate( playlist_preparser_t* preparser )
 {
     atomic_store( &preparser->deactivated, true );
-    background_worker_Cancel( preparser->worker, NULL );
+    for( unsigned i = 0; i < preparser->worker_count; ++i )
+        background_worker_Cancel( preparser->workers[i], NULL );
 }
 
 void playlist_preparser_Delete( playlist_preparser_t *preparser )
 {
-    background_worker_Delete( preparser->worker );
+    for( unsigned i = 0; i < preparser->worker_count; ++i )
+        background_worker_Delete( preparser->workers[i] );
+    free( preparser->workers );
 
     if( preparser->fetcher )
         playlist_fetcher_Delete( preparser->fetcher );

@@ -78,6 +78,7 @@ static void WatchTimerCallback( void* );
 
 static int vlclua_extension_deactivate( lua_State *L );
 static int vlclua_extension_keep_alive( lua_State *L );
+static int vlclua_extension_app_exiting( lua_State *L );
 static int vlclua_extension_timer( lua_State *L );
 
 /* Interactions */
@@ -169,8 +170,24 @@ void Close_Extension( vlc_object_t *p_this )
          * to be reaped */
         if( p_ext->p_sys->b_thread_joinable == true )
         {
+            /* On Jaguar/Tiger pthread_cond_signal can be consumed by the
+             * compatibility timed-wait just as it expires.  Cancellation is
+             * polled by that compatibility layer and guarantees that an idle
+             * extension cannot leave application shutdown stuck in join(). */
+            vlc_cancel( p_ext->p_sys->thread );
             vlc_join( p_ext->p_sys->thread, NULL );
             p_ext->p_sys->b_thread_joinable = false;
+        }
+
+        /* The watchdog callback uses both p_mgr and command_lock.  Stop and
+         * join it while both are still alive; destroying the lock first can
+         * leave a callback racing the extension manager's destruction. */
+        vlc_timer_destroy( p_ext->p_sys->timer );
+
+        if( p_ext->p_sys->p_progress_id != NULL )
+        {
+            vlc_dialog_release( p_mgr, p_ext->p_sys->p_progress_id );
+            p_ext->p_sys->p_progress_id = NULL;
         }
 
         /* Clear Lua State */
@@ -194,13 +211,16 @@ void Close_Extension( vlc_object_t *p_this )
         vlc_mutex_destroy( &p_ext->p_sys->running_lock );
         vlc_mutex_destroy( &p_ext->p_sys->command_lock );
         vlc_cond_destroy( &p_ext->p_sys->wait );
-        vlc_timer_destroy( p_ext->p_sys->timer );
 
-        free( p_ext->p_sys->psz_timer_func );
         free( p_ext->p_sys );
         free( p_ext );
     }
     FOREACH_END()
+
+    /* Detached helpers may outlive an extension window, but never PowerVLC.
+     * Do this after joining every extension thread so no new child can race
+     * with the application-wide cleanup. */
+    vlclua_process_cleanup_detached();
 
     vlc_mutex_destroy( &p_mgr->lock );
 
@@ -530,10 +550,10 @@ exit:
         free( p_ext->psz_description );
         free( p_ext->psz_shortdescription );
         free( p_ext->psz_version );
+        vlc_timer_destroy( p_ext->p_sys->timer );
         vlc_mutex_destroy( &p_ext->p_sys->command_lock );
         vlc_mutex_destroy( &p_ext->p_sys->running_lock );
         vlc_cond_destroy( &p_ext->p_sys->wait );
-        free( p_ext->p_sys->psz_timer_func );
         free( p_ext->p_sys );
         free( p_ext );
     }
@@ -973,6 +993,7 @@ static lua_State* GetLuaState( extensions_manager_t *p_mgr,
         luaopen_http( L );
         luaopen_browser( L );
         luaopen_keystore( L );
+        luaopen_process( L );
         luaopen_xml( L );
         luaopen_vlcio( L );
         luaopen_errno( L );
@@ -986,6 +1007,8 @@ static lua_State* GetLuaState( extensions_manager_t *p_mgr,
         lua_setfield( L, -2, "deactivate" );
         lua_pushcfunction( L, vlclua_extension_keep_alive );
         lua_setfield( L, -2, "keep_alive" );
+        lua_pushcfunction( L, vlclua_extension_app_exiting );
+        lua_setfield( L, -2, "app_exiting" );
         lua_pushcfunction( L, vlclua_extension_timer );
         lua_setfield( L, -2, "timer" );
 
@@ -1231,12 +1254,12 @@ static int vlclua_extension_timer( lua_State *L )
     const char *psz_func = luaL_optstring( L, 2, NULL );
 
     vlc_mutex_lock( &p_ext->p_sys->command_lock );
-    free( p_ext->p_sys->psz_timer_func );
-    p_ext->p_sys->psz_timer_func = NULL;
+    p_ext->p_sys->psz_timer_func[0] = '\0';
 
-    if( i_delay > 0 && psz_func != NULL && *psz_func != '\0' )
+    if( i_delay > 0 && psz_func != NULL && *psz_func != '\0'
+     && strlen( psz_func ) < sizeof( p_ext->p_sys->psz_timer_func ) )
     {
-        p_ext->p_sys->psz_timer_func = strdup( psz_func );
+        strcpy( p_ext->p_sys->psz_timer_func, psz_func );
         p_ext->p_sys->i_timer_deadline = mdate()
                                        + (mtime_t)i_delay * INT64_C(1000);
     }
@@ -1268,6 +1291,56 @@ int vlclua_extension_keep_alive( lua_State *L )
     vlc_mutex_unlock( &p_ext->p_sys->command_lock );
 
     return 1;
+}
+
+/* Unlike a regular extension deactivation, application shutdown sets
+ * b_exiting before calling deactivate(). Scripts can use this narrow signal
+ * to stop private background services without changing the useful behaviour
+ * of merely closing an extension window. */
+static int vlclua_extension_app_exiting( lua_State *L )
+{
+    extension_t *p_ext = vlclua_extension_get( L );
+    vlc_mutex_lock( &p_ext->p_sys->command_lock );
+    bool exiting = p_ext->p_sys->b_exiting;
+    vlc_mutex_unlock( &p_ext->p_sys->command_lock );
+    lua_pushboolean( L, exiting );
+    return 1;
+}
+
+/* A native modal dialog can legitimately keep the Lua command thread inside
+ * an OS API for longer than WATCH_TIMER_PERIOD.  Do not present that to the
+ * user as a hung extension.  The flag also closes the race where the timer
+ * callback was already waiting for command_lock when the dialog opened. */
+void vlclua_extension_watchdog_suspend( lua_State *L )
+{
+    extension_t *p_ext = vlclua_extension_get( L );
+    if( p_ext == NULL )
+        return;
+
+    vlc_mutex_lock( &p_ext->p_sys->command_lock );
+    p_ext->p_sys->b_watchdog_suspended = true;
+    vlc_timer_schedule( p_ext->p_sys->timer, false, 0, 0 );
+    if( p_ext->p_sys->p_progress_id != NULL )
+    {
+        vlc_dialog_release( p_ext->p_sys->p_mgr,
+                            p_ext->p_sys->p_progress_id );
+        p_ext->p_sys->p_progress_id = NULL;
+    }
+    vlc_mutex_unlock( &p_ext->p_sys->command_lock );
+}
+
+void vlclua_extension_watchdog_resume( lua_State *L )
+{
+    extension_t *p_ext = vlclua_extension_get( L );
+    if( p_ext == NULL )
+        return;
+
+    vlc_mutex_lock( &p_ext->p_sys->command_lock );
+    p_ext->p_sys->b_watchdog_suspended = false;
+    if( !p_ext->p_sys->b_exiting )
+        vlc_timer_schedule( p_ext->p_sys->timer, false,
+                            WATCH_TIMER_PERIOD, 0 );
+    vlc_mutex_unlock( &p_ext->p_sys->command_lock );
 }
 
 /** Callback for the variable "dialog-event"
@@ -1358,6 +1431,14 @@ static void WatchTimerCallback( void *data )
     extensions_manager_t *p_mgr = p_ext->p_sys->p_mgr;
 
     vlc_mutex_lock( &p_ext->p_sys->command_lock );
+
+    /* Shutdown may have woken a watchdog that was already due.  It must not
+     * create or re-arm a dialog once the extension is on its way out. */
+    if( p_ext->p_sys->b_exiting || p_ext->p_sys->b_watchdog_suspended )
+    {
+        vlc_mutex_unlock( &p_ext->p_sys->command_lock );
+        return;
+    }
 
     for( struct command_t *cmd = p_ext->p_sys->command;
          cmd != NULL;

@@ -51,6 +51,14 @@ OpenDecoder(vlc_object_t *p_this)
 {
     decoder_t *p_dec = (decoder_t*)p_this;
 
+    /* Passthrough must always be an explicit user choice.  Output modules
+     * can discover that a link supports encoded audio, but discovery alone
+     * must never make this decoder outrank the normal PCM decoder.  Keep the
+     * policy here, in the common decoder, so every platform and every UI gets
+     * the same master switch and receiver-capability checks. */
+    if (!var_InheritBool(p_dec, "spdif"))
+        return VLC_EGENERIC;
+
     switch (p_dec->fmt_in.i_codec)
     {
     case VLC_CODEC_MPGA:
@@ -60,13 +68,36 @@ OpenDecoder(vlc_object_t *p_this)
             return VLC_EGENERIC;
         break;
     case VLC_CODEC_A52:
+        if (!var_InheritBool(p_dec, "spdif-ac3"))
+            return VLC_EGENERIC;
+        break;
     case VLC_CODEC_EAC3:
+        if (!var_InheritBool(p_dec, "spdif-eac3"))
+            return VLC_EGENERIC;
+        break;
     case VLC_CODEC_MLP:
     case VLC_CODEC_TRUEHD:
+        if (!var_InheritBool(p_dec, "spdif-truehd"))
+            return VLC_EGENERIC;
+        break;
     case VLC_CODEC_DTS:
+    {
+        /* VLC 3 carries the DTS-HD indication in i_profile.  A DTS-HD
+         * access unit also contains a backward-compatible DTS core.  Keep
+         * the passthrough packetizer available when only core DTS is
+         * enabled so outputs without a native DTS-HD carrier (notably
+         * CoreAudio on macOS) can strip the extension and send that core. */
+        const bool b_dts_core = var_InheritBool(p_dec, "spdif-dts");
+        const bool b_dts_hd = p_dec->fmt_in.i_profile > 0
+                           && var_InheritBool(p_dec, "spdif-dtshd");
+        if (!b_dts_core && !b_dts_hd)
+            return VLC_EGENERIC;
+        break;
+    }
     case VLC_CODEC_SPDIFL:
     case VLC_CODEC_SPDIFB:
-        /* Enabled by default */
+        /* Already encapsulated: the master switch is still mandatory, but
+         * the original family is no longer available here. */
         break;
     default:
         return VLC_EGENERIC;

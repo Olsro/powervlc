@@ -34,16 +34,98 @@
 #include "recents.hpp"                                  /* Open:: */
 
 #include <vlc_intf_strings.h>                           /* I_DIR */
+#include <vlc_services_discovery.h>
 #include <vlc_url.h>
 
 #include "sorting.h"
 
 #include <cassert>
+#include <cctype>
 #include <QDateTime>
 #include <QFont>
 #include <QAction>
 #include <QStack>
 #include <QBrush>
+#include <QTimer>
+#include <QVector>
+
+static char *displayTrackTitle( input_item_t *input )
+{
+    char *title = input_item_GetTitleFbName( input );
+    if( !title )
+        return NULL;
+    char *discText = input_item_GetDiscNumber( input );
+    char *trackText = input_item_GetTrackNumber( input );
+    unsigned long disc = discText ? strtoul( discText, NULL, 10 ) : 0;
+    unsigned long track = trackText ? strtoul( trackText, NULL, 10 ) : 0;
+    free( discText );
+    free( trackText );
+    if( !track )
+        return title;
+
+    char prefix[64];
+    if( disc )
+        snprintf( prefix, sizeof(prefix), "%lu.%lu. ", disc, track );
+    else
+        snprintf( prefix, sizeof(prefix), "%lu. ", track );
+    if( !strncmp( title, prefix, strlen(prefix) ) )
+        return title;
+    if( !disc && isdigit( static_cast<unsigned char>( title[0] ) ) )
+    {
+        char *endDisc;
+        strtoul( title, &endDisc, 10 );
+        if( *endDisc == '.' && isdigit( static_cast<unsigned char>( endDisc[1] ) ) )
+        {
+            char *endTrack;
+            unsigned long embeddedTrack = strtoul( endDisc + 1, &endTrack, 10 );
+            if( embeddedTrack == track && !strncmp( endTrack, ". ", 2 ) )
+                return title;
+        }
+    }
+    char *formatted = NULL;
+    if( asprintf( &formatted, "%s%s", prefix, title ) < 0 )
+        formatted = NULL;
+    free( title );
+    return formatted;
+}
+
+static bool isExplicitRandomAction( input_item_t *input )
+{
+    return input && input_item_IsPowerVLCRandomAction( input );
+}
+
+static bool isPowerVLCIndexItem( input_item_t *input )
+{
+    return input && input_item_IsPowerVLCLazyIndex( input );
+}
+
+static void collectPlaylistItemIds( playlist_item_t *item, QSet<int> &ids )
+{
+    if( item == NULL )
+        return;
+    ids.insert( item->i_id );
+    for( int i = 0; i < item->i_children; ++i )
+        collectPlaylistItemIds( item->pp_children[i], ids );
+}
+
+static bool isSearchSubtreeLoaded( playlist_item_t *item )
+{
+    if( item == NULL )
+        return true;
+    for( int i = 0; i < item->i_children; ++i )
+    {
+        playlist_item_t *child = item->pp_children[i];
+        if( child->p_input != NULL
+         && !isExplicitRandomAction( child->p_input )
+         && ( child->p_input->i_type == ITEM_TYPE_DIRECTORY
+           || isPowerVLCIndexItem( child->p_input ) )
+         && child->i_children <= 0 )
+            return false;
+        if( child->i_children > 0 && !isSearchSubtreeLoaded( child ) )
+            return false;
+    }
+    return true;
+}
 
 /*************************************************************************
  * Playlist model implementation
@@ -59,6 +141,11 @@ PLModel::PLModel( playlist_t *_p_playlist,  /* THEPL */
 
     rootItem          = NULL; /* PLItem rootItem, will be set in rebuild( ) */
     latestSearch      = QString();
+    pendingRandomPlaybackId = -1;
+    pendingRandomBranchId = -1;
+    pendingNodePlaybackId = -1;
+    pendingNodeBrowseId = -1;
+    pendingNodePlaybackRetries = 0;
 
     rebuild( p_root );
     connect( THEMIM->getIM(), &InputManager::metaChanged,
@@ -87,7 +174,10 @@ Qt::ItemFlags PLModel::flags( const QModelIndex &index ) const
 
     const PLItem *item = index.isValid() ? getItem( index ) : rootItem;
 
-    if( canEdit() )
+    bool userTarget = index.isValid()
+        && ( isUserPlaylistsRoot( index ) || isUserPlaylistFolder( index )
+          || isUserPlaylist( index ) );
+    if( canEdit() || userTarget )
     {
         vlc_playlist_locker pl_lock ( THEPL );
 
@@ -147,7 +237,9 @@ QMimeData *PLModel::mimeData( const QModelIndexList &indexes ) const
         else
             item = getItem( index );
 
-        plMimeData->appendItem( static_cast<PLItem*>(item)->inputItem() );
+        input_item_t *input = static_cast<PLItem*>(item)->inputItem();
+        if( !isExplicitRandomAction( input ) )
+            plMimeData->appendItem( input );
     }
 
     return plMimeData;
@@ -164,6 +256,37 @@ bool PLModel::dropMimeData( const QMimeData *data, Qt::DropAction action,
     const PlMimeData *plMimeData = qobject_cast<const PlMimeData*>( data );
     if( plMimeData )
     {
+        if( isInsideUserPlaylists( parent ) )
+        {
+            QVector<int> ids;
+            bool sourcesInside = true;
+            {
+                vlc_playlist_locker pl_lock( THEPL );
+                foreach( input_item_t *input, plMimeData->inputItems() )
+                {
+                    playlist_item_t *item = playlist_ItemGetByInput(
+                        p_playlist, input );
+                    if( !item ) continue;
+                    ids.append( item->i_id );
+                    bool inside = false;
+                    for( playlist_item_t *cursor = item; cursor;
+                         cursor = cursor->p_parent )
+                        if( cursor->p_input
+                         && input_item_IsPowerVLCUserPlaylistsRoot(
+                                cursor->p_input ) )
+                        { inside = true; break; }
+                    sourcesInside &= inside;
+                }
+            }
+            if( ids.isEmpty() ) return false;
+            services_discovery_playlist_drop_t request = {
+                itemId( parent ), row, (size_t)ids.size(), ids.constData(),
+                !sourcesInside
+            };
+            return playlist_ServicesDiscoveryControl( THEPL,
+                "powervlc_library", SD_CMD_POWERVLC_PLAYLIST_DROP,
+                &request ) == VLC_SUCCESS;
+        }
         if( copy )
             dropAppendCopy( plMimeData, getItem( parent ), row );
         else
@@ -282,14 +405,149 @@ void PLModel::activateItem( const QModelIndex &index )
 void PLModel::activateItem( playlist_item_t *p_item )
 {
     if( !p_item ) return;
-    playlist_item_t *p_parent = p_item;
-    while( p_parent )
+    /* A newer activation always supersedes a branch that is still being
+     * materialised. It must never start playing later under the user's
+     * explicitly selected track. */
+    pendingNodePlaybackId = -1;
+    pendingNodeBrowseId = -1;
+    pendingNodePlaybackRetries = 0;
+    if( p_item->p_input
+     && isExplicitRandomAction( p_item->p_input ) )
     {
-        if( p_parent->i_id == rootItem->id() ) break;
-        p_parent = p_parent->p_parent;
+        pendingRandomPlaybackId = p_item->i_id;
+        pendingRandomBranchId = -1;
+        playlist_powervlc_random_result_t resolved;
+        playlist_PowerVLCRandomResolve( p_playlist, p_item, -1, &resolved );
+        pendingRandomBranchId = resolved.i_branch_id;
+        if( resolved.p_browse )
+            libvlc_MetadataRequest( p_intf->obj.libvlc,
+                resolved.p_browse->p_input, META_REQUEST_OPTION_SCOPE_ANY,
+                120000, resolved.p_browse );
+        else if( resolved.p_track )
+        {
+            pendingRandomPlaybackId = -1;
+            pendingRandomBranchId = -1;
+            playlist_ViewPlay( p_playlist, resolved.p_scope,
+                               resolved.p_track );
+        }
+        else
+        {
+            pendingRandomPlaybackId = -1;
+            pendingRandomBranchId = -1;
+        }
+        if( pendingRandomPlaybackId >= 0 )
+            QTimer::singleShot( 150, this,
+                                SLOT(retryPendingRandomPlayback()) );
+        return;
     }
-    if( p_parent )
-        playlist_ViewPlay( p_playlist, p_parent, p_item );
+    const bool indexedNode = isPowerVLCIndexItem( p_item->p_input );
+    const bool browsableNode = p_item->p_input != NULL
+        && (p_item->p_input->i_type == ITEM_TYPE_DIRECTORY || indexedNode);
+    if( p_item->i_children >= 0 || browsableNode )
+    {
+        /* A compact media-library branch is loaded one level at a time.
+         * Resolve the complete first album/track asynchronously instead of
+         * mistaking an unmaterialised branch for a playable leaf. */
+        pendingNodePlaybackId = p_item->i_id;
+        pendingNodeBrowseId = -1;
+        pendingNodePlaybackRetries = 0;
+        QTimer::singleShot( 0, this, SLOT(retryPendingNodePlayback()) );
+        return;
+    }
+    /* The immediate parent is the logical album/letter group. Using the
+     * discovery root mixes in the duplicate leaves of private Random XSPFs. */
+    playlist_item_t *scope = p_item->p_parent;
+    if( !scope )
+        scope = playlist_ItemGetById( p_playlist, rootItem->id() );
+    if( scope ) playlist_ViewPlay( p_playlist, scope, p_item );
+}
+
+void PLModel::retryPendingNodePlayback()
+{
+    if( pendingNodePlaybackId < 0 )
+        return;
+
+    bool retry = false;
+    {
+        vlc_playlist_locker pl_lock( p_playlist );
+        playlist_item_t *root = playlist_ItemGetById(
+            p_playlist, pendingNodePlaybackId );
+        if( root == NULL )
+        {
+            pendingNodePlaybackId = -1;
+            pendingNodeBrowseId = -1;
+            return;
+        }
+
+        playlist_item_t *cursor = root;
+        playlist_item_t *album = NULL;
+        while( cursor != NULL )
+        {
+            if( cursor->p_input != NULL
+             && input_item_IsPowerVLCAlbumScope( cursor->p_input ) )
+                album = cursor;
+
+            playlist_item_t *next = NULL;
+            if( cursor->i_children >= 0 )
+            {
+                for( int i = 0; i < cursor->i_children; ++i )
+                {
+                    playlist_item_t *candidate = cursor->pp_children[i];
+                    if( candidate != NULL && candidate->p_input != NULL
+                     && !isExplicitRandomAction( candidate->p_input ) )
+                    {
+                        next = candidate;
+                        break;
+                    }
+                }
+            }
+            if( next != NULL )
+            {
+                cursor = next;
+                continue;
+            }
+
+            const bool indexed = isPowerVLCIndexItem( cursor->p_input );
+            const bool browsable = cursor->p_input != NULL
+                && (cursor->p_input->i_type == ITEM_TYPE_DIRECTORY || indexed);
+            if( browsable )
+            {
+                const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                if( pendingNodeBrowseId != cursor->i_id
+                 && (!browseRequestedIds.contains( cursor->i_id )
+                  || now - browseRequestedIds.value( cursor->i_id ) >= 150000) )
+                {
+                    pendingNodeBrowseId = cursor->i_id;
+                    browseRequestedIds.insert( cursor->i_id, now );
+                    libvlc_MetadataRequest( p_intf->obj.libvlc,
+                        cursor->p_input, META_REQUEST_OPTION_SCOPE_ANY,
+                        120000, cursor );
+                }
+                retry = true;
+            }
+            else if( cursor != root )
+            {
+                pendingNodePlaybackId = -1;
+                pendingNodeBrowseId = -1;
+                /* Library navigation must remain within the selected album,
+                 * so Next stops at its final track. */
+                playlist_ViewPlay( p_playlist, album ? album : root, cursor );
+            }
+            else
+            {
+                pendingNodePlaybackId = -1;
+                pendingNodeBrowseId = -1;
+            }
+            break;
+        }
+    }
+    if( retry && pendingNodePlaybackRetries++ < 800 )
+        QTimer::singleShot( 150, this, SLOT(retryPendingNodePlayback()) );
+    else if( retry )
+    {
+        pendingNodePlaybackId = -1;
+        pendingNodeBrowseId = -1;
+    }
 }
 
 /****************** Base model mandatory implementations *****************/
@@ -302,7 +560,11 @@ QVariant PLModel::data( const QModelIndex &index, const int role ) const
     {
 
         case Qt::FontRole:
-            return customFont;
+        {
+            QFont font = customFont;
+            if( isRandomAction( index ) ) font.setItalic( true );
+            return font;
+        }
 
         case Qt::DisplayRole:
         {
@@ -333,7 +595,9 @@ QVariant PLModel::data( const QModelIndex &index, const int role ) const
             }
             else
             {
-                char *psz = psz_column_meta( item->inputItem(), metadata );
+                char *psz = metadata == COLUMN_TITLE
+                    ? displayTrackTitle( item->inputItem() )
+                    : psz_column_meta( item->inputItem(), metadata );
                 returninfo = qfu( psz );
                 free( psz );
             }
@@ -378,11 +642,62 @@ QVariant PLModel::data( const QModelIndex &index, const int role ) const
         case LEAF_NODE_ROLE:
             return QVariant( isLeaf( index ) );
 
+        case RATING_ROLE:
+        {
+            if( columnToMeta( index.column() ) != COLUMN_TITLE
+             || !isLeaf( index ) || isRandomAction( index ) )
+                return QVariant();
+            char *value = input_item_GetRating( getInputItem( index ) );
+            int rating = value ? (int)strtol( value, NULL, 10 ) : 0;
+            free( value );
+            return rating >= 1 && rating <= 5 ? QVariant( rating ) : QVariant();
+        }
+
         default:
             break;
     }
 
     return QVariant();
+}
+
+void PLModel::collectRatings( const QModelIndex &index,
+                              QMap<QString, int> &ratings ) const
+{
+    if( !index.isValid() || isRandomAction( index ) ) return;
+    const int children = rowCount( index );
+    if( children > 0 )
+    {
+        for( int row = 0; row < children; ++row )
+            collectRatings( this->index( row, 0, index ), ratings );
+        return;
+    }
+    input_item_t *input = getInputItem( index );
+    if( input == NULL || input->i_type != ITEM_TYPE_FILE ) return;
+    QByteArray uri = getURI( index ).toUtf8();
+    char *path = vlc_uri2path( uri.constData() );
+    if( path == NULL ) return;
+    char *value = input_item_GetRating( input );
+    int rating = value ? (int)strtol( value, NULL, 10 ) : 0;
+    free( value );
+    ratings.insert( qfu( path ), rating >= 0 && rating <= 5 ? rating : 0 );
+    free( path );
+}
+
+QStringList PLModel::ratingPaths( const QModelIndexList &indexes,
+                                  int *commonRating ) const
+{
+    QMap<QString, int> ratings;
+    foreach( const QModelIndex &index, indexes )
+        collectRatings( index.sibling( index.row(), 0 ), ratings );
+    int common = -1;
+    for( QMap<QString, int>::const_iterator it = ratings.constBegin();
+         it != ratings.constEnd(); ++it )
+    {
+        if( common < 0 ) common = it.value();
+        else if( common != it.value() ) { common = -2; break; }
+    }
+    if( commonRating ) *commonRating = common;
+    return ratings.keys();
 }
 
 bool PLModel::setData( const QModelIndex &index, const QVariant & value, int role )
@@ -480,10 +795,49 @@ QModelIndex PLModel::index( PLItem *item, int column ) const
 
 QModelIndex PLModel::currentIndex() const
 {
-    input_thread_t *p_input_thread = THEMIM->getInput();
-    if( !p_input_thread ) return QModelIndex();
-    PLItem *item = findByInput( rootItem, input_GetItem( p_input_thread ) );
+    int currentId = -1;
+    {
+        vlc_playlist_locker pl_lock( THEPL );
+        playlist_item_t *current = playlist_CurrentPlayingItem( THEPL );
+        if( current ) currentId = current->i_id;
+    }
+    PLItem *item = findByPLId( rootItem, currentId );
+    if( !item ) return QModelIndex();
+
+    PLItem *random = static_cast<PLItem *>( item->parent() );
+    while( random && !isExplicitRandomAction( random->p_input ) )
+        random = static_cast<PLItem *>( random->parent() );
+    if( random && random->parent() )
+    {
+        PLItem *scope = static_cast<PLItem *>( random->parent() );
+        PLItem *visible = findVisibleRandomCounterpart( scope, item->getURI() );
+        if( visible ) item = visible;
+    }
     return index( item, 0 );
+}
+
+bool PLModel::isCurrent( const QModelIndex &candidate ) const
+{
+    if( !candidate.isValid() )
+        return false;
+    QModelIndex current = currentIndex();
+    return current.isValid() && itemId( candidate ) == itemId( current );
+}
+
+PLItem *PLModel::findVisibleRandomCounterpart( PLItem *root,
+                                               const QString &uri ) const
+{
+    foreach( AbstractPLItem *abstractChild, root->children )
+    {
+        PLItem *child = static_cast<PLItem *>( abstractChild );
+        if( isExplicitRandomAction( child->p_input ) )
+            continue;
+        if( child->getURI() == uri )
+            return child;
+        PLItem *match = findVisibleRandomCounterpart( child, uri );
+        if( match ) return match;
+    }
+    return NULL;
 }
 
 QModelIndex PLModel::parent( const QModelIndex &index ) const
@@ -509,6 +863,9 @@ QModelIndex PLModel::parent( const QModelIndex &index ) const
 
 int PLModel::rowCount( const QModelIndex &parent ) const
 {
+    if( parent.isValid()
+     && isExplicitRandomAction( getInputItem( parent ) ) )
+        return 0;
     PLItem *parentItem = parent.isValid() ? getItem( parent ) : rootItem;
     return parentItem->childCount();
 }
@@ -519,12 +876,25 @@ bool PLModel::hasChildren( const QModelIndex &parent ) const
         return true;
     if( !parent.isValid() )
         return false;
+    if( !latestSearch.isEmpty()
+     && latestSearchScopeIds.contains( itemId( parent ) ) )
+        return true;
 
     /* unbrowsed directories (file browser folders, radio directory
      * countries...) get their expand decoration right away: expanding
      * them triggers the browse (see ensureBrowsed()) */
     input_item_t *p_input = getInputItem( parent );
-    return p_input != NULL && p_input->i_type == ITEM_TYPE_DIRECTORY;
+    if( isExplicitRandomAction( p_input ) )
+        return false;
+    bool indexed = isPowerVLCIndexItem( p_input );
+    return p_input != NULL && (p_input->i_type == ITEM_TYPE_DIRECTORY
+                            || indexed);
+}
+
+bool PLModel::isRandomAction( const QModelIndex &index ) const
+{
+    return index.isValid()
+        && isExplicitRandomAction( getInputItem( index ) );
 }
 
 void PLModel::ensureBrowsed( const QModelIndex &index )
@@ -533,7 +903,9 @@ void PLModel::ensureBrowsed( const QModelIndex &index )
         return;
 
     input_item_t *p_input = getInputItem( index );
-    if( p_input == NULL || p_input->i_type != ITEM_TYPE_DIRECTORY )
+    bool indexed = isPowerVLCIndexItem( p_input );
+    if( p_input == NULL || (p_input->i_type != ITEM_TYPE_DIRECTORY
+                         && !indexed) )
         return;
 
     /* a directory still childless once its request is surely over
@@ -559,6 +931,26 @@ void PLModel::ensureBrowsed( const QModelIndex &index )
         browseRequestedIds.insert( i_id, now );
         libvlc_MetadataRequest( p_intf->obj.libvlc, p_item->p_input,
                                 META_REQUEST_OPTION_SCOPE_ANY, 120000, p_item );
+    }
+    playlist_Unlock( p_playlist );
+}
+
+void PLModel::releaseBrowsed( const QModelIndex &index )
+{
+    if( !index.isValid() )
+        return;
+    int id = itemId( index );
+    browseRequestedIds.remove( id );
+    playlist_Lock( p_playlist );
+    playlist_item_t *item = playlist_ItemGetById( p_playlist, id );
+    char *uri = item && item->p_input ? input_item_GetURI( item->p_input )
+                                     : NULL;
+    bool indexed = uri && strstr( uri, "/powervlc-media-index/music-" );
+    free( uri );
+    if( indexed )
+    {
+        libvlc_MetadataCancel( p_intf->obj.libvlc, item );
+        playlist_NodeEmpty( p_playlist, item );
     }
     playlist_Unlock( p_playlist );
 }
@@ -656,8 +1048,17 @@ void PLModel::processInputItemUpdate( )
     input_thread_t *p_input = THEMIM->getInput();
     if( !p_input ) return;
 
-    PLItem *item = findByInput( rootItem, input_GetItem( p_input ) );
-    if( item ) emit currentIndexChanged( index( item, 0 ) );
+    /* Prefer the exact playlist item chosen by playlist_ViewPlay().  The
+     * same input exists in several media-library categories, so a lookup by
+     * input alone can highlight an unrelated occurrence. */
+    QModelIndex current = currentIndex();
+    if( current.isValid() )
+        emit currentIndexChanged( current );
+    else
+    {
+        PLItem *item = findByInput( rootItem, input_GetItem( p_input ) );
+        if( item ) emit currentIndexChanged( index( item, 0 ) );
+    }
 
     processInputItemUpdate( input_GetItem( p_input ) );
 }
@@ -665,9 +1066,7 @@ void PLModel::processInputItemUpdate( )
 void PLModel::processInputItemUpdate( input_item_t *p_item )
 {
     if( !p_item ) return;
-    PLItem *item = findByInput( rootItem, p_item );
-    if( item )
-        updateTreeItem( item );
+    updateTreeItemsForInput( rootItem, p_item );
 }
 
 void PLModel::processItemRemoval( int i_pl_itemid )
@@ -711,8 +1110,50 @@ void PLModel::processItemAppend( int i_pl_itemid, int i_pl_itemidparent )
     if ( newItem->inputItem() == THEMIM->currentInputItem() )
         emit currentIndexChanged( index( newItem, 0 ) );
 
+    if( pendingRandomPlaybackId >= 0 )
+        QTimer::singleShot( 150, this, SLOT(retryPendingRandomPlayback()) );
+
     if( latestSearch.isEmpty() ) return;
     filter( latestSearch, index( rootItem, 0), false /*FIXME*/ );
+}
+
+void PLModel::retryPendingRandomPlayback()
+{
+    if( pendingRandomPlaybackId < 0 ) return;
+    bool retry = false;
+    {
+        vlc_playlist_locker pl_lock( THEPL );
+        playlist_item_t *action = playlist_ItemGetById(
+            p_playlist, pendingRandomPlaybackId );
+        playlist_powervlc_random_result_t resolved;
+        int previousBranch = pendingRandomBranchId;
+        playlist_PowerVLCRandomResolve( p_playlist, action,
+                                       pendingRandomBranchId, &resolved );
+        pendingRandomBranchId = resolved.i_branch_id;
+        if( resolved.p_track )
+        {
+            pendingRandomPlaybackId = -1;
+            pendingRandomBranchId = -1;
+            playlist_ViewPlay( p_playlist, resolved.p_scope,
+                               resolved.p_track );
+        }
+        else if( resolved.p_browse )
+        {
+            if( previousBranch != resolved.i_branch_id )
+                libvlc_MetadataRequest( p_intf->obj.libvlc,
+                    resolved.p_browse->p_input, META_REQUEST_OPTION_SCOPE_ANY,
+                    120000, resolved.p_browse );
+            retry = true;
+        }
+        else
+        {
+            pendingRandomPlaybackId = -1;
+            pendingRandomBranchId = -1;
+        }
+    }
+    if( retry )
+        QTimer::singleShot( 150, this,
+                            SLOT(retryPendingRandomPlayback()) );
 }
 
 void PLModel::rebuild( playlist_item_t *p_root )
@@ -811,6 +1252,24 @@ void PLModel::updateTreeItem( PLItem *item )
     emit dataChanged( index( item, 0 ) , index( item, columnCount( QModelIndex() ) - 1 ) );
 }
 
+void PLModel::updateTreeItemsForInput( PLItem *root, input_item_t *input )
+{
+    if( root == NULL || input == NULL ) return;
+    input_item_t *candidate = root->inputItem();
+    bool same = candidate == input;
+    if( !same )
+    {
+        char *candidateUri = candidate ? input_item_GetURI( candidate ) : NULL;
+        char *inputUri = input_item_GetURI( input );
+        same = candidateUri && inputUri && !strcmp( candidateUri, inputUri );
+        free( candidateUri ); free( inputUri );
+    }
+    if( same ) updateTreeItem( root );
+    for( int i = 0; i < root->childCount(); ++i )
+        updateTreeItemsForInput( static_cast<PLItem *>( root->child( i ) ),
+                                 input );
+}
+
 /************************* Actions ******************************/
 
 /**
@@ -819,6 +1278,27 @@ void PLModel::updateTreeItem( PLItem *item )
  */
 void PLModel::doDelete( QModelIndexList selected )
 {
+    bool userPlaylistSelection = false;
+    foreach( const QModelIndex &index, selected )
+        if( index.column() == 0 && isInsideUserPlaylists( index )
+         && !isUserPlaylistsRoot( index ) )
+        {
+            userPlaylistSelection = true;
+            break;
+        }
+    if( userPlaylistSelection )
+    {
+        foreach( const QModelIndex &index, selected )
+        {
+            if( index.column() != 0 || !isInsideUserPlaylists( index )
+             || isUserPlaylistsRoot( index ) )
+                continue;
+            services_discovery_playlist_item_t request = { itemId( index ) };
+            playlist_ServicesDiscoveryControl( THEPL, "powervlc_library",
+                SD_CMD_POWERVLC_PLAYLIST_DELETE, &request );
+        }
+        return;
+    }
     if( !canEdit() ) return;
 
     while( !selected.isEmpty() )
@@ -933,7 +1413,8 @@ void PLModel::sortInternal( QModelIndex rootIndex, int mode, int type )
 
 void PLModel::filter( const QString& search_text, const QModelIndex & idx, bool b_recursive )
 {
-    latestSearch = search_text;
+    const QString normalizedSearch = search_text.trimmed();
+    latestSearch = normalizedSearch;
 
     /** \todo Fire the search with a small delay ? */
     {
@@ -942,7 +1423,7 @@ void PLModel::filter( const QString& search_text, const QModelIndex & idx, bool 
         playlist_item_t *p_root = playlist_ItemGetById( p_playlist,
                                                         itemId( idx ) );
         assert( p_root );
-        playlist_LiveSearchUpdate( p_playlist, p_root, qtu( search_text ),
+        playlist_LiveSearchUpdate( p_playlist, p_root, qtu( normalizedSearch ),
                                    b_recursive );
         if( idx.isValid() )
         {
@@ -961,6 +1442,137 @@ void PLModel::filter( const QString& search_text, const QModelIndex & idx, bool 
     }
 
     rebuild();
+}
+
+bool PLModel::isPowerVLCLibraryRoot() const
+{
+    char *name = rootItem && rootItem->p_input
+               ? input_item_GetName( rootItem->p_input ) : NULL;
+    QString rootName = name ? qfu( name ) : QString();
+    bool result = rootName == QStringLiteral( "PowerVLC Media Library" )
+               || rootName == qtr( "PowerVLC Media Library" );
+    free( name );
+    return result;
+}
+
+bool PLModel::isUserPlaylistsRoot( const QModelIndex &index ) const
+{
+    if( !index.isValid() ) return false;
+    PLItem *item = getItem( index );
+    return item && input_item_IsPowerVLCUserPlaylistsRoot( item->inputItem() );
+}
+
+bool PLModel::isUserPlaylistFolder( const QModelIndex &index ) const
+{
+    if( !index.isValid() ) return false;
+    PLItem *item = getItem( index );
+    return item && input_item_IsPowerVLCPlaylistFolder( item->inputItem() );
+}
+
+bool PLModel::isUserPlaylist( const QModelIndex &index ) const
+{
+    if( !index.isValid() ) return false;
+    PLItem *item = getItem( index );
+    return item && input_item_IsPowerVLCUserPlaylist( item->inputItem() );
+}
+
+bool PLModel::isPowerVLCDeviceStructure( const QModelIndex &index ) const
+{
+    if( !index.isValid() ) return false;
+    PLItem *item = getItem( index );
+    return item && input_item_IsPowerVLCDeviceStructure( item->inputItem() );
+}
+
+bool PLModel::isInsideUserPlaylists( const QModelIndex &index ) const
+{
+    if( !index.isValid() ) return false;
+    for( AbstractPLItem *cursor = getItem( index ); cursor;
+         cursor = cursor->parent() )
+    {
+        PLItem *item = static_cast<PLItem *>( cursor );
+        if( input_item_IsPowerVLCUserPlaylistsRoot( item->inputItem() ) )
+            return true;
+    }
+    return false;
+}
+
+void PLModel::createUserPlaylist( const QModelIndex &parent,
+                                  const QString &name, bool folder )
+{
+    if( name.trimmed().isEmpty() || !parent.isValid() ) return;
+    const QByteArray utf8Name = name.trimmed().toUtf8();
+    services_discovery_playlist_create_t request = {
+        itemId( parent ), utf8Name.constData(), folder
+    };
+    playlist_ServicesDiscoveryControl( THEPL, "powervlc_library",
+        SD_CMD_POWERVLC_PLAYLIST_CREATE, &request );
+}
+
+void PLModel::renameUserPlaylist( const QModelIndex &index,
+                                  const QString &name )
+{
+    if( name.trimmed().isEmpty() || !index.isValid() ) return;
+    const QByteArray utf8Name = name.trimmed().toUtf8();
+    services_discovery_playlist_rename_t request = {
+        itemId( index ), utf8Name.constData()
+    };
+    playlist_ServicesDiscoveryControl( THEPL, "powervlc_library",
+        SD_CMD_POWERVLC_PLAYLIST_RENAME, &request );
+}
+
+void PLModel::filterScopes( const QString &searchText,
+                            const QSet<int> &scopeIds )
+{
+    const QString normalizedSearch = searchText.trimmed();
+    latestSearch = normalizedSearch;
+    latestSearchScopeIds = normalizedSearch.isEmpty() ? QSet<int>() : scopeIds;
+    {
+        vlc_playlist_locker pl_lock( THEPL );
+        playlist_item_t *root = playlist_ItemGetById( p_playlist,
+                                                       rootItem->i_playlist_id );
+        if( root == NULL )
+            return;
+        playlist_LiveSearchUpdate( p_playlist, root, "", true );
+        if( !normalizedSearch.isEmpty() )
+            for( int id : scopeIds )
+            {
+                playlist_item_t *scope = playlist_ItemGetById( p_playlist, id );
+                if( scope != NULL )
+                    playlist_LiveSearchUpdate( p_playlist, scope,
+                                               qtu( normalizedSearch ), true );
+            }
+    }
+    rebuild();
+}
+
+bool PLModel::areSearchScopesLoaded( const QSet<int> &scopeIds ) const
+{
+    vlc_playlist_locker pl_lock( THEPL );
+    for( int id : scopeIds )
+    {
+        playlist_item_t *scope = playlist_ItemGetById( p_playlist, id );
+        if( !isSearchSubtreeLoaded( scope ) )
+            return false;
+    }
+    return true;
+}
+
+QSet<int> PLModel::protectedSearchItemIds() const
+{
+    QSet<int> ids;
+    vlc_playlist_locker pl_lock( THEPL );
+    playlist_item_t *current = playlist_CurrentPlayingItem( p_playlist );
+    playlist_item_t *album = NULL;
+    for( playlist_item_t *item = current; item != NULL; item = item->p_parent )
+    {
+        ids.insert( item->i_id );
+        if( album == NULL && item->p_input != NULL
+         && input_item_IsPowerVLCAlbumScope( item->p_input ) )
+            album = item;
+    }
+    if( album != NULL )
+        collectPlaylistItemIds( album, ids );
+    return ids;
 }
 
 void PLModel::removeAll()
@@ -1135,7 +1747,10 @@ bool PLModel::isSupportedAction( actions action, const QModelIndex &index ) cons
     case ACTION_INFO:
         return item;
     case ACTION_REMOVE:
-        return item && !item->readOnly();
+        return item && !isPowerVLCDeviceStructure( index )
+                    && ( !item->readOnly()
+                      || ( isInsideUserPlaylists( index )
+                        && !isUserPlaylistsRoot( index ) ) );
     case ACTION_EXPLORE:
     {
         if( !item )

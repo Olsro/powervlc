@@ -115,12 +115,24 @@ int vlclua_probe_sd( vlc_object_t *obj, const char *name )
     if( description == NULL )
         description = name;
 
+    int category = SD_CAT_INTERNET;
+    /* PowerVLC's local-network Lua discoveries can opt into the LAN section
+     * while existing scripts retain their historical Internet category. */
+    if( lua_istable( L, -2 ) )
+    {
+        lua_getfield( L, -2, "category" );
+        const char *psz_category = lua_tostring( L, -1 );
+        if( psz_category != NULL && !strcmp( psz_category, "lan" ) )
+            category = SD_CAT_LAN;
+        lua_pop( L, 1 );
+    }
+
     int r = VLC_ENOMEM;
     char *name_esc = config_StringEscape( name );
     char *chain;
     if( asprintf( &chain, "lua{sd='%s'}", name_esc ) != -1 )
     {
-        r = vlc_sd_probe_Add( probe, chain, description, SD_CAT_INTERNET );
+        r = vlc_sd_probe_Add( probe, chain, description, category );
         free( chain );
     }
     free( name_esc );
@@ -139,6 +151,8 @@ struct services_discovery_sys_t
 {
     lua_State *L;
     char *psz_filename;
+    vlclua_dtable_t dtable;
+    bool b_fd_init;
 
     vlc_thread_t thread;
     vlc_mutex_t lock;
@@ -162,7 +176,7 @@ int Open_LuaSD( vlc_object_t *p_this )
     lua_State *L = NULL;
     char *psz_name;
 
-    if( !( p_sys = malloc( sizeof( services_discovery_sys_t ) ) ) )
+    if( !( p_sys = calloc( 1, sizeof( services_discovery_sys_t ) ) ) )
         return VLC_ENOMEM;
 
     if( !strcmp( p_sd->psz_name, "lua" ) ||
@@ -202,6 +216,9 @@ int Open_LuaSD( vlc_object_t *p_this )
     luaL_register_namespace( L, "vlc", p_reg );
     luaopen_input( L );
     luaopen_msg( L );
+    if( vlclua_fd_init( L, &p_sys->dtable ) )
+        goto error;
+    p_sys->b_fd_init = true;
     luaopen_object( L );
     luaopen_sd_sd( L );
     luaopen_strings( L );
@@ -209,6 +226,7 @@ int Open_LuaSD( vlc_object_t *p_this )
     luaopen_stream( L );
     luaopen_gettext( L );
     luaopen_xml( L );
+    luaopen_http( L );
     lua_pop( L, 1 );
 
     if( vlclua_add_modules_path( L, p_sys->psz_filename ) )
@@ -246,6 +264,8 @@ int Open_LuaSD( vlc_object_t *p_this )
     return VLC_SUCCESS;
 
 error:
+    if( p_sys->b_fd_init )
+        vlclua_fd_cleanup( &p_sys->dtable );
     if( L )
         lua_close( L );
     free( p_sys->psz_filename );
@@ -261,6 +281,8 @@ void Close_LuaSD( vlc_object_t *p_this )
     services_discovery_t *p_sd = ( services_discovery_t * )p_this;
     services_discovery_sys_t *p_sys = p_sd->p_sys;
 
+    if( p_sys->b_fd_init )
+        vlclua_fd_interrupt( &p_sys->dtable );
     vlc_cancel( p_sys->thread );
     vlc_join( p_sys->thread, NULL );
 
@@ -271,6 +293,8 @@ void Close_LuaSD( vlc_object_t *p_this )
     vlc_cond_destroy( &p_sys->cond );
     vlc_mutex_destroy( &p_sys->lock );
     free( p_sys->psz_filename );
+    if( p_sys->b_fd_init )
+        vlclua_fd_cleanup( &p_sys->dtable );
     lua_close( p_sys->L );
     free( p_sys );
 }

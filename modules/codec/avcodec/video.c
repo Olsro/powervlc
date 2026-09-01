@@ -37,11 +37,16 @@
 #include <assert.h>
 
 #include <libavcodec/avcodec.h>
+#include <libavcodec/bsf.h>
 #include <libavutil/mem.h>
+#include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
 #include "avcommon_compat.h"
 #if LIBAVUTIL_VERSION_CHECK( 55, 16, 101 )
 #include <libavutil/mastering_display_metadata.h>
+#endif
+#if LIBAVUTIL_VERSION_CHECK( 57, 16, 100 )
+#include <libavutil/dovi_meta.h>
 #endif
 
 #include "avcodec.h"
@@ -122,6 +127,9 @@ struct decoder_sys_t
     vlc_tick_t i_slideshow_hold;
 
     bool b_draining;
+    /* avcodec_send_packet() returning EAGAIN means an already queued frame
+     * must be received before the exact same packet is submitted again. */
+    bool b_retry_packet;
 
     /* */
     bool palette_sent;
@@ -133,7 +141,374 @@ struct decoder_sys_t
     int level;
 
     vlc_sem_t sem_mt;
+
+#if LIBAVCODEC_VERSION_MAJOR >= 63
+    AVBSFContext *p_dovi_bl_bsf;
+    AVBSFContext *p_dovi_el_bsf;
+    AVCodecContext *p_dovi_el_context;
+    struct dovi_el_frame_t *p_dovi_el_frames;
+    struct dovi_el_frame_t **pp_dovi_el_frames_last;
+    unsigned i_dovi_el_frames;
+    bool b_dovi_el_warned;
+#endif
 };
+
+#if LIBAVCODEC_VERSION_MAJOR >= 63
+typedef struct dovi_el_frame_t
+{
+    AVFrame *frame;
+    int64_t pts;
+    struct dovi_el_frame_t *next;
+} dovi_el_frame_t;
+
+static void DoviClearEnhancementFrames( decoder_sys_t *sys )
+{
+    dovi_el_frame_t *entry = sys->p_dovi_el_frames;
+    while( entry != NULL )
+    {
+        dovi_el_frame_t *next = entry->next;
+        av_frame_free( &entry->frame );
+        free( entry );
+        entry = next;
+    }
+    sys->p_dovi_el_frames = NULL;
+    sys->pp_dovi_el_frames_last = &sys->p_dovi_el_frames;
+    sys->i_dovi_el_frames = 0;
+}
+
+static void DoviCloseEnhancementDecoder( decoder_sys_t *sys )
+{
+    DoviClearEnhancementFrames( sys );
+    avcodec_free_context( &sys->p_dovi_el_context );
+    av_bsf_free( &sys->p_dovi_bl_bsf );
+    av_bsf_free( &sys->p_dovi_el_bsf );
+}
+
+static int DoviInitSplitFilter( decoder_sys_t *sys,
+                                const AVBitStreamFilter *filter,
+                                const char *mode, AVBSFContext **out )
+{
+    int ret = av_bsf_alloc( filter, out );
+    if( ret < 0 )
+        return ret;
+    ret = avcodec_parameters_from_context( (*out)->par_in, sys->p_context );
+    if( ret < 0 )
+        return ret;
+    (*out)->time_base_in = sys->p_context->pkt_timebase;
+    ret = av_opt_set( *out, "mode", mode, AV_OPT_SEARCH_CHILDREN );
+    if( ret < 0 )
+        return ret;
+    return av_bsf_init( *out );
+}
+
+static int DoviInitEnhancementDecoder( decoder_t *dec )
+{
+    decoder_sys_t *sys = dec->p_sys;
+    const vlc_dovi_config_t *dovi = &dec->fmt_in.video.dovi;
+    int ret;
+
+    sys->pp_dovi_el_frames_last = &sys->p_dovi_el_frames;
+    if( sys->p_codec->id != AV_CODEC_ID_HEVC || dovi->profile != 7 ||
+        !dovi->bl_present || !dovi->el_present )
+        return VLC_SUCCESS;
+
+    const AVBitStreamFilter *filter = av_bsf_get_by_name( "dovi_split" );
+    if( filter == NULL )
+    {
+        msg_Warn( dec, "Dolby Vision Profile 7: dovi_split is unavailable; "
+                  "using the base layer only" );
+        return VLC_SUCCESS;
+    }
+
+    ret = DoviInitSplitFilter( sys, filter, "el", &sys->p_dovi_el_bsf );
+    if( ret < 0 )
+        goto error;
+    /* The primary decoder must not see the interleaved EL NAL units. Keep
+     * the RPU beside the BL so libavcodec still exports parsed per-frame
+     * Dolby Vision metadata. */
+    ret = DoviInitSplitFilter( sys, filter, "bl_rpu",
+                               &sys->p_dovi_bl_bsf );
+    if( ret < 0 )
+        goto error;
+
+    const AVCodec *codec =
+        avcodec_find_decoder( sys->p_dovi_el_bsf->par_out->codec_id );
+    if( codec == NULL )
+        goto error;
+    sys->p_dovi_el_context = avcodec_alloc_context3( codec );
+    if( sys->p_dovi_el_context == NULL )
+        goto error;
+    ret = avcodec_parameters_to_context( sys->p_dovi_el_context,
+                                         sys->p_dovi_el_bsf->par_out );
+    if( ret < 0 )
+        goto error;
+    sys->p_dovi_el_context->pkt_timebase =
+        sys->p_dovi_el_bsf->time_base_out;
+    sys->p_dovi_el_context->thread_count =
+        __MIN( __MAX( vlc_GetCPUCount(), 1 ), 8 );
+    ret = avcodec_open2( sys->p_dovi_el_context, codec, NULL );
+    if( ret < 0 )
+        goto error;
+
+    msg_Info( dec, "Dolby Vision Profile 7 enhancement layer enabled "
+              "(%dx%d)", sys->p_dovi_el_context->width,
+              sys->p_dovi_el_context->height );
+    return VLC_SUCCESS;
+
+error:
+    msg_Warn( dec, "cannot initialize the Dolby Vision enhancement layer; "
+              "using the base layer only" );
+    DoviCloseEnhancementDecoder( sys );
+    return VLC_SUCCESS;
+}
+
+static int64_t DoviFramePts( const AVFrame *frame )
+{
+    if( frame->best_effort_timestamp != AV_NOPTS_VALUE )
+        return frame->best_effort_timestamp;
+    if( frame->pts != AV_NOPTS_VALUE )
+        return frame->pts;
+    return frame->pkt_dts;
+}
+
+static int DoviReceiveEnhancementFrames( decoder_t *dec )
+{
+    decoder_sys_t *sys = dec->p_sys;
+
+    for( ;; )
+    {
+        AVFrame *frame = av_frame_alloc();
+        if( frame == NULL )
+            return AVERROR(ENOMEM);
+        int ret = avcodec_receive_frame( sys->p_dovi_el_context, frame );
+        if( ret < 0 )
+        {
+            av_frame_free( &frame );
+            return ret;
+        }
+
+        dovi_el_frame_t *entry = malloc( sizeof(*entry) );
+        if( entry == NULL )
+        {
+            av_frame_free( &frame );
+            return AVERROR(ENOMEM);
+        }
+        entry->frame = frame;
+        entry->pts = DoviFramePts( frame );
+        entry->next = NULL;
+        *sys->pp_dovi_el_frames_last = entry;
+        sys->pp_dovi_el_frames_last = &entry->next;
+        sys->i_dovi_el_frames++;
+
+        /* A corrupt stream must not retain an unbounded number of EL frames. */
+        if( sys->i_dovi_el_frames > 32 )
+        {
+            dovi_el_frame_t *old = sys->p_dovi_el_frames;
+            sys->p_dovi_el_frames = old->next;
+            av_frame_free( &old->frame );
+            free( old );
+            sys->i_dovi_el_frames--;
+        }
+    }
+}
+
+static void DoviFeedEnhancementDecoder( decoder_t *dec, const block_t *block )
+{
+    decoder_sys_t *sys = dec->p_sys;
+    if( sys->p_dovi_el_context == NULL || sys->p_dovi_el_bsf == NULL )
+        return;
+
+    if( block == NULL )
+    {
+        avcodec_send_packet( sys->p_dovi_el_context, NULL );
+        DoviReceiveEnhancementFrames( dec );
+        return;
+    }
+    if( block->i_buffer == 0 )
+        return;
+
+    AVPacket *input = av_packet_alloc();
+    AVPacket *output = av_packet_alloc();
+    if( input == NULL || output == NULL ||
+        av_new_packet( input, block->i_buffer ) < 0 )
+        goto out;
+
+    memcpy( input->data, block->p_buffer, block->i_buffer );
+    input->pts = block->i_pts > VLC_TICK_INVALID ?
+                 block->i_pts : AV_NOPTS_VALUE;
+    input->dts = block->i_dts > VLC_TICK_INVALID ?
+                 block->i_dts : AV_NOPTS_VALUE;
+    if( block->i_flags & BLOCK_FLAG_TYPE_I )
+        input->flags |= AV_PKT_FLAG_KEY;
+
+    int ret = av_bsf_send_packet( sys->p_dovi_el_bsf, input );
+    if( ret < 0 )
+        goto failure;
+    ret = av_bsf_receive_packet( sys->p_dovi_el_bsf, output );
+    if( ret == AVERROR(EAGAIN) || ret == AVERROR_EOF )
+        goto out;
+    if( ret < 0 )
+        goto failure;
+
+    ret = avcodec_send_packet( sys->p_dovi_el_context, output );
+    if( ret == AVERROR(EAGAIN) )
+    {
+        DoviReceiveEnhancementFrames( dec );
+        ret = avcodec_send_packet( sys->p_dovi_el_context, output );
+    }
+    if( ret < 0 )
+        goto failure;
+    ret = DoviReceiveEnhancementFrames( dec );
+    if( ret == AVERROR(EAGAIN) || ret == AVERROR_EOF )
+        goto out;
+    if( ret < 0 )
+        goto failure;
+    goto out;
+
+failure:
+    if( !sys->b_dovi_el_warned )
+    {
+        msg_Warn( dec, "Dolby Vision enhancement layer decode failed; "
+                  "continuing with the base layer" );
+        sys->b_dovi_el_warned = true;
+    }
+    av_bsf_flush( sys->p_dovi_el_bsf );
+    avcodec_flush_buffers( sys->p_dovi_el_context );
+    DoviClearEnhancementFrames( sys );
+
+out:
+    av_packet_free( &output );
+    av_packet_free( &input );
+}
+
+static block_t *DoviFilterBaseLayer( decoder_t *dec, block_t *block )
+{
+    decoder_sys_t *sys = dec->p_sys;
+    if( block == NULL || block->i_buffer == 0 || sys->p_dovi_bl_bsf == NULL )
+        return block;
+
+    AVPacket *input = av_packet_alloc();
+    AVPacket *output = av_packet_alloc();
+    block_t *filtered = NULL;
+    if( input == NULL || output == NULL ||
+        av_new_packet( input, block->i_buffer ) < 0 )
+        goto failure;
+
+    memcpy( input->data, block->p_buffer, block->i_buffer );
+    input->pts = block->i_pts > VLC_TICK_INVALID ?
+                 block->i_pts : AV_NOPTS_VALUE;
+    input->dts = block->i_dts > VLC_TICK_INVALID ?
+                 block->i_dts : AV_NOPTS_VALUE;
+    if( block->i_flags & BLOCK_FLAG_TYPE_I )
+        input->flags |= AV_PKT_FLAG_KEY;
+
+    int ret = av_bsf_send_packet( sys->p_dovi_bl_bsf, input );
+    if( ret < 0 )
+        goto failure;
+    ret = av_bsf_receive_packet( sys->p_dovi_bl_bsf, output );
+    if( ret < 0 )
+        goto failure;
+
+    filtered = block_Alloc( output->size );
+    if( filtered == NULL )
+        goto failure;
+    memcpy( filtered->p_buffer, output->data, output->size );
+    filtered->i_dts = block->i_dts;
+    filtered->i_pts = block->i_pts;
+    filtered->i_length = block->i_length;
+    filtered->i_flags = block->i_flags;
+    filtered->i_nb_samples = block->i_nb_samples;
+    block_Release( block );
+    block = filtered;
+    filtered = NULL;
+    goto out;
+
+failure:
+    if( filtered != NULL )
+        block_Release( filtered );
+    av_bsf_flush( sys->p_dovi_bl_bsf );
+    if( !sys->b_dovi_el_warned )
+    {
+        msg_Warn( dec, "Dolby Vision base-layer split failed; decoding the "
+                  "unsplit access unit" );
+        sys->b_dovi_el_warned = true;
+    }
+
+out:
+    av_packet_free( &output );
+    av_packet_free( &input );
+    return block;
+}
+
+static picture_t *DoviEnhancementPictureFromFrame( const AVFrame *frame )
+{
+    video_format_t format;
+    video_format_Init( &format, FindVlcChroma( frame->format ) );
+    if( format.i_chroma == 0 )
+        return NULL;
+    video_format_Setup( &format, format.i_chroma, frame->width, frame->height,
+                        frame->width, frame->height, 1, 1 );
+    picture_t *picture = picture_NewFromFormat( &format );
+    if( picture == NULL )
+        return NULL;
+
+    for( int plane = 0; plane < picture->i_planes; ++plane )
+    {
+        const uint8_t *src = frame->data[plane];
+        uint8_t *dst = picture->p[plane].p_pixels;
+        const size_t width = __MIN( (size_t) abs(frame->linesize[plane]),
+                                    (size_t) picture->p[plane].i_visible_pitch );
+        for( int line = 0; line < picture->p[plane].i_visible_lines; ++line )
+        {
+            memcpy( dst, src, width );
+            src += frame->linesize[plane];
+            dst += picture->p[plane].i_pitch;
+        }
+    }
+    picture->date = DoviFramePts( frame );
+    return picture;
+}
+
+static AVFrame *DoviTakeEnhancementFrame( decoder_t *dec, int64_t pts )
+{
+    decoder_sys_t *sys = dec->p_sys;
+    while( sys->p_dovi_el_frames != NULL )
+    {
+        dovi_el_frame_t *entry = sys->p_dovi_el_frames;
+        if( pts != AV_NOPTS_VALUE && entry->pts != AV_NOPTS_VALUE &&
+            entry->pts > pts )
+            break;
+
+        sys->p_dovi_el_frames = entry->next;
+        if( entry->next == NULL )
+            sys->pp_dovi_el_frames_last = &sys->p_dovi_el_frames;
+        sys->i_dovi_el_frames--;
+
+        AVFrame *frame = entry->frame;
+        const bool match = pts == AV_NOPTS_VALUE || entry->pts == pts;
+        free( entry );
+        if( match )
+            return frame;
+
+        /* The two decoders output in presentation order. A base-layer frame
+         * skipped during preroll or hurry-up leaves an older EL frame behind;
+         * discard it here instead of retaining a 4K surface until the queue
+         * reaches its corruption guard. */
+        av_frame_free( &frame );
+    }
+    return NULL;
+}
+
+static picture_t *DoviTakeEnhancementPicture( decoder_t *dec, int64_t pts )
+{
+    AVFrame *frame = DoviTakeEnhancementFrame( dec, pts );
+    if( frame == NULL )
+        return NULL;
+    picture_t *picture = DoviEnhancementPictureFromFrame( frame );
+    av_frame_free( &frame );
+    return picture;
+}
+#endif
 
 static inline void wait_mt(decoder_sys_t *sys)
 {
@@ -379,6 +754,7 @@ static int lavc_UpdateVideoFormat(decoder_t *dec, AVCodecContext *ctx,
     dec->fmt_out.video.projection_mode = dec->fmt_in.video.projection_mode;
     dec->fmt_out.video.multiview_mode = dec->fmt_in.video.multiview_mode;
     dec->fmt_out.video.pose = dec->fmt_in.video.pose;
+    dec->fmt_out.video.dovi = dec->fmt_in.video.dovi;
     if ( dec->fmt_in.video.mastering.max_luminance )
         dec->fmt_out.video.mastering = dec->fmt_in.video.mastering;
     dec->fmt_out.video.lighting = dec->fmt_in.video.lighting;
@@ -679,6 +1055,10 @@ static int InitVideoDecCommon( decoder_t *p_dec )
         return VLC_EGENERIC;
     }
 
+#if LIBAVCODEC_VERSION_MAJOR >= 63
+    DoviInitEnhancementDecoder( p_dec );
+#endif
+
     p_dec->pf_decode = DecodeVideo;
     p_dec->pf_flush  = Flush;
 
@@ -909,6 +1289,7 @@ static void Flush( decoder_t *p_dec )
     date_Set(&p_sys->pts, VLC_TICK_INVALID); /* To make sure we recover properly */
     p_sys->i_late_frames = 0;
     p_sys->b_draining = false;
+    p_sys->b_retry_packet = false;
     cc_Flush( &p_sys->cc );
 
     /* Abort pictures in order to unblock all avcodec workers threads waiting
@@ -921,6 +1302,16 @@ static void Flush( decoder_t *p_dec )
     if( avcodec_is_open( p_context ) )
         avcodec_flush_buffers( p_context );
     wait_mt( p_sys );
+
+#if LIBAVCODEC_VERSION_MAJOR >= 63
+    if( p_sys->p_dovi_bl_bsf != NULL )
+        av_bsf_flush( p_sys->p_dovi_bl_bsf );
+    if( p_sys->p_dovi_el_bsf != NULL )
+        av_bsf_flush( p_sys->p_dovi_el_bsf );
+    if( p_sys->p_dovi_el_context != NULL )
+        avcodec_flush_buffers( p_sys->p_dovi_el_context );
+    DoviClearEnhancementFrames( p_sys );
+#endif
 
     /* Reset cancel state to false */
     decoder_AbortPictures( p_dec, false );
@@ -1106,6 +1497,72 @@ static void update_late_frame_count( decoder_t *p_dec, block_t *p_block,
 }
 
 
+#if LIBAVUTIL_VERSION_CHECK( 57, 16, 100 )
+static void MapDolbyVisionMetadata( vlc_video_dovi_metadata_t *out,
+                                    const AVDOVIMetadata *metadata )
+{
+    const AVDOVIRpuDataHeader *header = av_dovi_get_header( metadata );
+    const AVDOVIDataMapping *mapping = av_dovi_get_mapping( metadata );
+    const AVDOVIColorMetadata *color = av_dovi_get_color( metadata );
+
+    out->coef_log2_denom = header->coef_log2_denom;
+    out->bl_bit_depth = header->bl_bit_depth;
+    out->el_bit_depth = header->el_bit_depth;
+    out->vdr_bit_depth = header->vdr_bit_depth;
+    out->bl_video_full_range = header->bl_video_full_range_flag;
+    out->residual_disabled = header->disable_residual_flag;
+    out->nlq_method = (enum vlc_dovi_nlq_method_t) mapping->nlq_method_idc;
+
+    for( size_t i = 0; i < ARRAY_SIZE(out->nonlinear_offset); ++i )
+        out->nonlinear_offset[i] = av_q2d( color->ycc_to_rgb_offset[i] );
+    for( size_t i = 0; i < ARRAY_SIZE(out->nonlinear_matrix); ++i )
+    {
+        out->nonlinear_matrix[i] = av_q2d( color->ycc_to_rgb_matrix[i] );
+        out->linear_matrix[i] = av_q2d( color->rgb_to_lms_matrix[i] );
+    }
+    out->source_min_pq = color->source_min_pq;
+    out->source_max_pq = color->source_max_pq;
+
+    for( size_t c = 0; c < ARRAY_SIZE(out->curves); ++c )
+    {
+        const AVDOVIReshapingCurve *src = &mapping->curves[c];
+        struct vlc_dovi_reshape_t *dst = &out->curves[c];
+        dst->num_pivots = __MIN( src->num_pivots,
+                                 (uint8_t) ARRAY_SIZE(dst->pivots) );
+        for( size_t i = 0; i < dst->num_pivots; ++i )
+            dst->pivots[i] = src->pivots[i];
+        for( size_t i = 0; i + 1 < dst->num_pivots; ++i )
+        {
+            dst->mapping[i] =
+                (enum vlc_dovi_reshape_method_t) src->mapping_idc[i];
+            dst->polynomial_order[i] = src->poly_order[i];
+            memcpy( dst->polynomial_coefficients[i], src->poly_coef[i],
+                    sizeof(dst->polynomial_coefficients[i]) );
+            dst->mmr_order[i] = src->mmr_order[i];
+            dst->mmr_constant[i] = src->mmr_constant[i];
+            memcpy( dst->mmr_coefficients[i], src->mmr_coef[i],
+                    sizeof(dst->mmr_coefficients[i]) );
+        }
+
+        out->nlq[c].offset = mapping->nlq[c].nlq_offset;
+        out->nlq[c].vdr_in_max = mapping->nlq[c].vdr_in_max;
+        out->nlq[c].deadzone_slope =
+            mapping->nlq[c].linear_deadzone_slope;
+        out->nlq[c].deadzone_threshold =
+            mapping->nlq[c].linear_deadzone_threshold;
+    }
+
+    const AVDOVIDmData *level1 = av_dovi_find_level( metadata, 1 );
+    if( level1 != NULL )
+    {
+        out->has_level1 = true;
+        out->level1_min_pq = level1->l1.min_pq;
+        out->level1_max_pq = level1->l1.max_pq;
+        out->level1_avg_pq = level1->l1.avg_pq;
+    }
+}
+#endif
+
 static int DecodeSidedata( decoder_t *p_dec, const AVFrame *frame, picture_t *p_pic )
 {
     decoder_sys_t *p_sys = p_dec->p_sys;
@@ -1183,6 +1640,29 @@ static int DecodeSidedata( decoder_t *p_dec, const AVFrame *frame, picture_t *p_
             p_dec->fmt_out.video.lighting  = p_pic->format.lighting;
             format_changed = true;
         }
+    }
+#endif
+
+#if LIBAVUTIL_VERSION_CHECK( 57, 16, 100 )
+    const AVFrameSideData *dovi =
+        av_frame_get_side_data( frame, AV_FRAME_DATA_DOVI_METADATA );
+    if( dovi != NULL )
+    {
+        p_pic->p_dovi = calloc( 1, sizeof(*p_pic->p_dovi) );
+        if( p_pic->p_dovi == NULL )
+            return VLC_ENOMEM;
+        MapDolbyVisionMetadata( p_pic->p_dovi,
+                                (const AVDOVIMetadata *) dovi->data );
+    }
+
+    const AVFrameSideData *rpu =
+        av_frame_get_side_data( frame, AV_FRAME_DATA_DOVI_RPU_BUFFER );
+    if( rpu != NULL )
+    {
+        p_pic->p_dovi_rpu = block_Alloc( rpu->size );
+        if( p_pic->p_dovi_rpu == NULL )
+            return VLC_ENOMEM;
+        memcpy( p_pic->p_dovi_rpu->p_buffer, rpu->data, rpu->size );
     }
 #endif
 
@@ -1386,7 +1866,7 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block, bool *error
 
         post_mt( p_sys );
 
-        if( b_has_data || b_start_drain )
+        if( (b_has_data || b_start_drain) && !p_sys->b_retry_packet )
         {
             AVPacket *pkt = av_packet_alloc();
             if(!pkt)
@@ -1401,9 +1881,6 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block, bool *error
                 pkt->pts = p_block->i_pts > VLC_TICK_INVALID ? p_block->i_pts : AV_NOPTS_VALUE;
                 pkt->dts = p_block->i_dts > VLC_TICK_INVALID ? p_block->i_dts : AV_NOPTS_VALUE;
 
-                /* Make sure we don't reuse the same timestamps twice */
-                p_block->i_pts =
-                p_block->i_dts = VLC_TICK_INVALID;
             }
             else /* start drain */
             {
@@ -1433,7 +1910,21 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block, bool *error
                 av_packet_free( &pkt );
                 break;
             }
-            i_used = ret != AVERROR(EAGAIN) ? pkt->size : 0;
+            if( ret == AVERROR(EAGAIN) )
+            {
+                p_sys->b_retry_packet = true;
+            }
+            else
+            {
+                p_sys->b_retry_packet = false;
+                i_used = pkt->size;
+                if( b_has_data )
+                {
+                    /* Make sure we don't reuse accepted timestamps twice. */
+                    p_block->i_pts =
+                    p_block->i_dts = VLC_TICK_INVALID;
+                }
+            }
             av_packet_free( &pkt );
         }
 
@@ -1482,6 +1973,14 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block, bool *error
         if( not_received_frame )
         {
             av_frame_free(&frame);
+            if( p_sys->b_retry_packet )
+            {
+                /* All pending output has now been drained. Retry the packet
+                 * without letting the codec parse its RPU repeatedly while
+                 * output frames were still queued. */
+                p_sys->b_retry_packet = false;
+                continue;
+            }
             if( i_used == 0 ) break;
             continue;
         }
@@ -1618,6 +2117,22 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block, bool *error
         if (DecodeSidedata(p_dec, frame, p_pic))
             i_pts = VLC_TICK_INVALID;
 
+#if LIBAVCODEC_VERSION_MAJOR >= 63
+        if( i_pts > VLC_TICK_INVALID && p_pic->p_dovi != NULL )
+        {
+            if( !p_pic->p_dovi->residual_disabled )
+                p_pic->p_enhancement_layer =
+                    DoviTakeEnhancementPicture( p_dec, i_pts );
+            else
+            {
+                /* MEL carries no residual to compose, but its decoded EL
+                 * frame still has to leave the pairing queue. */
+                AVFrame *unused = DoviTakeEnhancementFrame( p_dec, i_pts );
+                av_frame_free( &unused );
+            }
+        }
+#endif
+
         av_frame_free(&frame);
 
         /* Send decoded frame to vout */
@@ -1642,6 +2157,10 @@ static picture_t *DecodeBlock( decoder_t *p_dec, block_t **pp_block, bool *error
 
 static int DecodeVideo( decoder_t *p_dec, block_t *p_block )
 {
+#if LIBAVCODEC_VERSION_MAJOR >= 63
+    DoviFeedEnhancementDecoder( p_dec, p_block );
+    p_block = DoviFilterBaseLayer( p_dec, p_block );
+#endif
     block_t **pp_block = p_block ? &p_block : NULL;
     picture_t *p_pic;
     bool error = false;
@@ -1678,6 +2197,10 @@ void EndVideoDec( vlc_object_t *obj )
 
     if( p_sys->p_va )
         vlc_va_Delete( p_sys->p_va, &hwaccel_context );
+
+#if LIBAVCODEC_VERSION_MAJOR >= 63
+    DoviCloseEnhancementDecoder( p_sys );
+#endif
 
     vlc_sem_destroy( &p_sys->sem_mt );
     free( p_sys );
@@ -2005,6 +2528,22 @@ no_reuse:
 
     p_sys->profile = p_context->profile;
     p_sys->level = p_context->level;
+
+    /* Hardware surfaces do not retain the parsed RPU side data in VLC 3 and
+     * cannot be paired with the separately decoded Profile 7 enhancement
+     * layer. The dedicated libplacebo path uploads these software pictures
+     * and performs both reshaping and FEL residual composition on the GPU. */
+    const vlc_fourcc_t original = p_dec->fmt_in.i_original_fourcc;
+    if (p_dec->fmt_in.video.dovi.rpu_present ||
+        original == VLC_FOURCC('d', 'v', 'h', 'e') ||
+        original == VLC_FOURCC('d', 'v', 'h', '1') ||
+        original == VLC_FOURCC('d', 'v', 'a', 'v') ||
+        original == VLC_FOURCC('d', 'v', 'a', '1'))
+    {
+        p_sys->pix_fmt = swfmt;
+        msg_Dbg(p_dec, "using software decoder output for Dolby Vision RPU/EL rendering");
+        return swfmt;
+    }
 
     if (!can_hwaccel)
         return swfmt;

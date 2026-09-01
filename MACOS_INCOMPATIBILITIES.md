@@ -22,13 +22,13 @@ Each target produces a distinct Mach-O slice. The **universal** binary merges up
 
 | Build | Arch / subtype | macOS min | SDK | Compiler | SIMD | Endian / word | Interface(s) |
 |---|---|---|---|---|---|---|---|
-| `buildg3` | ppc (ppc750) | **10.2** | 10.4u | FSF GCC 13 (Tiger) | — (`--disable-altivec`) | BE / 32-bit | legacy |
-| `buildg4` | ppc (ppc7400) | **10.2** | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
-| `buildg5` | ppc (ppc970) | **10.2** | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
-| `buildx86` | i386 | 10.4 (10.4.4) | 10.4u | FSF GCC 13 (Tiger) | — (`--disable-mmx --disable-sse`) | LE / 32-bit | legacy |
-| `buildx64` | x86_64 | 10.5 *(see 1.2)* | modern Xcode | Apple clang | SSE2 | LE / 64-bit | modern + legacy |
-| `buildarm64` | arm64 | 11.0 | modern Xcode | Apple clang | NEON | LE / 64-bit | modern + legacy |
-| `builduniversal` | fat (the 7 above) | **10.2** (per arch) | — | — (`lipo` merge) | — | — | both worlds |
+| `build/macos/g3` | ppc (ppc750) | **10.2** | 10.4u | FSF GCC 13 (Tiger) | — (`--disable-altivec`) | BE / 32-bit | legacy |
+| `build/macos/g4` | ppc (ppc7400) | **10.2** | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
+| `build/macos/g5` | ppc (ppc970) | **10.2** | 10.4u | FSF GCC 13 | AltiVec | BE / 32-bit | legacy |
+| `build/macos/x86` | i386 | 10.4 (10.4.4) | 10.4u | FSF GCC 13 (Tiger) | — (`--disable-mmx --disable-sse`) | LE / 32-bit | legacy |
+| `build/macos/x64` | x86_64 | 10.5 *(see 1.2)* | modern Xcode | Apple clang | SSE2 | LE / 64-bit | modern + legacy |
+| `build/macos/arm64` | arm64 | 11.0 | modern Xcode | Apple clang | NEON | LE / 64-bit | modern + legacy |
+| `build/macos/universal` | fat (the 7 above) | **10.2** (per arch) | — | — (`lipo` merge) | — | — | both worlds |
 
 - **G4 / G4e / G5 share one set of contribs** built for the lowest common ISA (`-mcpu=7400 -maltivec`); only VLC itself is tuned per variant. The PowerPC slice embedded in the universal is in practice `ppc750`, which loads on **any G3/G4/G5** by subtype grading.
 - **G3 has no AltiVec** (`ppc750`, `-mcpu=750`); it uses separate contribs.
@@ -394,7 +394,7 @@ Four `vout display` modules, chosen by priority and GPU capabilities:
 
 ## 11. Summary by macOS version
 
-- **10.2 Jaguar / 10.3 Panther** (PPC): **legacy** interface via the dedicated `buildg3-jaguar` slice (§1.3). Everything the 10.4 floor offers minus what Jaguar itself lacks; **DVD playback and the ATI hardware decoder work**. ⚠️ Not merged into the universal bundle today — `make-universal.sh` still declares `ppc = 10.4.0`.
+- **10.2 Jaguar / 10.3 Panther** (PPC): **legacy** interface via the dedicated `build/macos/g3-jaguar` slice (§1.3). Everything the 10.4 floor offers minus what Jaguar itself lacks; **DVD playback and the ATI hardware decoder work**. ⚠️ Not merged into the universal bundle today — `make-universal.sh` still declares `ppc = 10.4.0`.
 - **10.4 Tiger** (PPC & Intel 32): **legacy** interface; notifications **via Growl**; **no media keys** (legacy requires 10.5); TTS without language detection; no CoreText (default face only); no Chromecast/Bonjour/Keychain/VideoToolbox/AVFoundation/Sparkle; fixed GL1 or QuickTime vout.
 - **10.5 Leopard** (PPC & Intel): same, but **legacy media keys OK** (10.5+, with accessibility), Blu-ray header available. On Intel 64-bit, the **i386** slice is chosen (x86_64 gated to 10.6).
 - **10.6 Snow Leopard** (Intel): **x86_64** slice; interface **still legacy** (modern = 10.7); notifications **via Growl**; VideoToolbox/Keychain/AVFoundation/Chromecast **available**; `caopengllayer` **not** (compiled arm64 only).

@@ -53,6 +53,14 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <pthread.h>
+#include <unistd.h>
+
+/* C99's immediate process termination was added after Jaguar. libstdc++
+ * uses it for fatal exception paths even in otherwise fully static builds. */
+void _Exit(int status)
+{
+    _exit(status);
+}
 
 /*===========================================================================
  * 1. C99 float math
@@ -280,6 +288,12 @@ char *nl_langinfo(nl_item item)
     return (item == CODESET) ? utf8 : empty;
 }
 
+char *nl_langinfo_l(nl_item item, locale_t locale)
+{
+    (void) locale;
+    return nl_langinfo(item);
+}
+
 /* No wide-character support to speak of on 10.2; VLC only uses wcwidth() to
  * lay out console output. One column per character is the right answer for
  * everything the terminal on these machines can display anyway. */
@@ -403,6 +417,84 @@ size_t wcrtomb(char *s, wchar_t wc, mbstate_t *ps)
     return (size_t) -1;
 }
 
+size_t mbsrtowcs(wchar_t *restrict dst, const char **restrict src,
+                 size_t len, mbstate_t *restrict ps)
+{
+    const char *s = *src;
+    size_t converted = 0;
+
+    while (*s != '\0')
+    {
+        wchar_t wc;
+        size_t used = mbrtowc(&wc, s, strlen(s) + 1, ps);
+
+        if (used == (size_t) -1 || used == (size_t) -2)
+        {
+            if (dst != NULL)
+                *src = s;
+            return (size_t) -1;
+        }
+        if (dst != NULL)
+        {
+            if (converted == len)
+            {
+                *src = s;
+                return converted;
+            }
+            dst[converted] = wc;
+        }
+        converted++;
+        s += used;
+    }
+
+    if (dst != NULL)
+    {
+        if (converted < len)
+            dst[converted] = L'\0';
+        *src = NULL;
+    }
+    return converted;
+}
+
+size_t wcsrtombs(char *restrict dst, const wchar_t **restrict src,
+                 size_t len, mbstate_t *restrict ps)
+{
+    const wchar_t *s = *src;
+    size_t converted = 0;
+
+    while (*s != L'\0')
+    {
+        char bytes[4];
+        size_t used = wcrtomb(bytes, *s, ps);
+
+        if (used == (size_t) -1)
+        {
+            if (dst != NULL)
+                *src = s;
+            return (size_t) -1;
+        }
+        if (dst != NULL)
+        {
+            if (used > len - converted)
+            {
+                *src = s;
+                return converted;
+            }
+            memcpy(dst + converted, bytes, used);
+        }
+        converted += used;
+        s++;
+    }
+
+    if (dst != NULL)
+    {
+        if (converted < len)
+            dst[converted] = '\0';
+        *src = NULL;
+    }
+    return converted;
+}
+
 wint_t btowc(int c)
 {
     return (c == EOF || (unsigned char) c >= 0x80) ? WEOF : (wint_t) c;
@@ -490,6 +582,49 @@ int wcscoll(const wchar_t *a, const wchar_t *b)
     return (int) (*a - *b);
 }
 
+int wcscmp(const wchar_t *a, const wchar_t *b)
+{
+    return wcscoll(a, b);
+}
+
+int wcscoll_l(const wchar_t *a, const wchar_t *b, locale_t locale)
+{
+    (void) locale;
+    return wcscoll(a, b);
+}
+
+wchar_t *wcsncpy(wchar_t *restrict dst, const wchar_t *restrict src,
+                 size_t n)
+{
+    size_t i = 0;
+
+    while (i < n && src[i] != L'\0')
+    {
+        dst[i] = src[i];
+        i++;
+    }
+    while (i < n)
+        dst[i++] = L'\0';
+    return dst;
+}
+
+wchar_t *wcspbrk(const wchar_t *s, const wchar_t *accept)
+{
+    for (; *s != L'\0'; s++)
+        if (wcschr(accept, *s) != NULL)
+            return (wchar_t *) s;
+    return NULL;
+}
+
+size_t wcsspn(const wchar_t *s, const wchar_t *accept)
+{
+    const wchar_t *start = s;
+
+    while (*s != L'\0' && wcschr(accept, *s) != NULL)
+        s++;
+    return (size_t) (s - start);
+}
+
 size_t wcsxfrm(wchar_t *dst, const wchar_t *src, size_t n)
 {
     size_t len = wcslen(src);
@@ -504,24 +639,87 @@ size_t wcsxfrm(wchar_t *dst, const wchar_t *src, size_t n)
     return len;
 }
 
-long wcstol(const wchar_t *s, wchar_t **end, int base)
+static char *jaguar_wide_number(const wchar_t *s)
 {
-    char buf[64];
+    size_t len = wcslen(s);
+    char *buf = malloc(len + 1);
+    size_t i;
+
+    if (buf == NULL)
+        return NULL;
+    for (i = 0; i < len; i++)
+        buf[i] = s[i] < 0x80 ? (char) s[i] : '?';
+    buf[len] = '\0';
+    return buf;
+}
+
+#define WIDE_NUMBER_CONVERSION(type, name, narrow)                         \
+type name(const wchar_t *s, wchar_t **end, int base)                      \
+{                                                                          \
+    char *buf = jaguar_wide_number(s);                                     \
+    char *cend;                                                             \
+    type value;                                                             \
+    if (buf == NULL)                                                        \
+        return (type) 0;                                                    \
+    value = narrow(buf, &cend, base);                                      \
+    if (end != NULL)                                                        \
+        *end = (wchar_t *) s + (cend - buf);                               \
+    free(buf);                                                              \
+    return value;                                                           \
+}
+
+WIDE_NUMBER_CONVERSION(long, wcstol, strtol)
+WIDE_NUMBER_CONVERSION(unsigned long, wcstoul, strtoul)
+WIDE_NUMBER_CONVERSION(long long, wcstoll, strtoll)
+WIDE_NUMBER_CONVERSION(unsigned long long, wcstoull, strtoull)
+
+#undef WIDE_NUMBER_CONVERSION
+
+double wcstod(const wchar_t *s, wchar_t **end)
+{
+    char *buf = jaguar_wide_number(s);
     char *cend;
-    size_t i = 0;
+    double value;
 
-    while (i < sizeof (buf) - 1 && s[i] != L'\0' && s[i] < 0x80)
-    {
-        buf[i] = (char) s[i];
-        i++;
-    }
-    buf[i] = '\0';
-
-    long v = strtol(buf, &cend, base);
-
+    if (buf == NULL)
+        return 0.0;
+    value = strtod(buf, &cend);
     if (end != NULL)
         *end = (wchar_t *) s + (cend - buf);
-    return v;
+    free(buf);
+    return value;
+}
+
+double wcstod_l(const wchar_t *s, wchar_t **end, locale_t locale)
+{
+    (void) locale;
+    return wcstod(s, end);
+}
+
+long wcstol_l(const wchar_t *s, wchar_t **end, int base, locale_t locale)
+{
+    (void) locale;
+    return wcstol(s, end, base);
+}
+
+unsigned long wcstoul_l(const wchar_t *s, wchar_t **end, int base,
+                        locale_t locale)
+{
+    (void) locale;
+    return wcstoul(s, end, base);
+}
+
+wchar_t *wcsstr(const wchar_t *haystack, const wchar_t *needle)
+{
+    size_t needle_len = wcslen(needle);
+
+    if (needle_len == 0)
+        return (wchar_t *) haystack;
+    for (; *haystack != L'\0'; haystack++)
+        if (wcslen(haystack) >= needle_len
+         && wmemcmp(haystack, needle, needle_len) == 0)
+            return (wchar_t *) haystack;
+    return NULL;
 }
 
 int wcswidth(const wchar_t *s, size_t n)
@@ -612,6 +810,14 @@ wint_t putwc(wchar_t wc, FILE *f)
     if (len == (size_t) -1 || fwrite(buf, 1, len, f) != len)
         return WEOF;
     return (wint_t) wc;
+}
+
+int fputws(const wchar_t *restrict s, FILE *restrict f)
+{
+    while (*s != L'\0')
+        if (putwc(*s++, f) == WEOF)
+            return -1;
+    return 0;
 }
 
 wint_t ungetwc(wint_t wc, FILE *f)

@@ -42,6 +42,9 @@ struct vlc_dialog_provider
 
     vlc_dialog_ext_update_cb    pf_ext_update;
     void *                      p_ext_data;
+
+    vlc_dialog_select_directory_cb pf_select_directory;
+    void *                      p_directory_data;
 };
 
 enum dialog_type
@@ -161,6 +164,8 @@ libvlc_InternalDialogInit(libvlc_int_t *p_libvlc)
 
     p_provider->pf_ext_update = NULL;
     p_provider->p_ext_data = NULL;
+    p_provider->pf_select_directory = NULL;
+    p_provider->p_directory_data = NULL;
     libvlc_priv(p_libvlc)->p_dialog_provider = p_provider;
 
     return VLC_SUCCESS;
@@ -272,6 +277,40 @@ vlc_dialog_provider_set_callbacks(vlc_object_t *p_obj,
         p_provider->p_cbs_data = p_data;
     }
     vlc_mutex_unlock(&p_provider->lock);
+}
+
+#undef vlc_dialog_provider_set_directory_callback
+void
+vlc_dialog_provider_set_directory_callback(
+    vlc_object_t *p_obj, vlc_dialog_select_directory_cb pf_select,
+    void *p_data)
+{
+    assert(p_obj != NULL);
+    vlc_dialog_provider *p_provider = get_dialog_provider(p_obj, false);
+
+    vlc_mutex_lock(&p_provider->lock);
+    p_provider->pf_select_directory = pf_select;
+    p_provider->p_directory_data = p_data;
+    vlc_mutex_unlock(&p_provider->lock);
+}
+
+#undef vlc_dialog_select_directory
+char *
+vlc_dialog_select_directory(vlc_object_t *p_obj, const char *psz_title,
+                            const char *psz_initial)
+{
+    vlc_dialog_provider *p_provider = get_dialog_provider(p_obj, true);
+    if (p_provider == NULL)
+        return NULL;
+
+    vlc_mutex_lock(&p_provider->lock);
+    vlc_dialog_select_directory_cb pf_select =
+        p_provider->pf_select_directory;
+    void *p_data = p_provider->p_directory_data;
+    vlc_mutex_unlock(&p_provider->lock);
+
+    return pf_select != NULL
+         ? pf_select(p_data, psz_title, psz_initial) : NULL;
 }
 
 static void

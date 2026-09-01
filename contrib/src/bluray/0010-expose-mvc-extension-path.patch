@@ -1,0 +1,76 @@
+diff --git a/src/libbluray/meson.build b/src/libbluray/meson.build
+index 93a923a..538937a 100644
+--- a/src/libbluray/meson.build
++++ b/src/libbluray/meson.build
+@@ -7,5 +7,7 @@ libbluray_api_headers = files(
+     'bluray.h',
+     'bdnav/clpi_data.h',
++    'bdnav/mpls_data.h',
++    'bdnav/uo_mask_table.h',
+     'keys.h',
+     'bdnav/meta_data.h',
+     'decoders/overlay.h',
+diff --git a/src/libbluray/bluray.c b/src/libbluray/bluray.c
+index 94a3cec..475ea68 100644
+--- a/src/libbluray/bluray.c
++++ b/src/libbluray/bluray.c
+@@ -4311,6 +4311,28 @@ struct mpls_pl *bd_read_mpls(const char *mpls_file)
+     return mpls_parse(mpls_file);
+ }
+ 
++struct mpls_pl *bd_get_title_mpls(BLURAY *bd)
++{
++    if (bd != NULL && bd->title != NULL && bd->title->pl != NULL) {
++        return bd->title->pl;
++    }
++    return NULL;
++}
++
++BD_FILE_H *bd_clip_open(BLURAY *bd, const char *file)
++{
++    BD_FILE_H *fp = NULL;
++
++    if (bd == NULL || file == NULL) {
++        return NULL;
++    }
++
++    bd_mutex_lock(&bd->mutex);
++    fp = disc_open_stream(bd->disc, file);
++    bd_mutex_unlock(&bd->mutex);
++    return fp;
++}
++
+ void bd_free_mpls(struct mpls_pl *pl)
+ {
+     mpls_free(&pl);
+diff --git a/src/libbluray/bluray.h b/src/libbluray/bluray.h
+index c65a951..be43207 100644
+--- a/src/libbluray/bluray.h
++++ b/src/libbluray/bluray.h
+@@ -1223,6 +1223,8 @@ BD_PUBLIC void bd_free_clpi(struct clpi_cl *cl);
+ 
+ 
+ /** Testing/debugging: Parse playlist (MPLS) file */
++BD_PUBLIC struct mpls_pl *bd_get_title_mpls(BLURAY *bd);
++
+ BD_PUBLIC struct mpls_pl *bd_read_mpls(const char *mpls_file);
+ /** Testing/debugging: Free parsed playlist */
+ BD_PUBLIC void bd_free_mpls(struct mpls_pl *);
+@@ -1290,6 +1292,17 @@ BD_PUBLIC struct bd_dir_s *bd_open_dir(BLURAY *bd, const char *dir);
+  */
+ BD_PUBLIC struct bd_file_s *bd_open_file_dec(BLURAY *bd, const char *path);
+ 
++/**
++ * Open an M2TS clip relative to BDMV/STREAM. This is used for the
++ * stereoscopic MVC extension sub-path while the primary title keeps playing.
++ *
++ * Caller must close with file->close().
++ *
++ * @param bd Blu-ray object
++ * @param file clip file name, for example "00001.m2ts"
++ */
++BD_PUBLIC struct bd_file_s *bd_clip_open(BLURAY *bd, const char *file);
++
+ #ifdef __cplusplus
+ }
+ #endif

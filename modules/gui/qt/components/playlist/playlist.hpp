@@ -58,6 +58,7 @@ public:
     void forceShow();
     void setSearchFieldFocus();
     bool addNetworkLocation( const QString& mrl );
+    void reloadPowerDevices();
     QStackedWidget *artContainer;
     StandardPLPanel      *mainView;
 
@@ -79,6 +80,7 @@ protected:
     void closeEvent( QCloseEvent * ) Q_DECL_OVERRIDE;
 private slots:
     void changeView( const QModelIndex& index );
+    void updateScanProgress();
 
     friend class PlaylistDialog;
 };
@@ -102,6 +104,7 @@ class LocationBar : public QWidget
 public:
     LocationBar( VLCModel * );
     void setIndex( const QModelIndex & );
+    void setScanProgressText( const QString & );
     void setModel( VLCModel * _model ) { model = _model; };
     QSize sizeHint() const Q_DECL_OVERRIDE;
 protected:

@@ -142,6 +142,10 @@ struct decoder_owner_sys_t
 
     /* Flushing */
     bool flushing;
+    /* input_DecoderFlush() is asynchronous.  While this is set, output that
+     * was already in flight before the flush must not acknowledge a newly
+     * armed buffering wait (notably after a seek). */
+    atomic_bool flush_wait_pending;
     bool b_draining;
     atomic_bool drained;
     bool b_idle;
@@ -405,7 +409,16 @@ static int aout_update_format( decoder_t *p_dec )
             /* TODO: 3.0 HACK: we need to put i_profile inside audio_format_t
              * for 4.0 */
             if( p_dec->fmt_out.i_codec == VLC_CODEC_DTS )
-                var_SetBool( p_aout, "dtshd", p_dec->fmt_out.i_profile > 0 );
+            {
+                /* DTS-HD streams can be packetized as their compatible DTS
+                 * core when the HD format was not enabled or the output
+                 * cannot expose a native HBR carrier.  Do not let the stream
+                 * profile alone override the user's DTS-HD capability
+                 * checkbox on platforms that do support native DTS-HD. */
+                bool b_dtshd = p_dec->fmt_out.i_profile > 0
+                            && var_InheritBool( p_dec, "spdif-dtshd" );
+                var_SetBool( p_aout, "dtshd", b_dtshd );
+            }
 
             /* "gapless-eligible" is only ever cleared when a video ES is
              * added to the input, so it really means "no video anywhere".
@@ -849,14 +862,22 @@ void decoder_AbortPictures( decoder_t *p_dec, bool b_abort )
 static size_t DecoderVideoCacheTarget( decoder_t *p_dec )
 {
     decoder_owner_sys_t *p_owner = p_dec->p_owner;
+    const video_format_t *fmt = &p_dec->fmt_out.video;
 
     if( p_owner->i_cache_bytes == 0 || p_owner->i_cache_pic_bytes == 0
      || p_owner->p_vout == NULL )
         return 0;
 
+    /* MVC base video and audio are emitted by the same chained TS parser.
+     * Holding a large decoded-picture cushion blocks that parser on video
+     * before it reaches the following audio PES packets, causing periodic
+     * passthrough underruns. The codec DPB and vout display pool remain in
+     * service; disable only the optional decoded look-ahead cache. */
+    if( fmt->multiview_mode == MULTIVIEW_STEREO_FRAMEPACKED )
+        return 0;
+
     size_t i_target = p_owner->i_cache_bytes / p_owner->i_cache_pic_bytes;
 
-    const video_format_t *fmt = &p_dec->fmt_out.video;
     if( p_owner->i_cache_max_seconds > 0
      && fmt->i_frame_rate > 0 && fmt->i_frame_rate_base > 0 )
     {
@@ -890,10 +911,16 @@ static size_t DecoderVideoCacheTarget( decoder_t *p_dec )
          * that hands out a fixed cushion simply lands under the floor and
          * runs without a cache, as before. */
         enum { VIDEO_CACHE_DR_POOL_MARGIN = 4,
-               VIDEO_CACHE_DR_MIN_VIABLE  = 24 };
-        size_t i_bound = i_headroom > VIDEO_CACHE_DR_POOL_MARGIN
-                       ? i_headroom - VIDEO_CACHE_DR_POOL_MARGIN : 1;
-        if( i_bound < VIDEO_CACHE_DR_MIN_VIABLE )
+               VIDEO_CACHE_DR_MIN_VIABLE  = 24,
+               VIDEO_CACHE_MVC_MIN_VIABLE = 2 };
+        const bool b_mvc =
+            fmt->multiview_mode == MULTIVIEW_STEREO_FRAMEPACKED;
+        const size_t i_margin = b_mvc ? 0 : VIDEO_CACHE_DR_POOL_MARGIN;
+        size_t i_bound = i_headroom > i_margin
+                       ? i_headroom - i_margin : 1;
+        const size_t i_min_viable = b_mvc ? VIDEO_CACHE_MVC_MIN_VIABLE
+                                          : VIDEO_CACHE_DR_MIN_VIABLE;
+        if( i_bound < i_min_viable )
             i_bound = 0;
         if( i_bound < i_target )
             i_target = i_bound;
@@ -981,6 +1008,7 @@ static void DecoderFixTs( decoder_t *p_dec, vlc_tick_t *pi_ts0, vlc_tick_t *pi_t
 
     if( *pi_ts0 > VLC_TICK_INVALID )
     {
+        const vlc_tick_t i_ts_before_es_delay = *pi_ts0;
         *pi_ts0 += i_es_delay;
         if( pi_ts1 && *pi_ts1 > VLC_TICK_INVALID )
             *pi_ts1 += i_es_delay;
@@ -990,9 +1018,13 @@ static void DecoderFixTs( decoder_t *p_dec, vlc_tick_t *pi_ts0, vlc_tick_t *pi_t
             const char *psz_name = module_get_name( p_dec->p_module, false );
             if( pi_ts1 != NULL )
                 msg_Err(p_dec, "Could not convert timestamps %"PRId64
-                        ", %"PRId64" for %s", *pi_ts0, *pi_ts1, psz_name );
+                        ", %"PRId64" for %s (input=%"PRId64
+                        ", ES delay=%"PRId64")", *pi_ts0, *pi_ts1,
+                        psz_name, i_ts_before_es_delay, i_es_delay );
             else
-                msg_Err(p_dec, "Could not convert timestamp %"PRId64" for %s", *pi_ts0, psz_name );
+                msg_Err(p_dec, "Could not convert timestamp %"PRId64
+                        " for %s (input=%"PRId64", ES delay=%"PRId64")",
+                        *pi_ts0, psz_name, i_ts_before_es_delay, i_es_delay );
             *pi_ts0 = VLC_TICK_INVALID;
         }
     }
@@ -1023,7 +1055,8 @@ static int DecoderPlaySout( decoder_t *p_dec, block_t *p_sout_block )
 
     vlc_mutex_lock( &p_owner->lock );
 
-    if( p_owner->b_waiting )
+    if( p_owner->b_waiting
+     && !atomic_load( &p_owner->flush_wait_pending ) )
     {
         p_owner->b_has_data = true;
         vlc_cond_signal( &p_owner->wait_acknowledge );
@@ -1187,6 +1220,7 @@ static int DecoderPlayVideo( decoder_t *p_dec, picture_t *p_picture,
     decoder_owner_sys_t *p_owner = p_dec->p_owner;
     vout_thread_t  *p_vout = p_owner->p_vout;
     bool prerolled;
+    const vlc_tick_t i_media_pts = p_picture->date;
 
     vlc_mutex_lock( &p_owner->lock );
     if( p_owner->i_preroll_end > p_picture->date )
@@ -1217,7 +1251,34 @@ static int DecoderPlayVideo( decoder_t *p_dec, picture_t *p_picture,
     /* */
     vlc_mutex_lock( &p_owner->lock );
 
-    if( p_owner->b_waiting && !p_owner->b_first )
+    const bool b_flush_wait_pending =
+        atomic_load( &p_owner->flush_wait_pending );
+
+    /* A seek changes the input clock origin when es_out opens the buffering
+     * gate.  Do not put the first post-preroll picture into the vout before
+     * that change: it would keep a date from the old origin, while every
+     * following picture and the first audio packet use the new one.  On MVC
+     * this was observed as one picture dated 653 ms after audio, followed by
+     * an out-of-order vout queue which accumulated almost one second of
+     * lateness.
+     *
+     * Acknowledge readiness with this picture itself and keep it in hand on
+     * DecoderWaitUnblock().  Once StopWait opens all decoders, DecoderFixTs
+     * below converts it against the same new origin as audio. */
+    const bool b_post_preroll_wait = p_owner->b_waiting
+                                  && !b_flush_wait_pending
+                                  && p_owner->b_first && prerolled;
+    if( b_post_preroll_wait )
+    {
+        p_owner->b_has_data = true;
+        p_owner->b_first = false;
+        p_picture->b_force = true;
+        msg_Dbg( p_dec, "holding first post-preroll picture at A/V gate" );
+        vlc_cond_signal( &p_owner->wait_acknowledge );
+    }
+
+    if( p_owner->b_waiting && !b_flush_wait_pending
+     && !p_owner->b_first )
     {
         p_owner->b_has_data = true;
         vlc_cond_signal( &p_owner->wait_acknowledge );
@@ -1248,7 +1309,8 @@ static int DecoderPlayVideo( decoder_t *p_dec, picture_t *p_picture,
     if( p_owner->i_cache_bytes > 0 && p_vout != NULL )
         i_cache_target = DecoderVideoCacheTarget( p_dec );
 
-    if( p_owner->b_waiting && !p_owner->b_first
+    if( p_owner->b_waiting && !b_post_preroll_wait
+     && !p_owner->b_first
      && p_owner->i_cache_bytes > 0 && p_vout != NULL
      && vout_GetDecoderFifoCount( p_vout ) < i_cache_target )
     {
@@ -1277,7 +1339,8 @@ static int DecoderPlayVideo( decoder_t *p_dec, picture_t *p_picture,
     if( !b_cache_fill )
         DecoderWaitUnblock( p_dec );
 
-    if( p_owner->b_waiting && p_owner->b_first )
+    if( p_owner->b_waiting && !b_flush_wait_pending
+     && p_owner->b_first )
     {
         /* Not an assert on b_first anymore: in cache-fill mode the
          * decoder passes here for every accumulated picture, and only
@@ -1318,6 +1381,13 @@ static int DecoderPlayVideo( decoder_t *p_dec, picture_t *p_picture,
     }
     DecoderFixTs( p_dec, &p_picture->date, NULL, NULL,
                   &i_rate, i_ts_bound );
+
+    if( unlikely(prerolled) )
+        msg_Dbg( p_dec, "first video after preroll: media PTS %"PRId64
+                 ", clock date %"PRId64", advance %"PRId64" us",
+                 i_media_pts, p_picture->date,
+                 p_picture->date > VLC_TICK_INVALID
+                    ? p_picture->date - mdate() : INT64_MIN );
 
     vlc_mutex_unlock( &p_owner->lock );
 
@@ -1527,6 +1597,8 @@ static int DecoderPlayAudio( decoder_t *p_dec, block_t *p_audio,
     if( p_audio == NULL )
         return 0; /* fully consumed encoder samples, not a loss */
 
+    const vlc_tick_t i_media_pts = p_audio->i_pts;
+
     vlc_mutex_lock( &p_owner->lock );
     if( p_owner->i_preroll_end > p_audio->i_pts )
     {
@@ -1558,7 +1630,8 @@ static int DecoderPlayAudio( decoder_t *p_dec, block_t *p_audio,
 
     /* */
     vlc_mutex_lock( &p_owner->lock );
-    if( p_owner->b_waiting )
+    if( p_owner->b_waiting
+     && !atomic_load( &p_owner->flush_wait_pending ) )
     {
         p_owner->b_has_data = true;
         vlc_cond_signal( &p_owner->wait_acknowledge );
@@ -1566,10 +1639,26 @@ static int DecoderPlayAudio( decoder_t *p_dec, block_t *p_audio,
 
     /* */
     int i_rate = INPUT_RATE_DEFAULT;
+    const bool b_first_audio_schedule = p_owner->b_first;
 
     DecoderWaitUnblock( p_dec );
     DecoderFixTs( p_dec, &p_audio->i_pts, NULL, &p_audio->i_length,
                   &i_rate, AOUT_MAX_ADVANCE_TIME );
+
+    if( unlikely(b_first_audio_schedule) )
+    {
+        /* Audio owners did not consume b_first, unlike video owners.  Logging
+         * the first scheduled packet gives measurement tools a precise media
+         * PTS <-> monotonic-clock anchor at initial start as well as after a
+         * seek; it does not alter audio timestamps or scheduling. */
+        p_owner->b_first = false;
+        msg_Dbg( p_dec, "first audio schedule%s: media PTS %"PRId64
+                 ", clock date %"PRId64", advance %"PRId64" us",
+                 prerolled ? " after preroll" : "",
+                 i_media_pts, p_audio->i_pts,
+                 p_audio->i_pts > VLC_TICK_INVALID
+                    ? p_audio->i_pts - mdate() : INT64_MIN );
+    }
     vlc_mutex_unlock( &p_owner->lock );
 
     audio_output_t *p_aout = p_owner->p_aout;
@@ -1655,7 +1744,8 @@ static void DecoderPlaySpu( decoder_t *p_dec, subpicture_t *p_subpic )
     /* */
     vlc_mutex_lock( &p_owner->lock );
 
-    if( p_owner->b_waiting )
+    if( p_owner->b_waiting
+     && !atomic_load( &p_owner->flush_wait_pending ) )
     {
         p_owner->b_has_data = true;
         vlc_cond_signal( &p_owner->wait_acknowledge );
@@ -1980,6 +2070,14 @@ static void *DecoderThread( void *p_data )
              * harmless). */
             p_owner->flushing = false;
 
+            /* input_DecoderFlush() only queues the request.  Until this
+             * point, a pre-seek picture already being returned by the codec
+             * can race with input_DecoderStartWait() and falsely release the
+             * buffering gate.  The codec and all its outputs have now been
+             * flushed, so only current-generation data may acknowledge it. */
+            if( atomic_exchange( &p_owner->flush_wait_pending, false ) )
+                msg_Dbg( p_dec, "decoder flush barrier released" );
+
             /* An old in-flight picture can finish while the flush request is
              * being handled. Arm the paused seek only after the codec and
              * vout flush have completed so that picture cannot consume it. */
@@ -2278,6 +2376,7 @@ static decoder_t * CreateDecoder( vlc_object_t *p_parent,
     p_owner->error = false;
 
     p_owner->flushing = false;
+    atomic_init( &p_owner->flush_wait_pending, false );
     p_owner->b_draining = false;
     p_owner->drained = false;
     p_owner->b_gapless_eos = false;
@@ -2768,6 +2867,7 @@ void input_DecoderFlush( decoder_t *p_dec )
      * second time, this function will clear the FIFO again before anything was
      * dequeued by DecoderThread and there is no need to flush a second time in
      * a row. */
+    atomic_store( &p_owner->flush_wait_pending, true );
     p_owner->flushing = true;
 
     /* Request one new video/subtitle after the flush itself has completed.
@@ -2936,6 +3036,8 @@ void input_DecoderStartWait( decoder_t *p_dec )
     p_owner->b_first = true;
     p_owner->b_has_data = false;
     p_owner->b_waiting = true;
+    if( atomic_load( &p_owner->flush_wait_pending ) )
+        msg_Dbg( p_dec, "seek wait armed behind decoder flush" );
     vlc_cond_signal( &p_owner->wait_request );
     vlc_mutex_unlock( &p_owner->lock );
 }
@@ -3130,4 +3232,19 @@ void input_DecoderGetObjects( decoder_t *p_dec,
     if( pp_aout )
         *pp_aout = p_owner->p_aout ? vlc_object_hold( p_owner->p_aout ) : NULL;
     vlc_mutex_unlock( &p_owner->lock );
+}
+
+bool input_DecoderGetAudioOutputDelay( decoder_t *p_dec,
+                                       vlc_tick_t *pi_delay )
+{
+    audio_output_t *p_aout = NULL;
+    input_DecoderGetObjects( p_dec, NULL, &p_aout );
+    if( p_aout == NULL )
+        return false;
+
+    aout_OutputLock( p_aout );
+    bool b_valid = aout_OutputTimeGet( p_aout, pi_delay ) == 0;
+    aout_OutputUnlock( p_aout );
+    vlc_object_release( p_aout );
+    return b_valid;
 }

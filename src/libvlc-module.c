@@ -198,6 +198,30 @@ static const char *ppsz_roles_text[] = {
 #define SPDIF_LONGTEXT N_( \
     "This option should be used when the audio output can't negotiate S/PDIF support.")
 
+#define PASSTHROUGH_AC3_TEXT N_("AC-3 passthrough")
+#define PASSTHROUGH_AC3_LONGTEXT N_( \
+    "Allow AC-3 (Dolby Digital) bitstreams to be sent unchanged to the " \
+    "selected HDMI or S/PDIF device. Enable this only if the connected " \
+    "receiver, television or projector supports AC-3.")
+#define PASSTHROUGH_EAC3_TEXT N_("E-AC-3 passthrough")
+#define PASSTHROUGH_EAC3_LONGTEXT N_( \
+    "Allow E-AC-3 (Dolby Digital Plus) bitstreams to be sent unchanged to " \
+    "the selected HDMI device. Enable this only if the connected equipment " \
+    "supports E-AC-3.")
+#define PASSTHROUGH_TRUEHD_TEXT N_("TrueHD passthrough")
+#define PASSTHROUGH_TRUEHD_LONGTEXT N_( \
+    "Allow Dolby TrueHD and MLP bitstreams to be sent unchanged over an " \
+    "HDMI HBR connection. Enable this only if the connected equipment " \
+    "supports Dolby TrueHD.")
+#define PASSTHROUGH_DTS_TEXT N_("DTS passthrough")
+#define PASSTHROUGH_DTS_LONGTEXT N_( \
+    "Allow DTS core bitstreams to be sent unchanged to the selected HDMI " \
+    "or S/PDIF device. Enable this only if the connected equipment supports DTS.")
+#define PASSTHROUGH_DTSHD_TEXT N_("DTS-HD passthrough")
+#define PASSTHROUGH_DTSHD_LONGTEXT N_( \
+    "Allow DTS-HD bitstreams to be sent unchanged over an HDMI HBR " \
+    "connection. Enable this only if the connected equipment supports DTS-HD.")
+
 #define FORCE_DOLBY_TEXT N_("Force detection of Dolby Surround")
 #define FORCE_DOLBY_LONGTEXT N_( \
     "Use this when you know your stream is (or is not) encoded with Dolby "\
@@ -358,6 +382,47 @@ static const char *const ppsz_align_descriptions[] =
 #define FULLSCREEN_TEXT N_("Fullscreen video output")
 #define FULLSCREEN_LONGTEXT N_( \
     "Start video in fullscreen mode" )
+
+#define STEREO3D_DISPLAY_MODE_TEXT N_("Change display mode for 3D video")
+#define STEREO3D_DISPLAY_MODE_LONGTEXT N_( \
+    "When a stereoscopic video starts, select standardized HDMI frame-packed " \
+    "output (a 1920x2205 physical raster for 1080p or 1280x1470 for 720p) at " \
+    "the content refresh rate, then enter full screen. Windows exposes this " \
+    "physical signal through a two-eye DXGI stereo mode whose logical size is " \
+    "1920x1080 or 1280x720; an ordinary monoscopic mode is never substituted. " \
+    "The previous display mode and window state are restored when playback " \
+    "stops." )
+
+static const int stereo3d_display_mode_values[] = { 0, 1, 2 };
+static const char *const stereo3d_display_mode_texts[] = {
+    N_("Always"), N_("Ask"), N_("Never")
+};
+
+#define STEREO3D_INPUT_MODE_TEXT N_("Stereoscopic input layout")
+#define STEREO3D_INPUT_MODE_LONGTEXT N_( \
+    "Select how the two views are stored in the source. Automatic detection " \
+    "uses embedded stream metadata first and Kodi-compatible filename flags " \
+    "second. A manual value is used only when embedded metadata is absent." )
+
+static const int stereo3d_input_mode_values[] = { 0, 1, 2, 3, 4, 5 };
+static const char *const stereo3d_input_mode_texts[] = {
+    N_("Automatic"), N_("2D"), N_("Side by side (left first)"),
+    N_("Side by side (right first)"), N_("Top/bottom (left first)"),
+    N_("Bottom/top (right first)")
+};
+
+#define STEREO3D_OVERLAY_DEPTH_TEXT N_("3D depth for subtitles, OSD and controls")
+#define STEREO3D_OVERLAY_DEPTH_LONGTEXT N_( \
+    "Sets the stereoscopic parallax of subtitles, on-screen displays and " \
+    "fullscreen controls during MVC frame-packed playback. Negative values " \
+    "place overlays behind the screen plane; positive values bring them " \
+    "towards the viewer." )
+
+static const int stereo3d_overlay_depth_values[] = { -100, -50, 0, 50, 100 };
+static const char *const stereo3d_overlay_depth_texts[] = {
+    N_("Far behind screen"), N_("Behind screen"), N_("At screen plane"),
+    N_("In front of screen"), N_("Closest to viewer")
+};
 
 #define VIDEO_ON_TOP_TEXT N_("Always on top")
 #define VIDEO_ON_TOP_LONGTEXT N_( \
@@ -1280,6 +1345,23 @@ static const char *const psz_recursive_list_text[] = {
     "The media library is automatically saved and reloaded each time you " \
     "start VLC." )
 
+#define PVLC_ML_MANAGED_TEXT N_("Auto-managed media folder")
+#define PVLC_ML_MANAGED_LONGTEXT N_( \
+    "Files dropped into the PowerVLC media library are copied here using " \
+    "Jellyfin-compatible Music, Movies and Shows subfolders." )
+#define PVLC_ML_FOLDERS_TEXT N_("PowerVLC monitored media folders")
+#define PVLC_ML_FOLDERS_LONGTEXT N_( \
+    "Encoded list of folders, monitoring choices and shared per-folder " \
+    "cache choices. Prefer changing this in the Media Library tab." )
+#define PVLC_ML_SMART_TEXT N_("PowerVLC smart playlists")
+#define PVLC_ML_SMART_LONGTEXT N_( \
+    "Encoded smart-playlist definitions. Results are cached and recomputed " \
+    "only after the library or a definition changes." )
+#define PVLC_DEVICES_TEXT N_("PowerVLC portable players")
+#define PVLC_DEVICES_LONGTEXT N_( \
+    "Encoded portable-player list and per-device synchronization settings. " \
+    "Prefer changing this in the Portable Players tab." )
+
 #define PLTREE_TEXT N_("Display playlist tree")
 #define PLTREE_LONGTEXT N_( \
     "The playlist can use a tree to categorize some items, like the " \
@@ -1591,6 +1673,16 @@ vlc_module_begin ()
     add_obsolete_integer( "aout-rate" ) /* since 2.0.0 */
     add_obsolete_bool( "hq-resampling" ) /* since 1.1.8 */
     add_bool( "spdif", false, SPDIF_TEXT, SPDIF_LONGTEXT, true )
+    add_bool( "spdif-ac3", false, PASSTHROUGH_AC3_TEXT,
+              PASSTHROUGH_AC3_LONGTEXT, true )
+    add_bool( "spdif-eac3", false, PASSTHROUGH_EAC3_TEXT,
+              PASSTHROUGH_EAC3_LONGTEXT, true )
+    add_bool( "spdif-truehd", false, PASSTHROUGH_TRUEHD_TEXT,
+              PASSTHROUGH_TRUEHD_LONGTEXT, true )
+    add_bool( "spdif-dts", false, PASSTHROUGH_DTS_TEXT,
+              PASSTHROUGH_DTS_LONGTEXT, true )
+    add_bool( "spdif-dtshd", false, PASSTHROUGH_DTSHD_TEXT,
+              PASSTHROUGH_DTSHD_LONGTEXT, true )
     add_integer( "force-dolby-surround", 0, FORCE_DOLBY_TEXT,
                  FORCE_DOLBY_LONGTEXT, false )
         change_integer_list( pi_force_dolby_values, ppsz_force_dolby_descriptions )
@@ -1681,6 +1773,20 @@ vlc_module_begin ()
     add_bool( "fullscreen", false, FULLSCREEN_TEXT, FULLSCREEN_LONGTEXT, false )
         change_short('f')
         change_safe ()
+    add_integer( "stereo3d-display-mode", 1, STEREO3D_DISPLAY_MODE_TEXT,
+                 STEREO3D_DISPLAY_MODE_LONGTEXT, false )
+        change_integer_list( stereo3d_display_mode_values,
+                             stereo3d_display_mode_texts )
+    add_integer( "stereo3d-input-mode", 0, STEREO3D_INPUT_MODE_TEXT,
+                 STEREO3D_INPUT_MODE_LONGTEXT, false )
+        change_integer_list( stereo3d_input_mode_values,
+                             stereo3d_input_mode_texts )
+    add_integer( "stereo3d-overlay-depth", 0, STEREO3D_OVERLAY_DEPTH_TEXT,
+                 STEREO3D_OVERLAY_DEPTH_LONGTEXT, false )
+        change_integer_list( stereo3d_overlay_depth_values,
+                             stereo3d_overlay_depth_texts )
+    add_integer( "stereo3d-fullscreen-display", 0, "", "", true )
+        change_private ()
     add_bool( "embedded-video", 1, EMBEDDED_TEXT, EMBEDDED_LONGTEXT,
               true )
     add_bool( "xlib", true, "", "", true )
@@ -1731,7 +1837,7 @@ vlc_module_begin ()
     set_section( N_("Snapshot") , NULL )
     add_directory( "snapshot-path", NULL, SNAP_PATH_TEXT,
                    SNAP_PATH_LONGTEXT, false )
-    add_string( "snapshot-prefix", "vlcsnap-", SNAP_PREFIX_TEXT,
+    add_string( "snapshot-prefix", "powervlsnap-", SNAP_PREFIX_TEXT,
                    SNAP_PREFIX_LONGTEXT, false )
     add_string( "snapshot-format", "png", SNAP_FORMAT_TEXT,
                    SNAP_FORMAT_LONGTEXT, false )
@@ -1802,6 +1908,20 @@ vlc_module_begin ()
     set_subcategory( SUBCAT_VIDEO_VFILTER )
     add_module_list( "video-filter", "video filter", NULL,
                      VIDEO_FILTER_TEXT, VIDEO_FILTER_LONGTEXT, false )
+    add_bool( "crt-retroarch-enabled", false,
+              N_("Enable exact RetroArch CRT shader"),
+              N_("Run the selected original RetroArch GLSL CRT preset in "
+                 "the video output. Unsupported presets are never exposed."),
+              false )
+    add_string( "crt-retroarch-preset", "crt-easymode",
+                N_("RetroArch CRT preset"),
+                N_("Exact GLSL preset selected for a compatible GPU output."),
+                false )
+    add_string( "crt-retroarch-raster", "auto",
+                N_("RetroArch CRT source raster"),
+                N_("Normalize pre-upscaled video to the native-like raster "
+                   "expected by CRT shaders (auto, native, 240p, or 480p)."),
+                false )
 
     set_subcategory( SUBCAT_VIDEO_SPLITTER )
     add_module_list( "video-splitter", "video splitter", NULL,
@@ -2244,6 +2364,35 @@ vlc_module_begin ()
     add_bool( "dbus", false, DBUS_TEXT, DBUS_LONGTEXT, true )
 #endif
     add_bool( "media-library", 0, ML_TEXT, ML_LONGTEXT, false )
+    add_string( "powervlc-ml-managed-folder", "", PVLC_ML_MANAGED_TEXT,
+                PVLC_ML_MANAGED_LONGTEXT, false )
+    add_string( "powervlc-ml-folders", "", PVLC_ML_FOLDERS_TEXT,
+                PVLC_ML_FOLDERS_LONGTEXT, true )
+    add_string( "powervlc-ml-smart-playlists", "", PVLC_ML_SMART_TEXT,
+                PVLC_ML_SMART_LONGTEXT, true )
+    add_integer_with_range( "powervlc-ml-monitor-interval", 300, 15, 86400,
+                N_("Maximum idle monitoring interval (seconds)"),
+                N_("Maximum backoff between lightweight database-stamp "
+                   "probes. Changed directories alone are rescanned."),
+                true )
+    add_integer_with_range( "powervlc-ml-max-component", 180, 48, 240,
+                N_("Maximum managed file-name component (bytes)"),
+                N_("Limits managed-library names for compatibility with "
+                   "older filesystems and network clients."), true )
+    add_integer_with_range( "powervlc-ml-max-path", 240, 96, 1024,
+                N_("Maximum managed-library path (bytes)"),
+                N_("Limits the complete destination path. Components are "
+                   "shortened without splitting UTF-8 characters."), true )
+    add_string( "powervlc-devices", "", PVLC_DEVICES_TEXT,
+                PVLC_DEVICES_LONGTEXT, true )
+    add_integer_with_range( "powervlc-device-max-component", 96, 32, 240,
+                N_("Maximum portable-player file-name component (bytes)"),
+                N_("Shorter names improve FAT32 and old firmware "
+                   "compatibility."), true )
+    add_integer_with_range( "powervlc-device-max-path", 240, 96, 1024,
+                N_("Maximum portable-player path (bytes)"),
+                N_("Maximum complete synchronization destination path."),
+                true )
     add_bool( "playlist-tree", 0, PLTREE_TEXT, PLTREE_LONGTEXT, false )
 
     add_string( "open", "", OPEN_TEXT, OPEN_LONGTEXT, false )

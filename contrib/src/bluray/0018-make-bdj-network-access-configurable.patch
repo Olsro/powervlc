@@ -1,0 +1,272 @@
+From: PowerVLC <powervlc@example.invalid>
+Subject: [PATCH] make BD-J network access configurable
+
+BD-Live servers embedded in old discs are commonly gone or unresponsive. In
+addition to the privacy problem of unexpected third-party connections, a
+connection attempt can leave the menu on its loading screen indefinitely.
+
+Add a player setting which rejects socket creation before any network traffic
+occurs. Keep the standard player capability properties unchanged so discs can
+run their normal offline fallback after the connection fails. Libbluray's own
+default remains enabled for API compatibility; applications can make access
+opt-in.
+---
+diff --git a/src/libbluray/bdj/bdj.c b/src/libbluray/bdj/bdj.c
+index ff71fbe5a5..3dd488b208 100644
+--- a/src/libbluray/bdj/bdj.c
++++ b/src/libbluray/bdj/bdj.c
+@@ -783,7 +783,7 @@ static int _bdj_init(JNIEnv *env, struct bluray *bd, const char *disc_root, cons
+     jmethodID init_id;
+     if (!_get_method(env, &init_class, &init_id,
+                      "org/videolan/Libbluray", "init",
+-                     "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V")) {
++                     "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V")) {
+         return 0;
+     }
+ 
+@@ -796,7 +796,8 @@ static int _bdj_init(JNIEnv *env, struct bluray *bd, const char *disc_root, cons
+ 
+     (*env)->CallStaticVoidMethod(env, init_class, init_id,
+                                  param_bdjava_ptr, param_disc_id, param_disc_root,
+-                                 param_persistent_root, param_buda_root);
++                                 param_persistent_root, param_buda_root,
++                                 storage->no_network ? JNI_FALSE : JNI_TRUE);
+ 
+     (*env)->DeleteLocalRef(env, init_class);
+     (*env)->DeleteLocalRef(env, param_disc_id);
+diff --git a/src/libbluray/bdj/bdj.h b/src/libbluray/bdj/bdj.h
+index 43b0132e6f..a3786cee12 100644
+--- a/src/libbluray/bdj/bdj.h
++++ b/src/libbluray/bdj/bdj.h
+@@ -71,6 +71,7 @@ typedef struct {
+     char *classpath[2];      /* BD-J implementation class path (location of libbluray.jar) */
+ 
+     uint8_t no_persistent_storage; /* disable persistent storage (remove files at close) */
++    uint8_t no_network;            /* report offline and reject BD-J sockets */
+ } BDJ_CONFIG;
+ 
+ typedef struct bdjava_s BDJAVA;
+diff --git a/src/libbluray/bdj/java/org/videolan/BDJSecurityManager.java b/src/libbluray/bdj/java/org/videolan/BDJSecurityManager.java
+index 00ae536b9f..d218270f00 100644
+--- a/src/libbluray/bdj/java/org/videolan/BDJSecurityManager.java
++++ b/src/libbluray/bdj/java/org/videolan/BDJSecurityManager.java
+@@ -134,7 +134,8 @@ public class BDJSecurityManager extends SecurityManager {
+             // allow read
+             if (perm.getActions().equals("read")) {
+                 String prop = perm.getName();
+-                if (prop.startsWith("bluray.") || prop.startsWith("dvb.") || prop.startsWith("mhp.") || prop.startsWith("aacs.")) {
++                if (prop.startsWith("bluray.") || prop.startsWith("dvb.") || prop.startsWith("mhp.") || prop.startsWith("aacs.") ||
++                    prop.startsWith("org.videolan.bdj.")) {
+                     return;
+                 }
+                 if (prop.equals("dolbyvision.graphicspriority.available")) {
+diff --git a/src/libbluray/bdj/java/org/videolan/BDJSocketFactory.java b/src/libbluray/bdj/java/org/videolan/BDJSocketFactory.java
+index 55a466aa49..37cbbdaae2 100644
+--- a/src/libbluray/bdj/java/org/videolan/BDJSocketFactory.java
++++ b/src/libbluray/bdj/java/org/videolan/BDJSocketFactory.java
+@@ -20,14 +20,19 @@
+ package org.videolan;
+ 
+ import java.io.IOException;
++import java.io.InputStream;
++import java.io.OutputStream;
+ 
+ import java.lang.reflect.Constructor;
+ import java.lang.reflect.Method;
+ 
++import java.net.InetAddress;
+ import java.net.ServerSocket;
+ import java.net.Socket;
+ import java.net.SocketImpl;
+ import java.net.SocketImplFactory;
++import java.net.SocketAddress;
++import java.net.SocketException;
+ 
+ import java.security.AccessController;
+ import java.security.PrivilegedActionException;
+@@ -35,6 +40,27 @@ import java.security.PrivilegedExceptionAction;
+ 
+ class BDJSocketFactory implements SocketImplFactory {
+ 
++    private static class BlockedSocketImpl extends SocketImpl {
++        private IOException denied() {
++            return new IOException("BD-Live network access is disabled");
++        }
++
++        protected void create(boolean stream) throws IOException {}
++        protected void connect(String host, int port) throws IOException { throw denied(); }
++        protected void connect(InetAddress address, int port) throws IOException { throw denied(); }
++        protected void connect(SocketAddress address, int timeout) throws IOException { throw denied(); }
++        protected void bind(InetAddress host, int port) throws IOException { throw denied(); }
++        protected void listen(int backlog) throws IOException { throw denied(); }
++        protected void accept(SocketImpl socket) throws IOException { throw denied(); }
++        protected InputStream getInputStream() throws IOException { throw denied(); }
++        protected OutputStream getOutputStream() throws IOException { throw denied(); }
++        protected int available() throws IOException { return 0; }
++        protected void close() throws IOException {}
++        protected void sendUrgentData(int data) throws IOException { throw denied(); }
++        public Object getOption(int option) throws SocketException { return null; }
++        public void setOption(int option, Object value) throws SocketException {}
++    }
++
+     protected static void init() {
+         try {
+             Socket.setSocketImplFactory(new BDJSocketFactory(false));
+@@ -84,6 +110,11 @@ class BDJSocketFactory implements SocketImplFactory {
+ 
+     public SocketImpl createSocketImpl() {
+ 
++        if (!"YES".equalsIgnoreCase(System.getProperty("org.videolan.bdj.network_access"))) {
++            logger.warning("BD-Live network access is disabled");
++            return new BlockedSocketImpl();
++        }
++
+         if (server) {
+             logger.error("Xlet tried to create server socket");
+             throw new RuntimeException("server sockets disabled");
+diff --git a/src/libbluray/bdj/java/org/videolan/Libbluray.java b/src/libbluray/bdj/java/org/videolan/Libbluray.java
+index f9201a0be0..63a05c4cfd 100644
+--- a/src/libbluray/bdj/java/org/videolan/Libbluray.java
++++ b/src/libbluray/bdj/java/org/videolan/Libbluray.java
+@@ -25,6 +25,9 @@ import java.awt.BDToolkit;
+ import java.awt.event.KeyEvent;
+ import java.awt.event.MouseEvent;
+ import java.io.File;
++import java.io.FileInputStream;
++import java.io.FileOutputStream;
++import java.io.IOException;
+ import java.lang.reflect.Method;
+ import java.util.HashMap;
+ import java.util.Map;
+@@ -53,6 +56,8 @@ import org.videolan.media.content.PlayerManager;
+  */
+ public class Libbluray {
+ 
++    private static final Logger logger = Logger.getLogger(Libbluray.class.getName());
++
+     /* hook system properties: make "user.dir" point to current Xlet home directory */
+ 
+     private static boolean booted;
+@@ -245,7 +250,8 @@ public class Libbluray {
+ 
+     /* called only from native code */
+     private static void init(long nativePointer, String discID, String discRoot,
+-                               String persistentRoot, String budaRoot) {
++                               String persistentRoot, String budaRoot,
++                               boolean networkAccess) {
+ 
+         initOnce();
+ 
+@@ -314,6 +320,7 @@ public class Libbluray {
+         System.setProperty("mhp.profile.enhanced_broadcast", "YES");
+         System.setProperty("mhp.profile.interactive_broadcast", "YES");
+         System.setProperty("mhp.profile.internet_access", "YES");
++        System.setProperty("org.videolan.bdj.network_access", networkAccess ? "YES" : "NO");
+ 
+         System.setProperty("mhp.eb.version.major", "1");
+         System.setProperty("mhp.eb.version.minor", "0");
+@@ -481,7 +488,51 @@ public class Libbluray {
+     }
+ 
+     protected static boolean cacheBdRomFile(String path, String cachePath) {
+-        return cacheBdRomFileN(nativePointer, path, cachePath) == 0;
++        if (cacheBdRomFileN(nativePointer, path, cachePath) != 0) {
++            return false;
++        }
++
++        /* Several Sony frameworks synchronously start their BD-Live loader
++         * from network.xml. A connection error kills that loader before it
++         * wakes the main Xlet, leaving playback at 00:00 forever. Disable the
++         * loader in the temporary VFS copy when networking is not allowed;
++         * the file on the disc is never modified. */
++        if (!"YES".equalsIgnoreCase(System.getProperty("org.videolan.bdj.network_access")) &&
++            path.toLowerCase().endsWith("network.xml")) {
++            FileInputStream input = null;
++            FileOutputStream output = null;
++            try {
++                File file = new File(cachePath);
++                byte[] data = new byte[(int)file.length()];
++                input = new FileInputStream(file);
++                int offset = 0;
++                while (offset < data.length) {
++                    int count = input.read(data, offset, data.length - offset);
++                    if (count < 0) break;
++                    offset += count;
++                }
++                input.close();
++                input = null;
++
++                String xml = new String(data, 0, offset, "UTF-8");
++                String disabled = xml.replaceAll("(?is)<enable>\\s*true\\s*</enable>",
++                                                 "<enable>false</enable>");
++                if (!disabled.equals(xml)) {
++                    output = new FileOutputStream(file);
++                    output.write(disabled.getBytes("UTF-8"));
++                    output.close();
++                    output = null;
++                    logger.info("Disabled BD-Live in cached " + path);
++                }
++            } catch (IOException e) {
++                logger.warning("Failed to disable cached BD-Live configuration: " + e);
++            } finally {
++                try { if (input != null) input.close(); } catch (IOException e) {}
++                try { if (output != null) output.close(); } catch (IOException e) {}
++            }
++        }
++
++        return true;
+     }
+ 
+     protected static void setUOMask(boolean menuCallMask, boolean titleSearchMask) {
+@@ -692,6 +743,19 @@ public class Libbluray {
+         if (num < 0 || (num >= 128))
+             throw new IllegalArgumentException("Invalid PSR");
+ 
++        /* Profile 2 and Profile 5 imply BD-Live. Do not downgrade Profile 5:
++         * authored 3D applications validate both its flag and version 2.4.
++         * Network access is enforced independently by the BD-J sandbox and
++         * connection wrappers. Only ordinary Profile 2 is exposed as the
++         * standard offline Profile 1.1 when network access is disabled. */
++        if (num == RegisterAccess.PSR_PLAYER_PROFILE &&
++            !"YES".equalsIgnoreCase(System.getProperty("org.videolan.bdj.network_access"))) {
++            int nativeProfile = readRegN(nativePointer, 1, num);
++            if ((nativeProfile & 0x00100000) != 0)
++                return nativeProfile;
++            return 0x00010110;
++        }
++
+         return readRegN(nativePointer, 1, num);
+     }
+ 
+diff --git a/src/libbluray/bluray.c b/src/libbluray/bluray.c
+index d4fb165a0c..8c1d894399 100644
+--- a/src/libbluray/bluray.c
++++ b/src/libbluray/bluray.c
+@@ -3123,6 +3123,15 @@ int bd_set_player_setting(BLURAY *bd, uint32_t idx, uint32_t value)
+         return 1;
+     }
+ 
++    if (idx == BLURAY_PLAYER_SETTING_NETWORK_ACCESS) {
++        if (bd->title_type != title_undef) {
++            BD_DEBUG(DBG_BLURAY | DBG_CRIT, "Can't change BD-J network access during playback\n");
++            return 0;
++        }
++        bd->bdj_config.no_network = !value;
++        return 1;
++    }
++
+     if (idx == BLURAY_PLAYER_SETTING_UO_RESTRICTION_LEVEL) {
+         if (BLURAY_PLAYER_SETTING_UO_RESTRICTION_COMPLIANT < value) {
+             BD_DEBUG(DBG_BLURAY | DBG_CRIT, "Invalid UO restriction level\n");
+diff --git a/src/libbluray/bluray.h b/src/libbluray/bluray.h
+index 7764715f9b..2ab55f42ae 100644
+--- a/src/libbluray/bluray.h
++++ b/src/libbluray/bluray.h
+@@ -769,6 +769,7 @@ typedef enum {
+     BLURAY_PLAYER_SETTING_DECODE_PG            = 0x100, /**< Enable/disable PG (subtitle) decoder. Integer. Default: disabled. */
+     BLURAY_PLAYER_SETTING_PERSISTENT_STORAGE   = 0x101, /**< Enable/disable BD-J persistent storage. Integer. Default: enabled. */
+     BLURAY_PLAYER_SETTING_UO_RESTRICTION_LEVEL = 0x102, /**< Set User Operations (UO) restriction mask enforcement level. bd_player_setting_uo_restriction_level value. Default: BLURAY_PLAYER_SETTING_UO_RESTRICTION_RELAXED. */
++    BLURAY_PLAYER_SETTING_NETWORK_ACCESS       = 0x103, /**< Enable/disable BD-J network access. Integer. Default: enabled. */
+ 
+     BLURAY_PLAYER_PERSISTENT_ROOT              = 0x200, /**< Root path to the BD_J persistent storage location. String. */
+     BLURAY_PLAYER_CACHE_ROOT                   = 0x201, /**< Root path to the BD_J cache storage location. String. */

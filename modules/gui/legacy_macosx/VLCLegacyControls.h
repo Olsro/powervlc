@@ -19,6 +19,7 @@
  *****************************************************************************/
 
 #import <Cocoa/Cocoa.h>
+#include <vlc_common.h>
 
 /* Interface theme (mirrors the 3.0 grey/dark styles). Set once at
  * interface startup from the "legacy-macosx-dark" option; switching
@@ -101,6 +102,13 @@ NSBezierPath *VLCLegacyRoundedRectPath(NSRect rect, float radius);
      * their names for the hover tooltip; nil when the media has none */
     NSArray *chapterFractions;
     NSArray *chapterNames;
+
+    /* Persistent bookmark marks. The time array contains VLC ticks and is
+     * used to seek to the exact saved position rather than to a rounded
+     * slider fraction. */
+    NSArray *bookmarkFractions;
+    NSArray *bookmarkNames;
+    NSArray *bookmarkTimes;
 }
 - (void)setKnobInset:(float)inset;
 - (void)setVolumeStyle:(BOOL)volume;
@@ -112,6 +120,11 @@ NSBezierPath *VLCLegacyRoundedRectPath(NSRect rect, float radius);
 - (void)setChapterFractions:(NSArray *)fractions names:(NSArray *)names;
 - (NSArray *)chapterFractions;
 - (NSArray *)chapterNames;
+- (void)setBookmarkFractions:(NSArray *)fractions names:(NSArray *)names
+                       times:(NSArray *)times;
+- (NSArray *)bookmarkFractions;
+- (NSArray *)bookmarkNames;
+- (NSArray *)bookmarkTimes;
 - (void)setClipKnobsActive:(BOOL)active;
 - (BOOL)clipKnobsActive;
 - (void)setClipEndValue:(double)value;
@@ -124,6 +137,13 @@ NSBezierPath *VLCLegacyRoundedRectPath(NSRect rect, float radius);
 /* half < 0 left half disc, 0 full disc, > 0 right half (clip bounds) */
 - (void)drawKnobInRect:(NSRect)knobRect half:(int)half;
 @end
+
+@class VLCLegacySeekSlider;
+/* Refresh the persistent bookmark overlay of one of the three legacy seek
+ * sliders (main window, detached video window, fullscreen panel). */
+void VLCLegacyUpdateSliderBookmarks(VLCLegacySeekSlider *slider,
+                                    input_thread_t *p_input,
+                                    int64_t duration);
 
 @class VLCLegacySeekTooltipWindow;
 
@@ -159,6 +179,8 @@ NSBezierPath *VLCLegacyRoundedRectPath(NSRect rect, float radius);
 /* the delegate is NOT retained (it owns the slider) */
 - (void)setHoverDelegate:(id)delegate;
 - (void)hideHoverTooltip;
+/* Re-evaluate hover after the interactive stereo panel changed eyes. */
+- (void)refreshHoverForCurrentMouseLocation;
 /* thumbnail provider answer; ignored when the mouse moved elsewhere */
 - (void)setHoverThumbnail:(NSImage *)image forFraction:(double)fraction;
 @end

@@ -28,6 +28,19 @@
 
 #define SPHERE_RADIUS 1.f
 
+/* matches the D3D11_INPUT_ELEMENT_DESC we setup */
+typedef struct d3d_vertex_t {
+    struct {
+        FLOAT x;
+        FLOAT y;
+        FLOAT z;
+    } position;
+    struct {
+        FLOAT x;
+        FLOAT y;
+    } texture;
+} d3d_vertex_t;
+
 /* A Quad is texture that can be displayed in a rectangle */
 typedef struct
 {
@@ -51,20 +64,9 @@ typedef struct
     video_projection_mode_t   projection;
 
     PS_CONSTANT_BUFFER        shaderConstants;
+    d3d_vertex_t              flatVertices[4];
+    int                       stereoOffset;
 } d3d_quad_t;
-
-/* matches the D3D11_INPUT_ELEMENT_DESC we setup */
-typedef struct d3d_vertex_t {
-    struct {
-        FLOAT x;
-        FLOAT y;
-        FLOAT z;
-    } position;
-    struct {
-        FLOAT x;
-        FLOAT y;
-    } texture;
-} d3d_vertex_t;
 
 void D3D11_RenderQuad(d3d11_device_t *, d3d_quad_t *,
                       ID3D11ShaderResourceView *resourceViews[D3D11_MAX_SHADER_VIEW],
@@ -81,6 +83,14 @@ int D3D11_SetupQuad(vlc_object_t *, d3d11_device_t *, const video_format_t *, d3
 bool D3D11_UpdateQuadPosition( vlc_object_t *, d3d11_device_t *, d3d_quad_t *,
                                const RECT *output, video_orientation_t );
 #define D3D11_UpdateQuadPosition(a,b,c,d,e)  D3D11_UpdateQuadPosition(VLC_OBJECT(a),b,c,d,e)
+
+/* Select a sub-rectangle of the source texture without rebuilding the quad.
+ * Hardware stereo uses this to render the left and right halves of a packed
+ * MVC/SBS/TB picture into the two DXGI back-buffer array slices. */
+bool D3D11_UpdateQuadTextureCoords(vlc_object_t *, d3d11_device_t *,
+                                   d3d_quad_t *, float, float, float, float);
+#define D3D11_UpdateQuadTextureCoords(a,b,c,d,e,f,g) \
+    D3D11_UpdateQuadTextureCoords(VLC_OBJECT(a),b,c,d,e,f,g)
 
 void D3D11_UpdateQuadOpacity(vlc_object_t *, d3d11_device_t *, d3d_quad_t *, float opacity);
 #define D3D11_UpdateQuadOpacity(a,b,c,d)  D3D11_UpdateQuadOpacity(VLC_OBJECT(a),b,c,d)

@@ -486,6 +486,9 @@ VLC_API void vlc_demux_chained_Delete(vlc_demux_chained_t *);
  */
 VLC_API void vlc_demux_chained_Send(vlc_demux_chained_t *, block_t *block);
 
+/** Returns the bytes waiting for the chained demuxer thread. */
+VLC_API size_t vlc_demux_chained_GetBytes(vlc_demux_chained_t *);
+
 /**
  * Controls a chained demuxer.
  *

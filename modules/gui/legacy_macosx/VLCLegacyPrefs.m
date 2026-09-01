@@ -30,6 +30,7 @@
 #import "VLCLegacyVoutWindow.h"
 
 #include <vlc_playlist.h>
+#include <vlc_services_discovery.h>
 #include <vlc_configuration.h>
 #include <vlc_modules.h>
 #include <vlc_plugin.h>
@@ -43,7 +44,10 @@
 #define PANE_VIDEO     2
 #define PANE_SUBS      3
 #define PANE_INPUT     4
-#define PANE_HOTKEYS   5
+#define PANE_MEDIA     5
+#define PANE_DEVICES   6
+#define PANE_HOTKEYS   7
+#define PANE_COUNT     8
 
 /* window geometry (VLC 3.0 simple prefs proportions) */
 #define PREFS_WIDTH        720.0f
@@ -58,6 +62,33 @@ enum {
     ENTRY_CHOICE_INT,    /* popup; values in choiceValues (NSNumber) */
     ENTRY_CHOICE_STRING  /* popup; values in choiceValues (NSString) */
 };
+
+static NSString *VLCLegacyPowerVLCEscape(NSString *value)
+{
+    if (!value)
+        return @"";
+    const unsigned char *bytes = (const unsigned char *)[value UTF8String];
+    NSMutableString *result = [NSMutableString string];
+    for (; *bytes; bytes++) {
+        unsigned char c = *bytes;
+        if (c >= 0x20 && c != '%' && c != '\t' && c != '\r' && c != '\n'
+         && c != '|' && c != ';')
+            [result appendFormat:@"%c", c];
+        else
+            [result appendFormat:@"%%%02X", c];
+    }
+    return result;
+}
+
+static NSString *VLCLegacyPowerVLCUnescape(NSString *value)
+{
+    /* NSString gained stringByReplacingPercentEscapesUsingEncoding: after
+     * Jaguar. Core Foundation's URL decoder is available on every supported
+     * release and has the same UTF-8 percent-decoding semantics here. */
+    CFStringRef decoded = CFURLCreateStringByReplacingPercentEscapes(
+        kCFAllocatorDefault, (CFStringRef)value, CFSTR(""));
+    return decoded ? [(NSString *)decoded autorelease] : value;
+}
 
 /* The VLC 3.0 language list (NSUserDefaults "language", read by
  * darwinvlc.m at startup) */
@@ -212,6 +243,15 @@ static struct {
 - (void)changeFont:(id)sender
 {
     [controller performSelector:@selector(fontChanged:) withObject:sender];
+}
+
+/* Closing an NSWindow built entirely in code tears down parts of its view
+ * hierarchy on Jaguar even when releasedWhenClosed is false.  The prefs
+ * controller intentionally reuses its controls, so a close must have the
+ * same semantics as Cancel/Save: hide the intact window. */
+- (void)performClose:(id)sender
+{
+    [self orderOut:sender];
 }
 @end
 
@@ -385,12 +425,17 @@ static NSString *prettyKeyString(NSString *theString)
         core = [interaction retain];
         p_intf = [interaction intf];
         entries = [[NSMutableArray alloc] init];
+        retainedPaneViews = [[NSMutableArray alloc] init];
         categoryTree = [[NSMutableArray alloc] init];
         advancedEntries = [[NSMutableArray alloc] init];
         hotkeyNames = [[NSMutableArray alloc] init];
         hotkeyTexts = [[NSMutableArray alloc] init];
         hotkeyValues = [[NSMutableArray alloc] init];
         hotkeyDirty = [[NSMutableArray alloc] init];
+        mediaFolders = [[NSMutableArray alloc] init];
+        smartPlaylists = [[NSMutableArray alloc] init];
+        portablePlayers = [[NSMutableArray alloc] init];
+        activePortablePlayerRow = -1;
         captureRow = -1;
     }
     return self;
@@ -402,12 +447,27 @@ static NSString *prettyKeyString(NSString *theString)
     [captureKeyInTransition release];
     [window release];
     [entries release];
+    [retainedPaneViews release];
     [categoryTree release];
     [advancedEntries release];
     [hotkeyNames release];
     [hotkeyTexts release];
     [hotkeyValues release];
     [hotkeyDirty release];
+    [mediaFolders release];
+    [smartPlaylists release];
+    [portablePlayers release];
+    [portablePlayerNameField release];
+    [portablePlayerPathField release];
+    [portablePlayerKindPopup release];
+    [portablePlayerTranscodeCheckbox release];
+    [portablePlayerCodecPopup release];
+    [portablePlayerBitrateField release];
+    [portablePlayerAlbumArtistComposerCheckbox release];
+    [languagePopup release];
+    [languageLabel release];
+    [cacheLevelPopup release];
+    [cacheCustomLabel release];
     [core release];
     [super dealloc];
 }
@@ -491,10 +551,25 @@ static NSString *prettyKeyString(NSString *theString)
                   titles:(NSArray *)titles values:(NSArray *)values
                 intValues:(BOOL)isInt at:(float)y in:(NSView *)parent
 {
-    if (labelText)
-        [self label:labelText at:y in:parent];
+    return [self popup:labelText config:name titles:titles values:values
+              intValues:isInt at:y in:parent labelWidth:216
+                  popupX:238 popupWidth:260];
+}
+
+- (NSPopUpButton *)popup:(NSString *)labelText config:(const char *)name
+                  titles:(NSArray *)titles values:(NSArray *)values
+               intValues:(BOOL)isInt at:(float)y in:(NSView *)parent
+              labelWidth:(float)labelWidth popupX:(float)popupX
+              popupWidth:(float)popupWidth
+{
+    if (labelText) {
+        NSTextField *label = [self label:labelText at:y in:parent];
+        NSRect frame = [label frame];
+        frame.size.width = labelWidth;
+        [label setFrame:frame];
+    }
     NSPopUpButton *popup = [[[NSPopUpButton alloc]
-        initWithFrame:NSMakeRect(238, y - 4, 260, 24) pullsDown:NO]
+        initWithFrame:NSMakeRect(popupX, y - 4, popupWidth, 24) pullsDown:NO]
         autorelease];
     unsigned i;
     for (i = 0; i < [titles count]; i++)
@@ -552,9 +627,17 @@ static NSString *prettyKeyString(NSString *theString)
     free(ppsz_values);
     free(ppsz_texts);
 
-    NSPopUpButton *popup = [self popup:labelText config:name
-                                titles:titles values:values
-                             intValues:isInt at:y in:parent];
+    const BOOL stereoRow = !strcmp(name, "stereo3d-display-mode")
+                        || !strcmp(name, "stereo3d-input-mode")
+                        || !strcmp(name, "stereo3d-overlay-depth");
+    NSPopUpButton *popup;
+    if (stereoRow)
+        popup = [self popup:labelText config:name titles:titles values:values
+                       intValues:isInt at:y in:parent labelWidth:340
+                           popupX:364 popupWidth:316];
+    else
+        popup = [self popup:labelText config:name titles:titles values:values
+                       intValues:isInt at:y in:parent];
     if (p_item->psz_longtext)
         [popup setToolTip:_NS(p_item->psz_longtext)];
     return popup;
@@ -673,15 +756,16 @@ static BOOL haveConfig(const char *name)
     float y = 16;
 
     /* language (NSUserDefaults, read by darwinvlc at startup) */
-    NSMutableArray *languages = [NSMutableArray array];
-    unsigned i;
-    for (i = 0; i < sizeof(language_map) / sizeof(language_map[0]); i++)
-        [languages addObject:strcmp(language_map[i].iso, "auto")
-            ? [NSString stringWithUTF8String:language_map[i].name]
-            : _NS("Auto")];
-    languagePopup = [self popup:_NS("Language") config:NULL
-                         titles:languages values:nil intValues:NO
-                             at:y in:pane];
+    /* Jaguar fails to display an NSPopUpButton carrying this long menu in a
+     * detached tab. NSComboBox provides the same closed-list interaction and
+     * is reliable in 10.2's programmatic view hierarchy. */
+    languageLabel = [[self label:_NS("Language") at:y in:pane] retain];
+    languagePopup = [[NSComboBox alloc]
+        initWithFrame:NSMakeRect(238, y - 3, 260, 22)];
+    [languagePopup setUsesDataSource:NO];
+    [languagePopup setEditable:NO];
+    [[languagePopup cell] setFont:[NSFont systemFontOfSize:12]];
+    [pane addSubview:languagePopup];
     y += 30;
 
     /* interface style radios, driving legacy-macosx-dark */
@@ -767,6 +851,24 @@ static BOOL haveConfig(const char *name)
                                      width:200];
     y += 34;
 
+    /* Keep the stereoscopic controls in their own final section, matching
+     * the modern preferences pane.  These labels deliberately use the wider
+     * row geometry selected by popupForConfig above: the French translations
+     * otherwise truncate on the 216 px legacy label column. */
+    y = [self header:_NS("Stereoscopic 3D") at:y in:pane];
+    if ([self popupForConfig:"stereo3d-display-mode"
+                       label:_NS("Change display mode for 3D video")
+                          at:y in:pane])
+        y += 34;
+    if ([self popupForConfig:"stereo3d-input-mode"
+                       label:_NS("Stereoscopic input layout")
+                          at:y in:pane])
+        y += 34;
+    if ([self popupForConfig:"stereo3d-overlay-depth"
+                       label:_NS("3D depth for subtitles, OSD and controls")
+                          at:y in:pane])
+        y += 34;
+
     return [self wrapPane:pane height:y];
 }
 
@@ -813,6 +915,75 @@ static BOOL haveConfig(const char *name)
                type:ENTRY_STRING at:y in:pane width:200];
     y += 30;
 
+    if (haveConfig("audio-visual")) {
+        [self popupForConfig:"audio-visual" label:_NS("Visualization")
+                          at:y in:pane];
+        y += 34;
+    }
+
+    /* Keep every encoded-output setting in one visual group.  Apart from
+     * being easier to scan, the two-column codec layout avoids making this
+     * pane needlessly tall on the 768-pixel displays of older Macs. */
+    {
+        y = [self header:_NS("HDMI") at:y in:pane];
+        NSBox *hdmiBox = [[[NSBox alloc]
+            initWithFrame:NSMakeRect(16, y, 672, 160)] autorelease];
+        [hdmiBox setTitlePosition:NSNoTitle];
+        NSView *content = [hdmiBox contentView];
+
+        passthroughCheckbox = [[[NSButton alloc]
+            initWithFrame:NSMakeRect(16, 101, 630, 24)] autorelease];
+        [passthroughCheckbox setButtonType:NSSwitchButton];
+        [[passthroughCheckbox cell] setFont:[NSFont systemFontOfSize:12]];
+        [passthroughCheckbox setTitle:
+            _NS("Use HDMI/S/PDIF audio passthrough when available")];
+        [passthroughCheckbox setToolTip:_NS("Send supported compressed audio formats "
+            "directly to an HDMI receiver or projector. VLC falls back to "
+            "decoded PCM when the selected output has no encoded mode.")];
+        [passthroughCheckbox setTarget:self];
+        [passthroughCheckbox setAction:@selector(passthroughSettingChanged:)];
+        [content addSubview:passthroughCheckbox];
+        [self addEntry:"spdif" type:ENTRY_BOOL
+                 control:passthroughCheckbox choices:nil];
+
+        NSTextField *formatsLabel = [[[NSTextField alloc]
+            initWithFrame:NSMakeRect(30, 80, 610, 18)] autorelease];
+        [formatsLabel setEditable:NO];
+        [formatsLabel setBordered:NO];
+        [formatsLabel setDrawsBackground:NO];
+        [[formatsLabel cell] setFont:[NSFont systemFontOfSize:12]];
+        [formatsLabel setStringValue:
+            _NS("Formats supported by the connected equipment")];
+        [content addSubview:formatsLabel];
+
+#define ADD_LEGACY_PASSTHROUGH_CHECKBOX(ivar, title, option, x, rowY, width) \
+        ivar = [[[NSButton alloc] \
+            initWithFrame:NSMakeRect(x, rowY, width, 24)] autorelease]; \
+        [ivar setButtonType:NSSwitchButton]; \
+        [[ivar cell] setFont:[NSFont systemFontOfSize:12]]; \
+        [ivar setTitle:title]; \
+        [content addSubview:ivar]; \
+        [self addEntry:option type:ENTRY_BOOL control:ivar choices:nil]
+        ADD_LEGACY_PASSTHROUGH_CHECKBOX(passthroughAC3Checkbox,
+            _NS("AC-3 (Dolby Digital)"), "spdif-ac3", 30, 53, 285);
+        ADD_LEGACY_PASSTHROUGH_CHECKBOX(passthroughEAC3Checkbox,
+            _NS("E-AC-3 (Dolby Digital Plus)"), "spdif-eac3", 30, 27, 285);
+        ADD_LEGACY_PASSTHROUGH_CHECKBOX(passthroughTrueHDCheckbox,
+            _NS("Dolby TrueHD"), "spdif-truehd", 30, 1, 285);
+        ADD_LEGACY_PASSTHROUGH_CHECKBOX(passthroughDTSCheckbox,
+            _NS("DTS"), "spdif-dts", 345, 53, 295);
+        ADD_LEGACY_PASSTHROUGH_CHECKBOX(passthroughDTSHDCheckbox,
+            _NS("DTS-HD (DTS core on macOS)"), "spdif-dtshd", 345, 27, 295);
+#undef ADD_LEGACY_PASSTHROUGH_CHECKBOX
+        [passthroughDTSHDCheckbox setToolTip:
+            _NS("macOS does not expose a native DTS-HD HDMI carrier. When DTS is "
+                "also enabled, PowerVLC sends the compatible DTS core without "
+                "decoding it.")];
+
+        [pane addSubview:hdmiBox];
+        y += 170;
+    }
+
     y = [self header:_NS("Resampling") at:y in:pane];
     {
         /* Speex is a band-limited resampler that costs a fraction of
@@ -828,12 +999,6 @@ static BOOL haveConfig(const char *name)
         if (!module_exists("speex_resampler"))
             [box setEnabled:NO];
         y += 30;
-    }
-
-    if (haveConfig("audio-visual")) {
-        [self popupForConfig:"audio-visual" label:_NS("Visualization")
-                          at:y in:pane];
-        y += 34;
     }
 
     y = [self header:@"Last.fm" at:y in:pane];
@@ -1190,10 +1355,10 @@ static BOOL haveConfig(const char *name)
         int i;
         for (i = 0; i < 6; i++)
             [titles addObject:_NS(levels[i].title)];
-        cacheLevelPopup = [self popup:_NS("Default Caching Level")
-                               config:NULL
-                               titles:titles values:nil intValues:NO
-                                   at:y in:pane];
+        cacheLevelPopup = [[self popup:_NS("Default Caching Level")
+                                config:NULL
+                                titles:titles values:nil intValues:NO
+                                    at:y in:pane] retain];
         for (i = 0; i < 6; i++)
             [[cacheLevelPopup itemAtIndex:i] setTag:levels[i].msec];
         y += 26;
@@ -1210,9 +1375,252 @@ static BOOL haveConfig(const char *name)
             _NS("Use the complete preferences to configure custom caching "
                 "values for each access module.")];
         [pane addSubview:cacheCustomLabel];
+        [cacheCustomLabel retain];
         y += 40;
     }
 
+    return [self wrapPane:pane height:y];
+}
+
+/*****************************************************************************
+ * PowerVLC media-library pane
+ *****************************************************************************/
+
+- (NSView *)buildMediaLibraryPane
+{
+    VLCLegacyFlippedView *pane = [[[VLCLegacyFlippedView alloc]
+        initWithFrame:NSMakeRect(0, 0, 704, 590)] autorelease];
+    float y = 8;
+    y = [self header:_NS("Managed Media Folder") at:y in:pane];
+    managedMediaFolderField = [self textField:_NS("Folder")
+        config:"powervlc-ml-managed-folder" type:ENTRY_STRING
+        at:y in:pane width:340];
+    [self smallButton:_NS("Browse…") at:NSMakeRect(590, y - 4, 90, 24)
+                    in:pane action:@selector(browseManagedMediaFolder:)];
+    y += 34;
+    NSTextField *hint = [self label:_NS("Organization") at:y in:pane];
+    [hint setStringValue:_NS("Organization")];
+    /* Long translations can occupy three lines.  Keep the explanatory text
+     * from being clipped before the next preference section. */
+    NSTextField *organization = [[[NSTextField alloc]
+        initWithFrame:NSMakeRect(240, y - 2, 440, 54)] autorelease];
+    [organization setEditable:NO]; [organization setBordered:NO];
+    [organization setDrawsBackground:NO];
+    [[organization cell] setFont:[NSFont systemFontOfSize:11]];
+    [[organization cell] setWraps:YES];
+    [organization setStringValue:_NS("Imports are copied into Music, Movies, "
+        "Shows, Podcasts and Playlists using Jellyfin-compatible folders.")];
+    [pane addSubview:organization];
+    y += 66;
+
+    /* Keep the maintenance controls close to the main library settings.  The
+     * legacy pane is taller than its viewport, and placing these after both
+     * tables made them look absent until the user scrolled to the very end. */
+    y = [self header:_NS("Maintenance") at:y in:pane];
+    [self textField:_NS("Maximum idle monitoring interval (seconds)")
+        config:"powervlc-ml-monitor-interval" type:ENTRY_INT
+        at:y in:pane width:90]; y += 28;
+    [self textField:_NS("Maximum file/folder name (bytes)")
+        config:"powervlc-ml-max-component" type:ENTRY_INT
+        at:y in:pane width:90]; y += 28;
+    [self textField:_NS("Maximum complete path (bytes)")
+        config:"powervlc-ml-max-path" type:ENTRY_INT
+        at:y in:pane width:90]; y += 36;
+
+    y = [self header:_NS("Library Folders") at:y in:pane];
+    NSScrollView *folderScroll = [[[NSScrollView alloc]
+        initWithFrame:NSMakeRect(16, y, 664, 112)] autorelease];
+    [folderScroll setHasVerticalScroller:YES];
+    [folderScroll setBorderType:NSBezelBorder];
+    mediaFoldersTable = [[[NSTableView alloc]
+        initWithFrame:NSMakeRect(0, 0, 644, 100)] autorelease];
+    NSTableColumn *folderColumn = [[[NSTableColumn alloc]
+        initWithIdentifier:@"path"] autorelease];
+    [[folderColumn headerCell] setStringValue:_NS("Folder")];
+    [folderColumn setWidth:388];
+    [mediaFoldersTable addTableColumn:folderColumn];
+    NSTableColumn *monitorColumn = [[[NSTableColumn alloc]
+        initWithIdentifier:@"monitor"] autorelease];
+    [[monitorColumn headerCell] setStringValue:_NS("Monitor this folder")];
+    [monitorColumn setWidth:130];
+    NSButtonCell *monitorToggle = [[[NSButtonCell alloc] init] autorelease];
+    [monitorToggle setButtonType:NSSwitchButton];
+    [monitorToggle setTitle:@""];
+    [monitorColumn setDataCell:monitorToggle];
+    [monitorColumn setEditable:YES];
+    [mediaFoldersTable addTableColumn:monitorColumn];
+    NSTableColumn *cacheColumn = [[[NSTableColumn alloc]
+        initWithIdentifier:@"cache"] autorelease];
+    [[cacheColumn headerCell] setStringValue:_NS("Shared cache")];
+    [cacheColumn setWidth:105];
+    NSButtonCell *cacheToggle = [[[NSButtonCell alloc] init] autorelease];
+    [cacheToggle setButtonType:NSSwitchButton];
+    [cacheToggle setTitle:@""];
+    [cacheColumn setDataCell:cacheToggle];
+    [cacheColumn setEditable:YES];
+    [mediaFoldersTable addTableColumn:cacheColumn];
+    [mediaFoldersTable setDataSource:(id)self];
+    [mediaFoldersTable setDelegate:(id)self];
+    if ([mediaFoldersTable respondsToSelector:
+            @selector(setUsesAlternatingRowBackgroundColors:)])
+        [mediaFoldersTable setUsesAlternatingRowBackgroundColors:YES];
+    [mediaFoldersTable setAllowsMultipleSelection:NO];
+    [folderScroll setDocumentView:mediaFoldersTable];
+    [pane addSubview:folderScroll];
+    y += 118;
+    [self smallButton:_NS("Add…") at:NSMakeRect(16, y, 90, 24)
+                    in:pane action:@selector(addMediaFolder:)];
+    [self smallButton:_NS("Edit…") at:NSMakeRect(112, y, 90, 24)
+                    in:pane action:@selector(editMediaFolder:)];
+    [self smallButton:_NS("Remove") at:NSMakeRect(208, y, 90, 24)
+                    in:pane action:@selector(removeMediaFolder:)];
+    y += 34;
+
+    y = [self header:_NS("Smart Playlists") at:y in:pane];
+    NSScrollView *smartScroll = [[[NSScrollView alloc]
+        initWithFrame:NSMakeRect(16, y, 664, 102)] autorelease];
+    [smartScroll setHasVerticalScroller:YES];
+    [smartScroll setBorderType:NSBezelBorder];
+    smartPlaylistsTable = [[[NSTableView alloc]
+        initWithFrame:NSMakeRect(0, 0, 644, 90)] autorelease];
+    NSTableColumn *smartName = [[[NSTableColumn alloc]
+        initWithIdentifier:@"smartName"] autorelease];
+    [[smartName headerCell] setStringValue:_NS("Name")];
+    [smartName setWidth:220]; [smartPlaylistsTable addTableColumn:smartName];
+    NSTableColumn *smartSummary = [[[NSTableColumn alloc]
+        initWithIdentifier:@"smartSummary"] autorelease];
+    [[smartSummary headerCell] setStringValue:_NS("Rules")];
+    [smartSummary setWidth:400]; [smartPlaylistsTable addTableColumn:smartSummary];
+    [smartPlaylistsTable setDataSource:(id)self];
+    [smartPlaylistsTable setDelegate:(id)self];
+    [smartPlaylistsTable setTarget:self];
+    [smartPlaylistsTable setDoubleAction:@selector(editSmartPlaylist:)];
+    [smartScroll setDocumentView:smartPlaylistsTable]; [pane addSubview:smartScroll];
+    y += 108;
+    [self smallButton:_NS("New…") at:NSMakeRect(16, y, 90, 24)
+                    in:pane action:@selector(addSmartPlaylist:)];
+    [self smallButton:_NS("Edit…") at:NSMakeRect(112, y, 90, 24)
+                    in:pane action:@selector(editSmartPlaylist:)];
+    [self smallButton:_NS("Remove") at:NSMakeRect(208, y, 90, 24)
+                    in:pane action:@selector(removeSmartPlaylist:)];
+    y += 34;
+
+    return [self wrapPane:pane height:y];
+}
+
+/*****************************************************************************
+ * PowerVLC portable-player pane
+ *****************************************************************************/
+
+- (NSView *)buildPortablePlayersPane
+{
+    VLCLegacyFlippedView *pane = [[[VLCLegacyFlippedView alloc]
+        initWithFrame:NSMakeRect(0, 0, 704, 790)] autorelease];
+    float y = 8;
+    y = [self header:_NS("Portable Players") at:y in:pane];
+    NSScrollView *playerScroll = [[[NSScrollView alloc]
+        initWithFrame:NSMakeRect(16, y, 664, 132)] autorelease];
+    [playerScroll setHasVerticalScroller:YES];
+    [playerScroll setBorderType:NSBezelBorder];
+    portablePlayersTable = [[[NSTableView alloc]
+        initWithFrame:NSMakeRect(0, 0, 644, 120)] autorelease];
+    NSTableColumn *nameColumn = [[[NSTableColumn alloc]
+        initWithIdentifier:@"name"] autorelease];
+    [[nameColumn headerCell] setStringValue:_NS("Portable Player")];
+    [nameColumn setWidth:170];
+    [portablePlayersTable addTableColumn:nameColumn];
+    NSTableColumn *pathColumn = [[[NSTableColumn alloc]
+        initWithIdentifier:@"path"] autorelease];
+    [[pathColumn headerCell] setStringValue:_NS("Folder")];
+    [pathColumn setWidth:330];
+    [portablePlayersTable addTableColumn:pathColumn];
+    NSTableColumn *kindColumn = [[[NSTableColumn alloc]
+        initWithIdentifier:@"kind"] autorelease];
+    [[kindColumn headerCell] setStringValue:_NS("Type")];
+    [kindColumn setWidth:120];
+    [portablePlayersTable addTableColumn:kindColumn];
+    [portablePlayersTable setDataSource:(id)self];
+    [portablePlayersTable setDelegate:(id)self];
+    /* Selection notifications are not consistently emitted by NSTableView
+     * on 10.2 after a programmatic reload.  An explicit action also refreshes
+     * the editor when the user clicks the row that is already selected. */
+    [portablePlayersTable setTarget:self];
+    [portablePlayersTable setAction:@selector(portablePlayerTableClicked:)];
+    if ([portablePlayersTable respondsToSelector:
+            @selector(setUsesAlternatingRowBackgroundColors:)])
+        [portablePlayersTable setUsesAlternatingRowBackgroundColors:YES];
+    [portablePlayersTable setAllowsMultipleSelection:NO];
+    [playerScroll setDocumentView:portablePlayersTable];
+    [pane addSubview:playerScroll];
+    y += 138;
+    [self smallButton:_NS("Add…") at:NSMakeRect(16, y, 90, 24)
+                    in:pane action:@selector(addPortablePlayer:)];
+    [self smallButton:_NS("Remove") at:NSMakeRect(112, y, 90, 24)
+                    in:pane action:@selector(removePortablePlayer:)];
+    y += 34;
+
+    y = [self header:_NS("Portable Player") at:y in:pane];
+    portablePlayerNameField = [self textField:_NS("Name") config:NULL
+        type:ENTRY_STRING at:y in:pane width:220]; y += 28;
+    portablePlayerPathField = [self textField:_NS("Mount point / folder")
+        config:NULL type:ENTRY_STRING at:y in:pane width:340];
+    [self smallButton:_NS("Browse…") at:NSMakeRect(590, y - 4, 90, 24)
+                    in:pane action:@selector(browsePortablePlayer:)]; y += 30;
+    portablePlayerKindPopup = [self popup:_NS("Device type") config:NULL
+        titles:[NSArray arrayWithObjects:_NS("USB / storage player"),
+                                         _NS("Apple iPod (libgpod)"),
+                                         _NS("Rockbox player"), nil]
+        values:nil intValues:NO at:y in:pane]; y += 30;
+    portablePlayerTranscodeCheckbox = [self checkbox:
+        _NS("Convert incompatible audio copies") config:NULL at:y in:pane];
+    y += 26;
+    portablePlayerCodecPopup = [self popup:_NS("Preferred audio format")
+        config:NULL titles:[NSArray arrayWithObjects:@"MP3", @"AAC / M4A",
+                                                     @"FLAC", nil]
+        values:nil intValues:NO at:y in:pane]; y += 28;
+    portablePlayerBitrateField = [self textField:_NS("Audio bitrate (kb/s)")
+        config:NULL type:ENTRY_INT at:y in:pane width:90]; y += 28;
+    portablePlayerAlbumArtistComposerCheckbox = [[[NSButton alloc]
+        initWithFrame:NSMakeRect(16, y, 664, 20)] autorelease];
+    [portablePlayerAlbumArtistComposerCheckbox setButtonType:NSSwitchButton];
+    [[portablePlayerAlbumArtistComposerCheckbox cell]
+        setFont:[NSFont systemFontOfSize:12]];
+    [portablePlayerAlbumArtistComposerCheckbox setTitle:
+        _NS("Map Album Artist to Composer (Apple iPod)")];
+    [pane addSubview:portablePlayerAlbumArtistComposerCheckbox];
+    y += 34;
+
+    /* These controls are also owned by the pane, but Jaguar can release an
+     * inactive tab's document view while rebuilding services-discovery UI.
+     * The controller continues to address them when loading a saved player,
+     * so keep an explicit ownership reference for its full lifetime. */
+    [portablePlayerNameField retain];
+    [portablePlayerPathField retain];
+    [portablePlayerKindPopup retain];
+    [portablePlayerTranscodeCheckbox retain];
+    [portablePlayerCodecPopup retain];
+    [portablePlayerBitrateField retain];
+    [portablePlayerAlbumArtistComposerCheckbox retain];
+
+    NSArray *livePlayerControls = [NSArray arrayWithObjects:
+        portablePlayerNameField, portablePlayerPathField,
+        portablePlayerKindPopup, portablePlayerTranscodeCheckbox,
+        portablePlayerCodecPopup, portablePlayerBitrateField,
+        portablePlayerAlbumArtistComposerCheckbox, nil];
+    for (unsigned controlIndex = 0;
+         controlIndex < [livePlayerControls count]; ++controlIndex) {
+        NSControl *control = [livePlayerControls objectAtIndex:controlIndex];
+        [control setTarget:self];
+        [control setAction:@selector(portablePlayerSettingChanged:)];
+    }
+
+    y = [self header:_NS("Compatibility") at:y in:pane];
+    [self textField:_NS("Maximum name (bytes)")
+        config:"powervlc-device-max-component" type:ENTRY_INT
+        at:y in:pane width:90]; y += 28;
+    [self textField:_NS("Maximum complete path (bytes)")
+        config:"powervlc-device-max-path" type:ENTRY_INT
+        at:y in:pane width:90]; y += 36;
     return [self wrapPane:pane height:y];
 }
 
@@ -1332,30 +1740,45 @@ static BOOL haveConfig(const char *name)
 
     /* icon row, VLC 3.0 simple-preferences style; the buttons are sized
      * to their localized captions so no title gets clipped */
-    struct { const char *title; NSString *icon; } panes[6] = {
+    struct { const char *title; NSString *icon; } panes[PANE_COUNT] = {
         { N_("Interface"),        @"VLCInterfaceCone" },
         { N_("Audio"),            @"VLCAudioCone" },
         { N_("Video"),            @"VLCVideoCone" },
         { N_("Subtitles / OSD"),  @"VLCSubtitleCone" },
         { N_("Input / Codecs"),   @"VLCInputCone" },
+        /* Use the 64px preference cones as 32pt Retina images, consistently
+         * with the six original panes. The sidebar icons are only 16px. */
+        { N_("Media Library"),    @"VLCInputCone" },
+        { N_("Portable Players"), @"VLCAudioCone" },
         { N_("Hotkeys"),          @"VLCHotkeysCone" },
     };
-    NSDictionary *titleAttributes = [NSDictionary dictionaryWithObject:
-        [NSFont systemFontOfSize:11] forKey:NSFontAttributeName];
-    float widths[6];
+    /* NSString's drawing measurement corrupts ATSU run-feature storage on
+     * Jaguar for some translated strings.  A cell is both the period-correct
+     * measuring API and the object that will eventually draw the caption. */
+    NSTextFieldCell *titleMeasurer = [[[NSTextFieldCell alloc] init] autorelease];
+    [titleMeasurer setFont:[NSFont systemFontOfSize:11]];
+    float widths[PANE_COUNT];
     float total = 0;
     int i;
-    for (i = 0; i < 6; i++) {
-        widths[i] = (float)ceil([_NS(panes[i].title)
-            sizeWithAttributes:titleAttributes].width) + 16;
-        if (widths[i] < 72)
-            widths[i] = 72;
+    for (i = 0; i < PANE_COUNT; i++) {
+        [titleMeasurer setStringValue:_NS(panes[i].title)];
+        widths[i] = (float)ceil([titleMeasurer cellSize].width) + 16;
+        if (widths[i] < 64)
+            widths[i] = 64;
         total += widths[i];
+    }
+    if (total > PREFS_WIDTH - 8) {
+        float scale = (PREFS_WIDTH - 8) / total;
+        total = 0;
+        for (i = 0; i < PANE_COUNT; i++) {
+            widths[i] *= scale;
+            total += widths[i];
+        }
     }
     float x = (PREFS_WIDTH - total) / 2;
     if (x < 4)
         x = 4;
-    for (i = 0; i < 6; i++) {
+    for (i = 0; i < PANE_COUNT; i++) {
         [self addToolbarButton:_NS(panes[i].title) icon:panes[i].icon
                            tag:i x:x width:widths[i] in:content];
         x += widths[i];
@@ -1372,14 +1795,23 @@ static BOOL haveConfig(const char *name)
         autorelease];
     [tabView setTabViewType:NSNoTabsNoBorder];
 
-    NSView *paneViews[6];
+    NSView *paneViews[PANE_COUNT];
     paneViews[PANE_INTERFACE] = [self buildInterfacePane];
     paneViews[PANE_AUDIO] = [self buildAudioPane];
     paneViews[PANE_VIDEO] = [self buildVideoPane];
     paneViews[PANE_SUBS] = [self buildSubtitlesPane];
     paneViews[PANE_INPUT] = [self buildInputPane];
+    paneViews[PANE_MEDIA] = [self buildMediaLibraryPane];
+    paneViews[PANE_DEVICES] = [self buildPortablePlayersPane];
     paneViews[PANE_HOTKEYS] = [self buildHotkeysPane];
-    for (i = 0; i < 6; i++) {
+    /* NSTabView on 10.2 does not reliably keep every inactive item's view
+     * alive. loadValues nevertheless populates controls in all panes before
+     * the window is shown, so own the roots explicitly for the controller's
+     * lifetime instead of leaving those ivars pointing into freed views. */
+    [retainedPaneViews removeAllObjects];
+    for (i = 0; i < PANE_COUNT; i++)
+        [retainedPaneViews addObject:paneViews[i]];
+    for (i = 0; i < PANE_COUNT; i++) {
         NSTabViewItem *item = [[[NSTabViewItem alloc]
             initWithIdentifier:[NSNumber numberWithInt:i]] autorelease];
         [item setView:paneViews[i]];
@@ -1503,6 +1935,474 @@ static BOOL haveConfig(const char *name)
         [field setStringValue:[[panel filenames] objectAtIndex:0]];
 }
 
+- (NSString *)chooseDirectoryStartingAt:(NSString *)path
+{
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    [panel setCanChooseFiles:NO];
+    [panel setCanChooseDirectories:YES];
+    [panel setAllowsMultipleSelection:NO];
+    if ([panel runModalForDirectory:path file:nil] == NSOKButton
+        && [[panel filenames] count])
+        return [[panel filenames] objectAtIndex:0];
+    return nil;
+}
+
+- (void)storeActivePortablePlayer
+{
+    if (activePortablePlayerRow < 0
+        || (unsigned)activePortablePlayerRow >= [portablePlayers count])
+        return;
+    NSMutableDictionary *player = [portablePlayers objectAtIndex:activePortablePlayerRow];
+    [player setObject:[portablePlayerNameField stringValue] forKey:@"name"];
+    [player setObject:[portablePlayerPathField stringValue] forKey:@"path"];
+    [player setObject:[portablePlayerKindPopup indexOfSelectedItem] == 1
+        ? @"ipod" : [portablePlayerKindPopup indexOfSelectedItem] == 2
+        ? @"rockbox" : @"storage" forKey:@"kind"];
+    [player setObject:[NSNumber numberWithBool:
+        [portablePlayerTranscodeCheckbox state] == NSOnState] forKey:@"transcode"];
+    [player setObject:[portablePlayerCodecPopup indexOfSelectedItem] == 1
+        ? @"aac" : [portablePlayerCodecPopup indexOfSelectedItem] == 2
+        ? @"flac" : @"mp3" forKey:@"codec"];
+    [player setObject:[NSNumber numberWithInt:[portablePlayerBitrateField intValue]]
+               forKey:@"bitrate"];
+    [player setObject:[NSNumber numberWithBool:
+        [portablePlayerAlbumArtistComposerCheckbox state] == NSOnState]
+               forKey:@"albumArtistAsComposer"];
+    [player setObject:portablePlayerBackupField ? [portablePlayerBackupField stringValue] : @""
+             forKey:@"backup"];
+}
+
+- (void)loadActivePortablePlayer
+{
+    BOOL enabled = activePortablePlayerRow >= 0
+        && (unsigned)activePortablePlayerRow < [portablePlayers count];
+    NSDictionary *player = enabled
+        ? [portablePlayers objectAtIndex:activePortablePlayerRow] : nil;
+    [portablePlayerNameField setStringValue:enabled ? [player objectForKey:@"name"] : @""];
+    [portablePlayerPathField setStringValue:enabled ? [player objectForKey:@"path"] : @""];
+    NSString *kind = enabled ? [player objectForKey:@"kind"] : @"storage";
+    [portablePlayerKindPopup selectItemAtIndex:[kind isEqualToString:@"ipod"] ? 1
+        : [kind isEqualToString:@"rockbox"] ? 2 : 0];
+    [portablePlayerTranscodeCheckbox setState:enabled
+        && [[player objectForKey:@"transcode"] boolValue] ? NSOnState : NSOffState];
+    NSString *codec = enabled ? [player objectForKey:@"codec"] : @"aac";
+    [portablePlayerCodecPopup selectItemAtIndex:[codec isEqualToString:@"aac"] ? 1
+        : [codec isEqualToString:@"flac"] ? 2 : 0];
+    [portablePlayerBitrateField setIntValue:enabled
+        ? [[player objectForKey:@"bitrate"] intValue] : 256];
+    [portablePlayerAlbumArtistComposerCheckbox setState:enabled
+        && [[player objectForKey:@"albumArtistAsComposer"] boolValue]
+            ? NSOnState : NSOffState];
+    [portablePlayerBackupField setStringValue:enabled
+        ? [player objectForKey:@"backup"] : @""];
+    NSArray *controls = [NSArray arrayWithObjects:portablePlayerNameField,
+        portablePlayerPathField, portablePlayerKindPopup,
+        portablePlayerTranscodeCheckbox, portablePlayerCodecPopup,
+        portablePlayerBitrateField,
+        portablePlayerAlbumArtistComposerCheckbox,
+        portablePlayerBackupField, nil];
+    unsigned i;
+    for (i = 0; i < [controls count]; i++)
+        [[controls objectAtIndex:i] setEnabled:enabled];
+    [portablePlayerAlbumArtistComposerCheckbox setEnabled:
+        enabled && [kind isEqualToString:@"ipod"]];
+}
+
+- (void)addMediaFolder:(id)sender
+{
+    NSString *path = [self chooseDirectoryStartingAt:NSHomeDirectory()];
+    if (!path)
+        return;
+    unsigned i;
+    for (i = 0; i < [mediaFolders count]; i++)
+        if ([[[mediaFolders objectAtIndex:i] objectForKey:@"path"]
+                isEqualToString:path]) {
+            VLCLegacySelectRow(mediaFoldersTable, i);
+            return;
+        }
+    BOOL cache = YES;
+    NSString *db = [path stringByAppendingPathComponent:@".powervlcmediafolder.db"];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:db]) {
+        NSInteger answer = NSRunAlertPanel(_NS("Existing Media Cache"), @"%@",
+            _NS("Yes"), _NS("No"), nil,
+            _NS("This folder already contains a PowerVLC media cache. Use it?"));
+        cache = answer == NSAlertDefaultReturn;
+    }
+    [mediaFolders addObject:[NSMutableDictionary dictionaryWithObjectsAndKeys:
+        path, @"path", [NSNumber numberWithBool:NO], @"monitor",
+        [NSNumber numberWithBool:cache], @"cache", nil]];
+    [mediaFoldersTable reloadData];
+    VLCLegacySelectRow(mediaFoldersTable, (NSInteger)[mediaFolders count] - 1);
+}
+
+- (void)removeMediaFolder:(id)sender
+{
+    NSInteger row = [mediaFoldersTable selectedRow];
+    if (row < 0 || (unsigned)row >= [mediaFolders count])
+        return;
+    [mediaFolders removeObjectAtIndex:row];
+    [mediaFoldersTable reloadData];
+    if ([mediaFolders count])
+        VLCLegacySelectRow(mediaFoldersTable,
+            MIN(row, (NSInteger)[mediaFolders count] - 1));
+}
+
+- (void)editMediaFolder:(id)sender
+{
+    NSInteger row = [mediaFoldersTable selectedRow];
+    if (row < 0 || (unsigned)row >= [mediaFolders count]) return;
+    NSMutableDictionary *folder = [mediaFolders objectAtIndex:row];
+    NSString *path = [self chooseDirectoryStartingAt:[folder objectForKey:@"path"]];
+    if (!path)
+        return;
+    unsigned index;
+    for (index = 0; index < [mediaFolders count]; index++)
+        if (index != (unsigned)row
+         && [[(NSDictionary *)[mediaFolders objectAtIndex:index]
+                objectForKey:@"path"] isEqualToString:path])
+            return;
+    [folder setObject:path forKey:@"path"];
+    [mediaFoldersTable reloadData];
+    VLCLegacySelectRow(mediaFoldersTable, row);
+}
+
+- (NSDictionary *)runSmartPlaylistEditor:(NSString *)raw
+{
+    NSArray *parts = [raw componentsSeparatedByString:@"\t"];
+    NSView *view = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 620, 365)] autorelease];
+    NSTextField *nameLabel = [self label:_NS("Name") at:335 in:view];
+    [nameLabel setFrame:NSMakeRect(0, 335, 95, 18)];
+    NSTextField *name = [[[NSTextField alloc]
+        initWithFrame:NSMakeRect(105, 331, 300, 22)] autorelease];
+    if ([parts count]) [name setStringValue:VLCLegacyPowerVLCUnescape([parts objectAtIndex:0])];
+    [view addSubview:name];
+    NSPopUpButton *match = [[[NSPopUpButton alloc]
+        initWithFrame:NSMakeRect(135, 299, 160, 24)] autorelease];
+    [match addItemsWithTitles:[NSArray arrayWithObjects:_NS("all rules"), _NS("any rule"), nil]];
+    if ([parts count] > 1 && [[parts objectAtIndex:1] isEqualToString:@"any"])
+        [match selectItemAtIndex:1];
+    NSTextField *matchLabel = [self label:_NS("Match") at:303 in:view];
+    [matchLabel setFrame:NSMakeRect(0, 303, 125, 18)];
+    [view addSubview:match];
+    NSTextField *limit = [[[NSTextField alloc]
+        initWithFrame:NSMakeRect(500, 299, 75, 22)] autorelease];
+    [limit setIntValue:[parts count] > 2 ? [[parts objectAtIndex:2] intValue] : 0];
+    NSTextField *limitLabel = [self label:_NS("Limit (0 = none)")
+                                           at:303 in:view];
+    [limitLabel setFrame:NSMakeRect(325, 303, 170, 18)];
+    [view addSubview:limit];
+
+    NSArray *headerTitles = [NSArray arrayWithObjects:_NS("Use"), _NS("Field"),
+        _NS("Condition"), _NS("Value"), nil];
+    const NSRect headerFrames[] = {
+        NSMakeRect(2, 268, 60, 18), NSMakeRect(65, 268, 125, 18),
+        NSMakeRect(194, 268, 165, 18), NSMakeRect(364, 268, 244, 18)
+    };
+    for (unsigned headerIndex = 0; headerIndex < [headerTitles count];
+         headerIndex++) {
+        NSTextField *header = [self label:[headerTitles objectAtIndex:headerIndex]
+                                       at:268 in:view];
+        [header setFrame:headerFrames[headerIndex]];
+        [header setAlignment:NSLeftTextAlignment];
+    }
+
+    NSArray *fieldIds = [NSArray arrayWithObjects:@"title", @"artist", @"album",
+        @"path", @"type", @"size", @"modified", @"rating", nil];
+    NSArray *fieldNames = [NSArray arrayWithObjects:_NS("Title"), _NS("Artist"),
+        _NS("Album"), _NS("Path"), _NS("Media type"), _NS("File size"),
+        _NS("Modified date"), _NS("Rating (0–5)"), nil];
+    NSArray *operatorIds = [NSArray arrayWithObjects:@"contains", @"not_contains",
+        @"is", @"is_not", @"greater", @"less", @"starts_with", @"ends_with",
+        @"after", @"before", nil];
+    NSArray *operatorNames = [NSArray arrayWithObjects:_NS("contains"),
+        _NS("does not contain"), _NS("is"), _NS("is not"),
+        _NS("is greater than"), _NS("is less than"), _NS("starts with"),
+        _NS("ends with"), _NS("is after"), _NS("is before"), nil];
+    NSMutableArray *saved = [NSMutableArray array];
+    if ([parts count] >= 4) {
+        NSString *rules = [[parts subarrayWithRange:NSMakeRange(3, [parts count] - 3)]
+            componentsJoinedByString:@"\t"];
+        NSArray *lines = [rules componentsSeparatedByString:@";"];
+        unsigned i;
+        for (i = 0; i < [lines count]; i++) {
+            NSArray *bits = [[lines objectAtIndex:i] componentsSeparatedByString:@"|"];
+            if ([bits count] >= 3)
+                [saved addObject:[NSDictionary dictionaryWithObjectsAndKeys:
+                    VLCLegacyPowerVLCUnescape([bits objectAtIndex:0]), @"field",
+                    VLCLegacyPowerVLCUnescape([bits objectAtIndex:1]), @"operator",
+                    VLCLegacyPowerVLCUnescape([[bits subarrayWithRange:
+                        NSMakeRange(2, [bits count] - 2)] componentsJoinedByString:@"|"]), @"value", nil]];
+        }
+    }
+    NSMutableArray *checks = [NSMutableArray array], *fields = [NSMutableArray array];
+    NSMutableArray *operators = [NSMutableArray array], *values = [NSMutableArray array];
+    unsigned rowCount = MAX(4, MIN(8, (unsigned)[saved count] + 1));
+    unsigned row;
+    for (row = 0; row < rowCount; row++) {
+        float y = 238 - row * 32;
+        NSButton *check = [[[NSButton alloc] initWithFrame:NSMakeRect(20, y, 24, 22)] autorelease];
+        [check setButtonType:NSSwitchButton]; [check setTitle:@""];
+        NSPopUpButton *field = [[[NSPopUpButton alloc] initWithFrame:NSMakeRect(65, y, 125, 24)] autorelease];
+        [field addItemsWithTitles:fieldNames];
+        NSPopUpButton *op = [[[NSPopUpButton alloc] initWithFrame:NSMakeRect(194, y, 165, 24)] autorelease];
+        [op addItemsWithTitles:operatorNames];
+        NSTextField *value = [[[NSTextField alloc] initWithFrame:NSMakeRect(364, y, 244, 22)] autorelease];
+        if (row < [saved count]) {
+            NSDictionary *rule = [saved objectAtIndex:row];
+            NSUInteger fi = [fieldIds indexOfObject:[rule objectForKey:@"field"]];
+            NSUInteger oi = [operatorIds indexOfObject:[rule objectForKey:@"operator"]];
+            if (fi != NSNotFound) [field selectItemAtIndex:fi];
+            if (oi != NSNotFound) [op selectItemAtIndex:oi];
+            [value setStringValue:[rule objectForKey:@"value"]]; [check setState:NSOnState];
+        }
+        [view addSubview:check]; [view addSubview:field]; [view addSubview:op]; [view addSubview:value];
+        [checks addObject:check]; [fields addObject:field]; [operators addObject:op]; [values addObject:value];
+    }
+    /* NSAlert gained accessory views only in Leopard.  Use a small ordinary
+     * modal panel so this editor is fully functional on Jaguar. */
+    NSPanel *panel = [[NSPanel alloc]
+        initWithContentRect:NSMakeRect(0, 0, 640, 410)
+                  styleMask:NSTitledWindowMask
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    [panel setTitle:_NS("Smart Playlist")];
+    [panel setReleasedWhenClosed:NO];
+    [view setFrameOrigin:NSMakePoint(10, 40)];
+    [[panel contentView] addSubview:view];
+
+    NSButton *cancelButton = [[[NSButton alloc]
+        initWithFrame:NSMakeRect(440, 9, 90, 26)] autorelease];
+    [cancelButton setTitle:_NS("Cancel")];
+    [cancelButton setBezelStyle:NSRoundedBezelStyle];
+    [cancelButton setTarget:self];
+    [cancelButton setAction:@selector(finishSmartPlaylistEditor:)];
+    [cancelButton setTag:0];
+    [[panel contentView] addSubview:cancelButton];
+
+    NSButton *saveButton = [[[NSButton alloc]
+        initWithFrame:NSMakeRect(535, 9, 90, 26)] autorelease];
+    [saveButton setTitle:_NS("Save")];
+    [saveButton setBezelStyle:NSRoundedBezelStyle];
+    [saveButton setKeyEquivalent:@"\r"];
+    [saveButton setTarget:self];
+    [saveButton setAction:@selector(finishSmartPlaylistEditor:)];
+    [saveButton setTag:1];
+    [[panel contentView] addSubview:saveButton];
+
+    smartPlaylistModalResult = 0;
+    [panel center];
+    /* A free-standing modal panel can remain ordered behind Preferences on
+     * Jaguar. A child window is synchronous like this editor expects and is
+     * guaranteed to stay above its parent. */
+    [window addChildWindow:panel ordered:NSWindowAbove];
+    [panel makeKeyAndOrderFront:nil];
+    [NSApp runModalForWindow:panel];
+    [window removeChildWindow:panel];
+    [panel orderOut:nil];
+    /* The panel owns view, which in turn owns every editor control.  Read
+     * their values before releasing the panel; doing it in the opposite
+     * order is a use-after-free on Jaguar's non-GC Objective-C runtime. */
+    if (smartPlaylistModalResult != 1 || ![[name stringValue] length]) {
+        [panel release];
+        return nil;
+    }
+    NSMutableArray *encoded = [NSMutableArray array];
+    for (row = 0; row < rowCount; row++) if ([[checks objectAtIndex:row] state] == NSOnState) {
+        NSUInteger fi = [[fields objectAtIndex:row] indexOfSelectedItem];
+        NSUInteger oi = [[operators objectAtIndex:row] indexOfSelectedItem];
+        [encoded addObject:[NSString stringWithFormat:@"%@|%@|%@",
+            VLCLegacyPowerVLCEscape([fieldIds objectAtIndex:fi]),
+            VLCLegacyPowerVLCEscape([operatorIds objectAtIndex:oi]),
+            VLCLegacyPowerVLCEscape([[values objectAtIndex:row] stringValue])]];
+    }
+    if (![encoded count]) [encoded addObject:@"title|contains|"];
+    NSString *mode = [match indexOfSelectedItem] == 1 ? @"any" : @"all";
+    NSString *serialized = [NSString stringWithFormat:@"%@\t%@\t%d\t%@",
+        VLCLegacyPowerVLCEscape([name stringValue]), mode, MAX(0, [limit intValue]),
+        [encoded componentsJoinedByString:@";"]];
+    NSString *summary = [NSString stringWithFormat:_NS("%u rules, %@ match, limit %@"),
+        (unsigned)[encoded count], mode, [limit intValue] ? [limit stringValue] : _NS("none")];
+    NSDictionary *result = [NSDictionary dictionaryWithObjectsAndKeys:
+        serialized, @"raw", [name stringValue], @"name",
+        summary, @"summary", nil];
+    [panel release];
+    return result;
+}
+
+- (void)finishSmartPlaylistEditor:(id)sender
+{
+    smartPlaylistModalResult = [sender tag];
+    [NSApp stopModal];
+}
+
+- (void)addSmartPlaylist:(id)sender
+{
+    NSDictionary *value = [self runSmartPlaylistEditor:@""];
+    if (value) { [smartPlaylists addObject:value]; [smartPlaylistsTable reloadData]; }
+}
+
+- (void)editSmartPlaylist:(id)sender
+{
+    NSInteger row = [smartPlaylistsTable selectedRow];
+    if (row < 0 || (unsigned)row >= [smartPlaylists count]) return;
+    NSDictionary *value = [self runSmartPlaylistEditor:
+        [[smartPlaylists objectAtIndex:row] objectForKey:@"raw"]];
+    if (value) { [smartPlaylists replaceObjectAtIndex:row withObject:value]; [smartPlaylistsTable reloadData]; }
+}
+
+- (void)removeSmartPlaylist:(id)sender
+{
+    NSInteger row = [smartPlaylistsTable selectedRow];
+    if (row >= 0 && (unsigned)row < [smartPlaylists count]) {
+        [smartPlaylists removeObjectAtIndex:row]; [smartPlaylistsTable reloadData];
+    }
+}
+
+- (void)addPortablePlayer:(id)sender
+{
+    NSString *path = [self chooseDirectoryStartingAt:@"/Volumes"];
+    if (!path)
+        return;
+    path = [path stringByStandardizingPath];
+    if ([path isEqualToString:@"/"]) {
+        NSRunAlertPanel(_NS("Invalid Portable Player"), @"%@",
+            _NS("OK"), nil, nil,
+            _NS("The system disk cannot be used as a portable player. "
+                "Choose a removable volume or a dedicated folder."));
+        return;
+    }
+    [self storeActivePortablePlayer];
+    NSFileManager *manager = [NSFileManager defaultManager];
+    NSString *kind = [manager fileExistsAtPath:
+        [path stringByAppendingPathComponent:@"iPod_Control"]] ? @"ipod"
+        : [manager fileExistsAtPath:[path stringByAppendingPathComponent:@".rockbox"]]
+        ? @"rockbox" : @"storage";
+    [portablePlayers addObject:[NSMutableDictionary dictionaryWithObjectsAndKeys:
+        [path lastPathComponent], @"name", path, @"path", kind, @"kind",
+        [NSNumber numberWithBool:NO], @"transcode", @"aac", @"codec",
+        [NSNumber numberWithInt:256], @"bitrate",
+        [NSNumber numberWithBool:NO], @"albumArtistAsComposer",
+        @"", @"backup", nil]];
+    [portablePlayersTable reloadData];
+    /* Save applies the devices once the preferences editor is quiescent.
+     * Starting services discovery from inside this AppKit event invalidates
+     * the pane controls on Jaguar before the delayed selection can use them. */
+    /* Returning from NSOpenPanel leaves Jaguar's AppKit selection machinery
+     * in a transient state until this mouse event has unwound.  Selecting or
+     * populating controls here crashes in objc_msgSend even without a table
+     * notification.  Defer all UI work to the next run-loop iteration. */
+    NSNumber *newRow = [NSNumber numberWithInt:(int)[portablePlayers count] - 1];
+    [self performSelector:@selector(finishAddingPortablePlayer:)
+               withObject:newRow
+               afterDelay:0.0];
+}
+
+- (void)finishAddingPortablePlayer:(id)rowNumber
+{
+    NSInteger row = [rowNumber intValue];
+    if (row < 0 || (unsigned)row >= [portablePlayers count])
+        return;
+    activePortablePlayerRow = row;
+    VLCLegacySelectRow(portablePlayersTable, row);
+    [self loadActivePortablePlayer];
+}
+
+- (void)removePortablePlayer:(id)sender
+{
+    NSInteger row = [portablePlayersTable selectedRow];
+    if (row < 0 || (unsigned)row >= [portablePlayers count])
+        return;
+    activePortablePlayerRow = -1;
+    [portablePlayers removeObjectAtIndex:row];
+    [portablePlayersTable reloadData];
+    if ([portablePlayers count]) {
+        activePortablePlayerRow = MIN(row, (NSInteger)[portablePlayers count] - 1);
+        VLCLegacySelectRow(portablePlayersTable, activePortablePlayerRow);
+    }
+    [self loadActivePortablePlayer];
+}
+
+- (void)portablePlayerSettingChanged:(id)sender
+{
+    [self storeActivePortablePlayer];
+    if (sender == portablePlayerKindPopup)
+        [portablePlayerAlbumArtistComposerCheckbox setEnabled:
+            [portablePlayerKindPopup indexOfSelectedItem] == 1];
+    [portablePlayersTable reloadData];
+}
+
+- (void)portablePlayerTableClicked:(id)sender
+{
+    NSInteger row = [portablePlayersTable selectedRow];
+    if (row != activePortablePlayerRow)
+        [self storeActivePortablePlayer];
+    activePortablePlayerRow = row;
+    [self loadActivePortablePlayer];
+}
+
+- (void)applyPortablePlayers
+{
+    char *oldConfigValue = config_GetPsz(p_intf, "powervlc-devices");
+    NSString *oldConfig = oldConfigValue
+        ? [NSString stringWithUTF8String:oldConfigValue] : @"";
+    free(oldConfigValue);
+    /* stringByReplacingOccurrencesOfString:withString: only appeared in
+     * Leopard.  The legacy interface still targets Jaguar, whose mutable
+     * replacement API provides the same result. */
+    NSMutableString *normalisedOldConfig =
+        [NSMutableString stringWithString:oldConfig];
+    [normalisedOldConfig replaceOccurrencesOfString:@"|"
+                                         withString:@"\n"
+                                            options:NSLiteralSearch
+                                              range:NSMakeRange(0,
+                                                  [normalisedOldConfig length])];
+    NSArray *oldLines = [normalisedOldConfig componentsSeparatedByString:@"\n"];
+    NSMutableArray *lines = [NSMutableArray array];
+    unsigned i;
+    for (i = 0; i < [portablePlayers count]; i++) {
+        NSDictionary *player = [portablePlayers objectAtIndex:i];
+        NSString *name = [player objectForKey:@"name"];
+        NSString *path = [player objectForKey:@"path"];
+        if (![name length] || ![path length]) continue;
+        NSArray *fields = [NSArray arrayWithObjects:
+            VLCLegacyPowerVLCEscape(name), VLCLegacyPowerVLCEscape(path),
+            [player objectForKey:@"kind"],
+            [[player objectForKey:@"transcode"] boolValue] ? @"1" : @"0",
+            [player objectForKey:@"codec"],
+            [NSString stringWithFormat:@"%d",
+                [[player objectForKey:@"bitrate"] intValue]],
+            [[player objectForKey:@"albumArtistAsComposer"] boolValue]
+                && [[player objectForKey:@"kind"] isEqualToString:@"ipod"]
+                ? @"1" : @"0",
+            @"0", @"0",
+            VLCLegacyPowerVLCEscape([player objectForKey:@"backup"]), nil];
+        [lines addObject:[fields componentsJoinedByString:@"\t"]];
+    }
+    NSString *deviceConfig = [lines componentsJoinedByString:@"|"];
+    config_PutPsz(p_intf, "powervlc-devices", [deviceConfig UTF8String]);
+    var_Create(p_intf->obj.libvlc, "powervlc-devices", VLC_VAR_STRING);
+    var_SetString(p_intf->obj.libvlc, "powervlc-devices",
+                  [deviceConfig UTF8String]);
+    config_SaveConfigFile(p_intf);
+    playlist_t *playlist = pl_Get(p_intf);
+    for (i = 0; i < 64; i++) {
+        NSString *oldLine = i < [oldLines count]
+                          ? [oldLines objectAtIndex:i] : @"";
+        NSString *newLine = i < [lines count]
+                          ? [lines objectAtIndex:i] : @"";
+        if ([oldLine isEqualToString:newLine]) continue;
+        NSString *chain = [NSString stringWithFormat:
+            @"powervlc_device{index=%d}", i];
+        if ([oldLine length]
+         && playlist_IsServicesDiscoveryLoaded(playlist, [chain UTF8String]))
+            playlist_ServicesDiscoveryRemove(playlist, [chain UTF8String]);
+        if ([newLine length])
+            playlist_ServicesDiscoveryAdd(playlist, [chain UTF8String]);
+    }
+    extern VLCLegacyMainWindow *VLCLegacyGetMainWindow(void);
+    [VLCLegacyGetMainWindow() reloadPowerVLCDevices];
+}
+
 - (void)browseSnapshotPath:(id)sender
 {
     [self browseIntoField:snapshotPathField directoriesOnly:YES];
@@ -1511,6 +2411,30 @@ static BOOL haveConfig(const char *name)
 - (void)browseRecordPath:(id)sender
 {
     [self browseIntoField:recordPathField directoriesOnly:YES];
+}
+
+- (void)browseManagedMediaFolder:(id)sender
+{
+    [self browseIntoField:managedMediaFolderField directoriesOnly:YES];
+}
+
+- (void)browsePortablePlayer:(id)sender
+{
+    [self browseIntoField:portablePlayerPathField directoriesOnly:YES];
+    NSString *root = [portablePlayerPathField stringValue];
+    NSFileManager *manager = [NSFileManager defaultManager];
+    if ([manager fileExistsAtPath:[root stringByAppendingPathComponent:@"iPod_Control"]])
+        [portablePlayerKindPopup selectItemAtIndex:1];
+    else if ([manager fileExistsAtPath:[root stringByAppendingPathComponent:@".rockbox"]])
+        [portablePlayerKindPopup selectItemAtIndex:2];
+    if (![[portablePlayerNameField stringValue] length])
+        [portablePlayerNameField setStringValue:[root lastPathComponent]];
+    [self portablePlayerSettingChanged:sender];
+}
+
+- (void)browsePortableBackup:(id)sender
+{
+    [self browseIntoField:portablePlayerBackupField directoriesOnly:YES];
 }
 
 - (void)chooseFont:(id)sender
@@ -1943,7 +2867,7 @@ static BOOL haveConfig(const char *name)
         VLCLegacySetViewHidden(advancedContainer, NO);
         VLCLegacySetViewHidden(tabView, YES);
         int i;
-        for (i = 0; i < 6; i++)
+        for (i = 0; i < PANE_COUNT; i++)
             VLCLegacySetViewHidden(
                 VLCLegacyViewWithTag([window contentView], 100 + i), YES);
         [toggleButton setTitle:_NS("Basic")];
@@ -1957,7 +2881,7 @@ static BOOL haveConfig(const char *name)
         VLCLegacySetViewHidden(advancedContainer, YES);
         VLCLegacySetViewHidden(tabView, NO);
         int i;
-        for (i = 0; i < 6; i++)
+        for (i = 0; i < PANE_COUNT; i++)
             VLCLegacySetViewHidden(
                 VLCLegacyViewWithTag([window contentView], 100 + i), NO);
         [toggleButton setTitle:_NS("Show All")];
@@ -2032,8 +2956,26 @@ static BOOL haveConfig(const char *name)
     }
 
     [self loadCustomValues];
+    [self updatePassthroughFormatControls];
     /* the raw method picker only makes sense for the "Custom" preset */
     [self syncDeinterlaceMethodVisibility];
+}
+
+- (void)updatePassthroughFormatControls
+{
+    BOOL enabled = passthroughCheckbox
+                && [passthroughCheckbox state] == NSOnState;
+    [passthroughAC3Checkbox setEnabled:enabled];
+    [passthroughEAC3Checkbox setEnabled:enabled];
+    [passthroughTrueHDCheckbox setEnabled:enabled];
+    [passthroughDTSCheckbox setEnabled:enabled];
+    [passthroughDTSHDCheckbox setEnabled:enabled];
+}
+
+- (void)passthroughSettingChanged:(id)sender
+{
+    (void)sender;
+    [self updatePassthroughFormatControls];
 }
 
 /* Show the deinterlace method picker only when the quality preset is "Custom".
@@ -2057,6 +2999,20 @@ static BOOL haveConfig(const char *name)
 - (void)loadCustomValues
 {
     /* language (NSUserDefaults) */
+    if ([languagePopup numberOfItems] == 0) {
+        unsigned languageIndex;
+        for (languageIndex = 0;
+             languageIndex < sizeof(language_map) / sizeof(language_map[0]);
+             languageIndex++) {
+            NSString *title = strcmp(language_map[languageIndex].iso, "auto")
+                ? [NSString stringWithUTF8String:
+                    language_map[languageIndex].name] : _NS("Auto");
+            if (!title)
+                title = [NSString stringWithUTF8String:
+                    language_map[languageIndex].iso];
+            [languagePopup addItemWithObjectValue:title];
+        }
+    }
     NSString *pref = [[NSUserDefaults standardUserDefaults]
         objectForKey:@"language"];
     unsigned sel = 0, x;
@@ -2152,6 +3108,103 @@ static BOOL haveConfig(const char *name)
             VLCLegacySetViewHidden(cacheCustomLabel, NO);
         }
     }
+
+    /* Blank means the portable core default; show the effective location. */
+    if (managedMediaFolderField
+     && ![[managedMediaFolderField stringValue] length]) {
+        /* NSMusicDirectory was only added after the 10.4 SDK. The canonical
+         * per-user Music folder has had this location throughout the legacy
+         * Cocoa releases supported by PowerVLC. */
+        NSString *base = [NSHomeDirectory()
+            stringByAppendingPathComponent:@"Music"];
+        [managedMediaFolderField setStringValue:
+            [base stringByAppendingPathComponent:@"PowerVLC media library"]];
+    }
+
+    char *folderConfig = config_GetPsz(p_intf, "powervlc-ml-folders");
+    NSString *folderText = folderConfig
+        ? [NSString stringWithUTF8String:folderConfig] : @"";
+    free(folderConfig);
+    [mediaFolders removeAllObjects];
+    NSArray *folderLines = [folderText componentsSeparatedByString:@"\n"];
+    unsigned folderIndex;
+    for (folderIndex = 0; folderIndex < [folderLines count]; folderIndex++) {
+        NSArray *parts = [[folderLines objectAtIndex:folderIndex]
+            componentsSeparatedByString:@"\t"];
+        if ([parts count] < 2)
+            continue;
+        NSString *flags = [parts count] ? [parts objectAtIndex:0] : @"";
+        NSString *path = VLCLegacyPowerVLCUnescape(
+            [[parts subarrayWithRange:NSMakeRange(1, [parts count] - 1)]
+                componentsJoinedByString:@"\t"]);
+        [mediaFolders addObject:[NSMutableDictionary dictionaryWithObjectsAndKeys:
+            path, @"path",
+            [NSNumber numberWithBool:[flags rangeOfString:@"m"].location
+                                     != NSNotFound], @"monitor",
+            [NSNumber numberWithBool:[flags rangeOfString:@"d"].location
+                                     != NSNotFound], @"cache", nil]];
+    }
+    [mediaFoldersTable reloadData];
+    if ([mediaFolders count])
+        VLCLegacySelectRow(mediaFoldersTable, 0);
+
+    char *smartConfig = config_GetPsz(p_intf, "powervlc-ml-smart-playlists");
+    NSString *smartText = smartConfig ? [NSString stringWithUTF8String:smartConfig] : @"";
+    free(smartConfig); [smartPlaylists removeAllObjects];
+    NSArray *smartLines = [smartText componentsSeparatedByString:@"\n"];
+    for (folderIndex = 0; folderIndex < [smartLines count]; folderIndex++) {
+        NSString *line = [smartLines objectAtIndex:folderIndex];
+        NSArray *parts = [line componentsSeparatedByString:@"\t"];
+        if ([parts count] < 4) continue;
+        NSString *limit = [[parts objectAtIndex:2] intValue] ? [parts objectAtIndex:2] : _NS("none");
+        NSString *summary = [NSString stringWithFormat:_NS("%@ match, limit %@"),
+            [[parts objectAtIndex:1] isEqualToString:@"any"] ? _NS("any") : _NS("all"), limit];
+        [smartPlaylists addObject:[NSDictionary dictionaryWithObjectsAndKeys:line, @"raw",
+            VLCLegacyPowerVLCUnescape([parts objectAtIndex:0]), @"name",
+            summary, @"summary", nil]];
+    }
+    [smartPlaylistsTable reloadData];
+
+    char *devicesConfig = config_GetPsz(p_intf, "powervlc-devices");
+    NSString *devicesText = devicesConfig
+        ? [NSString stringWithUTF8String:devicesConfig] : @"";
+    free(devicesConfig);
+    [portablePlayers removeAllObjects];
+    NSMutableString *normalisedDevicesText =
+        [NSMutableString stringWithString:devicesText];
+    [normalisedDevicesText replaceOccurrencesOfString:@"|"
+                                           withString:@"\n"
+                                              options:NSLiteralSearch
+                                                range:NSMakeRange(0,
+                                                    [normalisedDevicesText length])];
+    NSArray *deviceLines =
+        [normalisedDevicesText componentsSeparatedByString:@"\n"];
+    unsigned deviceIndex;
+    for (deviceIndex = 0; deviceIndex < [deviceLines count]; deviceIndex++) {
+        NSArray *device = [[deviceLines objectAtIndex:deviceIndex]
+            componentsSeparatedByString:@"\t"];
+        if ([device count] < 10)
+            continue;
+        [portablePlayers addObject:[NSMutableDictionary dictionaryWithObjectsAndKeys:
+            VLCLegacyPowerVLCUnescape([device objectAtIndex:0]), @"name",
+            VLCLegacyPowerVLCUnescape([device objectAtIndex:1]), @"path",
+            [device objectAtIndex:2], @"kind",
+            [NSNumber numberWithBool:[[device objectAtIndex:3] intValue] != 0], @"transcode",
+            [[device objectAtIndex:4] length] ? [device objectAtIndex:4] : @"aac", @"codec",
+            [NSNumber numberWithInt:MAX(64, [[device objectAtIndex:5] intValue] ?: 256)], @"bitrate",
+            [NSNumber numberWithBool:[[device objectAtIndex:6] intValue] != 0],
+            @"albumArtistAsComposer",
+            VLCLegacyPowerVLCUnescape([[device subarrayWithRange:
+                NSMakeRange(9, [device count] - 9)] componentsJoinedByString:@"\t"]),
+            @"backup", nil]];
+    }
+    activePortablePlayerRow = -1;
+    [portablePlayersTable reloadData];
+    if ([portablePlayers count]) {
+        activePortablePlayerRow = 0;
+        VLCLegacySelectRow(portablePlayersTable, 0);
+    }
+    [self loadActivePortablePlayer];
 }
 
 - (void)loadHotkeys
@@ -2169,8 +3222,9 @@ static BOOL haveConfig(const char *name)
     unsigned i;
     for (i = 0; i < confsize; i++) {
         module_config_t *item = p_config + i;
-        if (item->i_type != CONFIG_ITEM_KEY || !item->psz_name
-            || strncmp(item->psz_name, "key-", 4))
+        /* Some old module banks carry modifier bits in i_type. The key-
+         * namespace is authoritative and is what the modern macOS UI uses. */
+        if (!item->psz_name || strncmp(item->psz_name, "key-", 4))
             continue;
         [hotkeyNames addObject:
             [NSString stringWithUTF8String:item->psz_name]];
@@ -2190,6 +3244,11 @@ static BOOL haveConfig(const char *name)
 - (void)save:(id)sender
 {
     [window makeFirstResponder:nil];
+    char *oldManagedFolderConfig = config_GetPsz(
+        p_intf, "powervlc-ml-managed-folder");
+    NSString *oldManagedFolderConfiguration = oldManagedFolderConfig
+        ? [NSString stringWithUTF8String:oldManagedFolderConfig] : @"";
+    free(oldManagedFolderConfig);
     if (advancedMode)
         [self commitAdvancedEntries];
     unsigned i;
@@ -2350,6 +3409,85 @@ static BOOL haveConfig(const char *name)
                       [[hotkeyValues objectAtIndex:i] UTF8String]);
     }
 
+    [self storeActivePortablePlayer];
+    {
+        NSMutableArray *lines = [NSMutableArray array];
+        for (i = 0; i < [mediaFolders count]; i++) {
+            NSDictionary *folder = [mediaFolders objectAtIndex:i];
+            NSString *path = [folder objectForKey:@"path"];
+            if (![path length])
+                continue;
+            NSMutableString *flags = [NSMutableString string];
+            if ([[folder objectForKey:@"monitor"] boolValue])
+                [flags appendString:@"m"];
+            if ([[folder objectForKey:@"cache"] boolValue])
+                [flags appendString:@"d"];
+            [lines addObject:[NSString stringWithFormat:@"%@\t%@", flags,
+                              VLCLegacyPowerVLCEscape(path)]];
+        }
+        NSString *newFolderConfiguration = [lines componentsJoinedByString:@"\n"];
+        char *oldFolderConfig = config_GetPsz(p_intf,
+                                               "powervlc-ml-folders");
+        NSString *oldFolderConfiguration = oldFolderConfig
+            ? [NSString stringWithUTF8String:oldFolderConfig] : @"";
+        BOOL folderConfigurationChanged =
+            ![newFolderConfiguration isEqualToString:oldFolderConfiguration];
+        free(oldFolderConfig);
+        char *newManagedFolderConfig = config_GetPsz(
+            p_intf, "powervlc-ml-managed-folder");
+        NSString *newManagedFolderConfiguration = newManagedFolderConfig
+            ? [NSString stringWithUTF8String:newManagedFolderConfig] : @"";
+        folderConfigurationChanged |= ![newManagedFolderConfiguration
+            isEqualToString:oldManagedFolderConfiguration];
+        free(newManagedFolderConfig);
+        config_PutPsz(p_intf, "powervlc-ml-folders",
+                      [newFolderConfiguration UTF8String]);
+        /* The media-library worker reloads this setting on every rescan, but
+         * it sleeps between explicit requests. Saving a new source therefore
+         * has to wake it just like the sidebar's Rescan command does. */
+        playlist_t *playlist = pl_Get(p_intf);
+        if (folderConfigurationChanged
+         && playlist_IsServicesDiscoveryLoaded(playlist,
+                                                "powervlc_library"))
+            playlist_ServicesDiscoveryControl(playlist, "powervlc_library",
+                                               SD_CMD_POWERVLC_RESCAN);
+    }
+    {
+        NSMutableArray *lines = [NSMutableArray array];
+        for (i = 0; i < [smartPlaylists count]; i++)
+            [lines addObject:[[smartPlaylists objectAtIndex:i] objectForKey:@"raw"]];
+        NSString *newSmartConfiguration = [lines componentsJoinedByString:@"\n"];
+        char *oldSmartConfig = config_GetPsz(p_intf,
+                                              "powervlc-ml-smart-playlists");
+        NSString *oldSmartConfiguration = oldSmartConfig
+            ? [NSString stringWithUTF8String:oldSmartConfig] : @"";
+        BOOL smartConfigurationChanged =
+            ![newSmartConfiguration isEqualToString:oldSmartConfiguration];
+        free(oldSmartConfig);
+        config_PutPsz(p_intf, "powervlc-ml-smart-playlists",
+                      [newSmartConfiguration UTF8String]);
+        playlist_t *playlist = pl_Get(p_intf);
+        if (smartConfigurationChanged
+         && playlist_IsServicesDiscoveryLoaded(playlist,
+                                                "powervlc_library"))
+            playlist_ServicesDiscoveryControl(playlist, "powervlc_library",
+                SD_CMD_POWERVLC_LIBRARY_RELOAD_SMART);
+    }
+    [self applyPortablePlayers];
+
+    NSString *managedRoot = [managedMediaFolderField stringValue];
+    if ([managedRoot length]) {
+        NSFileManager *manager = [NSFileManager defaultManager];
+        [manager createDirectoryAtPath:managedRoot attributes:nil];
+        NSArray *branches = [NSArray arrayWithObjects:@"Music", @"Movies",
+            @"Shows", @"Podcasts", @"Playlists", nil];
+        unsigned branchIndex;
+        for (branchIndex = 0; branchIndex < [branches count]; branchIndex++)
+            [manager createDirectoryAtPath:
+                [managedRoot stringByAppendingPathComponent:
+                    [branches objectAtIndex:branchIndex]]
+                                  attributes:nil];
+    }
     /* apply the session-visible playback modes immediately */
     playlist_t *p_playlist = pl_Get(p_intf);
     var_SetBool(p_playlist, "video-on-top",
@@ -2374,6 +3512,12 @@ static BOOL haveConfig(const char *name)
 {
     if (!window)
         [self buildWindow];
+    /* Building and populating eight programmatic panes is noticeable on a
+     * G3.  Put the completed window on screen before reading every config
+     * value and enumerating the hotkeys, so the Preferences command always
+     * has immediate visible feedback instead of appearing to do nothing. */
+    [window makeKeyAndOrderFront:nil];
+    [window displayIfNeeded];
     [self loadValues];
     [self loadHotkeys];
     [tabView selectTabViewItemAtIndex:PANE_INTERFACE];
@@ -2387,6 +3531,12 @@ static BOOL haveConfig(const char *name)
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
 {
+    if (tableView == mediaFoldersTable)
+        return (NSInteger)[mediaFolders count];
+    if (tableView == portablePlayersTable)
+        return (NSInteger)[portablePlayers count];
+    if (tableView == smartPlaylistsTable)
+        return (NSInteger)[smartPlaylists count];
     return (NSInteger)[hotkeyNames count];
 }
 
@@ -2394,11 +3544,76 @@ static BOOL haveConfig(const char *name)
     objectValueForTableColumn:(NSTableColumn *)column
                           row:(NSInteger)row
 {
+    if (tableView == mediaFoldersTable) {
+        if (row < 0 || (unsigned)row >= [mediaFolders count])
+            return @"";
+        NSDictionary *folder = [mediaFolders objectAtIndex:row];
+        NSString *identifier = [column identifier];
+        if ([identifier isEqualToString:@"monitor"]
+            || [identifier isEqualToString:@"cache"])
+            return [folder objectForKey:identifier];
+        return [folder objectForKey:@"path"];
+    }
+    if (tableView == portablePlayersTable) {
+        if (row < 0 || (unsigned)row >= [portablePlayers count])
+            return @"";
+        NSDictionary *player = [portablePlayers objectAtIndex:row];
+        NSString *identifier = [column identifier];
+        if ([identifier isEqualToString:@"kind"]) {
+            NSString *kind = [player objectForKey:@"kind"];
+            return [kind isEqualToString:@"ipod"] ? _NS("Apple iPod")
+                : [kind isEqualToString:@"rockbox"] ? _NS("Rockbox")
+                : _NS("USB / storage");
+        }
+        return [player objectForKey:identifier];
+    }
+    if (tableView == smartPlaylistsTable) {
+        if (row < 0 || (unsigned)row >= [smartPlaylists count]) return @"";
+        NSDictionary *smart = [smartPlaylists objectAtIndex:row];
+        return [[column identifier] isEqualToString:@"smartName"]
+            ? [smart objectForKey:@"name"] : [smart objectForKey:@"summary"];
+    }
     if (row < 0 || (unsigned)row >= [hotkeyNames count])
         return @"";
     if ([[column identifier] isEqualToString:@"action"])
         return [hotkeyTexts objectAtIndex:row];
     return prettyKeyString([hotkeyValues objectAtIndex:row]);
+}
+
+- (void)tableView:(NSTableView *)tableView
+    setObjectValue:(id)value
+    forTableColumn:(NSTableColumn *)column
+               row:(NSInteger)row
+{
+    if (tableView != mediaFoldersTable || row < 0
+        || (unsigned)row >= [mediaFolders count])
+        return;
+    NSString *identifier = [column identifier];
+    if (![identifier isEqualToString:@"monitor"]
+        && ![identifier isEqualToString:@"cache"])
+        return;
+    NSMutableDictionary *folder = [mediaFolders objectAtIndex:row];
+    [folder setObject:[NSNumber numberWithBool:[value boolValue]]
+               forKey:identifier];
+}
+
+- (void)tableViewSelectionDidChange:(NSNotification *)notification
+{
+    NSTableView *table = [notification object];
+    if (table == portablePlayersTable) {
+        NSInteger row = [table selectedRow];
+        /* addPortablePlayer: sets activePortablePlayerRow before selecting
+         * the freshly inserted row.  Jaguar posts this notification from
+         * inside selectRow:, where touching the table-bound editor controls
+         * can dereference AppKit's transient selection object.  The table's
+         * explicit action refreshes an already-selected row after a real
+         * click, so this re-entrant notification must remain a no-op. */
+        if (row == activePortablePlayerRow)
+            return;
+        [self storeActivePortablePlayer];
+        activePortablePlayerRow = row;
+        [self loadActivePortablePlayer];
+    }
 }
 
 - (void)buildCapturePanel

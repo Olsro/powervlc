@@ -1,0 +1,26 @@
+--- libplacebo/src/convert.cc.orig
++++ libplacebo/src/convert.cc
+@@ -41,7 +41,8 @@
+ template <typename T>
+ constexpr bool has_std_to_chars = has_std_to_chars_impl<T>::value;
+ 
+-#if defined(HAS_STD_TO_CHARS_FP) && HAS_STD_TO_CHARS_FP == 0
++#if (defined(HAS_STD_TO_CHARS_FP) && HAS_STD_TO_CHARS_FP == 0) || \
++    defined(_WIN32)
+ template <>
+ constexpr bool has_std_to_chars<float>  = false;
+ template <>
+@@ -75,6 +76,13 @@
+ template <typename T>
+ constexpr bool has_std_from_chars = has_std_from_chars_impl<T>::value;
+ 
++/* llvm-mingw exposes the floating-point overloads in the libc++ headers, but
++ * not every target runtime provides their out-of-line implementations. */
++#if defined(_WIN32)
++template <> constexpr bool has_std_from_chars<float>  = false;
++template <> constexpr bool has_std_from_chars<double> = false;
++#endif
++
+ template <typename T, typename... Args>
+ static inline bool from_chars(pl_str str, T &n, Args ...args)
+ {

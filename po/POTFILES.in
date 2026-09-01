@@ -648,6 +648,7 @@ modules/gui/macosx/VLCPlaylistView.h
 modules/gui/macosx/VLCPlaylistView.m
 modules/gui/macosx/VLCPopupPanelController.h
 modules/gui/macosx/VLCPopupPanelController.m
+modules/gui/macosx/VLCPowerVLCPreferences.m
 modules/gui/macosx/VLCRendererDiscovery.h
 modules/gui/macosx/VLCRendererDiscovery.m
 modules/gui/macosx/VLCRendererItem.h
@@ -772,6 +773,7 @@ modules/gui/qt/components/playlist/views.cpp
 modules/gui/qt/components/playlist/views.hpp
 modules/gui/qt/components/playlist/vlc_model.cpp
 modules/gui/qt/components/playlist/vlc_model.hpp
+modules/gui/qt/components/powervlc_media_preferences.cpp
 modules/gui/qt/components/preferences_widgets.cpp
 modules/gui/qt/components/preferences_widgets.hpp
 modules/gui/qt/components/simple_preferences.cpp
@@ -1176,6 +1178,8 @@ modules/services_discovery/microdns.c
 modules/services_discovery/mtp.c
 modules/services_discovery/os2drive.c
 modules/services_discovery/podcast.c
+modules/services_discovery/powervlc_devices.c
+modules/services_discovery/powervlc_medialibrary.c
 modules/services_discovery/pulse.c
 modules/services_discovery/sap.c
 modules/services_discovery/udev.c

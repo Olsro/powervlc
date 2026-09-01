@@ -1,0 +1,59 @@
+--- a/edge264/src/edge264.c
++++ b/edge264/src/edge264.c
+@@ -177,7 +177,18 @@ Edge264Decoder *edge264_alloc(int n_threads, Edge264LogCb log_cb, void *log_arg,
+ 	dec->parse_nal_unit[8] = ADD_VARIANT(parse_pic_parameter_set);
+ 	dec->parse_nal_unit[10] = parse_end_of_sequence;
+ 	dec->parse_nal_unit[14] = dec->parse_nal_unit[20] = ADD_VARIANT(parse_nal_unit_header_extension);
+-	#if defined(HAS_X86_64_V2) || defined(HAS_X86_64_V3)
++	#if defined(HAS_X86_SSE41) || defined(HAS_X86_64_V2) || defined(HAS_X86_64_V3)
+ 		__builtin_cpu_init();
+ 	#endif
++	#ifdef HAS_X86_SSE41
++		if (__builtin_cpu_supports("sse4.1") &&
++			__builtin_cpu_supports("ssse3")) {
++			dec->worker_loop = worker_loop_sse41;
++			dec->parse_nal_unit[1] = dec->parse_nal_unit[5] = parse_slice_layer_without_partitioning_sse41;
++			dec->parse_nal_unit[7] = dec->parse_nal_unit[15] = parse_seq_parameter_set_sse41;
++			dec->parse_nal_unit[8] = parse_pic_parameter_set_sse41;
++			dec->parse_nal_unit[10] = parse_end_of_sequence_sse41;
++			dec->parse_nal_unit[14] = dec->parse_nal_unit[20] = parse_nal_unit_header_extension_sse41;
++		}
++	#endif
+ 	#ifdef HAS_X86_64_V2
+--- a/edge264/src/edge264_internal.h
++++ b/edge264/src/edge264_internal.h
+@@ -1305,6 +1305,7 @@ static noinline void parse_slice_data_cabac(Edge264Context *ctx);
+ 	#define ADD_VARIANT(f) f
+ #endif
+ void *worker_loop(void *d);
++void *worker_loop_sse41(void *d);
+ void *worker_loop_v2(void *d);
+ void *worker_loop_v3(void *d);
+ void *worker_loop_log(void *d);
+@@ -1312,21 +1313,26 @@ int ignore_NAL_log(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg
+ int unsup_NAL_log(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_slice_layer_without_partitioning(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
++int parse_slice_layer_without_partitioning_sse41(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_slice_layer_without_partitioning_v2(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_slice_layer_without_partitioning_v3(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_slice_layer_without_partitioning_log(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_access_unit_delimiter_log(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_sei_log(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_nal_unit_header_extension(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
++int parse_nal_unit_header_extension_sse41(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_nal_unit_header_extension_v2(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_nal_unit_header_extension_v3(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_nal_unit_header_extension_log(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_pic_parameter_set(Edge264Decoder *dec,  Edge264UnrefCb unref_cb, void *unref_arg);
++int parse_pic_parameter_set_sse41(Edge264Decoder *dec,  Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_pic_parameter_set_v2(Edge264Decoder *dec,  Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_pic_parameter_set_v3(Edge264Decoder *dec,  Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_pic_parameter_set_log(Edge264Decoder *dec,  Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_seq_parameter_set(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
++int parse_seq_parameter_set_sse41(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_seq_parameter_set_v2(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_seq_parameter_set_v3(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_seq_parameter_set_log(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_end_of_sequence(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
++int parse_end_of_sequence_sse41(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);
+ int parse_end_of_sequence_v2(Edge264Decoder *dec, Edge264UnrefCb unref_cb, void *unref_arg);

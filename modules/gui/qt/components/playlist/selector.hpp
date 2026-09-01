@@ -52,7 +52,10 @@ enum SpecialData {
     IS_PODCAST = 1,
     IS_PL,
     IS_ML,
-    IS_NETWORK
+    IS_NETWORK,
+    IS_POWER_ML,
+    IS_POWER_DEVICE,
+    IS_AUDIO_CD
 };
 
 enum {
@@ -132,6 +135,8 @@ public:
     void getCurrentItemInfos( int *type, bool *delayedSearch, QString *name );
     int getCurrentItemCategory();
     bool addNetworkLocation( const QString& mrl );
+    void reloadPowerDevices();
+    QString currentPowerDeviceService() const;
 
 protected:
     void drawBranches ( QPainter *, const QRect &, const QModelIndex & ) const Q_DECL_OVERRIDE;
@@ -142,6 +147,8 @@ protected:
 
 private:
     void createItems();
+    void updatePowerDeviceTransfers();
+    void showPowerDeviceTransfers( const QString&, const QString& );
     PLSelItem * addItem ( SelectorItemType type, const char* str,
             bool drop = false, bool bold = false, QTreeWidgetItem* parentItem = 0 );
     PLSelItem * addPodcastItem( playlist_item_t *p_item );
@@ -155,6 +162,9 @@ private:
     intf_thread_t    *p_intf;
     QTreeWidgetItem  *podcastsParent;
     QTreeWidgetItem  *myComputerItem;
+    QTreeWidgetItem  *powerLibraryItem;
+    QTreeWidgetItem  *powerDevicesRoot;
+    bool              powerDeviceBusy;
     int               podcastsParentId;
     QTreeWidgetItem  *curItem;
 
@@ -167,10 +177,12 @@ private slots:
     void podcastRemove( PLSelItem* );
     void networkRemove( PLSelItem* );
     void showContextMenu( const QPoint& );
+    void importAudioCD( QTreeWidgetItem * );
 
 signals:
     void categoryActivated( playlist_item_t *, bool );
     void SDCategorySelected( bool );
+    void powerDeviceBusyChanged( bool );
 };
 
 #endif

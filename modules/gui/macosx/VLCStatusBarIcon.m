@@ -69,6 +69,22 @@
 #pragma mark -
 #pragma mark Implementation
 
+static BOOL VLCStatusArtworkURLIsLoadable(NSURL *url)
+{
+    if (url == nil)
+        return NO;
+    if (![url isFileURL])
+        return YES;
+
+    static NSSet *imageExtensions;
+    if (imageExtensions == nil)
+        imageExtensions = [[NSSet alloc] initWithObjects:
+            @"bmp", @"gif", @"heic", @"icns", @"jpeg", @"jpg",
+            @"png", @"tif", @"tiff", @"webp", nil];
+    return [imageExtensions containsObject:
+        [[[url path] pathExtension] lowercaseString]];
+}
+
 @implementation VLCStatusBarIcon
 
 #pragma mark -
@@ -340,8 +356,10 @@
         if (tmp_cstr) {
             NSString *tempStr = toNSStr(tmp_cstr);
             if (![tempStr hasPrefix:@"attachment://"]) {
-                coverArtImage = [[NSImage alloc]
-                                 initWithContentsOfURL:[NSURL URLWithString:tempStr]];
+                NSURL *url = [NSURL URLWithString:tempStr];
+                if (VLCStatusArtworkURLIsLoadable(url))
+                    coverArtImage = [[NSImage alloc]
+                                     initWithContentsOfURL:url];
             }
             FREENULL(tmp_cstr);
         }

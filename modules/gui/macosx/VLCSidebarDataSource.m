@@ -30,6 +30,7 @@
 #import <vlc_services_discovery.h>
 #import <vlc_input_item.h>
 #import <vlc_playlist.h>
+#import <vlc_url.h>
 
 #import "PXSourceList/PXSourceList.h"
 #import "PXSourceList/PXSourceListDataSource.h"
@@ -42,10 +43,198 @@
 #import "VLCSourceListTableCellView.h"
 #import "VLCSourceListItem.h"
 
+#define PVLC_ML_SCAN_ACTIVE "powervlc-ml-scan-active"
+#define PVLC_ML_SCAN_DONE   "powervlc-ml-scan-done"
+#define PVLC_ML_SCAN_TOTAL  "powervlc-ml-scan-total"
+
+static void VLCCollectAudioCDTracks(playlist_item_t *node,
+                                     NSMutableArray *tracks)
+{
+    if (!node) return;
+    if (node->i_children > 0) {
+        for (int i = 0; i < node->i_children; i++)
+            VLCCollectAudioCDTracks(node->pp_children[i], tracks);
+        return;
+    }
+    if (!node->p_input) return;
+    char *uri = input_item_GetURI(node->p_input);
+    BOOL isTrack = uri && !strncmp(uri, "cdda://", 7)
+                && input_item_GetDuration(node->p_input) > 0;
+    free(uri);
+    if (isTrack)
+        [tracks addObject:[NSValue valueWithPointer:
+                           input_item_Hold(node->p_input)]];
+}
+
+static NSArray *VLCSidebarFilePathsFromPasteboard(NSPasteboard *pasteboard)
+{
+    NSMutableArray *paths = [NSMutableArray array];
+    NSArray *legacy = [pasteboard propertyListForType:NSFilenamesPboardType];
+    if ([legacy isKindOfClass:[NSArray class]])
+        [paths addObjectsFromArray:legacy];
+    NSArray *urls = [pasteboard readObjectsForClasses:@[[NSURL class]]
+        options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
+    for (NSURL *url in urls)
+        if ([url isFileURL] && ![paths containsObject:[url path]])
+            [paths addObject:[url path]];
+    return paths;
+}
+
+static void VLCDeviceTransferStatusClear(services_discovery_transfer_status_t *status)
+{
+    for (size_t i = 0; i < status->i_count; ++i) {
+        free(status->p_items[i].psz_source);
+        free(status->p_items[i].psz_destination);
+    }
+    free(status->p_items);
+    memset(status, 0, sizeof(*status));
+}
+
+static NSString *VLCDeviceTransferStage(services_discovery_transfer_stage_e stage)
+{
+    switch (stage) {
+        case SD_TRANSFER_QUEUED: return _NS("Queued");
+        case SD_TRANSFER_COPYING: return _NS("Copying");
+        case SD_TRANSFER_TRANSCODING: return _NS("Transcoding");
+        case SD_TRANSFER_COMPLETED: return _NS("Completed");
+        case SD_TRANSFER_FAILED: return _NS("Failed");
+        case SD_TRANSFER_CANCELLED: return _NS("Cancelled");
+    }
+    return @"";
+}
+
+@interface VLCDeviceTransferWindowController : NSWindowController
+    <NSTableViewDataSource, NSWindowDelegate>
+@property (copy) NSString *service;
+@property (strong) NSArray *rows;
+@property (strong) NSTableView *table;
+@property (strong) NSTimer *timer;
+- (instancetype)initWithService:(NSString *)service title:(NSString *)title;
+@end
+
+@implementation VLCDeviceTransferWindowController
+
+- (instancetype)initWithService:(NSString *)service title:(NSString *)title
+{
+    NSWindow *window = [[NSWindow alloc]
+        initWithContentRect:NSMakeRect(0, 0, 780, 360)
+                  styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                            NSWindowStyleMaskResizable
+                    backing:NSBackingStoreBuffered defer:NO];
+    self = [super initWithWindow:window];
+    if (!self) return nil;
+    _service = [service copy];
+    window.title = [NSString stringWithFormat:_NS("Transfer History — %@"), title];
+    window.delegate = self;
+    NSRect bounds = window.contentView.bounds;
+    NSScrollView *scroll = [[NSScrollView alloc]
+        initWithFrame:NSMakeRect(0, 44, bounds.size.width, bounds.size.height - 44)];
+    scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    scroll.hasVerticalScroller = YES;
+    _table = [[NSTableView alloc] initWithFrame:scroll.bounds];
+    NSArray *identifiers = @[@"source", @"destination", @"stage", @"progress"];
+    NSArray *titles = @[_NS("File"), _NS("Destination"), _NS("Step"), _NS("Progress")];
+    CGFloat widths[] = { 235, 265, 135, 90 };
+    for (NSUInteger i = 0; i < identifiers.count; ++i) {
+        NSTableColumn *column = [[NSTableColumn alloc]
+            initWithIdentifier:[identifiers objectAtIndex:i]];
+        column.title = [titles objectAtIndex:i]; column.width = widths[i];
+        [_table addTableColumn:column];
+    }
+    _table.dataSource = self;
+    _table.usesAlternatingRowBackgroundColors = YES;
+    scroll.documentView = _table;
+    [window.contentView addSubview:scroll];
+    NSButton *cancelSelected = [[NSButton alloc]
+        initWithFrame:NSMakeRect(12, 8, 180, 28)];
+    cancelSelected.title = _NS("Cancel Selected Transfer");
+    cancelSelected.bezelStyle = NSBezelStyleRounded;
+    cancelSelected.target = self;
+    cancelSelected.action = @selector(cancelSelected:);
+    cancelSelected.autoresizingMask = NSViewMaxXMargin | NSViewMaxYMargin;
+    [window.contentView addSubview:cancelSelected];
+    NSButton *cancelAll = [[NSButton alloc]
+        initWithFrame:NSMakeRect(202, 8, 150, 28)];
+    cancelAll.title = _NS("Cancel All Transfers");
+    cancelAll.bezelStyle = NSBezelStyleRounded;
+    cancelAll.target = self;
+    cancelAll.action = @selector(cancelAll:);
+    cancelAll.autoresizingMask = NSViewMaxXMargin | NSViewMaxYMargin;
+    [window.contentView addSubview:cancelAll];
+    [window center];
+    [self refresh:nil];
+    _timer = [NSTimer scheduledTimerWithTimeInterval:0.25 target:self
+        selector:@selector(refresh:) userInfo:nil repeats:YES];
+    return self;
+}
+
+- (void)cancelSelected:(id)sender
+{
+    NSInteger row = self.table.selectedRow;
+    if (row < 0 || (NSUInteger)row >= self.rows.count) return;
+    services_discovery_transfer_cancel_t request = {
+        .i_id = [[[self.rows objectAtIndex:(NSUInteger)row]
+                   objectForKey:@"id"] unsignedLongLongValue]
+    };
+    playlist_ServicesDiscoveryControl(pl_Get(getIntf()), self.service.UTF8String,
+        SD_CMD_POWERVLC_DEVICE_CANCEL_TRANSFER, &request);
+    [self refresh:nil];
+}
+
+- (void)cancelAll:(id)sender
+{
+    playlist_ServicesDiscoveryControl(pl_Get(getIntf()), self.service.UTF8String,
+                                      SD_CMD_POWERVLC_DEVICE_CANCEL_ALL);
+    [self refresh:nil];
+}
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
+{ return self.rows.count; }
+
+- (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)column
+            row:(NSInteger)row
+{
+    return [[self.rows objectAtIndex:(NSUInteger)row]
+            objectForKey:column.identifier];
+}
+
+- (void)refresh:(NSTimer *)timer
+{
+    services_discovery_transfer_status_t status = { 0 };
+    if (playlist_ServicesDiscoveryControl(pl_Get(getIntf()), self.service.UTF8String,
+            SD_CMD_POWERVLC_DEVICE_TRANSFERS, &status) != VLC_SUCCESS)
+        return;
+    NSMutableArray *rows = [NSMutableArray arrayWithCapacity:status.i_count];
+    for (size_t n = status.i_count; n > 0; --n) {
+        services_discovery_transfer_item_t *item = &status.p_items[n - 1];
+        NSString *source = toNSStr(item->psz_source ?: "");
+        NSString *destination = toNSStr(item->psz_destination ?: "");
+        [rows addObject:@{
+            @"id": @(item->i_id),
+            @"source": source.lastPathComponent ?: source,
+            @"destination": destination,
+            @"stage": VLCDeviceTransferStage(item->i_stage),
+            @"progress": [NSString stringWithFormat:@"%u %%", item->i_progress]
+        }];
+    }
+    self.rows = rows;
+    [self.table reloadData];
+    VLCDeviceTransferStatusClear(&status);
+}
+
+- (void)windowWillClose:(NSNotification *)notification
+{ [self.timer invalidate]; self.timer = nil; }
+
+@end
+
 @interface VLCSidebarDataSource() <PXSourceListDataSource, PXSourceListDelegate>
 {
     NSMutableArray *o_sidebaritems;
     NSMutableArray *_networkItems;
+    NSMutableDictionary *_deviceBaseTitles;
+    NSMutableDictionary *_transferWindows;
+    NSTimer *_deviceStatusTimer;
+    VLCSourceListItem *_powerLibraryItem;
 }
 
 @end
@@ -55,10 +244,19 @@
 - (id)init
 {
     self = [super init];
-    if (self)
+    if (self) {
         _networkItems = [[NSMutableArray alloc] init];
+        _deviceBaseTitles = [[NSMutableDictionary alloc] init];
+        _transferWindows = [[NSMutableDictionary alloc] init];
+        _deviceStatusTimer = [NSTimer scheduledTimerWithTimeInterval:0.25
+            target:self selector:@selector(updateDeviceTransferState:)
+            userInfo:nil repeats:YES];
+    }
     return self;
 }
+
+- (void)dealloc
+{ [_deviceStatusTimer invalidate]; }
 
 - (void)reloadSidebar
 {
@@ -78,8 +276,12 @@
     VLCSourceListItem *libraryItem = [VLCSourceListItem itemWithTitle:_NS("LIBRARY") identifier:@"library"];
     VLCSourceListItem *playlistItem = [VLCSourceListItem itemWithTitle:_NS("Playlist") identifier:@"playlist"];
     [playlistItem setIcon: sidebarImageFromRes(@"sidebar-playlist", darkMode)];
-    VLCSourceListItem *medialibraryItem = [VLCSourceListItem itemWithTitle:_NS("Media Library") identifier:@"medialibrary"];
+    VLCSourceListItem *medialibraryItem = [VLCSourceListItem itemWithTitle:_NS("Catch-all Media Library") identifier:@"medialibrary"];
     [medialibraryItem setIcon: sidebarImageFromRes(@"sidebar-playlist", darkMode)];
+    VLCSourceListItem *powerLibraryItem = [VLCSourceListItem itemWithTitle:_NS("Media Library") identifier:@"powervlc_library"];
+    _powerLibraryItem = powerLibraryItem;
+    [powerLibraryItem setIcon: sidebarImageFromRes(@"sidebar-playlist", darkMode)];
+    [powerLibraryItem setSdtype: SD_CAT_MYCOMPUTER];
     VLCSourceListItem *mycompItem = [VLCSourceListItem itemWithTitle:_NS("MY COMPUTER") identifier:@"mycomputer"];
     VLCSourceListItem *devicesItem = [VLCSourceListItem itemWithTitle:_NS("DEVICES") identifier:@"devices"];
     VLCSourceListItem *lanItem = [VLCSourceListItem itemWithTitle:_NS("LOCAL NETWORK") identifier:@"localnetwork"];
@@ -97,9 +299,15 @@
     NSMutableArray *devicesItems = [[NSMutableArray alloc] init];
     NSMutableArray *lanItems = [[NSMutableArray alloc] init];
     NSMutableArray *mycompItems = [[NSMutableArray alloc] init];
+    [_deviceBaseTitles removeAllObjects];
     NSString *o_identifier;
     for (; ppsz_name && *ppsz_name; ppsz_name++, ppsz_longname++, p_category++) {
         o_identifier = toNSStr(*ppsz_name);
+        if (!strcmp(*ppsz_name, "powervlc_library")) {
+            free(*ppsz_name);
+            free(*ppsz_longname);
+            continue;
+        }
         switch (*p_category) {
             case SD_CAT_INTERNET:
                 [internetItems addObject: [VLCSourceListItem itemWithTitle: _NS(*ppsz_longname) identifier: o_identifier]];
@@ -107,9 +315,22 @@
                 [[internetItems lastObject] setSdtype: SD_CAT_INTERNET];
                 break;
             case SD_CAT_DEVICES:
-                [devicesItems addObject: [VLCSourceListItem itemWithTitle: _NS(*ppsz_longname) identifier: o_identifier]];
-                [[devicesItems lastObject] setIcon: sidebarImageFromRes(@"sidebar-local", darkMode)];
-                [[devicesItems lastObject] setSdtype: SD_CAT_DEVICES];
+                if (!strcmp(*ppsz_name, "disc")) {
+                    [mycompItems addObject:[VLCSourceListItem itemWithTitle:
+                        _NS(*ppsz_longname) identifier:o_identifier]];
+                    [[mycompItems lastObject] setIcon:sidebarImageFromRes(@"sidebar-local", darkMode)];
+                    [[mycompItems lastObject] setSdtype:SD_CAT_DEVICES];
+                } else {
+                    [devicesItems addObject: [VLCSourceListItem itemWithTitle: _NS(*ppsz_longname) identifier: o_identifier]];
+                    if ([o_identifier hasPrefix:@"powervlc_device{"]) {
+                        [_deviceBaseTitles setObject:_NS(*ppsz_longname)
+                                             forKey:o_identifier];
+                        [[devicesItems lastObject]
+                            setServiceRootTitle:_NS(*ppsz_longname)];
+                    }
+                    [[devicesItems lastObject] setIcon: sidebarImageFromRes(@"sidebar-local", darkMode)];
+                    [[devicesItems lastObject] setSdtype: SD_CAT_DEVICES];
+                }
                 break;
             case SD_CAT_LAN:
                 [lanItems addObject: [VLCSourceListItem itemWithTitle: _NS(*ppsz_longname) identifier: o_identifier]];
@@ -145,7 +366,8 @@
     free(ppsz_longnames);
     free(p_categories);
 
-    [libraryItem setChildren: [NSArray arrayWithObjects:playlistItem, medialibraryItem, nil]];
+    [libraryItem setChildren: [NSArray arrayWithObjects:playlistItem,
+                               medialibraryItem, powerLibraryItem, nil]];
     [o_sidebaritems addObject: libraryItem];
     if ([mycompItem hasChildren])
         [o_sidebaritems addObject: mycompItem];
@@ -158,7 +380,10 @@
 
     [_sidebarView reloadData];
     [_sidebarView setDropItem:playlistItem dropChildIndex:NSOutlineViewDropOnItemIndex];
-    [_sidebarView registerForDraggedTypes:[NSArray arrayWithObjects:NSFilenamesPboardType, @"VLCPlaylistItemPboardType", nil]];
+    [_sidebarView setDropItem:powerLibraryItem dropChildIndex:NSOutlineViewDropOnItemIndex];
+    [_sidebarView registerForDraggedTypes:@[NSFilenamesPboardType,
+                                             NSURLPboardType,
+                                             @"VLCPlaylistItemPboardType"]];
 
     [_sidebarView setDataSource:self];
     [_sidebarView setDelegate:self];
@@ -168,6 +393,103 @@
     if (isAReload) {
         [_sidebarView expandItem:nil expandChildren:YES];
     }
+}
+
+- (void)updateDeviceTransferState:(NSTimer *)timer
+{
+    playlist_t *playlist = pl_Get(getIntf());
+    BOOL scanActive = var_GetBool(getIntf()->obj.libvlc, PVLC_ML_SCAN_ACTIVE);
+    uint64_t scanDone = var_GetInteger(getIntf()->obj.libvlc, PVLC_ML_SCAN_DONE);
+    uint64_t scanTotal = var_GetInteger(getIntf()->obj.libvlc, PVLC_ML_SCAN_TOTAL);
+    NSString *libraryTitle = _NS("Media Library");
+    if (scanActive) {
+        if (scanTotal > 0) {
+            uint64_t remaining = scanTotal > scanDone ? scanTotal - scanDone : 0;
+            unsigned percent = (unsigned)MIN(100, (scanDone * 100) / scanTotal);
+            libraryTitle = [NSString stringWithFormat:
+                remaining == 1
+                    ? _NS("Media Library — scanning %u%% · %llu file remaining")
+                    : _NS("Media Library — scanning %u%% · %llu files remaining"),
+                percent, (unsigned long long)remaining];
+        } else {
+            libraryTitle = [NSString stringWithFormat:
+                scanDone == 1
+                    ? _NS("Media Library — scanning… · %llu file indexed")
+                    : _NS("Media Library — scanning… · %llu files indexed"),
+                (unsigned long long)scanDone];
+        }
+    }
+    if (_powerLibraryItem && ![_powerLibraryItem.title isEqualToString:libraryTitle]) {
+        _powerLibraryItem.title = libraryTitle;
+        [_sidebarView reloadItem:_powerLibraryItem];
+        NSInteger selected = _sidebarView.selectedRow;
+        if (selected >= 0 && [_sidebarView itemAtRow:selected] == _powerLibraryItem)
+            [[[[VLCMain sharedInstance] mainWindow] categoryLabel]
+                setStringValue:libraryTitle];
+    }
+    BOOL selectedDeviceDeleting = NO;
+    for (VLCSourceListItem *group in o_sidebaritems) {
+        for (VLCSourceListItem *item in group.children) {
+            NSString *service = item.identifier;
+            NSString *base = [_deviceBaseTitles objectForKey:service];
+            if (!base) continue;
+            BOOL synchronizing = NO;
+            BOOL pendingChanges = NO;
+            BOOL commitFailed = NO;
+            unsigned activity = SD_DEVICE_IDLE;
+            uint64_t totalBytes = 0, freeBytes = 0;
+            if (playlist_IsServicesDiscoveryLoaded(playlist, service.UTF8String)) {
+                services_discovery_transfer_status_t status = { 0 };
+                if (playlist_ServicesDiscoveryControl(playlist, service.UTF8String,
+                        SD_CMD_POWERVLC_DEVICE_TRANSFERS, &status) == VLC_SUCCESS) {
+                    synchronizing = status.b_synchronizing;
+                    pendingChanges = status.b_pending_changes;
+                    commitFailed = status.b_commit_failed;
+                    activity = status.i_activity;
+                    totalBytes = status.i_total_bytes;
+                    freeBytes = status.i_free_bytes;
+                }
+                VLCDeviceTransferStatusClear(&status);
+            }
+            NSString *operation = nil;
+            if (activity == SD_DEVICE_LOADING_ITUNESDB)
+                operation = _NS("Loading iTunesDB…");
+            else if (activity == SD_DEVICE_LOADING_CONTENTS)
+                operation = _NS("Loading contents…");
+            else if (activity == SD_DEVICE_UPDATING_ITUNESDB)
+                operation = _NS("Updating iTunesDB…");
+            else if (activity == SD_DEVICE_DELETING)
+                operation = _NS("Deleting…");
+            else if (synchronizing)
+                operation = _NS("Synchronizing");
+            else if (commitFailed)
+                operation = _NS("Finalization failed — changes still pending");
+            else if (pendingChanges)
+                operation = _NS("Changes pending finalization");
+            NSString *title = operation
+                ? [base stringByAppendingFormat:@" (%@)", operation] : base;
+            if (totalBytes > 0) {
+                unsigned percent = (unsigned)((freeBytes * 100) / totalBytes);
+                title = [title stringByAppendingFormat:@" — %.1f GB %@ %.1f GB (%u%%)",
+                    (double)freeBytes / 1000000000., _NS("free of"),
+                    (double)totalBytes / 1000000000., percent];
+            }
+            if (![item.title isEqualToString:title]) {
+                item.title = title;
+                [_sidebarView reloadItem:item];
+                NSInteger selected = _sidebarView.selectedRow;
+                if (selected >= 0 && [_sidebarView itemAtRow:selected] == item)
+                    [[[[VLCMain sharedInstance] mainWindow] categoryLabel]
+                        setStringValue:title];
+            }
+            NSInteger selected = _sidebarView.selectedRow;
+            if (selected >= 0 && [_sidebarView itemAtRow:selected] == item
+             && activity == SD_DEVICE_DELETING)
+                selectedDeviceDeleting = YES;
+        }
+    }
+    [[[[VLCMain sharedInstance] mainWindow] outlineView]
+        setEnabled:!selectedDeviceDeleting];
 }
 
 - (BOOL)addNetworkLocation:(NSString *)mrl
@@ -229,6 +551,15 @@
                   byExtendingSelection:NO];
     [[_sidebarView window] makeKeyAndOrderFront:nil];
     return YES;
+}
+
+- (NSString *)selectedPowerDeviceService
+{
+    NSInteger row = _sidebarView.selectedRow;
+    if (row < 0) return nil;
+    VLCSourceListItem *item = [_sidebarView itemAtRow:row];
+    NSString *service = item.identifier;
+    return [service hasPrefix:@"powervlc_device{"] ? service : nil;
 }
 
 - (IBAction)ejectNetworkLocation:(id)sender
@@ -309,6 +640,55 @@
                 NSMenu *m = [[NSMenu alloc] init];
                 playlist_t * p_playlist = pl_Get(getIntf());
                 BOOL sd_loaded = playlist_IsServicesDiscoveryLoaded(p_playlist, [[item identifier] UTF8String]);
+                if ([[item identifier] isEqualToString:@"powervlc_library"] && sd_loaded) {
+                    NSMenuItem *rescan = [m addItemWithTitle:_NS("Rescan Media Library")
+                                                     action:@selector(rescanPowerVLCLibrary:)
+                                              keyEquivalent:@""];
+                    [rescan setTarget:self];
+                    return m;
+                }
+                if ([[item identifier] hasPrefix:@"powervlc_device{"] && sd_loaded) {
+                    NSMenuItem *commit = [m addItemWithTitle:_NS("Finalize Changes")
+                                                      action:@selector(commitPowerVLCDeviceChanges:)
+                                               keyEquivalent:@""];
+                    [commit setTarget:self];
+                    [commit setRepresentedObject:[item identifier]];
+                    services_discovery_transfer_status_t status = { 0 };
+                    BOOL statusOK = playlist_ServicesDiscoveryControl(
+                        p_playlist, [[item identifier] UTF8String],
+                        SD_CMD_POWERVLC_DEVICE_TRANSFERS,
+                        &status) == VLC_SUCCESS;
+                    [commit setEnabled:statusOK && status.b_pending_changes
+                                             && !status.b_synchronizing];
+                    VLCDeviceTransferStatusClear(&status);
+                    [m addItem:[NSMenuItem separatorItem]];
+                    NSMenuItem *history = [m addItemWithTitle:_NS("Transfer History…")
+                                                      action:@selector(showPowerVLCDeviceTransfers:)
+                                               keyEquivalent:@""];
+                    [history setTarget:self];
+                    [history setRepresentedObject:item];
+                    [m addItem:[NSMenuItem separatorItem]];
+                    NSMenuItem *backup = [m addItemWithTitle:_NS("Back Up…")
+                                                      action:@selector(backupPowerVLCDevices:)
+                                               keyEquivalent:@""];
+                    [backup setTarget:self];
+                    [backup setRepresentedObject:[item identifier]];
+                    [m addItem:[NSMenuItem separatorItem]];
+                    NSMenuItem *refresh = [m addItemWithTitle:_NS("Refresh")
+                                                       action:@selector(refreshPowerVLCDevices:)
+                                                keyEquivalent:@""];
+                    [refresh setTarget:self];
+                    [refresh setRepresentedObject:[item identifier]];
+                    return m;
+                }
+                if ([[item identifier] isEqualToString:@"disc"] && sd_loaded) {
+                    NSMenuItem *import = [m addItemWithTitle:
+                        _NS("Import Audio CD into Media Library")
+                        action:@selector(importPowerVLCAudioCD:)
+                        keyEquivalent:@""];
+                    [import setTarget:self];
+                    return m;
+                }
                 if (!sd_loaded)
                     [m addItemWithTitle:_NS("Enable") action:@selector(sdmenuhandler:) keyEquivalent:@""];
                 else
@@ -320,6 +700,104 @@
     }
 
     return nil;
+}
+
+- (IBAction)showPowerVLCDeviceTransfers:(id)sender
+{
+    VLCSourceListItem *item = [sender representedObject];
+    NSString *service = item.identifier;
+    VLCDeviceTransferWindowController *controller =
+        [_transferWindows objectForKey:service];
+    if (!controller || !controller.window.visible) {
+        NSString *title = [_deviceBaseTitles objectForKey:service] ?: item.title;
+        controller = [[VLCDeviceTransferWindowController alloc]
+                       initWithService:service title:title];
+        [_transferWindows setObject:controller forKey:service];
+    }
+    [controller showWindow:nil];
+    [controller.window makeKeyAndOrderFront:nil];
+}
+
+- (IBAction)rescanPowerVLCLibrary:(id)sender
+{
+    playlist_ServicesDiscoveryControl(pl_Get(getIntf()), "powervlc_library",
+                                       SD_CMD_POWERVLC_RESCAN);
+}
+
+- (IBAction)refreshPowerVLCDevices:(id)sender
+{
+    playlist_ServicesDiscoveryControl(pl_Get(getIntf()),
+                                       [[sender representedObject] UTF8String],
+                                       SD_CMD_POWERVLC_RESCAN);
+}
+
+- (IBAction)commitPowerVLCDeviceChanges:(id)sender
+{
+    int result = playlist_ServicesDiscoveryControl(pl_Get(getIntf()),
+        [[sender representedObject] UTF8String], SD_CMD_POWERVLC_DEVICE_COMMIT);
+    if (result != VLC_SUCCESS) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.alertStyle = NSAlertStyleWarning;
+        alert.messageText = _NS("Unable to Finalize Changes");
+        alert.informativeText = _NS("The portable player is unavailable. Your changes remain pending and can be validated after reconnecting it.");
+        [alert runModal];
+    }
+}
+
+- (IBAction)backupPowerVLCDevices:(id)sender
+{
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.canChooseDirectories = YES;
+    panel.canChooseFiles = NO;
+    panel.canCreateDirectories = YES;
+    panel.allowsMultipleSelection = NO;
+    panel.message = _NS("Choose Backup Folder");
+    if ([panel runModal] != NSOKButton)
+        return;
+    playlist_ServicesDiscoveryControl(pl_Get(getIntf()),
+        [[sender representedObject] UTF8String],
+        SD_CMD_POWERVLC_DEVICE_BACKUP, [[[panel URL] path] fileSystemRepresentation]);
+}
+
+- (IBAction)importPowerVLCAudioCD:(id)sender
+{
+    NSMutableArray *tracks = [NSMutableArray array];
+    playlist_t *p_playlist = pl_Get(getIntf());
+    PL_LOCK;
+    VLCCollectAudioCDTracks(&p_playlist->root, tracks);
+    PL_UNLOCK;
+    if (![tracks count]) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = _NS("Import Audio CD");
+        alert.informativeText = _NS("Open the Audio CD once so its tracks are displayed, then run the import again.");
+        [alert runModal];
+        return;
+    }
+    if (!playlist_IsServicesDiscoveryLoaded(p_playlist, "powervlc_library")
+     && playlist_ServicesDiscoveryAdd(p_playlist, "powervlc_library") != VLC_SUCCESS) {
+        for (NSValue *value in tracks)
+            input_item_Release([value pointerValue]);
+        return;
+    }
+    NSUInteger imported = 0;
+    for (NSValue *value in tracks) {
+        input_item_t *track = [value pointerValue];
+        char *uri = input_item_GetURI(track);
+        char *title = input_item_GetTitleFbName(track);
+        char *artist = input_item_GetMeta(track, vlc_meta_Artist);
+        char *album = input_item_GetMeta(track, vlc_meta_Album);
+        services_discovery_import_t request = { uri, title, artist, album, track };
+        if (playlist_ServicesDiscoveryControl(p_playlist, "powervlc_library",
+              SD_CMD_POWERVLC_IMPORT, &request) == VLC_SUCCESS) imported++;
+        free(uri); free(title); free(artist); free(album);
+        input_item_Release(track);
+    }
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = _NS("Import Audio CD");
+    alert.informativeText = [NSString stringWithFormat:
+        _NS("%lu tracks are being imported as lossless FLAC files in the managed library."),
+        (unsigned long)imported];
+    [alert runModal];
 }
 
 #pragma mark -
@@ -388,9 +866,13 @@
 
 - (NSDragOperation)sourceList:(PXSourceList *)aSourceList validateDrop:(id <NSDraggingInfo>)info proposedItem:(id)item proposedChildIndex:(NSInteger)index
 {
-    if ([[item identifier] isEqualToString:@"playlist"] || [[item identifier] isEqualToString:@"medialibrary"]) {
+    if ([[item identifier] isEqualToString:@"playlist"]
+     || [[item identifier] isEqualToString:@"medialibrary"]
+     || [[item identifier] isEqualToString:@"powervlc_library"]
+     || [[item identifier] hasPrefix:@"powervlc_device{"]) {
         NSPasteboard *o_pasteboard = [info draggingPasteboard];
-        if ([[o_pasteboard types] containsObject: VLCPLItemPasteboadType] || [[o_pasteboard types] containsObject: NSFilenamesPboardType])
+        if ([[o_pasteboard types] containsObject: VLCPLItemPasteboadType]
+         || [VLCSidebarFilePathsFromPasteboard(o_pasteboard) count] > 0)
             return NSDragOperationGeneric;
     }
     return NSDragOperationNone;
@@ -402,6 +884,93 @@
 
     playlist_t * p_playlist = pl_Get(getIntf());
     playlist_item_t *p_node;
+
+    if ([[item identifier] hasPrefix:@"powervlc_device{"]) {
+        NSString *service = [item identifier];
+        if (!playlist_IsServicesDiscoveryLoaded(p_playlist, [service UTF8String])
+         && playlist_ServicesDiscoveryAdd(p_playlist, [service UTF8String])
+                                                        != VLC_SUCCESS)
+            return NO;
+        NSMutableArray *paths = [NSMutableArray array];
+        NSMutableDictionary *inputsByPath = [NSMutableDictionary dictionary];
+        if ([[o_pasteboard types] containsObject:VLCPLItemPasteboadType]) {
+            NSArray *dragged = [[[VLCMain sharedInstance] playlist] draggedItems];
+            PL_LOCK;
+            for (id draggedItem in dragged) {
+                playlist_item_t *playlistItem = playlist_ItemGetById(
+                    p_playlist, [draggedItem plItemId]);
+                char *uri = playlistItem && playlistItem->p_input
+                          ? input_item_GetURI(playlistItem->p_input) : NULL;
+                char *path = uri ? vlc_uri2path(uri) : NULL;
+                free(uri);
+                if (path) {
+                    NSString *sourcePath = toNSStr(path);
+                    [paths addObject:sourcePath];
+                    if (playlistItem->p_input) {
+                        input_item_Hold(playlistItem->p_input);
+                        NSValue *old = [inputsByPath objectForKey:sourcePath];
+                        if (old) input_item_Release([old pointerValue]);
+                        [inputsByPath setObject:[NSValue valueWithPointer:
+                                                playlistItem->p_input]
+                                         forKey:sourcePath];
+                    }
+                    free(path);
+                }
+            }
+            PL_UNLOCK;
+        }
+        for (NSString *path in VLCSidebarFilePathsFromPasteboard(o_pasteboard))
+            if (![paths containsObject:path]) [paths addObject:path];
+        BOOL queued = NO;
+        for (NSString *path in paths) {
+            input_item_t *input = [[inputsByPath objectForKey:path] pointerValue];
+            services_discovery_import_t request = {
+                [path fileSystemRepresentation], NULL, NULL, NULL, input
+            };
+            if (playlist_ServicesDiscoveryControl(p_playlist,
+                    [service UTF8String], SD_CMD_POWERVLC_DEVICE_ADD,
+                    &request) == VLC_SUCCESS)
+                queued = YES;
+        }
+        for (NSValue *value in [inputsByPath allValues])
+            input_item_Release([value pointerValue]);
+        return queued;
+    }
+
+    if ([[item identifier] isEqualToString:@"powervlc_library"]) {
+        if (!playlist_IsServicesDiscoveryLoaded(p_playlist, "powervlc_library")
+         && playlist_ServicesDiscoveryAdd(p_playlist, "powervlc_library") != VLC_SUCCESS)
+            return NO;
+        NSMutableArray *paths = [NSMutableArray array];
+        if ([[o_pasteboard types] containsObject:@"VLCPlaylistItemPboardType"]) {
+            NSArray *dragged = [[[VLCMain sharedInstance] playlist] draggedItems];
+            PL_LOCK;
+            for (id draggedItem in dragged) {
+                playlist_item_t *playlistItem = playlist_ItemGetById(
+                    p_playlist, [draggedItem plItemId]);
+                char *path = playlistItem && playlistItem->p_input
+                           ? vlc_uri2path(playlistItem->p_input->psz_uri) : NULL;
+                if (path) {
+                    [paths addObject:toNSStr(path)];
+                    free(path);
+                }
+            }
+            PL_UNLOCK;
+        }
+        for (NSString *path in VLCSidebarFilePathsFromPasteboard(o_pasteboard))
+            if (![paths containsObject:path]) [paths addObject:path];
+        BOOL imported = NO;
+        for (NSString *path in paths) {
+            services_discovery_import_t request = {
+                [path fileSystemRepresentation], NULL, NULL, NULL, NULL
+            };
+            if (playlist_ServicesDiscoveryControl(p_playlist,
+                    "powervlc_library", SD_CMD_POWERVLC_IMPORT,
+                    &request) == VLC_SUCCESS)
+                imported = YES;
+        }
+        return imported;
+    }
 
     if ([[item identifier] isEqualToString:@"playlist"])
         p_node = p_playlist->p_playing;

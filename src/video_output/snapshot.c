@@ -154,7 +154,7 @@ int vout_snapshot_SaveImage(char **name, int *sequential,
     if (prefix)
         filename_sanitize(prefix);
     else {
-        prefix = strdup("vlcsnap-");
+        prefix = strdup("powervlsnap-");
         if (prefix == NULL)
             goto error;
     }

@@ -121,6 +121,8 @@ static const struct {
 - (void)dealloc
 {
     [refreshTimer invalidate];
+    if (inspectedItem)
+        input_item_Release(inspectedItem);
     [panes[0] release];
     [panes[1] release];
     [panes[2] release];
@@ -532,6 +534,11 @@ objectValueForTableColumn:(NSTableColumn *)tableColumn byItem:(id)item
     [window orderOut:sender];
     [refreshTimer invalidate];
     refreshTimer = nil;
+    if (inspectedItem) {
+        input_item_Release(inspectedItem);
+        inspectedItem = NULL;
+    }
+    lastItem = NULL;
 }
 
 /* debug helper, like -[VLCLegacyPrefs debugSelectPane:] */
@@ -543,7 +550,7 @@ objectValueForTableColumn:(NSTableColumn *)tableColumn byItem:(id)item
         [self selectPane:tabButtons[i]];
 }
 
-- (void)showWindow
+- (void)showPreparedWindow
 {
     if (!window)
         [self buildWindow];
@@ -568,10 +575,35 @@ objectValueForTableColumn:(NSTableColumn *)tableColumn byItem:(id)item
     [window makeKeyAndOrderFront:nil];
 }
 
+- (void)showWindow
+{
+    if (inspectedItem) {
+        input_item_Release(inspectedItem);
+        inspectedItem = NULL;
+    }
+    lastItem = NULL;
+    [self showPreparedWindow];
+}
+
+- (void)showWindowForInputItem:(input_item_t *)item
+{
+    input_item_t *held = item ? input_item_Hold(item) : NULL;
+    if (inspectedItem)
+        input_item_Release(inspectedItem);
+    inspectedItem = held;
+    lastItem = NULL;
+    [self showPreparedWindow];
+}
+
 - (void)windowWillClose:(NSNotification *)notification
 {
     [refreshTimer invalidate];
     refreshTimer = nil;
+    if (inspectedItem) {
+        input_item_Release(inspectedItem);
+        inspectedItem = NULL;
+    }
+    lastItem = NULL;
 }
 
 /*****************************************************************************
@@ -590,6 +622,18 @@ objectValueForTableColumn:(NSTableColumn *)tableColumn byItem:(id)item
     [streamNodes release];
     streamNodes = nil;
     [streamsOutline reloadData];
+    [readBytesField setStringValue:@"-"];
+    [inputBitrateField setStringValue:@"-"];
+    [demuxBytesField setStringValue:@"-"];
+    [demuxBitrateField setStringValue:@"-"];
+    [videoDecodedField setStringValue:@"-"];
+    [displayedField setStringValue:@"-"];
+    [lostFramesField setStringValue:@"-"];
+    [videoCacheField setStringValue:@"-"];
+    [videoCacheMemField setStringValue:@"-"];
+    [audioDecodedField setStringValue:@"-"];
+    [playedABuffersField setStringValue:@"-"];
+    [lostABuffersField setStringValue:@"-"];
 }
 
 - (void)fillMetaFromItem:(input_item_t *)p_item
@@ -760,15 +804,27 @@ static void setFieldIfChanged(NSTextField *field, NSString *value)
 - (void)refresh:(NSTimer *)timer
 {
     input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
-    if (!p_input) {
+    input_item_t *p_item = inspectedItem;
+
+    /* A contextual Media Information window follows the selected browser
+     * item, even if it has never been played. Keep live statistics only when
+     * that exact item also happens to be the current input. */
+    if (p_item) {
+        if (p_input && input_GetItem(p_input) != p_item) {
+            vlc_object_release(p_input);
+            p_input = NULL;
+        }
+    } else if (p_input) {
+        p_item = input_GetItem(p_input);
+    }
+
+    if (!p_item) {
         if (lastItem) {
             lastItem = NULL;
             [self clearFields];
         }
         return;
     }
-
-    input_item_t *p_item = input_GetItem(p_input);
 
     /* only (re)fill the editable fields when the item changes, so a
      * refresh never stomps on an edit in progress */
@@ -781,11 +837,27 @@ static void setFieldIfChanged(NSTextField *field, NSString *value)
      * stats tick pauses with the input, which is exactly when the
      * look-ahead cache visibly pre-fills and the user watches this
      * tab -- without this the whole tab freezes on pause. */
-    input_Control(p_input, INPUT_UPDATE_STATS);
-    [self refreshStatsFromItem:p_item];
-    [self refreshVideoCacheFromInput:p_input];
+    if (p_input) {
+        input_Control(p_input, INPUT_UPDATE_STATS);
+        [self refreshStatsFromItem:p_item];
+        [self refreshVideoCacheFromInput:p_input];
+    } else {
+        [readBytesField setStringValue:@"-"];
+        [inputBitrateField setStringValue:@"-"];
+        [demuxBytesField setStringValue:@"-"];
+        [demuxBitrateField setStringValue:@"-"];
+        [videoDecodedField setStringValue:@"-"];
+        [displayedField setStringValue:@"-"];
+        [lostFramesField setStringValue:@"-"];
+        [videoCacheField setStringValue:@"-"];
+        [videoCacheMemField setStringValue:@"-"];
+        [audioDecodedField setStringValue:@"-"];
+        [playedABuffersField setStringValue:@"-"];
+        [lostABuffersField setStringValue:@"-"];
+    }
 
-    vlc_object_release(p_input);
+    if (p_input)
+        vlc_object_release(p_input);
 }
 
 /*****************************************************************************
@@ -794,10 +866,16 @@ static void setFieldIfChanged(NSTextField *field, NSString *value)
 
 - (void)saveMetaData:(id)sender
 {
-    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
-    if (!p_input)
-        return;
-    input_item_t *p_item = input_GetItem(p_input);
+    input_thread_t *p_input = NULL;
+    input_item_t *p_item = inspectedItem;
+    if (p_item)
+        input_item_Hold(p_item);
+    else {
+        p_input = playlist_CurrentInput(pl_Get(p_intf));
+        if (!p_input)
+            return;
+        p_item = input_item_Hold(input_GetItem(p_input));
+    }
 
     int i;
     for (i = 0; i < MEDIA_INFO_META_COUNT; i++)
@@ -811,7 +889,9 @@ static void setFieldIfChanged(NSTextField *field, NSString *value)
     /* refresh from what was actually stored */
     lastItem = NULL;
     [self refresh:nil];
-    vlc_object_release(p_input);
+    input_item_Release(p_item);
+    if (p_input)
+        vlc_object_release(p_input);
 }
 
 @end

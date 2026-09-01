@@ -996,6 +996,11 @@ local function html_parse_cards(html, kind)
       if ae and ae < nextFirst then
         item.author = html_decode(author)
       end
+      local _, ie, author_id = string.find(
+        html, 'href="/channel/([%w_%-]+)"', last)
+      if ie and ie < nextFirst then
+        item.authorId = author_id
+      end
       -- "9 videos" sits in the same overlay a video uses for its length,
       -- and that overlay comes BEFORE the title link: searching forward
       -- from the title picks up the next card's count. Take the last one
@@ -1029,6 +1034,11 @@ local function html_parse_cards(html, kind)
       local _, ae, author = string.find(html, CHANNEL_NAME, last)
       if ae and ae < nextFirst then
         item.author = html_decode(author)
+      end
+      local _, ie, author_id = string.find(
+        html, 'href="/channel/([%w_%-]+)"', last)
+      if ie and ie < nextFirst then
+        item.authorId = author_id
       end
       local _, de, date = string.find(html,
         'video%-data"[^>]*>(.-)</p>', last)
@@ -2244,7 +2254,9 @@ function show_search()
   ui.results:set_text(lang.col_title .. "\t" .. lang.col_channel
                       .. "\t" .. lang.col_date)
   dlg:add_button(lang.btn_open, click_open_result, 1, 3, 1, 1)
-  dlg:add_button(lang.btn_change_instance, show_connect, 2, 3, 1, 1)
+  dlg:add_button(lang.btn_open_channel, click_open_selected_channel,
+                 2, 3, 1, 1)
+  dlg:add_button(lang.btn_change_instance, show_connect, 3, 3, 1, 1)
   ui.message = dlg:add_label("", 1, 4, 3, 1)
   -- Whatever the list held last -- a search, or the videos of a channel
   -- someone opened -- is put back: coming out of a video to an empty
@@ -2315,6 +2327,7 @@ function fill_results(list, kind)
       app.results[i] = { kind = "video", id = item.videoId,
                          title = item.title or "?",
                          author = item.author or "?",
+                         authorId = item.authorId,
                          published = item.published }
       line = cell(item.title) .. "\t" .. cell(item.author)
           .. "\t" .. date_cell(item, ordered and (#items - i) or nil)
@@ -2392,18 +2405,44 @@ function click_search()
   fill_results(obj, kind)
 end
 
-function click_open_result()
+local function selected_result()
   local selection = ui.results:get_selection()
-  local result = nil
   for id in pairs(selection) do
-    result = app.results[id]
-    break
+    return app.results[id]
   end
+  return nil
+end
+
+local function channel_for_result(result)
+  if type(result) ~= "table" then return nil end
+  local channel_id = result.kind == "channel" and result.id
+                                                  or result.authorId
+  if not channel_id or channel_id == "" then return nil end
+  return { kind = "channel", id = channel_id,
+           title = result.author or result.title or "?" }
+end
+
+function click_open_result()
+  local result = selected_result()
   if not result then
     set_message(lang.msg_select_result)
     return
   end
   open_result(result)
+end
+
+function click_open_selected_channel()
+  local result = selected_result()
+  if not result then
+    set_message(lang.msg_select_result)
+    return
+  end
+  local channel = channel_for_result(result)
+  if not channel then
+    set_message(lang.msg_channel_unavailable)
+    return
+  end
+  open_result(channel)
 end
 
 -- Taken apart from the click so that it can be replayed after a check:
@@ -4051,4 +4090,11 @@ function click_download_audio()
     return
   end
   begin_download({ sound }, "audio")
+end
+
+if POWERVLC_INVIDIOUS_TEST then
+  invidious_test = {
+    channel_for_result = channel_for_result,
+    html_parse_cards = html_parse_cards,
+  }
 end

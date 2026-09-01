@@ -89,12 +89,13 @@ struct extension_sys_t
     // The two following booleans are protected by command_lock
     vlc_dialog_id *p_progress_id;
     vlc_timer_t timer; ///< This timer makes sure Lua never gets stuck >5s
+    bool b_watchdog_suspended; ///< A native modal dialog owns the Lua thread
 
     /* vlc.timer(): when the script asked to be called back, and what to
      * call. Both protected by command_lock, read by the extension thread
      * only. Extensions otherwise hear nothing until the user acts. */
     mtime_t i_timer_deadline; ///< 0 when no callback is pending
-    char *psz_timer_func;
+    char psz_timer_func[128];
 
     /* Interruption context of the extension thread: lets shutdown and
      * KillExtension abort blocking network I/O (vlc.stream on a dead
@@ -137,6 +138,8 @@ static inline int PushCommandUnique( extension_t *ext, int cmd, ... )
 /* Lua specific functions */
 void vlclua_extension_set( lua_State *L, extension_t * );
 extension_t *vlclua_extension_get( lua_State *L );
+void vlclua_extension_watchdog_suspend( lua_State *L );
+void vlclua_extension_watchdog_resume( lua_State *L );
 int lua_ExtensionActivate( extensions_manager_t *, extension_t * );
 int lua_ExtensionDeactivate( extensions_manager_t *, extension_t * );
 int lua_ExecuteFunctionVa( extensions_manager_t *p_mgr, extension_t *p_ext,

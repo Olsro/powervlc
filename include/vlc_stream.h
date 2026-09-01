@@ -442,6 +442,16 @@ VLC_API stream_t *vlc_stream_fifo_New(vlc_object_t *parent);
 VLC_API int vlc_stream_fifo_Queue(stream_t *s, block_t *block);
 
 /**
+ * Returns the number of bytes currently waiting in a FIFO stream.
+ *
+ * This is intended for bounded producer-side congestion control. The value
+ * is an instantaneous snapshot and may change as soon as the call returns.
+ *
+ * \param s FIFO stream created by vlc_stream_fifo_New()
+ */
+VLC_API size_t vlc_stream_fifo_GetBytes(stream_t *s);
+
+/**
  * Writes data to a FIFO stream.
  *
  * This is a convenience helper for vlc_stream_fifo_Queue().

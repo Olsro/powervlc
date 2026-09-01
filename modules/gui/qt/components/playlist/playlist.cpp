@@ -38,9 +38,29 @@
 #include "main_interface.hpp"                     /* DropEvent TODO remove this*/
 
 #include <QMenu>
+#include <QFile>
+#include <QMimeData>
 #include <QSignalMapper>
 #include <QSlider>
 #include <QStackedWidget>
+#include <QUrl>
+
+#include <vlc_playlist.h>
+#include <vlc_services_discovery.h>
+
+#define PVLC_ML_SCAN_ACTIVE   "powervlc-ml-scan-active"
+#define PVLC_ML_SCAN_DONE     "powervlc-ml-scan-done"
+#define PVLC_ML_SCAN_TOTAL    "powervlc-ml-scan-total"
+#define PVLC_ML_SCAN_REVISION "powervlc-ml-scan-revision"
+
+static int PowerVLCMediaLibraryScanChanged( vlc_object_t *, const char *,
+                                             vlc_value_t, vlc_value_t,
+                                             void *opaque )
+{
+    QMetaObject::invokeMethod( static_cast<PlaylistWidget *>( opaque ),
+                               "updateScanProgress", Qt::QueuedConnection );
+    return VLC_SUCCESS;
+}
 
 /**********************************************************************
  * Playlist Widget. The embedded playlist
@@ -133,8 +153,14 @@ PlaylistWidget::PlaylistWidget( intf_thread_t *_p_i, QWidget *_par )
     /* Connect the activation of the selector to a redefining of the PL */
     connect( selector, &PLSelector::categoryActivated,
              mainView, QOverload<playlist_item_t *, bool>::of(&StandardPLPanel::setRootItem), Qt::DirectConnection );
+    connect( selector, &PLSelector::categoryActivated, this,
+             [this]( playlist_item_t *, bool listOnly ) {
+                 artContainer->setVisible( !listOnly );
+             } );
     mainView->setRootItem( p_root, false );
     connect( selector, &PLSelector::SDCategorySelected, mainView, &StandardPLPanel::setWaiting );
+    connect( selector, &PLSelector::powerDeviceBusyChanged,
+             mainView, &QWidget::setDisabled );
 
     /* */
     split = new QSplitter( this );
@@ -165,6 +191,13 @@ PlaylistWidget::PlaylistWidget( intf_thread_t *_p_i, QWidget *_par )
     setWindowTitle( qtr( "Playlist" ) );
     setWindowRole( "vlc-playlist" );
     setWindowIcon( QApplication::windowIcon() );
+
+    var_Create( p_intf->obj.libvlc, PVLC_ML_SCAN_ACTIVE, VLC_VAR_BOOL );
+    var_Create( p_intf->obj.libvlc, PVLC_ML_SCAN_DONE, VLC_VAR_INTEGER );
+    var_Create( p_intf->obj.libvlc, PVLC_ML_SCAN_TOTAL, VLC_VAR_INTEGER );
+    var_Create( p_intf->obj.libvlc, PVLC_ML_SCAN_REVISION, VLC_VAR_INTEGER );
+    var_AddCallback( p_intf->obj.libvlc, PVLC_ML_SCAN_REVISION,
+                     PowerVLCMediaLibraryScanChanged, this );
 }
 
 bool PlaylistWidget::addNetworkLocation( const QString& mrl )
@@ -172,8 +205,15 @@ bool PlaylistWidget::addNetworkLocation( const QString& mrl )
     return selector->addNetworkLocation( mrl );
 }
 
+void PlaylistWidget::reloadPowerDevices()
+{
+    selector->reloadPowerDevices();
+}
+
 PlaylistWidget::~PlaylistWidget()
 {
+    var_DelCallback( p_intf->obj.libvlc, PVLC_ML_SCAN_REVISION,
+                     PowerVLCMediaLibraryScanChanged, this );
     getSettings()->beginGroup("Playlist");
     getSettings()->setValue( "splitterSizes", split->saveState() );
     getSettings()->setValue( "leftSplitterGeometry", leftSplitter->saveState() );
@@ -183,12 +223,33 @@ PlaylistWidget::~PlaylistWidget()
 
 void PlaylistWidget::dropEvent( QDropEvent *event )
 {
-    if( !( selector->getCurrentItemCategory() == IS_PL ||
-           selector->getCurrentItemCategory() == IS_ML ) ) return;
+    const int category = selector->getCurrentItemCategory();
+    if( category == IS_POWER_ML )
+    {
+        if( !playlist_IsServicesDiscoveryLoaded( THEPL, "powervlc_library" )
+         && playlist_ServicesDiscoveryAdd( THEPL, "powervlc_library" )
+                                                        != VLC_SUCCESS )
+            return;
+        bool imported = false;
+        for( const QUrl &url : event->mimeData()->urls() )
+        {
+            if( !url.isLocalFile() ) continue;
+            QByteArray path = QFile::encodeName( url.toLocalFile() );
+            services_discovery_import_t request = {
+                path.constData(), NULL, NULL, NULL, NULL
+            };
+            imported |= playlist_ServicesDiscoveryControl( THEPL,
+                "powervlc_library", SD_CMD_POWERVLC_IMPORT, &request )
+                                                            == VLC_SUCCESS;
+        }
+        if( imported ) event->acceptProposedAction();
+        return;
+    }
+    if( category != IS_PL && category != IS_ML ) return;
 
     if( p_intf->p_sys->p_mi )
         p_intf->p_sys->p_mi->dropEventPlay( event, false,
-                (selector->getCurrentItemCategory() == IS_PL) );
+                                            category == IS_PL );
 }
 void PlaylistWidget::dragEnterEvent( QDragEnterEvent *event )
 {
@@ -227,6 +288,28 @@ void PlaylistWidget::forceShow()
 void PlaylistWidget::changeView( const QModelIndex& index )
 {
     locationBar->setIndex( index );
+    updateScanProgress();
+}
+
+void PlaylistWidget::updateScanProgress()
+{
+    if( !var_GetBool( p_intf->obj.libvlc, PVLC_ML_SCAN_ACTIVE ) )
+    {
+        locationBar->setScanProgressText( QString() );
+        return;
+    }
+    quint64 done = qMax<qint64>( 0, var_GetInteger( p_intf->obj.libvlc,
+                                                    PVLC_ML_SCAN_DONE ) );
+    quint64 total = qMax<qint64>( 0, var_GetInteger( p_intf->obj.libvlc,
+                                                     PVLC_ML_SCAN_TOTAL ) );
+    if( total == 0 ) return;
+    unsigned percent = done >= total ? 100
+                     : static_cast<unsigned>( (double)done * 100.0 / total );
+    quint64 remaining = done < total ? total - done : 0;
+    QString format = remaining == 1
+        ? qtr( "Media Library — scanning %1% · %2 file remaining" )
+        : qtr( "Media Library — scanning %1% · %2 files remaining" );
+    locationBar->setScanProgressText( format.arg( percent ).arg( remaining ) );
 }
 
 void PlaylistWidget::setSearchFieldFocus()
@@ -263,6 +346,7 @@ void LocationBar::setIndex( const QModelIndex &index )
         QString text = model->getTitle( i );
 
         QAbstractButton *btn = new LocationButton( text, first, !first, this );
+        btn->setProperty( "powervlcNormalTitle", text );
         btn->setSizePolicy( QSizePolicy::Maximum, QSizePolicy::Fixed );
         buttons.append( btn );
 
@@ -287,6 +371,28 @@ void LocationBar::setIndex( const QModelIndex &index )
     }
 
     if( isVisible() ) layOut( size() );
+}
+
+void LocationBar::setScanProgressText( const QString &text )
+{
+    const QString mediaLibrary = qtr( "Media Library" );
+    const QString powerLibrary = qtr( "PowerVLC Media Library" );
+    bool changed = false;
+    for( int i = 0; i < buttons.count(); ++i )
+    {
+        QAbstractButton *button = qobject_cast<QAbstractButton *>( buttons[i] );
+        if( !button ) continue;
+        QString normal = button->property( "powervlcNormalTitle" ).toString();
+        if( normal != mediaLibrary && normal != powerLibrary ) continue;
+        QString displayed = text.isEmpty() ? normal : text;
+        if( button->text() != displayed )
+        {
+            button->setText( displayed );
+            if( i < actions.count() ) actions[i]->setText( displayed );
+            changed = true;
+        }
+    }
+    if( changed && isVisible() ) layOut( size() );
 }
 
 void LocationBar::setRootIndex()

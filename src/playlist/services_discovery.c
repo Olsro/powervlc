@@ -110,6 +110,33 @@ static void playlist_sd_item_removed(services_discovery_t *sd,
     playlist_Unlock(playlist);
 }
 
+static void playlist_sd_item_tree_added(services_discovery_t *sd,
+                                        input_item_t *parent,
+                                        input_item_node_t *tree)
+{
+    vlc_sd_internal_t *sds = sd->owner.sys;
+    playlist_t *playlist = (playlist_t *)sd->obj.parent;
+    playlist_Lock(playlist);
+    if (sds->node == NULL)
+        sds->node = playlist_NodeCreate(playlist,
+            sd->description != NULL ? sd->description : "?", &playlist->root,
+            PLAYLIST_END, PLAYLIST_RO_FLAG);
+    playlist_item_t *node = parent != NULL
+                          ? playlist_ItemGetByInput(playlist, parent) : sds->node;
+    /* A service can finish building a background tree while its former
+     * parent is being replaced by a refresh.  Never silently discard the
+     * completed result: publish it at the service root as a safe fallback. */
+    if (node == NULL && parent != NULL)
+    {
+        msg_Warn(sd, "bulk tree parent `%s' disappeared; adding at device root",
+                 parent->psz_name != NULL ? parent->psz_name : "?");
+        node = sds->node;
+    }
+    if (node != NULL)
+        playlist_InsertInputItemTree(playlist, node, tree, PLAYLIST_END, false);
+    playlist_Unlock(playlist);
+}
+
 int playlist_ServicesDiscoveryAdd(playlist_t *playlist, const char *chain)
 {
     vlc_sd_internal_t *sds = malloc(sizeof (*sds) + strlen(chain) + 1);
@@ -122,6 +149,7 @@ int playlist_ServicesDiscoveryAdd(playlist_t *playlist, const char *chain)
         sds,
         playlist_sd_item_added,
         playlist_sd_item_removed,
+        playlist_sd_item_tree_added,
     };
 
     /* Perform the addition */

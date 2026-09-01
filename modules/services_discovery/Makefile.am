@@ -4,6 +4,26 @@ sd_LTLIBRARIES =
 libmediadirs_plugin_la_SOURCES = services_discovery/mediadirs.c
 sd_LTLIBRARIES += libmediadirs_plugin.la
 
+libpowervlc_medialibrary_plugin_la_SOURCES = \
+	services_discovery/powervlc_medialibrary.c \
+	services_discovery/powervlc_media_common.c \
+	services_discovery/powervlc_media_common.h
+libpowervlc_medialibrary_plugin_la_LIBADD = $(LIBPTHREAD)
+sd_LTLIBRARIES += libpowervlc_medialibrary_plugin.la
+
+libpowervlc_devices_plugin_la_SOURCES = \
+	services_discovery/powervlc_devices.c \
+	services_discovery/powervlc_media_common.c \
+	services_discovery/powervlc_media_common.h
+libpowervlc_devices_plugin_la_CFLAGS = $(AM_CFLAGS) $(GPOD_CFLAGS)
+libpowervlc_devices_plugin_la_LIBADD = $(GPOD_LIBS) $(LIBPTHREAD)
+libpowervlc_devices_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(sddir)'
+if HAVE_OSX
+libpowervlc_devices_plugin_la_LDFLAGS += \
+	-Wl,-framework,CoreFoundation,-framework,Carbon
+endif
+sd_LTLIBRARIES += libpowervlc_devices_plugin.la
+
 libpodcast_plugin_la_SOURCES = services_discovery/podcast.c
 libpodcast_plugin_la_LIBADD = $(LIBPTHREAD)
 sd_LTLIBRARIES += libpodcast_plugin.la

@@ -47,6 +47,233 @@ static int RecursiveInsertCopy (
                 playlist_t *p_playlist, playlist_item_t *p_item,
                 playlist_item_t *p_parent, int i_pos, bool b_flat );
 
+static bool PowerVLCRandomReservoirPick( uint64_t seen )
+{
+    uint64_t value;
+    vlc_rand_bytes( &value, sizeof(value) );
+    return seen == 1 || value % seen == 0;
+}
+
+static playlist_item_t *PowerVLCFirstPlayable( playlist_item_t *node )
+{
+    if( node == NULL || node->p_input == NULL
+     || input_item_IsPowerVLCRandomAction( node->p_input ) )
+        return NULL;
+    if( node->i_children < 0 )
+        return node;
+    for( int i = 0; i < node->i_children; ++i )
+    {
+        playlist_item_t *leaf = PowerVLCFirstPlayable( node->pp_children[i] );
+        if( leaf ) return leaf;
+    }
+    return NULL;
+}
+
+static void PowerVLCRandomLeaf( playlist_item_t *node,
+                                playlist_item_t **selected, uint64_t *seen )
+{
+    if( node == NULL || node->p_input == NULL
+     || input_item_IsPowerVLCRandomAction( node->p_input ) )
+        return;
+    if( node->i_children < 0 )
+    {
+        if( PowerVLCRandomReservoirPick( ++*seen ) ) *selected = node;
+        return;
+    }
+    for( int i = 0; i < node->i_children; ++i )
+        PowerVLCRandomLeaf( node->pp_children[i], selected, seen );
+}
+
+static void PowerVLCRandomAlbum( playlist_item_t *node,
+                                 playlist_item_t **selected, uint64_t *seen )
+{
+    if( node == NULL || node->p_input == NULL
+     || input_item_IsPowerVLCRandomAction( node->p_input ) )
+        return;
+    if( input_item_IsPowerVLCAlbumScope( node->p_input ) )
+    {
+        if( PowerVLCRandomReservoirPick( ++*seen ) ) *selected = node;
+        return;
+    }
+    for( int i = 0; i < node->i_children; ++i )
+        PowerVLCRandomAlbum( node->pp_children[i], selected, seen );
+}
+
+/* Pick one unloaded directory at the current materialised frontier.  Compact
+ * media-library views load letter -> artist -> album one node at a time.  An
+ * unloaded artist is not a playable leaf: Random (Album) must browse it and
+ * continue resolving until a real album node is available. */
+static void PowerVLCRandomBrowsable( playlist_item_t *node,
+                                     playlist_item_t **selected,
+                                     uint64_t *seen )
+{
+    if( node == NULL || node->p_input == NULL
+     || input_item_IsPowerVLCRandomAction( node->p_input ) )
+        return;
+    if( node->p_input->i_type == ITEM_TYPE_DIRECTORY
+     && node->i_children < 0 )
+    {
+        if( PowerVLCRandomReservoirPick( ++*seen ) ) *selected = node;
+        return;
+    }
+    for( int i = 0; i < node->i_children; ++i )
+        PowerVLCRandomBrowsable( node->pp_children[i], selected, seen );
+}
+
+static playlist_item_t *PowerVLCDirectChildContaining(
+    playlist_item_t *parent, playlist_item_t *item )
+{
+    while( item && item->p_parent && item->p_parent != parent )
+        item = item->p_parent;
+    return item && item->p_parent == parent ? item : NULL;
+}
+
+static bool PowerVLCDescendsFrom( playlist_item_t *item,
+                                  playlist_item_t *ancestor )
+{
+    for( playlist_item_t *cursor = item; cursor; cursor = cursor->p_parent )
+        if( cursor == ancestor ) return true;
+    return false;
+}
+
+void playlist_PowerVLCRandomResolve(
+    playlist_t *p_playlist, playlist_item_t *action, int branch_id,
+    playlist_powervlc_random_result_t *result )
+{
+    PL_ASSERT_LOCKED;
+    memset( result, 0, sizeof(*result) );
+    result->i_branch_id = -1;
+    if( action == NULL || action->p_input == NULL || action->p_parent == NULL
+     || !input_item_IsPowerVLCRandomAction( action->p_input ) )
+        return;
+
+    playlist_item_t *parent = action->p_parent;
+    playlist_item_t *current = playlist_CurrentPlayingItem( p_playlist );
+    if( input_item_IsPowerVLCRandomAlbumTrackAction( action->p_input ) )
+    {
+        playlist_item_t *track = NULL;
+        uint64_t seen = 0;
+        for( int i = 0; i < parent->i_children; ++i )
+        {
+            playlist_item_t *candidate = parent->pp_children[i];
+            if( candidate == action || candidate == NULL
+             || candidate->p_input == NULL || candidate->i_children >= 0
+             || input_item_IsPowerVLCRandomAction( candidate->p_input ) )
+                continue;
+            if( candidate == current ) continue;
+            if( PowerVLCRandomReservoirPick( ++seen ) ) track = candidate;
+        }
+        if( track == NULL && current && current->p_parent == parent )
+            track = current;
+        result->p_track = track;
+        result->p_scope = parent;
+        return;
+    }
+
+    playlist_item_t *remembered = branch_id >= 0
+        ? playlist_ItemGetById( p_playlist, branch_id ) : NULL;
+    /* Random (Album) may have selected a lazy album node that still needs
+     * one compact-index read.  Keep that exact album across the metadata
+     * callback; treating an unloaded directory as a playable leaf made the
+     * input layer start an arbitrary descendant instead of disc/track one. */
+    if( input_item_IsPowerVLCAlbumScope( action->p_input )
+     && remembered && remembered != action && remembered->p_input
+     && PowerVLCDescendsFrom( remembered, parent ) )
+    {
+        result->i_branch_id = remembered->i_id;
+        if( remembered->p_input->i_type == ITEM_TYPE_DIRECTORY
+         && remembered->i_children < 0 )
+        {
+            result->p_browse = remembered;
+            return;
+        }
+        if( input_item_IsPowerVLCAlbumScope( remembered->p_input ) )
+        {
+            result->p_track = PowerVLCFirstPlayable( remembered );
+            result->p_scope = remembered;
+            return;
+        }
+    }
+
+    playlist_item_t *branch = remembered;
+    if( branch == NULL || !PowerVLCDescendsFrom( branch, parent )
+     || branch == action )
+    {
+        playlist_item_t *current_branch =
+            PowerVLCDirectChildContaining( parent, current );
+        branch = NULL;
+        uint64_t seen = 0;
+        for( int i = 0; i < parent->i_children; ++i )
+        {
+            playlist_item_t *candidate = parent->pp_children[i];
+            if( candidate == action || candidate == NULL
+             || candidate->p_input == NULL
+             || input_item_IsPowerVLCRandomAction( candidate->p_input ) )
+                continue;
+            if( candidate == current_branch ) continue;
+            if( PowerVLCRandomReservoirPick( ++seen ) ) branch = candidate;
+        }
+        if( branch == NULL ) branch = current_branch;
+    }
+    if( branch == NULL ) return;
+    result->i_branch_id = branch->i_id;
+
+    /* Lazy media-library buckets become playlist nodes as soon as their
+     * XSPF children are attached.  input_item_IsPreparsed() is not a useful
+     * readiness signal here: directory inputs can keep it false after a
+     * successful parse (notably in the Artists view), which left Random
+     * (Album) retrying forever even though the albums were already present.
+     * The playlist item's child state is the authoritative signal used by
+     * every interface: -1 means that the lazy directory still needs loading. */
+    if( branch->p_input->i_type == ITEM_TYPE_DIRECTORY
+     && branch->i_children < 0 )
+    {
+        result->p_browse = branch;
+        return;
+    }
+
+    if( input_item_IsPowerVLCAlbumScope( action->p_input ) )
+    {
+        playlist_item_t *album = NULL;
+        uint64_t seen = 0;
+        PowerVLCRandomAlbum( branch, &album, &seen );
+        if( album )
+        {
+            result->i_branch_id = album->i_id;
+            if( album->p_input->i_type == ITEM_TYPE_DIRECTORY
+             && album->i_children < 0 )
+            {
+                result->p_browse = album;
+                return;
+            }
+            result->p_track = PowerVLCFirstPlayable( album );
+            result->p_scope = album;
+            return;
+        }
+
+        /* No album is materialised yet. Browse one random lazy artist/group
+         * and remember that exact descendant across the metadata callback;
+         * falling through to RandomLeaf would start the directory itself and
+         * leave the UI highlighting an artist while a hidden descendant
+         * happened to play. */
+        playlist_item_t *browsable = NULL;
+        seen = 0;
+        PowerVLCRandomBrowsable( branch, &browsable, &seen );
+        if( browsable )
+        {
+            result->i_branch_id = browsable->i_id;
+            result->p_browse = browsable;
+            return;
+        }
+    }
+
+    playlist_item_t *track = NULL;
+    uint64_t seen = 0;
+    PowerVLCRandomLeaf( branch, &track, &seen );
+    result->p_track = track;
+    result->p_scope = track && track->p_parent ? track->p_parent : branch;
+}
+
 /*****************************************************************************
  * An input item has gained subitems (Event Callback)
  *****************************************************************************/
@@ -233,12 +460,43 @@ static void input_item_changed( const vlc_event_t * p_event,
     var_SetAddress( p_playlist, "item-change", p_event->p_obj );
 }
 
+static uint32_t playlist_Reverse32( uint32_t value )
+{
+    value = ((value >> 1) & UINT32_C(0x55555555))
+          | ((value & UINT32_C(0x55555555)) << 1);
+    value = ((value >> 2) & UINT32_C(0x33333333))
+          | ((value & UINT32_C(0x33333333)) << 2);
+    value = ((value >> 4) & UINT32_C(0x0f0f0f0f))
+          | ((value & UINT32_C(0x0f0f0f0f)) << 4);
+    value = ((value >> 8) & UINT32_C(0x00ff00ff))
+          | ((value & UINT32_C(0x00ff00ff)) << 8);
+    return (value >> 16) | (value << 16);
+}
+
+static uintptr_t playlist_ReversePointerBits( uintptr_t value )
+{
+#if UINTPTR_MAX > UINT32_MAX
+    uint64_t low = playlist_Reverse32( (uint32_t)value );
+    uint64_t high = playlist_Reverse32( (uint32_t)(value >> 32) );
+    return (uintptr_t)((low << 32) | high);
+#else
+    return (uintptr_t)playlist_Reverse32( (uint32_t)value );
+#endif
+}
+
 static int playlist_ItemCmpId( const void *a, const void *b )
 {
     const playlist_item_t *pa = a, *pb = b;
+    if( pa->i_id == pb->i_id ) return 0;
 
-    /* ID are between 1 and INT_MAX, this cannot overflow. */
-    return pa->i_id - pb->i_id;
+    /* Darwin's tsearch() is an unbalanced binary tree. Playlist ids are
+     * monotonic, so comparing them directly turns the tree into a linked
+     * list and makes a large lazy-library expansion quadratic while holding
+     * the global playlist lock. Bit reversal is a collision-free permutation
+     * that gives sequential ids a balanced insertion order. */
+    uint32_t ka = playlist_Reverse32( (uint32_t)pa->i_id );
+    uint32_t kb = playlist_Reverse32( (uint32_t)pb->i_id );
+    return ka < kb ? -1 : 1;
 }
 
 static int playlist_ItemCmpInput( const void *a, const void *b )
@@ -247,8 +505,11 @@ static int playlist_ItemCmpInput( const void *a, const void *b )
 
     if( pa->p_input == pb->p_input )
         return 0;
-    return (((uintptr_t)pa->p_input) > ((uintptr_t)pb->p_input))
-        ? +1 : -1;
+    /* Input allocations for one parsed XSPF are commonly adjacent and would
+     * degenerate the second tsearch tree for the same reason. */
+    uintptr_t ka = playlist_ReversePointerBits( (uintptr_t)pa->p_input );
+    uintptr_t kb = playlist_ReversePointerBits( (uintptr_t)pb->p_input );
+    return ka < kb ? -1 : 1;
 }
 
 /*****************************************************************************
@@ -529,6 +790,19 @@ playlist_item_t * playlist_NodeAddInput( playlist_t *p_playlist,
     assert( p_input );
     assert( p_parent && p_parent->i_children != -1 );
 
+    /* PowerVLC's Random rows are controls in the media-library browser, not
+     * media.  Several drag-and-drop entry points eventually converge here
+     * (including pasteboard imports which rebuild an input tree instead of
+     * calling playlist_NodeAddCopy()).  Keep the invariant at that common
+     * boundary: a virtual action must never become an entry in the main
+     * playback queue or one of its subnodes. */
+    if( input_item_IsPowerVLCRandomAction( p_input ) )
+    {
+        for( playlist_item_t *p_up = p_parent; p_up; p_up = p_up->p_parent )
+            if( p_up == p_playlist->p_playing )
+                return NULL;
+    }
+
     playlist_item_t *p_item = playlist_ItemNewFromInput( p_playlist, p_input );
     if( unlikely(p_item == NULL) )
         return NULL;
@@ -598,8 +872,16 @@ int playlist_InsertInputItemTree (
     playlist_t *p_playlist, playlist_item_t *p_parent,
     input_item_node_t *p_node, int i_pos, bool b_flat )
 {
-    return RecursiveAddIntoParent( p_playlist, p_parent, p_node, i_pos, b_flat,
-                                   &(playlist_item_t*){ NULL } );
+    /* A service discovery can publish thousands of items at once.  The
+     * individual append notifications remain available to interfaces that
+     * need them, while this bracket lets graphical models coalesce their
+     * expensive tree reloads into a single update. */
+    var_SetBool( p_playlist, "playlist-item-tree-update", true );
+    int result = RecursiveAddIntoParent( p_playlist, p_parent, p_node, i_pos,
+                                         b_flat,
+                                         &(playlist_item_t*){ NULL } );
+    var_SetBool( p_playlist, "playlist-item-tree-update", false );
+    return result;
 }
 
 
@@ -746,6 +1028,7 @@ static void playlist_Preparse( playlist_t *p_playlist,
     char *psz_album = input_item_GetAlbum( input );
 
     if( sys->b_preparse && !input_item_IsPreparsed( input )
+     && !input_item_IsPowerVLCLazyIndex( input )
      && (EMPTY_STR(psz_artist) || EMPTY_STR(psz_album)) )
         vlc_MetadataRequest( p_playlist->obj.libvlc, input, 0, -1, p_item );
     free( psz_artist );
@@ -788,6 +1071,12 @@ static int RecursiveAddIntoParent (
     {
         input_item_node_t *p_child_node = p_node->pp_children[i];
 
+        /* Do not let a rejected virtual action abort insertion of the real
+         * siblings that follow it (Random is normally the first album row). */
+        if( input_item_IsPowerVLCRandomAction( p_child_node->p_item )
+         && PowerVLCDescendsFrom( p_parent, p_playlist->p_playing ) )
+            continue;
+
         playlist_item_t *p_new_item = NULL;
         bool b_children = p_child_node->i_children > 0;
 
@@ -818,7 +1107,7 @@ static int RecursiveAddIntoParent (
         }
 
         assert( p_new_item != NULL );
-        if( i == 0 ) *pp_first_leaf = p_new_item;
+        if( *pp_first_leaf == NULL ) *pp_first_leaf = p_new_item;
     }
     return i_pos;
 }
@@ -833,6 +1122,12 @@ static int RecursiveInsertCopy (
     if( p_item == p_parent ) return i_pos;
 
     input_item_t *p_input = p_item->p_input;
+
+    /* Random entries are UI actions backed by a private generated subtree.
+     * That subtree must never become playlist content when an album, artist,
+     * letter, or multi-selection is flattened by drag-and-drop. */
+    if( input_item_IsPowerVLCRandomAction( p_input ) )
+        return i_pos;
 
     if( p_item->i_children == -1 || !b_flat )
     {

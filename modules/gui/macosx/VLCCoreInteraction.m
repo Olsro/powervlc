@@ -58,6 +58,7 @@ static int BossCallback(vlc_object_t *p_this, const char *psz_var,
 }
 
 NSString *VLCClipCreationModeChangedNotification = @"VLCClipCreationModeChangedNotification";
+NSString *VLCFullscreenFeedbackNotification = @"VLCFullscreenFeedbackNotification";
 
 /* the core hotkeys module redirects the extrashort/short jump actions to
  * this input variable while the clip creation mode is active (the key
@@ -96,6 +97,36 @@ static int RevealControlsCallback(vlc_object_t *p_this, const char *psz_var,
     dispatch_async(dispatch_get_main_queue(), ^{
         [[NSNotificationCenter defaultCenter]
             postNotificationName:VLCRevealControlsNotification object:nil];
+    });
+    return VLC_SUCCESS;
+}
+
+static int PositionFeedbackCallback(vlc_object_t *p_this, const char *psz_var,
+                                    vlc_value_t oldval, vlc_value_t newval,
+                                    void *p_data)
+{
+    VLC_UNUSED(p_this); VLC_UNUSED(psz_var); VLC_UNUSED(oldval);
+    VLC_UNUSED(newval); VLC_UNUSED(p_data);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[VLCCoreInteraction sharedInstance] schedulePositionOSD];
+    });
+    return VLC_SUCCESS;
+}
+
+static int VolumeFeedbackCallback(vlc_object_t *p_this, const char *psz_var,
+                                  vlc_value_t oldval, vlc_value_t newval,
+                                  void *p_data)
+{
+    VLC_UNUSED(p_this); VLC_UNUSED(psz_var); VLC_UNUSED(oldval);
+    VLC_UNUSED(newval); VLC_UNUSED(p_data);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        /* Volume key repeat can be faster than the old delayed selector.
+         * Drawing the reported value immediately keeps the stereo panel
+         * alive and current throughout the repeat. */
+        VLCCoreInteraction *core = [VLCCoreInteraction sharedInstance];
+        if (![core shouldSuppressVolumeOSD])
+            [core showVolumeOSD];
     });
     return VLC_SUCCESS;
 }
@@ -144,6 +175,14 @@ static int RevealControlsCallback(vlc_object_t *p_this, const char *psz_var,
     BOOL b_remote_button_hold; /* true as long as the user holds the left,right,plus or minus on the remote control */
 
     NSArray *_usedHotkeys;
+
+    /* The hotkeys plug-in can temporarily retain the pre-switch vout while
+     * Mavericks republishes the HDMI display.  GUI feedback uses the current
+     * input's vout and keeps only its identity plus its private slider
+     * channel (never an owning reference). */
+    uintptr_t _osdSliderVoutIdentity;
+    int _osdSliderChannel;
+    NSTimeInterval _suppressVolumeOSDUntil;
 }
 @end
 
@@ -205,8 +244,16 @@ static int RevealControlsCallback(vlc_object_t *p_this, const char *psz_var,
         _autoHideControls = var_InheritBool(p_intf, "macosx-hide-controls");
         var_Create(p_intf->obj.libvlc, "intf-controls-hidden", VLC_VAR_BOOL);
         var_Create(p_intf->obj.libvlc, "intf-reveal-controls", VLC_VAR_VOID);
+        var_Create(p_intf->obj.libvlc, "intf-show-position-osd", VLC_VAR_VOID);
+        var_Create(p_intf->obj.libvlc, "intf-show-volume-osd", VLC_VAR_VOID);
+        var_Create(p_intf->obj.libvlc, "intf-stereo-feedback", VLC_VAR_BOOL);
+        var_SetBool(p_intf->obj.libvlc, "intf-stereo-feedback", true);
         var_AddCallback(p_intf->obj.libvlc, "intf-reveal-controls",
                         RevealControlsCallback, (__bridge void *)self);
+        var_AddCallback(p_intf->obj.libvlc, "intf-show-position-osd",
+                        PositionFeedbackCallback, (__bridge void *)self);
+        var_AddCallback(p_intf->obj.libvlc, "intf-show-volume-osd",
+                        VolumeFeedbackCallback, (__bridge void *)self);
     }
     return self;
 }
@@ -221,6 +268,10 @@ static int RevealControlsCallback(vlc_object_t *p_this, const char *psz_var,
     var_DelCallback(p_intf->obj.libvlc, "intf-boss", BossCallback, (__bridge void *)self);
     var_DelCallback(p_intf->obj.libvlc, "intf-reveal-controls",
                     RevealControlsCallback, (__bridge void *)self);
+    var_DelCallback(p_intf->obj.libvlc, "intf-show-position-osd",
+                    PositionFeedbackCallback, (__bridge void *)self);
+    var_DelCallback(p_intf->obj.libvlc, "intf-show-volume-osd",
+                    VolumeFeedbackCallback, (__bridge void *)self);
     [[NSNotificationCenter defaultCenter] removeObserver: self];
 }
 
@@ -247,25 +298,54 @@ static int RevealControlsCallback(vlc_object_t *p_this, const char *psz_var,
  * the hotkeys module (seeks…) already display theirs. */
 - (void)osdDisplayVolume
 {
-    if (!_controlsHiddenForPlayback)
-        return;
-    vout_thread_t *p_vout = getVout();
-    if (!p_vout)
-        return;
     float volume = playlist_VolumeGet(pl_Get(getIntf()));
     if (volume >= 0.) {
-        vout_OSDSlider(p_vout, VOUT_SPU_CHANNEL_OSD,
-                       lroundf(volume * 100.f), OSD_VERT_SLIDER);
-        vout_OSDMessage(p_vout, VOUT_SPU_CHANNEL_OSD, _("Volume %ld%%"),
-                        lroundf(volume * 100.f));
+        NSInteger percent = lroundf(volume * 100.f);
+        [[NSNotificationCenter defaultCenter]
+            postNotificationName:VLCFullscreenFeedbackNotification
+                          object:self
+                        userInfo:@{@"text": [NSString
+                            stringWithFormat:_NS("Volume %ld%%"), percent],
+                                   @"value": @(percent)}];
+        /* The Cocoa stereo feedback does not need a vout. During the
+         * Mavericks frame-packed display republish getVout() can be nil even
+         * though playback and the HDMI overlay windows are alive. */
+        if (var_InheritInteger(getIntf(),
+                               "stereo3d-fullscreen-display") > 0)
+            return;
+
+        vout_thread_t *p_vout = getVout();
+        if (!p_vout)
+            return;
+        if (_osdSliderVoutIdentity != (uintptr_t)p_vout) {
+            _osdSliderVoutIdentity = (uintptr_t)p_vout;
+            _osdSliderChannel = vout_RegisterSubpictureChannel(p_vout);
+        }
+        vout_FlushSubpictureChannel(p_vout, _osdSliderChannel);
+        vout_OSDSlider(p_vout, _osdSliderChannel,
+                       (int)percent, OSD_VERT_SLIDER);
+        char message[64];
+        snprintf(message, sizeof(message), _("Volume %ld%%"),
+                 percent);
+        vout_OSDText(p_vout, VOUT_SPU_CHANNEL_OSD,
+                     SUBPICTURE_ALIGN_TOP | SUBPICTURE_ALIGN_RIGHT,
+                     2500000, message);
+        vlc_object_release(p_vout);
     }
-    vlc_object_release(p_vout);
 }
 
 - (void)osdDisplayIcon:(short)icon
 {
-    if (!_controlsHiddenForPlayback)
+    if (var_InheritInteger(getIntf(),
+                           "stereo3d-fullscreen-display") > 0) {
+        if (icon == OSD_PAUSE_ICON)
+            [self showPlaybackStateOSD:YES];
+        else if (icon == OSD_PLAY_ICON)
+            [self showPlaybackStateOSD:NO];
+        else if (icon == OSD_MUTE_ICON)
+            [self showMuteOSD];
         return;
+    }
     vout_thread_t *p_vout = getVout();
     if (!p_vout)
         return;
@@ -275,8 +355,6 @@ static int RevealControlsCallback(vlc_object_t *p_this, const char *psz_var,
 
 - (void)osdDisplayMessage:(const char *)message
 {
-    if (!_controlsHiddenForPlayback)
-        return;
     vout_thread_t *p_vout = getVout();
     if (!p_vout)
         return;
@@ -1220,6 +1298,21 @@ static int RevealControlsCallback(vlc_object_t *p_this, const char *psz_var,
     [self osdDisplayVolume];
 }
 
+- (void)setVolumeFromVisibleControl:(int)value
+{
+    /* The visible slider already reports the value. The playlist callback is
+     * asynchronous, so cover the callback burst generated by a continuous
+     * drag without changing feedback for later keyboard/remote commands. */
+    _suppressVolumeOSDUntil = [NSDate timeIntervalSinceReferenceDate] + .20;
+    [self setVolume:value];
+}
+
+- (BOOL)shouldSuppressVolumeOSD
+{
+    return [NSDate timeIntervalSinceReferenceDate] <
+           _suppressVolumeOSDUntil;
+}
+
 - (void)toggleMute
 {
     intf_thread_t *p_intf = getIntf();
@@ -1231,6 +1324,40 @@ static int RevealControlsCallback(vlc_object_t *p_this, const char *psz_var,
         [self osdDisplayIcon:OSD_MUTE_ICON];
     else
         [self osdDisplayVolume];
+}
+
+- (void)showVolumeOSD
+{
+    [self osdDisplayVolume];
+}
+
+- (void)showPlaybackStateOSD:(BOOL)paused
+{
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:VLCFullscreenFeedbackNotification
+                      object:self
+                    userInfo:@{@"text": paused ? _NS("Pause") : _NS("Play"),
+                               @"value": @0,
+                               @"showsBar": @NO}];
+}
+
+- (void)showMuteOSD
+{
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:VLCFullscreenFeedbackNotification
+                      object:self
+                    userInfo:@{@"text": _NS("Mute"),
+                               @"value": @0,
+                               @"showsBar": @NO}];
+}
+
+- (void)scheduleVolumeOSD
+{
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(showVolumeOSD)
+                                               object:nil];
+    [self performSelector:@selector(showVolumeOSD) withObject:nil
+               afterDelay:0.08];
 }
 
 - (BOOL)mute
@@ -1305,13 +1432,61 @@ static int RevealControlsCallback(vlc_object_t *p_this, const char *psz_var,
 {
     input_thread_t *p_input = pl_CurrentInput(getIntf());
     if (p_input != NULL) {
+        int64_t time = var_GetInteger(p_input, "time") / CLOCK_FREQ;
+        int64_t length = var_GetInteger(p_input, "length") / CLOCK_FREQ;
+        char timeText[MSTRTIME_MAX_SIZE];
+        char lengthText[MSTRTIME_MAX_SIZE];
+        secstotimestr(timeText, time);
+        char message[2 * MSTRTIME_MAX_SIZE + 4];
+        if (length > 0) {
+            secstotimestr(lengthText, length);
+            snprintf(message, sizeof(message), "%s / %s",
+                     timeText, lengthText);
+        } else
+            snprintf(message, sizeof(message), "%s", timeText);
+        NSInteger percent = lroundf(var_GetFloat(p_input, "position")
+                                    * 100.f);
+        [[NSNotificationCenter defaultCenter]
+            postNotificationName:VLCFullscreenFeedbackNotification
+                          object:self
+                        userInfo:@{@"text": [NSString
+                            stringWithUTF8String:message],
+                                   @"value": @(percent)}];
+
+        /* The Cocoa stereo panel above does not depend on input_GetVout().
+         * That lookup can legitimately be nil while Mavericks republishes
+         * the frame-packed drawable. */
+        if (var_InheritInteger(getIntf(),
+                               "stereo3d-fullscreen-display") > 0) {
+            vlc_object_release(p_input);
+            return;
+        }
+
         vout_thread_t *p_vout = input_GetVout(p_input);
         if (p_vout != NULL) {
-            var_SetInteger(getIntf()->obj.libvlc, "key-action", ACTIONID_POSITION);
+            if (_osdSliderVoutIdentity != (uintptr_t)p_vout) {
+                _osdSliderVoutIdentity = (uintptr_t)p_vout;
+                _osdSliderChannel = vout_RegisterSubpictureChannel(p_vout);
+            }
+            vout_OSDText(p_vout, VOUT_SPU_CHANNEL_OSD,
+                         SUBPICTURE_ALIGN_TOP | SUBPICTURE_ALIGN_RIGHT,
+                         2500000, message);
+            vout_FlushSubpictureChannel(p_vout, _osdSliderChannel);
+            vout_OSDSlider(p_vout, _osdSliderChannel,
+                           (int)percent, OSD_HOR_SLIDER);
             vlc_object_release(p_vout);
         }
         vlc_object_release(p_input);
     }
+}
+
+- (void)schedulePositionOSD
+{
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(showPosition)
+                                               object:nil];
+    [self performSelector:@selector(showPosition) withObject:nil
+               afterDelay:0.05];
 }
 
 #pragma mark - Drop support for files into the video, controls bar or drop box

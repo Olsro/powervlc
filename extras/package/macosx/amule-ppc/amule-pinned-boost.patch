@@ -1,0 +1,16 @@
+diff --git a/cmake/boost.cmake b/cmake/boost.cmake
+index b654275c1..80a5d5388 100644
+--- a/cmake/boost.cmake
++++ b/cmake/boost.cmake
+@@ -1,4 +1,10 @@
+-find_package(Boost CONFIG REQUIRED)
++if (POWERVLC_BOOST_INCLUDE_DIR)
++	set (Boost_INCLUDE_DIR "${POWERVLC_BOOST_INCLUDE_DIR}")
++	set (Boost_INCLUDE_DIRS "${POWERVLC_BOOST_INCLUDE_DIR}")
++	set (Boost_LIBRARIES "")
++else()
++	find_package(Boost CONFIG REQUIRED)
++endif()
+ 
+ include (CheckIncludeFiles)
+ 

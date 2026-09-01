@@ -34,6 +34,28 @@
     return([(VLCPlaylist *)[self delegate] menuForEvent: event]);
 }
 
+- (void)mouseDown:(NSEvent *)event
+{
+    /* NSOutlineView can consume the second click while handling its editable
+     * cells, so its configured doubleAction is not reliably sent after a
+     * stopped input.  Resolve the row ourselves and start it explicitly. */
+    if ([event clickCount] >= 2) {
+        NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+        NSInteger row = [self rowAtPoint:point];
+        if (row >= 0) {
+            [self selectRowIndexes:[NSIndexSet indexSetWithIndex:row]
+              byExtendingSelection:NO];
+            /* The superclass has not updated clickedRow yet, so pass nil:
+             * playItem: must use the selection we just established rather
+             * than rejecting the action as a click outside a row. */
+            [(VLCPlaylist *)[self delegate] playItem:nil];
+            return;
+        }
+    }
+
+    [super mouseDown:event];
+}
+
 - (void)keyDown:(NSEvent *)event
 {
     unichar key = 0;
@@ -53,6 +75,21 @@
         case NSCarriageReturnCharacter:
             [(VLCPlaylist *)[[VLCMain sharedInstance] playlist] playItem:nil];
             break;
+
+        case NSRightArrowFunctionKey: {
+            NSInteger row = [self selectedRow];
+            id item = row >= 0 ? [self itemAtRow:row] : nil;
+            if (item && [self isExpandable:item] && ![self isItemExpanded:item]) {
+                [self expandItem:item];
+                NSInteger restored = [self rowForItem:item];
+                if (restored >= 0)
+                    [self selectRowIndexes:[NSIndexSet indexSetWithIndex:restored]
+                      byExtendingSelection:NO];
+                break;
+            }
+            [super keyDown:event];
+            break;
+        }
 
         default:
             [super keyDown: event];

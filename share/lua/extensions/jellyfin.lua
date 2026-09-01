@@ -853,7 +853,7 @@ end
 function click_connect_account()
   local user = trim(ui.username:get_text())
   local pass = ui.password:get_text()
-  if user == "" or pass == "" then
+  if user == "" then
     set_message(lang.msg_enter_account)
     return
   end

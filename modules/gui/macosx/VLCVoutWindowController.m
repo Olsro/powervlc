@@ -43,6 +43,24 @@ static atomic_bool b_intf_starting = ATOMIC_VAR_INIT(false);
 
 static int WindowControl(vout_window_t *, int i_query, va_list);
 
+static BOOL UseNativeFullscreenMode(void)
+{
+    if (![[VLCMain sharedInstance] nativeFullscreenMode])
+        return NO;
+
+    intf_thread_t *intf = getIntf();
+    if (intf == NULL)
+        return YES;
+
+    /* A native fullscreen Space is tied to AppKit's current screen and can
+     * migrate back to the main display when an external HDMI link changes
+     * mode. VLC's controlled fullscreen window is required whenever the user
+     * selected an explicit output (and for the existing stereo override). */
+    return var_InheritInteger(intf, "macosx-vdev") <= 0 &&
+           var_InheritInteger(intf, "stereo3d-fullscreen-display") <= 0 &&
+           var_InheritInteger(intf, "dovi-fullscreen-display") <= 0;
+}
+
 int WindowOpen(vout_window_t *p_wnd, const vout_window_cfg_t *cfg)
 {
     @autoreleasepool {
@@ -133,7 +151,15 @@ static int WindowControl(vout_window_t *p_wnd, int i_query, va_list args)
                 }
 
                 int i_full = va_arg(args, int);
-                BOOL b_animation = YES;
+                /* A frame-packed display is republished with a different
+                 * backing scale and raster.  Animating between the old and
+                 * new screens feeds intermediate backing sizes (sometimes
+                 * larger than 3700x4100) into reshape and can leave the video
+                 * window off-screen.  The HDMI transition already blanks at
+                 * the display layer, so move its fullscreen window atomically. */
+                BOOL b_animation =
+                    var_InheritInteger(getIntf(),
+                                       "stereo3d-fullscreen-display") <= 0;
 
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [voutController setFullscreen:i_full
@@ -186,6 +212,8 @@ void WindowClose(vout_window_t *p_wnd)
     NSInteger currentWindowLevel;
 
     BOOL mainWindowHasVideo;
+    BOOL stereoPresentationActive;
+    NSApplicationPresentationOptions savedStereoPresentationOptions;
 }
 @end
 
@@ -206,6 +234,9 @@ void WindowClose(vout_window_t *p_wnd)
 
 - (void)dealloc
 {
+    if (stereoPresentationActive)
+        [NSApp setPresentationOptions:savedStereoPresentationOptions];
+
     NSArray *keys = [voutWindows allKeys];
     for (NSValue *key in keys)
         [self removeVoutForDisplay:key];
@@ -240,7 +271,7 @@ void WindowClose(vout_window_t *p_wnd)
 - (VLCVoutView *)setupVoutForWindow:(vout_window_t *)p_wnd withProposedVideoViewPosition:(NSRect)videoViewPosition
 {
     BOOL isEmbedded = YES;
-    BOOL isNativeFullscreen = [[VLCMain sharedInstance] nativeFullscreenMode];
+    BOOL isNativeFullscreen = UseNativeFullscreenMode();
     BOOL windowDecorations = var_InheritBool(getIntf(), "video-deco");
     BOOL videoWallpaper = var_InheritBool(getIntf(), "video-wallpaper");
     BOOL multipleVoutWindows = [voutWindows count] > 0;
@@ -259,7 +290,13 @@ void WindowClose(vout_window_t *p_wnd)
         // videoWallpaper is priorized over !windowDecorations
 
         msg_Dbg(getIntf(), "Creating background / blank window");
-        NSScreen *screen = [NSScreen screenWithDisplayID:(CGDirectDisplayID)var_InheritInteger(getIntf(), "macosx-vdev")];
+        int64_t doviDisplay = var_InheritInteger(getIntf(),
+                                                 "dovi-fullscreen-display");
+        int64_t configuredDisplay = var_InheritInteger(getIntf(),
+                                                       "macosx-vdev");
+        NSScreen *screen = [NSScreen screenWithDisplayID:
+            (CGDirectDisplayID)(doviDisplay > 0 ? doviDisplay
+                                                : configuredDisplay)];
         if (!screen)
             screen = [[[VLCMain sharedInstance] mainWindow] screen];
 
@@ -423,7 +460,7 @@ void WindowClose(vout_window_t *p_wnd)
 
     // prevent visible extra window if in fullscreen
     NSDisableScreenUpdates();
-    BOOL b_native = [[[VLCMain sharedInstance] mainWindow] nativeFullscreenMode];
+    BOOL b_native = UseNativeFullscreenMode();
 
     // close fullscreen, without changing fullscreen vars
     if (!b_native && ([o_window fullscreen] || [o_window inFullscreenTransition]))
@@ -499,12 +536,38 @@ void WindowClose(vout_window_t *p_wnd)
 - (void)setFullscreen:(int)i_full forWindow:(vout_window_t *)p_wnd withAnimation:(BOOL)b_animation
 {
     intf_thread_t *p_intf = getIntf();
-    BOOL b_nativeFullscreenMode = [[VLCMain sharedInstance] nativeFullscreenMode];
+    BOOL b_nativeFullscreenMode = UseNativeFullscreenMode();
 
     if (!p_intf || (!b_nativeFullscreenMode && !p_wnd))
         return;
     playlist_t *p_playlist = pl_Get(p_intf);
     BOOL b_fullscreen = i_full != 0;
+    BOOL b_stereo_fullscreen =
+        var_InheritInteger(p_intf, "stereo3d-fullscreen-display") > 0;
+
+    /* Auto-hide is insufficient for an HDMI frame-packed desktop: moving the
+     * pointer to the bottom edge makes the Dock reappear inside the lower-eye
+     * raster.  Mavericks may also leave Finder's chrome visible when the
+     * fullscreen request originates on the vout thread.  Hide both pieces of
+     * system UI unconditionally for the lifetime of the transient 3D target,
+     * then restore the exact presentation state we inherited. */
+    if (b_fullscreen && b_stereo_fullscreen && !stereoPresentationActive) {
+        savedStereoPresentationOptions = [NSApp presentationOptions];
+        NSApplicationPresentationOptions options =
+            savedStereoPresentationOptions &
+            ~(NSApplicationPresentationAutoHideDock |
+              NSApplicationPresentationAutoHideMenuBar);
+        options |= NSApplicationPresentationHideDock |
+                   NSApplicationPresentationHideMenuBar;
+        [NSApp setPresentationOptions:options];
+        stereoPresentationActive = YES;
+        msg_Dbg(p_intf, "hid Dock and menu bar for HDMI frame packing");
+    } else if (!b_fullscreen && stereoPresentationActive) {
+        [NSApp setPresentationOptions:savedStereoPresentationOptions];
+        stereoPresentationActive = NO;
+        msg_Dbg(p_intf, "restored macOS presentation options after leaving "
+                       "fullscreen");
+    }
 
     if (!var_GetBool(p_playlist, "fullscreen") != !b_fullscreen)
         var_SetBool(p_playlist, "fullscreen", b_fullscreen);

@@ -181,6 +181,7 @@ libvlc_media_discoverer_start( libvlc_media_discoverer_t * p_mdis )
         p_mdis,
         services_discovery_item_added,
         services_discovery_item_removed,
+        NULL,
     };
 
     /* Here we go */

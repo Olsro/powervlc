@@ -73,6 +73,15 @@ package-win-common: package-win-install package-win-sdk
 
 	cp $(srcdir)/share/icons/powervlc.ico $(win32_destdir)
 
+# Private engine resolved by vlc.config.helper("emule-engine"). Never flatten
+# it with the public executables and never place it in NSIS's own helpers dir.
+# The portable ZIP excludes every *helpers* path, hence the distinct name.
+	test -n "$(POWERVLC_AMULED)" -a -x "$(POWERVLC_AMULED)"
+	mkdir -p "$(win32_destdir)/powervlc-engines"
+	cp "$(POWERVLC_AMULED)" "$(win32_destdir)/powervlc-engines/amuled.exe"
+	cp "$(top_srcdir)/extras/package/amule-engine-NOTICE.txt" \
+	   "$(win32_destdir)/powervlc-engines/aMule-engine.txt"
+
 # The browser add-on. It goes to the root of the install because that is
 # where config_GetDataDir() points on Windows (src/win32/dirs.c hands back
 # the executable's own directory), and that is where the Help menu entry
@@ -173,6 +182,7 @@ endif
 
 # HRTF
 	cp -r $(srcdir)/share/hrtfs $(win32_destdir)/
+	cp -r $(prefix)/share/vlc/retroarch-shaders $(win32_destdir)/
 
 # Convert to DOS line endings
 	find $(win32_destdir) -type f \( -name "*xml" -or -name "*html" -or -name '*js' -or -name '*css' -or -name '*hosts' -or -iname '*txt' -or -name '*.cfg' -or -name '*.lua' \) -exec $(U2D) -q {} \;

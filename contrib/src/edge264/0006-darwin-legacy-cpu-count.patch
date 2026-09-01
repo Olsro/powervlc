@@ -1,0 +1,33 @@
+--- a/edge264/src/edge264.c
++++ b/edge264/src/edge264.c
+@@ -79,5 +79,9 @@
+  */
+ 
+ #include "edge264_internal.h"
++#ifdef __APPLE__
++#include <sys/types.h>
++#include <sys/sysctl.h>
++#endif
+ 
+ #include "edge264_headers.c"
+@@ -230,8 +234,20 @@ Edge264Decoder *edge264_alloc(int n_threads, Edge264LogCb log_cb, void *log_arg,
+ 	if (n_threads < 0) {
+ 		#ifdef _WIN32
+ 			int n_cpus = atoi(getenv("NUMBER_OF_PROCESSORS"));
++		#elif defined(__APPLE__)
++			/* _SC_NPROCESSORS_ONLN is absent from the 10.4 SDK.  The
++			 * Darwin sysctl API predates it and also reports both cores on
++			 * Core 2 Duo Snow Leopard systems. */
++			int n_cpus = 1;
++			size_t n_cpus_size = sizeof(n_cpus);
++			if (sysctlbyname("hw.logicalcpu", &n_cpus, &n_cpus_size, NULL, 0) != 0) {
++				n_cpus_size = sizeof(n_cpus);
++				if (sysctlbyname("hw.ncpu", &n_cpus, &n_cpus_size, NULL, 0) != 0)
++					n_cpus = 1;
++			}
+ 		#else
+ 			int n_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+ 		#endif
++		if (n_cpus < 1) n_cpus = 1;
+ 		n_threads = min(n_cpus, 16);
+ 	}

@@ -181,8 +181,30 @@ VLC_API vlc_tick_t vout_GetDecoderFifoFirstDate( vout_thread_t * );
 
 /* */
 VLC_API void vout_PutSubpicture( vout_thread_t *, subpicture_t * );
+VLC_API void vout_RefreshSubpicture( vout_thread_t * );
 VLC_API int vout_RegisterSubpictureChannel( vout_thread_t * );
 VLC_API void vout_FlushSubpictureChannel( vout_thread_t *, int );
+
+/**
+ * Preserve the currently displayed picture across decoder/output flushes.
+ *
+ * Interactive disc menus can end their background video immediately before
+ * entering an indefinite still. Their graphics plane remains live and must
+ * be composited again whenever keyboard focus changes, even though no new
+ * video picture will arrive. The caller must disable the hold when that menu
+ * plane closes.
+ */
+VLC_API void vout_ChangeStaticFrameHold( vout_thread_t *, bool );
+
+/**
+ * Keep an interactive disc overlay in the uncropped source coordinate space.
+ *
+ * Automatic black-border detection must not resize the video underneath a
+ * Blu-ray/DVD graphics plane whose authored button coordinates remain tied to
+ * the complete source raster. The previous automatic-crop preference remains
+ * selected and starts measuring afresh when the overlay closes.
+ */
+VLC_API void vout_ChangeInteractiveOverlay( vout_thread_t *, bool );
 
 /**@}*/
 

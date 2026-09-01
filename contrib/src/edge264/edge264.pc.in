@@ -1,0 +1,11 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: edge264
+Description: Edge264 H.264/AVC and MVC decoder
+Version: 0.3-sylc
+Libs: -L${libdir} -ledge264
+Libs.private: -lpthread
+Cflags: -I${includedir}

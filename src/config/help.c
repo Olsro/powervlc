@@ -169,7 +169,7 @@ static inline void print_help_on_full_help( void )
  * apart (the bundle only advertises the PowerVLC one). */
 static inline void print_powervlc_header( void )
 {
-    printf(_("PowerVLC %s (forked from VLC %s)\n\n"),
+    printf(_("PowerVLC %s forked from VLC %s\n\n"),
            POWERVLC_VERSION, VERSION_MESSAGE);
 }
 
@@ -753,7 +753,8 @@ static void ShowConsole( void )
      * Unicode/locale subsystem. By default, we have the obsolecent OEM code
      * page (e.g. CP437 or CP850). */
     SetConsoleOutputCP (GetACP ());
-    SetConsoleTitle (TEXT("VLC media player version ") TEXT(PACKAGE_VERSION));
+    SetConsoleTitle (TEXT("PowerVLC ") TEXT(POWERVLC_VERSION)
+                     TEXT(" forked from VLC ") TEXT(VERSION_MESSAGE));
 
     freopen( "CONOUT$", "w", stderr );
     freopen( "CONIN$", "r", stdin );

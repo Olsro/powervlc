@@ -646,6 +646,41 @@ libdav1d_plugin_la_LIBADD = $(DAV1D_LIBS)
 EXTRA_LTLIBRARIES += libdav1d_plugin.la
 codec_LTLIBRARIES += $(LTLIBdav1d)
 
+libmvc_plugin_la_SOURCES = codec/mvc.c \
+	codec/hxxx_helper.c codec/hxxx_helper.h \
+	packetizer/hxxx_nal.h packetizer/hxxx_nal.c \
+	packetizer/hxxx_sei.h packetizer/hxxx_sei.c \
+	packetizer/h264_slice.c packetizer/h264_slice.h \
+	packetizer/h264_nal.c packetizer/h264_nal.h \
+	packetizer/hevc_nal.c packetizer/hevc_nal.h
+libmvc_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) $(EDGE264_CFLAGS)
+libmvc_plugin_la_CFLAGS = $(AM_CFLAGS)
+libmvc_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)'
+libmvc_plugin_la_LIBADD = $(EDGE264_LIBS)
+if HAVE_OSX
+# mvc.c resolves VDA itself with dlopen so this plugin remains loadable on
+# 10.4/10.5, where the framework does not exist. CoreFoundation and CoreVideo
+# are present throughout PowerVLC's Intel macOS support range.
+libmvc_plugin_la_LDFLAGS += -Wl,-framework,CoreFoundation \
+	-Wl,-framework,CoreVideo
+if HAVE_VT_FRAMEWORK
+# Apple Silicon decodes the AVC-compatible base view with VideoToolbox. Keep
+# these frameworks out of legacy-SDK builds for the GeForce 320M target.
+libmvc_plugin_la_LDFLAGS += -Wl,-framework,VideoToolbox \
+	-Wl,-framework,CoreMedia
+endif
+endif
+EXTRA_LTLIBRARIES += libmvc_plugin.la
+codec_LTLIBRARIES += $(LTLIBmvc)
+
+libmfx_mvc_plugin_la_SOURCES = codec/mfx_mvc.c
+libmfx_mvc_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) $(MFXMVC_CFLAGS)
+libmfx_mvc_plugin_la_CFLAGS = $(AM_CFLAGS)
+libmfx_mvc_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)'
+libmfx_mvc_plugin_la_LIBADD = $(MFXMVC_LIBS) -ld3d11 -ldxgi
+EXTRA_LTLIBRARIES += libmfx_mvc_plugin.la
+codec_LTLIBRARIES += $(LTLIBmfx_mvc)
+
 
 ### Hardware encoders ###
 

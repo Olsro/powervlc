@@ -57,6 +57,7 @@ ${LangFileString} Action_OnArrivalSVCDMovie "Speel SVCD-rolprent"
 ${LangFileString} Action_OnArrivalVideoFiles "Speel videolêers"
 ${LangFileString} Action_OnArrivalMusicFiles "Speel oudiolêers"
 ${LangFileString} Action_OnArrivalDVDAudio "Speel oudio DVD"
+${LangFileString} Action_OnArrivalBluray "Speel Blu-ray"
 ${LangFileString} License_NextText "U is nou bewus van u regte. Klik Volgende om aan te gaan."
 
 ${LangFileString} Detail_CheckProcesses "Gaan prosesse na…"

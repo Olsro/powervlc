@@ -36,6 +36,7 @@ return {
     mode_playlists = "Listas de reprodução",
     btn_search = "Buscar",
     btn_open = "Abrir a seleção",
+    btn_open_channel = "Abrir o canal do item selecionado",
     btn_change_instance = "< Instância",
     msg_enter_query = "Digite algo para buscar",
     msg_searching = "Buscando…",
@@ -46,7 +47,13 @@ return {
     msg_target_found = "Endereço reconhecido — abrindo diretamente",
     msg_search_fail = "Falha na busca: ",
     msg_select_result = "Selecione antes um resultado na lista",
+    msg_channel_unavailable = "O canal vinculado a esta seleção não está disponível",
     lbl_quality = "Qualidade:",
+    lbl_audio_track = "Faixa de áudio:",
+    audio_default = "Áudio padrão",
+    audio_original = "original",
+    lbl_subtitles = "Legendas:",
+    subtitles_none = "Nenhuma",
     lbl_by = "de",
     audio_only = "Somente áudio",
     combined = "áudio+vídeo",
@@ -172,4 +179,18 @@ return {
           .. "&gt; Instalar a extensão PowerVLC</strong> coloca no seu "
           .. "navegador uma pequena extensão que faz isso sozinha — sem "
           .. "favorito, sem cliques, em todas as páginas.",
+    web_addon_lead = "Extensão instalada? Não é preciso arrastar nem clicar "
+                  .. "em nada: basta abrir a instância abaixo e passar pela "
+                  .. "verificação. Esta página avisará quando a conexão "
+                  .. "estiver estabelecida.",
+    web_steps_title = "Sem a extensão: o favorito",
+    web_relay_on_addon = "Conectado ao PowerVLC pela extensão do navegador. "
+                      .. "Não é preciso clicar em nada: deixe esta janela e "
+                      .. "a aba da instância abertas.",
+    web_m_taking = "O PowerVLC está reproduzindo este vídeo. A aba foi "
+                .. "esvaziada de propósito logo no início: deixar o "
+                .. "reprodutor do site terminar de carregar aqui custaria à "
+                .. "máquina uma segunda decodificação e um segundo download, "
+                .. "além de sobrecarregar a instância sem necessidade. "
+                .. "Deixe-a aberta.",
 }

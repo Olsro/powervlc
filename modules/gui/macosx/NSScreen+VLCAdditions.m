@@ -143,9 +143,14 @@ static bool b_old_spaces_style = YES;
 - (void)setFullscreenPresentationOptions
 {
     NSApplicationPresentationOptions presentationOpts = [NSApp presentationOptions];
-    if ([self hasMenuBar])
+    /* Hide and auto-hide are mutually exclusive on Mavericks.  The HDMI 3D
+     * path deliberately uses the stronger Hide variants so Finder UI cannot
+     * be revealed inside either eye by touching a screen edge. */
+    if ([self hasMenuBar] &&
+        !(presentationOpts & NSApplicationPresentationHideMenuBar))
         presentationOpts |= NSApplicationPresentationAutoHideMenuBar;
-    if ([self hasMenuBar] || [self hasDock])
+    if (([self hasMenuBar] || [self hasDock]) &&
+        !(presentationOpts & NSApplicationPresentationHideDock))
         presentationOpts |= NSApplicationPresentationAutoHideDock;
     [NSApp setPresentationOptions:presentationOpts];
 }

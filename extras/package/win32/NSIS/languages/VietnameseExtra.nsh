@@ -2,11 +2,15 @@
 ${LangFileString} Name_Section01 "Trình phát phương tiện (bắt buộc)"
 ${LangFileString} Name_Section02a "Lối tắt trên menu Bắt đầu"
 ${LangFileString} Name_Section02b "Lối tắt trên Desktop"
+${LangFileString} Name_Section34 "Trình bổ trợ web"
+${LangFileString} Name_Section03 "Trình bổ trợ Mozilla"
+${LangFileString} Name_Section04 "Trình bổ trợ ActiveX"
 ${LangFileString} Name_Section05 "Phát các đĩa"
 ${LangFileString} Name_Section06 "Sự liên kết loại tệp"
 ${LangFileString} Name_SectionGroupAudio "Các tệp âm thanh"
 ${LangFileString} Name_SectionGroupVideo "Các tệp video"
 ${LangFileString} Name_SectionGroupOther "Khác"
+${LangFileString} Name_Section07 "Menu ngữ cảnh"
 ${LangFileString} Name_Section08 "Xoá cài đặt và bộ nhớ đệm"
 
 ${LangFileString} Desc_Section01 \
@@ -15,6 +19,16 @@ ${LangFileString} Desc_Section02a \
     "Thêm biểu tượng vào menu bắt đầu để dễ truy cập"
 ${LangFileString} Desc_Section02b \
     "Thêm biểu tượng vào Desktop để dễ truy cập"
+${LangFileString} Desc_Section03 \
+    "Trình bổ trợ ${PRODUCT_NAME} cho Mozilla và Mozilla Firefox"
+${LangFileString} Desc_Section04 \
+    "Trình bổ trợ ActiveX của ${PRODUCT_NAME}"
+${LangFileString} Desc_Section05 \
+    "Đăng ký phát DVD và CD"
+${LangFileString} Desc_Section06 \
+    "Đặt ${PRODUCT_NAME} làm ứng dụng mặc định cho loại tệp được chỉ định"
+${LangFileString} Desc_Section07 \
+    "Thêm các mục vào menu ngữ cảnh ('Phát bằng ${PRODUCT_NAME}' và 'Thêm vào danh sách phát của ${PRODUCT_NAME}')"
 ${LangFileString} Desc_Section08 \
     "Xoá cài đặt và tệp bộ nhớ đệm của trình phát phương tiện ${PRODUCT_NAME} còn sót lại từ các lần cài đặt trước"
 

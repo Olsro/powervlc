@@ -92,7 +92,6 @@ static void DisplayVolume( vout_thread_t *, int, float );
 static void DisplayRate ( vout_thread_t *, float );
 static float AdjustRateFine( vlc_object_t *, const int );
 static void ClearChannels  ( vout_thread_t *, int );
-static bool OSDIsAlone( vout_thread_t * );
 
 #define DisplayMessage(vout, ...) \
     do { \
@@ -100,23 +99,13 @@ static bool OSDIsAlone( vout_thread_t * );
             vout_OSDMessage(vout, VOUT_SPU_CHANNEL_OSD, __VA_ARGS__); \
     } while(0)
 #define DisplayIcon(vout, icon) \
-    do { if(vout) vout_OSDIcon(vout, VOUT_SPU_CHANNEL_OSD, icon); } while(0)
-
-/* True when the video is the only thing on screen: the OSD sliders are
- * then the only place a position or a volume shows, so they are drawn.
- * Historically that meant fullscreen; it is also the case while an
- * interface auto-hides its windowed controls and raises the libvlc
- * "intf-controls-hidden" bool. The messages and the icons are NOT
- * conditioned on it -- upstream draws them windowed too. */
-static bool OSDIsAlone( vout_thread_t *p_vout )
-{
-    if( var_GetBool( p_vout, "fullscreen" ) )
-        return true;
-
-    vlc_object_t *libvlc = VLC_OBJECT(p_vout->obj.libvlc);
-    return var_Type( libvlc, "intf-controls-hidden" ) != 0
-        && var_GetBool( libvlc, "intf-controls-hidden" );
-}
+    do { \
+        if ((vout) && \
+            !(var_InheritBool((vout), "intf-stereo-feedback") && \
+              var_InheritInteger((vout), \
+                                 "stereo3d-fullscreen-display") > 0)) \
+            vout_OSDIcon((vout), VOUT_SPU_CHANNEL_OSD, (icon)); \
+    } while(0)
 
 /*****************************************************************************
  * Module descriptor
@@ -1064,6 +1053,10 @@ static int PutAction( intf_thread_t *p_intf, input_thread_t *p_input,
                 break;
             var_SetInteger( p_input, "time-offset", it * sign * CLOCK_FREQ );
             DisplayPosition( p_vout, slider_chan, p_input );
+            if( var_Type( p_intf->obj.libvlc,
+                          "intf-show-position-osd" ) != 0 )
+                var_TriggerCallback( p_intf->obj.libvlc,
+                                     "intf-show-position-osd" );
             break;
         }
 
@@ -1086,7 +1079,10 @@ static int PutAction( intf_thread_t *p_intf, input_thread_t *p_input,
             break;
         case ACTIONID_DISC_MENU:
             if( p_input )
-                var_SetInteger( p_input, "title  0", 2 );
+                /* The historical pseudo-variable bypasses Blu-ray UO
+                 * handling. Route root-menu requests through the demux so a
+                 * prohibited operation can be rejected with OSD feedback. */
+                input_Control( p_input, INPUT_NAV_MENU, NULL );
             break;
         case ACTIONID_DISC_POPUP_MENU:
             input_ShowPopupMenu( p_input );
@@ -1613,6 +1609,9 @@ static void DisplayPosition( vout_thread_t *p_vout, int slider_chan,
     char psz_time[MSTRTIME_MAX_SIZE];
 
     if( p_vout == NULL ) return;
+    if( var_InheritBool( p_vout, "intf-stereo-feedback" ) &&
+        var_InheritInteger( p_vout, "stereo3d-fullscreen-display" ) > 0 )
+        return;
 
     ClearChannels( p_vout, slider_chan );
 
@@ -1631,24 +1630,32 @@ static void DisplayPosition( vout_thread_t *p_vout, int slider_chan,
         DisplayMessage( p_vout, "%s", psz_time );
     }
 
-    if( OSDIsAlone( p_vout ) )
-    {
-        vlc_value_t pos;
-        var_Get( p_input, "position", &pos );
-        vout_OSDSlider( p_vout, slider_chan,
-                        pos.f_float * 100, OSD_HOR_SLIDER );
-    }
+    /* Always draw the widget.  On the Mavericks private frame-packing path
+     * the fullscreen state crosses a display-republish boundary and is not a
+     * reliable eligibility test, while the text OSD is not rendered by the
+     * legacy stack.  Suppressing this bar therefore leaves seeks with no
+     * feedback at all. */
+    vlc_value_t pos;
+    var_Get( p_input, "position", &pos );
+    vout_OSDSlider( p_vout, slider_chan,
+                    pos.f_float * 100, OSD_HOR_SLIDER );
 }
 
 static void DisplayVolume( vout_thread_t *p_vout, int slider_chan, float vol )
 {
     if( p_vout == NULL )
         return;
+    if( var_InheritBool( p_vout, "intf-stereo-feedback" ) &&
+        var_InheritInteger( p_vout, "stereo3d-fullscreen-display" ) > 0 ) {
+        if( var_Type( p_vout->obj.libvlc, "intf-show-volume-osd" ) != 0 )
+            var_TriggerCallback( p_vout->obj.libvlc,
+                                 "intf-show-volume-osd" );
+        return;
+    }
     ClearChannels( p_vout, slider_chan );
 
-    if( OSDIsAlone( p_vout ) )
-        vout_OSDSlider( p_vout, slider_chan,
-                        lroundf(vol * 100.f), OSD_VERT_SLIDER );
+    vout_OSDSlider( p_vout, slider_chan,
+                    lroundf(vol * 100.f), OSD_VERT_SLIDER );
     DisplayMessage( p_vout, _( "Volume %ld%%" ), lroundf(vol * 100.f) );
 }
 

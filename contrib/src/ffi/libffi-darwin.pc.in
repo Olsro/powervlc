@@ -1,0 +1,8 @@
+prefix=@PREFIX@
+includedir=@SDK@/usr/include/ffi
+
+Name: libffi
+Description: macOS SDK system libffi
+Version: 3.4-rc1
+Libs: -lffi
+Cflags: -I${includedir}

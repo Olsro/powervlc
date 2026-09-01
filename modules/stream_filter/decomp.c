@@ -97,7 +97,13 @@ struct stream_sys_t
     int64_t      pts_delay;
 };
 
+#ifdef __APPLE__
+# include <crt_externs.h>
+# define VLC_DECOMP_ENVIRON (*_NSGetEnviron())
+#else
 extern char **environ;
+# define VLC_DECOMP_ENVIRON environ
+#endif
 
 static const size_t bufsize = 65536;
 #ifdef HAVE_VMSPLICE
@@ -293,7 +299,7 @@ static int Open (stream_t *stream, const char *path)
                 if (!posix_spawn_file_actions_adddup2 (&actions, comp[0], 0)
                  && !posix_spawn_file_actions_adddup2 (&actions, uncomp[1], 1)
                  && !posix_spawnp (&p_sys->pid, path, &actions, NULL, argv,
-                                   environ))
+                                   VLC_DECOMP_ENVIRON))
                 {
                     if (vlc_clone (&p_sys->thread, Thread, stream,
                                    VLC_THREAD_PRIORITY_INPUT) == 0)

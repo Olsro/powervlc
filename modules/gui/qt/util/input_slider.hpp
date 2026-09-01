@@ -36,6 +36,8 @@
 #include <QSlider>
 #include <QPainter>
 #include <QTime>
+#include <QVector>
+#include <QStringList>
 
 #define MSTRTIME_MAX_SIZE 22
 
@@ -102,6 +104,8 @@ private:
     float f_buffering;
     QTime bufferingStart;
     SeekPoints* chapters;
+    QVector<vlc_tick_t> bookmarkTimes;
+    QStringList bookmarkNames;
     bool b_classic;
     bool b_seekable;
     int mHandleLength;
@@ -135,6 +139,8 @@ private:
     void clipKnobInteract( int xPos );
     void clipSeekPreview( float fraction );
     void paintClipExtras( QPainter &painter );
+    void paintBookmarkMarkers( QPainter &painter );
+    int bookmarkAtX( int x, int tolerance = 5 ) const;
 
     /* PowerVLC hover previews (qt-hover-thumbnails): the tooltip carries a
      * small image of the hovered position, decoded on the side. */
@@ -151,6 +157,7 @@ public slots:
     void hideHandle();
     /* PowerVLC clip creation mode: sync with InputManager's state */
     void updateClipCreationMode();
+    void updateBookmarks();
 
 private slots:
     void startSeekTimer();

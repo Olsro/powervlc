@@ -16,11 +16,9 @@ Artifacts land in `extras/package/docker/out/`.
 
 ## Why Docker works well here
 
-Windows builds are **cross-compiled on Linux** (the compiler is a Linux program
-that emits Windows `.exe`; it never runs Windows). On an arm64 Mac the cross
-toolchains run **natively**, so even the x86 Windows targets build fast. Native
-Linux builds are the opposite: the compiler targets the container's arch, so a
-non-arm64 Linux build runs the compiler under QEMU emulation.
+Windows and x86 Linux builds are **cross-compiled on Linux**. On an arm64 Mac
+their compiler and packaging tools run natively; only the produced files target
+x86, so no QEMU is involved.
 
 ## Target matrix
 
@@ -30,8 +28,15 @@ non-arm64 Linux build runs the compiler under QEMU emulation.
 | `win64` | mingw-w64 GCC (apt) | msvcrt — **Windows Vista** | native — fast |
 | `winarm64` | llvm-mingw | ucrt — **Windows 10 (RS5)** | native — fast |
 | `linux-arm64-appimage` | system Qt5 (old glibc) | glibc 2.27+ | native — fast |
-| `linux-amd64-appimage` | system Qt5 (old glibc) | glibc 2.27+ | **emulated — slow** |
-| `linux-i386-appimage` | system Qt5 (old glibc) | glibc 2.27+ | **emulated — slow** |
+| `linux-amd64-appimage` | GCC cross + Bionic sysroot | glibc 2.27+ | native — fast |
+| `linux-i386-appimage` | GCC cross + Bionic sysroot | glibc 2.27+ | native — fast |
+
+The x86 AppImages are assembled natively with `mksquashfs` and the matching
+prebuilt AppImage runtime. No target-native `linuxdeploy` binary is run.
+
+```bash
+extras/package/docker/build-in-docker.sh linux-amd64-cross-check linux-i386-cross-check
+```
 
 There is no snap target: snapcraft is itself a snap and wants LXD/multipass, so
 building one in a container never worked here. Linux ships as an AppImage.

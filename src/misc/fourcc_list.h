@@ -283,9 +283,14 @@ static const staticentry_t p_list_video[] = {
         E("q264", "QNAP H.264/MPEG-4 AVC"),
         E("w264", "QNAP H.264/MPEG-4 AVC"),
         A("UMSV"),
+
         A("SMV2"),
         A("tshd"),
         A("rv64"),
+
+    B(VLC_CODEC_H264_MVC, "H.264/MVC stereoscopic video"),
+        A("mvc1"),
+        A("MVC1"),
 
     /* H263 and H263i */
     /* H263(+) is also known as Real Video 1.0 */

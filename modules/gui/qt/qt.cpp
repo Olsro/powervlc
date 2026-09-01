@@ -30,7 +30,14 @@
 
 #include <QApplication>
 #include <QDate>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QFontInfo>
+#include <QFontMetrics>
+#include <QFontDatabase>
 #include <QMutex>
+#include <QTextStream>
 
 #include "qt.hpp"
 
@@ -53,6 +60,7 @@
 #include <vlc_vout_window.h>
 
 #ifdef _WIN32 /* For static builds */
+ #include <windows.h>
  #include <QtPlugin>
 
  #ifdef QT_STATICPLUGIN
@@ -75,6 +83,116 @@ static void Close        ( vlc_object_t * );
 static int  WindowOpen   ( vout_window_t *, const vout_window_cfg_t * );
 static void WindowClose  ( vout_window_t * );
 static void ShowDialog   ( intf_thread_t *, int, int, intf_dialog_args_t * );
+
+#ifdef _WIN32
+/**
+ * Install the packaged wide-coverage font before any Qt widget is created.
+ * Windows XP's UI fonts lack many characters that are valid in media and
+ * remote filenames. Loading the font only when an extension dialog opened
+ * left the main playlist, and every widget created earlier, on the XP font.
+ */
+static void LoadWindowsUnicodeFont( intf_thread_t *p_intf, QApplication &app )
+{
+    const QString diagnosticPath = QDir( QCoreApplication::applicationDirPath() )
+            .filePath( QStringLiteral("portable/powervlc-font-diagnostic.txt") );
+    QDir().mkpath( QFileInfo( diagnosticPath ).absolutePath() );
+    QFile diagnostic( diagnosticPath );
+    diagnostic.open( QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text );
+    QTextStream report( &diagnostic );
+    report.setCodec( "UTF-8" );
+    report << "PowerVLC Qt Unicode font diagnostic\n";
+
+    char *psz_data = config_GetDataDir();
+    if( psz_data == NULL )
+    {
+        report << "error=config_GetDataDir failed\n";
+        return;
+    }
+
+    const QDir data( qfu( psz_data ) );
+    const QDir executable( QCoreApplication::applicationDirPath() );
+    free( psz_data );
+    struct FontCandidate { QString path; QString family; };
+    const QList<FontCandidate> candidates = {
+        { executable.filePath( QStringLiteral("skins/fonts/PowerVLCUnicode.ttf") ),
+          QStringLiteral("PowerVLC Unicode CJK") },
+        { data.filePath( QStringLiteral("skins/fonts/PowerVLCUnicode.ttf") ),
+          QStringLiteral("PowerVLC Unicode CJK") },
+        { data.filePath( QStringLiteral("skins2/fonts/PowerVLCUnicode.ttf") ),
+          QStringLiteral("PowerVLC Unicode CJK") },
+        { data.filePath( QStringLiteral("share/skins2/fonts/PowerVLCUnicode.ttf") ),
+          QStringLiteral("PowerVLC Unicode CJK") },
+        { data.filePath( QStringLiteral("skins/fonts/FreeSans.ttf") ),
+          QStringLiteral("FreeSans") },
+        { data.filePath( QStringLiteral("skins2/fonts/FreeSans.ttf") ),
+          QStringLiteral("FreeSans") },
+        { data.filePath( QStringLiteral("share/skins2/fonts/FreeSans.ttf") ),
+          QStringLiteral("FreeSans") }
+    };
+
+    for( const FontCandidate &candidate : candidates )
+    {
+        if( !QFileInfo::exists( candidate.path ) )
+        {
+            report << "candidate=" << candidate.path << " exists=0\n";
+            continue;
+        }
+
+        /* Qt 5/XP and GDI both reject loading these valid files by pathname
+         * in the interactive SSH-launched session. Feeding Qt the bytes uses
+         * its memory-font path instead and is independent of GDI's file-font
+         * registration. Retain both fallbacks for other Windows versions. */
+        QFile fontFile( candidate.path );
+        QByteArray fontData;
+        if( fontFile.open( QIODevice::ReadOnly ) )
+            fontData = fontFile.readAll();
+        const int memoryId = fontData.isEmpty() ? -1
+                           : QFontDatabase::addApplicationFontFromData( fontData );
+        const int nativeCount = memoryId >= 0 ? 0 : AddFontResourceExW(
+                reinterpret_cast<LPCWSTR>( candidate.path.utf16() ),
+                FR_PRIVATE, NULL );
+        const int id = memoryId >= 0 ? memoryId
+                     : QFontDatabase::addApplicationFont( candidate.path );
+        report << "candidate=" << candidate.path
+               << " bytes=" << fontData.size()
+               << " memory-id=" << memoryId
+               << " native-count=" << nativeCount << " qt-id=" << id << "\n";
+
+        QStringList families;
+        if( id >= 0 )
+            families = QFontDatabase::applicationFontFamilies( id );
+        if( families.isEmpty() && nativeCount > 0 )
+            families << candidate.family;
+        report << "registered-families=" << families.join( QStringLiteral(" | ") ) << "\n";
+        if( families.isEmpty() )
+            continue;
+
+        /* The bundled face deliberately has its own family name. Keeping the
+         * upstream "DejaVu Sans" name let GDI resolve an installed, smaller
+         * face with the same family on XP, so addApplicationFont() succeeded
+         * while Japanese filenames still rendered as squares. */
+        QFont font( families.first(), app.font().pointSize() );
+        font.setStyleStrategy( QFont::PreferAntialias );
+        QApplication::setFont( font );
+        const QFontInfo info( QApplication::font() );
+        const QFontMetrics metrics( QApplication::font() );
+        report << "requested-family=" << font.family() << "\n"
+               << "application-family=" << QApplication::font().family() << "\n"
+               << "resolved-family=" << info.family() << " exact=" << info.exactMatch() << "\n"
+               << "glyph-U+798F=" << metrics.inFontUcs4( 0x798f ) << "\n"
+               << "glyph-U+30EA=" << metrics.inFontUcs4( 0x30ea ) << "\n"
+               << "status=loaded\n";
+        diagnostic.close();
+        msg_Dbg( p_intf, "using packaged Qt Unicode font '%s' from %s",
+                 qtu( families.first() ), qtu( candidate.path ) );
+        return;
+    }
+
+    report << "status=no-font-loaded\n";
+    diagnostic.close();
+    msg_Warn( p_intf, "unable to load the packaged Qt Unicode font" );
+}
+#endif
 
 /*****************************************************************************
  * Module descriptor
@@ -593,6 +711,10 @@ static void *ThreadPlatform( void *obj, char *platform_name )
 
     /* Start the QApplication here */
     QVLCApp app( argc, argv );
+
+#ifdef _WIN32
+    LoadWindowsUnicodeFont( p_intf, app );
+#endif
 
     /* Set application direction to locale direction,
      * necessary for  RTL locales */

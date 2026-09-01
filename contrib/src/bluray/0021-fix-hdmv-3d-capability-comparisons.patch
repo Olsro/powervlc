@@ -1,0 +1,127 @@
+From: PowerVLC
+Subject: [PATCH] Fix HDMV 3D capability comparisons
+
+Some processed 3D images substitute stale immediate values for PSR31 and
+PSR23 in COMPARE commands rather than in the MOVE commands handled by the
+existing recovery.  Accept the intact BACKUP MovieObject only when the whole
+structure matches and every difference is one of those exact substitutions.
+
+Also backport libbluray's corrected BC operand order.  The old expression
+tests bits outside the requested mask; profile and display values naturally
+contain such additional bits, causing compliant 3D players to be rejected.
+
+--- a/src/libbluray/hdmv/mobj_parse.c
++++ b/src/libbluray/hdmv/mobj_parse.c
+@@ -221,24 +221,69 @@
+     return objects;
+ }
+ 
+-static int _mobj_same_insn(const HDMV_INSN *a, const HDMV_INSN *b, int ignore_imm_op2)
++static int _mobj_same_insn(const HDMV_INSN *a, const HDMV_INSN *b,
++                           int ignore_imm_op1, int ignore_imm_op2)
+ {
+     return a->sub_grp    == b->sub_grp &&
+            a->op_cnt     == b->op_cnt &&
+            a->grp        == b->grp &&
+            a->branch_opt == b->branch_opt &&
+            (ignore_imm_op2 || a->imm_op2 == b->imm_op2) &&
+-           a->imm_op1    == b->imm_op1 &&
++           (ignore_imm_op1 || a->imm_op1 == b->imm_op1) &&
+            a->cmp_opt    == b->cmp_opt &&
+            a->set_opt    == b->set_opt;
+ }
+ 
+ static int _mobj_same_cmd(const MOBJ_CMD *a, const MOBJ_CMD *b)
+ {
+-    return _mobj_same_insn(&a->insn, &b->insn, 0) &&
++    return _mobj_same_insn(&a->insn, &b->insn, 0, 0) &&
+            a->dst == b->dst && a->src == b->src;
+ }
+ 
++static int _mobj_3d_cap_substitution(const MOBJ_CMD *primary,
++                                     const MOBJ_CMD *backup,
++                                     unsigned int *profile_reads,
++                                     unsigned int *display_reads)
++{
++    uint32_t stale_value, register_value;
++
++    /* The substitution can occur in the source operand of a MOVE. */
++    if (_mobj_same_insn(&primary->insn, &backup->insn, 0, 1) &&
++        primary->insn.grp == INSN_GROUP_SET &&
++        primary->insn.sub_grp == SET_SET &&
++        primary->insn.set_opt == INSN_MOVE &&
++        primary->insn.op_cnt == 2 &&
++        !primary->insn.imm_op1 && primary->insn.imm_op2 &&
++        !backup->insn.imm_op1 && !backup->insn.imm_op2 &&
++        primary->dst == backup->dst) {
++        stale_value = primary->src;
++        register_value = backup->src;
++
++    /* Other authoring paths compare the capability register directly. */
++    } else if (_mobj_same_insn(&primary->insn, &backup->insn, 1, 0) &&
++               primary->insn.grp == INSN_GROUP_CMP &&
++               primary->insn.op_cnt == 2 &&
++               primary->insn.imm_op1 && !backup->insn.imm_op1 &&
++               primary->src == backup->src) {
++        stale_value = primary->dst;
++        register_value = backup->dst;
++    } else {
++        return 0;
++    }
++
++    if (stale_value == UINT32_C(0x00010200) &&
++        register_value == UINT32_C(0x8000001f)) {
++        (*profile_reads)++;
++    } else if (stale_value == UINT32_C(0x00003403) &&
++               register_value == UINT32_C(0x80000017)) {
++        (*display_reads)++;
++    } else {
++        return 0;
++    }
++
++    return 1;
++}
++
+ /*
+  * Some otherwise valid discs have a damaged primary MovieObject.bdmv where
+  * reads of the player's 3D profile and display capability registers were
+@@ -278,26 +323,10 @@
+                 continue;
+             }
+ 
+-            if (!_mobj_same_insn(&pcmd->insn, &bcmd->insn, 1) ||
+-                pcmd->insn.grp != INSN_GROUP_SET ||
+-                pcmd->insn.sub_grp != SET_SET ||
+-                pcmd->insn.set_opt != INSN_MOVE ||
+-                pcmd->insn.op_cnt != 2 ||
+-                pcmd->insn.imm_op1 || !pcmd->insn.imm_op2 ||
+-                bcmd->insn.imm_op1 || bcmd->insn.imm_op2 ||
+-                pcmd->dst != bcmd->dst) {
++            if (!_mobj_3d_cap_substitution(pcmd, bcmd,
++                                           &profile_reads, &display_reads)) {
+                 return 0;
+             }
+-
+-            if (pcmd->src == UINT32_C(0x00010200) &&
+-                bcmd->src == UINT32_C(0x8000001f)) {
+-                profile_reads++;
+-            } else if (pcmd->src == UINT32_C(0x00003403) &&
+-                       bcmd->src == UINT32_C(0x80000017)) {
+-                display_reads++;
+-            } else {
+-                return 0;
+-            }
+         }
+     }
+ 
+--- a/src/libbluray/hdmv/hdmv_vm.c
++++ b/src/libbluray/hdmv/hdmv_vm.c
+@@ -1134,7 +1134,7 @@
+                 BD_DEBUG(DBG_HDMV|DBG_CRIT, "missing operand in BRANCH/JUMP opcode 0x%08x\n", *(uint32_t*)insn);
+             }
+             switch (insn->cmp_opt) {
+-                case INSN_BC: p->pc += !!(dst & ~src); break;
++                case INSN_BC: p->pc += !!(src & ~dst); break;
+                 case INSN_EQ: p->pc += !(dst == src); break;
+                 case INSN_NE: p->pc += !(dst != src); break;
+                 case INSN_GE: p->pc += !(dst >= src); break;

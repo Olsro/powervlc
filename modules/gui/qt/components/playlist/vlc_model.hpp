@@ -60,6 +60,7 @@ public:
       CURRENT_ITEM_ROLE = Qt::UserRole,
       CURRENT_ITEM_CHILD_ROLE,
       LEAF_NODE_ROLE, /* FIXME: same as index().child() ? */
+      RATING_ROLE,
     };
     virtual void rebuild( playlist_item_t * p = NULL ) = 0;
     virtual void doDelete( QModelIndexList ) = 0;
@@ -147,6 +148,8 @@ public slots:
     /* make sure the children of an expanded lazy node are loaded;
      * models supporting on-demand browsing override this */
     virtual void ensureBrowsed( const QModelIndex & ) {}
+    /* release children of disk-backed lazy nodes when their branch closes */
+    virtual void releaseBrowsed( const QModelIndex & ) {}
 
 signals:
     void currentIndexChanged( const QModelIndex& );

@@ -44,6 +44,9 @@
 
 #include <vlc_services_discovery.h>               /* SD_CMD_SEARCH */
 #include <vlc_intf_strings.h>                     /* POP_ */
+#include <vlc_url.h>
+#include <QMessageBox>
+#include <QSet>
 
 #define SPINNER_SIZE 32
 #define I_NEW_DIR \
@@ -60,6 +63,10 @@
 
 #include <QHeaderView>
 #include <QMenu>
+#include <QMessageBox>
+#include <QProcess>
+#include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QKeyEvent>
 #include <QWheelEvent>
 #include <QStackedLayout>
@@ -71,13 +78,50 @@
 #include <QUrl>
 #include <QFont>
 #include <QActionGroup>
+#include <QTimer>
 
 #include <assert.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define DROPZONE_SIZE 112
 
 /* local helper */
 inline QModelIndex popupIndex( QAbstractItemView *view );
+static void expandIndexPath( QTreeView *, const QModelIndex & );
+
+static int powerVLCLibraryIntegerOption( input_item_t *input,
+                                         const char *prefix )
+{
+    if( input == NULL || prefix == NULL )
+        return -1;
+    const size_t prefixLength = strlen( prefix );
+    int value = -1;
+    vlc_mutex_lock( &input->lock );
+    for( int i = 0; i < input->i_options; ++i )
+    {
+        const char *option = input->ppsz_options[i];
+        if( strncmp( option, prefix, prefixLength ) != 0 )
+            continue;
+        char *end = NULL;
+        long parsed = strtol( option + prefixLength, &end, 10 );
+        if( end != NULL && *end == '\0' && parsed >= 0 && parsed <= INT_MAX )
+            value = (int)parsed;
+        break;
+    }
+    vlc_mutex_unlock( &input->lock );
+    return value;
+}
+
+static QString playlistItemName( VLCModel *model, const QModelIndex &index )
+{
+    input_item_t *input = model->getInputItem( index );
+    char *name = input ? input_item_GetName( input ) : NULL;
+    QString result = name ? qfu( name ) : QString();
+    free( name );
+    return result;
+}
 
 StandardPLPanel::StandardPLPanel( PlaylistWidget *_parent,
                                   intf_thread_t *_p_intf,
@@ -100,6 +144,21 @@ StandardPLPanel::StandardPLPanel( PlaylistWidget *_parent,
 
     currentRootIndexPLId  = -1;
     lastActivatedPLItemId     = -1;
+    listOnly = false;
+
+    searchDelayTimer = new QTimer( this );
+    searchDelayTimer->setSingleShot( true );
+    searchDelayTimer->setInterval( 350 );
+    connect( searchDelayTimer, &QTimer::timeout,
+             this, &StandardPLPanel::applyDelayedLibrarySearch );
+    searchLoadTimer = new QTimer( this );
+    searchLoadTimer->setSingleShot( true );
+    searchLoadTimer->setInterval( 150 );
+    connect( searchLoadTimer, &QTimer::timeout,
+             this, &StandardPLPanel::finishDelayedLibrarySearch );
+    searchLoadRetries = 0;
+    searchUsesMemoryIndex = false;
+    memset( searchBucketMasks, 0, sizeof( searchBucketMasks ) );
 
     QList<QString> frames;
     frames << ":/util/wait1.svg";
@@ -149,9 +208,17 @@ void StandardPLPanel::gotoPlayingItem()
 void StandardPLPanel::handleExpansion( const QModelIndex& index )
 {
     assert( currentView );
-    if( currentRootIndexPLId != -1 && currentRootIndexPLId != model->itemId( index.parent() ) )
-        browseInto( index.parent() );
-    currentView->scrollTo( index );
+    QModelIndex current = model->currentIndex();
+    if( !current.isValid() )
+        current = index;
+    if( currentView != treeView && currentRootIndexPLId != -1
+     && currentRootIndexPLId != model->itemId( current.parent() ) )
+        browseInto( current.parent() );
+    if( treeView != NULL && currentView == treeView )
+        expandIndexPath( treeView, current );
+    currentView->scrollTo( current );
+    currentView->setCurrentIndex( current );
+    currentView->viewport()->update();
 }
 
 void StandardPLPanel::popupPlView( const QPoint &point )
@@ -175,6 +242,10 @@ bool StandardPLPanel::popup( const QPoint &point )
 {
     QModelIndex index = popupIndex( currentView ); /* index for menu logic only. Do not store.*/
     VLCModel *model = qobject_cast<VLCModel *>(currentView->model());
+    PLModel *plModel = qobject_cast<PLModel *>(currentView->model());
+    const bool userPlaylistsRoot = plModel && plModel->isUserPlaylistsRoot( index );
+    const bool userPlaylistFolder = plModel && plModel->isUserPlaylistFolder( index );
+    const bool userPlaylist = plModel && plModel->isUserPlaylist( index );
 
 #define ADD_MENU_ENTRY( icon, title, act ) \
     if ( model->isSupportedAction( act, index ) )\
@@ -213,11 +284,28 @@ bool StandardPLPanel::popup( const QPoint &point )
 
     QIcon addIcon( ":/buttons/playlist/playlist_add.svg" );
 
-    ADD_MENU_ENTRY( addIcon, qtr(I_POP_NEWFOLDER),
-                    VLCModelSubInterface::ACTION_CREATENODE )
+    if( userPlaylistsRoot || userPlaylistFolder )
+    {
+        action = menu.addAction( addIcon, qtr( "New Playlist…" ) );
+        action->setProperty( "powervlc-user-playlist-create", true );
+        action = menu.addAction( QIcon( ":/type/folder-grey.svg" ),
+                                 qtr( "New Playlist Folder…" ) );
+        action->setProperty( "powervlc-user-playlist-folder-create", true );
+    }
+    if( userPlaylistFolder || userPlaylist )
+    {
+        action = menu.addAction( QIcon(), qtr( "Rename…" ) );
+        action->setProperty( "powervlc-user-playlist-rename", true );
+    }
 
-    ADD_MENU_ENTRY( QIcon(), qtr(I_POP_RENAMEFOLDER),
-                    VLCModelSubInterface::ACTION_RENAMENODE )
+    if( !userPlaylistsRoot && !userPlaylistFolder && !userPlaylist )
+    {
+        ADD_MENU_ENTRY( addIcon, qtr(I_POP_NEWFOLDER),
+                        VLCModelSubInterface::ACTION_CREATENODE )
+
+        ADD_MENU_ENTRY( QIcon(), qtr(I_POP_RENAMEFOLDER),
+                        VLCModelSubInterface::ACTION_RENAMENODE )
+    }
 
     menu.addSeparator();
     /* In PL or ML, allow to add a file/folder */
@@ -236,6 +324,29 @@ bool StandardPLPanel::popup( const QPoint &point )
     menu.addSeparator();
     ADD_MENU_ENTRY( QIcon(), qtr( I_PL_SAVE ),
                     VLCModelSubInterface::ACTION_SAVETOPLAYLIST );
+
+    if( !currentView->selectionModel()->selectedRows().isEmpty() )
+    {
+        QAction *burn = menu.addAction( qtr( "Burn Playlist to Audio CD…" ) );
+        burn->setProperty( "powervlc-audio-cd", true );
+        QMenu *ratings = menu.addMenu( qtr( "Rating" ) );
+        int commonRating = -1;
+        if( plModel )
+            plModel->ratingPaths( currentView->selectionModel()->selectedRows(),
+                                  &commonRating );
+        for( int value = 1; value <= 5; ++value )
+        {
+            QAction *star = ratings->addAction( QString( value, QChar( 0x2605 ) ) );
+            star->setProperty( "powervlc-rating", value );
+            star->setCheckable( true );
+            star->setChecked( commonRating == value );
+        }
+        ratings->addSeparator();
+        QAction *clear = ratings->addAction( qtr( "No Rating" ) );
+        clear->setProperty( "powervlc-rating", 0 );
+        clear->setCheckable( true );
+        clear->setChecked( commonRating == 0 );
+    }
 
     menu.addSeparator();
 
@@ -297,6 +408,61 @@ bool StandardPLPanel::popup( const QPoint &point )
 
 void StandardPLPanel::popupAction( QAction *action )
 {
+    PLModel *plModel = qobject_cast<PLModel *>( currentView->model() );
+    QModelIndex playlistIndex = popupIndex( currentView );
+    if( plModel && ( action->property( "powervlc-user-playlist-create" ).toBool()
+                  || action->property( "powervlc-user-playlist-folder-create" ).toBool() ) )
+    {
+        const bool folder = action->property(
+            "powervlc-user-playlist-folder-create" ).toBool();
+        bool accepted = false;
+        QString name = QInputDialog::getText(
+            PlaylistDialog::getInstance( p_intf ),
+            folder ? qtr( "New Playlist Folder" ) : qtr( "New Playlist" ),
+            folder ? qtr( "Playlist folder name:" ) : qtr( "Playlist name:" ),
+            QLineEdit::Normal, QString(), &accepted );
+        if( accepted && !name.trimmed().isEmpty() )
+            plModel->createUserPlaylist( playlistIndex, name, folder );
+        return;
+    }
+    if( plModel
+     && action->property( "powervlc-user-playlist-rename" ).toBool() )
+    {
+        bool accepted = false;
+        QString name = QInputDialog::getText(
+            PlaylistDialog::getInstance( p_intf ), qtr( "Rename" ),
+            qtr( "New name:" ), QLineEdit::Normal,
+            plModel->getTitle( playlistIndex ), &accepted );
+        if( accepted && !name.trimmed().isEmpty() )
+            plModel->renameUserPlaylist( playlistIndex, name );
+        return;
+    }
+    if( action->property( "powervlc-audio-cd" ).toBool() )
+    {
+        burnAudioCD();
+        return;
+    }
+    if( action->property( "powervlc-rating" ).isValid() )
+    {
+        unsigned rating = action->property( "powervlc-rating" ).toUInt();
+        QStringList paths = plModel
+            ? plModel->ratingPaths( currentView->selectionModel()->selectedRows(), NULL )
+            : QStringList();
+        QVector<QByteArray> storage;
+        QVector<const char *> pointers;
+        foreach( const QString &path, paths ) storage.append( path.toUtf8() );
+        foreach( const QByteArray &path, storage ) pointers.append( path.constData() );
+        if( !pointers.isEmpty() )
+        {
+            services_discovery_ratings_t request = {
+                pointers.constData(), (size_t)pointers.size(), rating
+            };
+            playlist_ServicesDiscoveryControl( THEPL, "powervlc_library",
+                SD_CMD_POWERVLC_SET_RATINGS, &request );
+            currentView->viewport()->update();
+        }
+        return;
+    }
     VLCModel *model = qobject_cast<VLCModel *>(currentView->model());
     VLCModelSubInterface::actionsContainerType a =
             action->data().value<VLCModelSubInterface::actionsContainerType>();
@@ -409,6 +575,96 @@ void StandardPLPanel::popupAction( QAction *action )
     }
 }
 
+static void collectBurnPaths( VLCModel *model, const QModelIndex &index,
+                              QStringList &paths )
+{
+    if( model->rowCount( index ) > 0 )
+    {
+        for( int row = 0; row < model->rowCount( index ); ++row )
+            collectBurnPaths( model, model->index( row, 0, index ), paths );
+        return;
+    }
+    QUrl url( model->getURI( index ) );
+    if( !url.isLocalFile() ) return;
+    QString path = url.toLocalFile();
+    const QString suffix = QFileInfo( path ).suffix().toLower();
+    static const QStringList audio = QStringList() << "aac" << "aif" << "aiff"
+        << "alac" << "flac" << "m4a" << "mp3" << "ogg" << "opus" << "wav";
+    if( audio.contains( suffix ) ) paths << path;
+}
+
+void StandardPLPanel::burnAudioCD()
+{
+    VLCModel *playlistModel = qobject_cast<VLCModel *>( currentView->model() );
+    QStringList paths;
+    for( const QModelIndex &index : currentView->selectionModel()->selectedRows( 0 ) )
+        collectBurnPaths( playlistModel, index, paths );
+    paths.removeDuplicates();
+    if( paths.isEmpty() )
+    {
+        QMessageBox::warning( this, qtr( "Burn Audio CD" ),
+                              qtr( "The selection contains no local audio tracks." ) );
+        return;
+    }
+    if( QMessageBox::question( this, qtr( "Burn Audio CD" ),
+        qtr( "Burn %1 tracks to the blank Audio CD?" ).arg( paths.size() ) )
+        != QMessageBox::Yes ) return;
+
+    QTemporaryDir temporary( QDir::tempPath() + "/PowerVLC-Audio-CD-XXXXXX" );
+    temporary.setAutoRemove( false );
+    if( !temporary.isValid() ) return;
+    int number = 1;
+    for( const QString &source : paths )
+    {
+        QString extension = QFileInfo( source ).suffix();
+        QString target = QDir( temporary.path() ).filePath(
+            QString( "%1.%2" ).arg( number++, 3, 10, QLatin1Char( '0' ) )
+                                .arg( extension ) );
+        if( !QFile::link( source, target ) ) QFile::copy( source, target );
+    }
+
+    QString program;
+    QStringList arguments;
+#ifdef Q_OS_MAC
+    program = "/usr/bin/drutil";
+    arguments << "burn" << "-audio" << "-eject" << temporary.path();
+#else
+    program = QStandardPaths::findExecutable( "wodim" );
+    if( program.isEmpty() ) program = QStandardPaths::findExecutable( "cdrecord" );
+    bool pcmOnly = true;
+    for( const QString &path : paths )
+    {
+        const QString suffix = QFileInfo( path ).suffix().toLower();
+        if( suffix != "wav" && suffix != "aif" && suffix != "aiff" )
+            pcmOnly = false;
+    }
+    if( program.isEmpty() || !pcmOnly )
+    {
+        QDir( temporary.path() ).removeRecursively();
+        QMessageBox::information( this, qtr( "Burn Audio CD" ),
+            qtr( "On this system, install wodim/cdrecord and use PCM WAV or AIFF tracks. PowerVLC can burn compressed tracks directly on macOS." ) );
+        return;
+    }
+    arguments << "-v" << "-dao" << "-audio";
+    QStringList staged = QDir( temporary.path() ).entryList( QDir::Files,
+                                                             QDir::Name );
+    for( const QString &file : staged )
+        arguments << QDir( temporary.path() ).filePath( file );
+#endif
+    QProcess *process = new QProcess( this );
+    const QString stagingPath = temporary.path();
+    connect( process, static_cast<void (QProcess::*)(int, QProcess::ExitStatus)>(
+        &QProcess::finished), this,
+        [this, process, stagingPath]( int code, QProcess::ExitStatus status ) {
+            QDir( stagingPath ).removeRecursively();
+            if( status != QProcess::NormalExit || code != 0 )
+                QMessageBox::warning( this, qtr( "Burn Audio CD" ),
+                                      qtr( "The disc burning process failed." ) );
+            process->deleteLater();
+        } );
+    process->start( program, arguments );
+}
+
 QMenu* StandardPLPanel::viewSelectionMenu( StandardPLPanel *panel )
 {
     QMenu *viewMenu = new QMenu( qtr( "Playlist View Mode" ), panel );
@@ -420,6 +676,7 @@ QMenu* StandardPLPanel::viewSelectionMenu( StandardPLPanel *panel )
     for( int i = 0; i < MAX_VIEW; i++ )
     {
         QAction *action = viewMenu->addAction( viewNames[i] );
+        panel->viewActions.append( action );
         action->setCheckable( true );
         viewGroup->addAction( action );
         viewSelectionMapper->setMapping( action, i );
@@ -465,6 +722,7 @@ void StandardPLPanel::toggleColumnShown( int i )
 /* Search in the playlist */
 void StandardPLPanel::search( const QString& searchText )
 {
+    const QString normalizedSearchText = searchText.trimmed();
     int type;
     QString name;
     bool can_search;
@@ -472,12 +730,329 @@ void StandardPLPanel::search( const QString& searchText )
 
     if( type != SD_TYPE || !can_search )
     {
+        PLModel *playlistModel = qobject_cast<PLModel *>( model );
+        if( playlistModel != NULL && playlistModel->isPowerVLCLibraryRoot()
+         && currentView == treeView )
+        {
+            pendingSearchText = normalizedSearchText;
+            searchDelayTimer->start();
+            return;
+        }
         bool flat = ( currentView == iconView ||
                       currentView == listView ||
                       currentView == picFlowView );
-        model->filter( searchText,
+        model->filter( normalizedSearchText,
                        flat ? currentView->rootIndex() : QModelIndex(),
                        !flat );
+    }
+}
+
+QSet<int> StandardPLPanel::openLibraryCategoryIds() const
+{
+    QSet<int> ids;
+    if( treeView == NULL )
+        return ids;
+    for( int row = 0; row < model->rowCount(); ++row )
+    {
+        QModelIndex section = model->index( row, 0, QModelIndex() );
+        if( !treeView->isExpanded( section ) )
+            continue;
+        PLModel *playlistModel = qobject_cast<PLModel *>( model );
+        if( playlistModel != NULL
+         && playlistModel->isUserPlaylistsRoot( section ) )
+        {
+            ids.insert( model->itemId( section ) );
+            continue;
+        }
+        for( int child = 0; child < model->rowCount( section ); ++child )
+        {
+            QModelIndex category = model->index( child, 0, section );
+            if( treeView->isExpanded( category ) )
+                ids.insert( model->itemId( category ) );
+        }
+    }
+    return ids;
+}
+
+void StandardPLPanel::collapsePreviousSearchExpansion()
+{
+    PLModel *playlistModel = qobject_cast<PLModel *>( model );
+    if( playlistModel == NULL || treeView == NULL )
+        return;
+    searchProtectedIds = playlistModel->protectedSearchItemIds();
+    for( int id : searchExpandedIds )
+    {
+        if( searchProtectedIds.contains( id ) )
+            continue;
+        QModelIndex index = model->indexByPLID( id, 0 );
+        if( index.isValid() )
+            treeView->collapse( index );
+    }
+    searchExpandedIds.clear();
+}
+
+void StandardPLPanel::restoreProtectedSearchExpansion()
+{
+    if( treeView == NULL )
+        return;
+    for( int id : searchProtectedIds )
+    {
+        QModelIndex index = model->indexByPLID( id, 0 );
+        QList<QModelIndex> path;
+        for( QModelIndex cursor = index; cursor.isValid(); cursor = cursor.parent() )
+            path.prepend( cursor );
+        for( const QModelIndex &part : path )
+            treeView->expand( part );
+    }
+}
+
+static void expandIndexPath( QTreeView *view, const QModelIndex &index )
+{
+    QList<QModelIndex> path;
+    for( QModelIndex cursor = index; cursor.isValid(); cursor = cursor.parent() )
+        path.prepend( cursor );
+    for( const QModelIndex &part : path )
+        view->expand( part );
+}
+
+bool StandardPLPanel::requestSearchScopeLoading()
+{
+    if( treeView == NULL )
+        return false;
+    PLModel *playlistModel = qobject_cast<PLModel *>( model );
+    if( playlistModel == NULL )
+        return false;
+    bool pending = false;
+    for( int id : searchScopeIds )
+    {
+        QModelIndex scope = model->indexByPLID( id, 0 );
+        if( !scope.isValid() )
+            continue;
+        treeView->expand( scope );
+        const int view = powerVLCLibraryIntegerOption(
+            model->getInputItem( scope ),
+            VLC_INPUT_OPTION_POWERVLC_LIBRARY_VIEW_PREFIX );
+        if( searchUsesMemoryIndex && view >= 0
+         && view < SD_POWERVLC_LIBRARY_VIEW_COUNT )
+        {
+            const uint64_t mask = searchBucketMasks[view];
+            for( int row = 0; row < model->rowCount( scope ); ++row )
+            {
+                QModelIndex bucketIndex = model->index( row, 0, scope );
+                const int bucket = powerVLCLibraryIntegerOption(
+                    model->getInputItem( bucketIndex ),
+                    VLC_INPUT_OPTION_POWERVLC_LIBRARY_BUCKET_PREFIX );
+                if( bucket < 0 || bucket >= 64
+                 || !(mask & (UINT64_C(1) << bucket)) )
+                    continue;
+                if( !treeView->isExpanded( bucketIndex ) )
+                {
+                    searchExpandedIds.insert( model->itemId( bucketIndex ) );
+                    treeView->expand( bucketIndex );
+                }
+                if( model->rowCount( bucketIndex ) == 0 )
+                {
+                    model->ensureBrowsed( bucketIndex );
+                    pending = true;
+                    continue;
+                }
+                for( const SearchBranchMatch &match : searchBranchMatches )
+                {
+                    if( match.view != (unsigned)view
+                     || match.bucket != (unsigned)bucket )
+                        continue;
+                    QModelIndex primary;
+                    for( int primaryRow = 0;
+                         primaryRow < model->rowCount( bucketIndex );
+                         ++primaryRow )
+                    {
+                        QModelIndex candidate = model->index( primaryRow, 0,
+                                                              bucketIndex );
+                        if( playlistModel->isRandomAction( candidate ) )
+                            continue;
+                        if( playlistItemName( model, candidate ).compare(
+                                match.primary, Qt::CaseInsensitive ) == 0 )
+                        {
+                            primary = candidate;
+                            break;
+                        }
+                    }
+                    if( !primary.isValid() )
+                        continue;
+                    if( !treeView->isExpanded( primary ) )
+                    {
+                        searchExpandedIds.insert( model->itemId( primary ) );
+                        treeView->expand( primary );
+                    }
+                    if( model->rowCount( primary ) == 0 )
+                    {
+                        model->ensureBrowsed( primary );
+                        pending = true;
+                        continue;
+                    }
+                    /* Albums view ends at the primary group. Other grouped
+                     * views have one album level below it. */
+                    if( view == 2 )
+                        continue;
+                    for( int albumRow = 0;
+                         albumRow < model->rowCount( primary ); ++albumRow )
+                    {
+                        QModelIndex album = model->index( albumRow, 0, primary );
+                        if( playlistModel->isRandomAction( album )
+                         || playlistItemName( model, album ).compare(
+                                match.secondary, Qt::CaseInsensitive ) != 0 )
+                            continue;
+                        if( !treeView->isExpanded( album ) )
+                        {
+                            searchExpandedIds.insert( model->itemId( album ) );
+                            treeView->expand( album );
+                        }
+                        if( model->rowCount( album ) == 0 )
+                        {
+                            model->ensureBrowsed( album );
+                            pending = true;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        else if( requestSearchLoadingInIndex( scope ) )
+            pending = true;
+    }
+    return pending;
+}
+
+bool StandardPLPanel::requestSearchLoadingInIndex( const QModelIndex &index )
+{
+    bool pending = false;
+    for( int row = 0; row < model->rowCount( index ); ++row )
+    {
+        QModelIndex child = model->index( row, 0, index );
+        if( model->hasChildren( child ) )
+        {
+            if( !treeView->isExpanded( child ) )
+            {
+                searchExpandedIds.insert( model->itemId( child ) );
+                treeView->expand( child );
+            }
+            if( model->rowCount( child ) == 0 )
+            {
+                model->ensureBrowsed( child );
+                pending = true;
+            }
+        }
+        if( model->rowCount( child ) > 0 )
+            pending |= requestSearchLoadingInIndex( child );
+    }
+    return pending;
+}
+
+void StandardPLPanel::expandSearchMatches( const QModelIndex &index )
+{
+    if( !index.isValid() || model->rowCount( index ) <= 0 )
+        return;
+    if( !treeView->isExpanded( index ) )
+    {
+        searchExpandedIds.insert( model->itemId( index ) );
+        treeView->expand( index );
+    }
+    for( int row = 0; row < model->rowCount( index ); ++row )
+        expandSearchMatches( model->index( row, 0, index ) );
+}
+
+void StandardPLPanel::applyDelayedLibrarySearch()
+{
+    PLModel *playlistModel = qobject_cast<PLModel *>( model );
+    if( playlistModel == NULL || treeView == NULL )
+        return;
+
+    searchLoadTimer->stop();
+    searchScopeIds = openLibraryCategoryIds();
+    /* Loading a lazy category rebuilds PLModel and can momentarily erase its
+     * QTreeView expansion state. Keep scopes explicitly requested while a
+     * query was active across that asynchronous rebuild. */
+    searchScopeIds.unite( requestedSearchScopeIds );
+    requestedSearchScopeIds.clear();
+    collapsePreviousSearchExpansion();
+    playlistModel->filterScopes( QString(), QSet<int>() );
+    restoreProtectedSearchExpansion();
+    for( int id : searchScopeIds )
+    {
+        QModelIndex scope = model->indexByPLID( id, 0 );
+        if( scope.isValid() )
+            expandIndexPath( treeView, scope );
+    }
+    if( pendingSearchText.isEmpty() )
+    {
+        searchScopeIds.clear();
+        searchBranchMatches.clear();
+        searchUsesMemoryIndex = false;
+        return;
+    }
+    memset( searchBucketMasks, 0, sizeof( searchBucketMasks ) );
+    searchBranchMatches.clear();
+    services_discovery_library_search_t request = {};
+    const QByteArray query = pendingSearchText.toUtf8();
+    request.psz_query = query.constData();
+    for( int id : searchScopeIds )
+    {
+        QModelIndex scope = model->indexByPLID( id, 0 );
+        const int view = scope.isValid() ? powerVLCLibraryIntegerOption(
+            model->getInputItem( scope ),
+            VLC_INPUT_OPTION_POWERVLC_LIBRARY_VIEW_PREFIX ) : -1;
+        if( view >= 0 && view < SD_POWERVLC_LIBRARY_VIEW_COUNT )
+            request.i_view_mask |= UINT64_C(1) << view;
+    }
+    searchUsesMemoryIndex = request.i_view_mask != 0
+        && playlist_ServicesDiscoveryControl( THEPL, "powervlc_library",
+            SD_CMD_POWERVLC_LIBRARY_SEARCH, &request ) == VLC_SUCCESS;
+    if( searchUsesMemoryIndex )
+    {
+        memcpy( searchBucketMasks, request.p_bucket_masks,
+                sizeof( searchBucketMasks ) );
+        for( size_t i = 0; i < request.i_match_count; ++i )
+        {
+            services_discovery_library_match_t *match = &request.p_matches[i];
+            SearchBranchMatch copy = {
+                match->i_view, match->i_bucket,
+                qfu( match->psz_primary ? match->psz_primary : "" ),
+                qfu( match->psz_secondary ? match->psz_secondary : "" )
+            };
+            searchBranchMatches.append( copy );
+            free( match->psz_primary );
+            free( match->psz_secondary );
+        }
+        free( request.p_matches );
+    }
+    searchLoadRetries = 0;
+    finishDelayedLibrarySearch();
+}
+
+void StandardPLPanel::finishDelayedLibrarySearch()
+{
+    PLModel *playlistModel = qobject_cast<PLModel *>( model );
+    if( playlistModel == NULL || treeView == NULL )
+        return;
+    if( requestSearchScopeLoading() && searchLoadRetries++ < 800 )
+    {
+        searchLoadTimer->start();
+        return;
+    }
+    playlistModel->filterScopes( pendingSearchText, searchScopeIds );
+    restoreProtectedSearchExpansion();
+    for( int id : searchScopeIds )
+    {
+        QModelIndex scope = model->indexByPLID( id, 0 );
+        if( scope.isValid() )
+        {
+            /* filterScopes() rebuilds the Qt model.  Expanding only the
+             * category leaves its rebuilt Music parent collapsed, making a
+             * successful indexed search look empty. Restore the complete
+             * path before opening the exact matching descendants. */
+            expandIndexPath( treeView, scope );
+            expandSearchMatches( scope );
+        }
     }
 }
 
@@ -500,8 +1075,12 @@ void StandardPLPanel::searchDelayed( const QString& searchText )
 /* This activated by the selector selection */
 void StandardPLPanel::setRootItem( playlist_item_t *p_item, bool b )
 {
-    Q_UNUSED( b );
+    listOnly = b;
+    for( int i = 0; i < viewActions.size(); ++i )
+        viewActions[i]->setEnabled( !listOnly || i == TREE_VIEW );
     model->rebuild( p_item );
+    if( listOnly && currentView != treeView )
+        showView( TREE_VIEW );
 }
 
 void StandardPLPanel::browseInto( const QModelIndex &index )
@@ -616,6 +1195,49 @@ bool StandardPLPanel::eventFilter ( QObject *obj, QEvent * event )
 void StandardPLPanel::deleteSelection()
 {
     QModelIndexList list = currentView->selectionModel()->selectedIndexes();
+    const QString service = p_selector->currentPowerDeviceService();
+    if( !service.isEmpty() )
+    {
+        PLModel *playlistModel = qobject_cast<PLModel *>( model );
+        for( const QModelIndex &index : list )
+            if( playlistModel && playlistModel->isPowerVLCDeviceStructure( index ) )
+                return;
+        QVector<int> itemIds;
+        for( const QModelIndex &index : list ) itemIds << model->itemId( index );
+        services_discovery_device_delete_resolve_t resolved = {
+            itemIds.constData(), (size_t)itemIds.size(), NULL, 0
+        };
+        if( playlist_ServicesDiscoveryControl( THEPL, qtu( service ),
+                SD_CMD_POWERVLC_DEVICE_RESOLVE_DELETE, &resolved )
+            != VLC_SUCCESS || resolved.i_count == 0 )
+        {
+            QMessageBox::warning( this, qtr( "Unable to Delete Selected Content" ),
+                qtr( "PowerVLC could not resolve the selected rows to media stored on this player." ) );
+            return;
+        }
+        if( QMessageBox::warning( this, qtr( "Delete Content from Portable Player?" ),
+              qtr( "%1 item(s) will be permanently deleted from the player. "
+                   "This action cannot be undone." ).arg( resolved.i_count ),
+              QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel )
+            == QMessageBox::Ok )
+        {
+            services_discovery_device_delete_t request = {
+                (const char *const *)resolved.ppsz_paths, resolved.i_count,
+                itemIds.constData(), (size_t)itemIds.size()
+            };
+            if( playlist_ServicesDiscoveryControl( THEPL, qtu( service ),
+                    SD_CMD_POWERVLC_DEVICE_DELETE, &request ) != VLC_SUCCESS )
+                QMessageBox::warning( this,
+                    qtr( "Unable to Delete Selected Content" ),
+                    qtr( "The portable player rejected the deletion request. No content was changed." ) );
+            else
+                setEnabled( false );
+        }
+        for( size_t i = 0; i < resolved.i_count; ++i )
+            free( resolved.ppsz_paths[i] );
+        free( resolved.ppsz_paths );
+        return;
+    }
     model->doDelete( list );
 }
 
@@ -667,6 +1289,8 @@ void StandardPLPanel::createTreeView()
     /* Connections for the TreeView */
     connect( treeView, &PlTreeView::activated,
              this, &StandardPLPanel::activate );
+    connect( treeView, &PlTreeView::expanded,
+             this, &StandardPLPanel::libraryCategoryExpanded );
     connect( treeView->header(), &QHeaderView::customContextMenuRequested,
              this, &StandardPLPanel::popupSelectColumn );
     connect( treeView, &PlTreeView::customContextMenuRequested,
@@ -682,6 +1306,32 @@ void StandardPLPanel::createTreeView()
     viewStack->addWidget( treeView );
 }
 
+void StandardPLPanel::libraryCategoryExpanded( const QModelIndex &index )
+{
+    PLModel *playlistModel = qobject_cast<PLModel *>( model );
+    if( playlistModel == NULL || pendingSearchText.isEmpty()
+     || !playlistModel->isPowerVLCLibraryRoot() )
+        return;
+
+    /* Only direct children of the Music section define search scopes.  A
+     * programmatic expansion below that level must not restart the search. */
+    QModelIndex section = index.parent();
+    if( !section.isValid() || section.parent().isValid() )
+        return;
+    int id = model->itemId( index );
+    if( searchScopeIds.contains( id ) )
+        return;
+
+    /* Do not rebuild the model from inside QTreeView::expanded.  Lazy
+     * categories are populated asynchronously and an immediate rebuild can
+     * invalidate the index while the mouse event is still being delivered,
+     * opening a neighbouring category or leaving the view empty.  Reuse the
+     * normal debounce: the local compact node has ample time to finish, then
+     * the active query is applied to the newly opened scope. */
+    requestedSearchScopeIds.insert( id );
+    searchDelayTimer->start();
+}
+
 void StandardPLPanel::updateZoom( int i )
 {
     QVariant fontdata = model->data( QModelIndex(), Qt::FontRole );
@@ -694,6 +1344,7 @@ void StandardPLPanel::updateZoom( int i )
 
 void StandardPLPanel::showView( int i_view )
 {
+    if( listOnly ) i_view = TREE_VIEW;
     bool b_treeViewCreated = false;
 
     switch( i_view )
@@ -796,6 +1447,11 @@ int StandardPLPanel::currentViewIndex() const
 
 void StandardPLPanel::cycleViews()
 {
+    if( listOnly )
+    {
+        showView( TREE_VIEW );
+        return;
+    }
     if( currentView == iconView )
         showView( TREE_VIEW );
     else if( currentView == treeView )
@@ -815,10 +1471,17 @@ void StandardPLPanel::activate( const QModelIndex &index )
     if( currentView->model() == model )
     {
         /* If we are not a leaf node */
-        if( !index.data( VLCModelSubInterface::LEAF_NODE_ROLE ).toBool() )
+        const bool expandable = model->hasChildren( index )
+            || !index.data( VLCModelSubInterface::LEAF_NODE_ROLE ).toBool();
+        if( expandable )
         {
             if( currentView != treeView )
                 browseInto( index );
+            else
+            {
+                treeView->expand( index );
+                model->activateItem( index );
+            }
         }
         else
         {

@@ -22,6 +22,7 @@
  *****************************************************************************/
 
 #include "components/playlist/views.hpp"
+#include "components/playlist/playlist_model.hpp" /* PLModel */
 #include "components/playlist/vlc_model.hpp"      /* VLCModel */
 #include "components/playlist/sorting.h"          /* Columns List */
 #include "input_manager.hpp"                      /* THEMIM */
@@ -275,15 +276,28 @@ QSize PlListViewItemDelegate::sizeHint ( const QStyleOptionViewItem &, const QMo
 
 void PlTreeViewItemDelegate::paint( QPainter * painter, const QStyleOptionViewItem & option, const QModelIndex & index ) const
 {
-    if ( index.data( VLCModel::CURRENT_ITEM_ROLE ).toBool() )
+    QStyleOptionViewItem myoptions = option;
+    const int rating = index.data( VLCModel::RATING_ROLE ).toInt();
+    if( rating > 0 )
     {
-        QStyleOptionViewItem myoptions = option;
-        myoptions.font.setBold( true );
-        AbstractPlViewItemDelegate::paint( painter, myoptions, index );
+        const QString stars( rating, QChar( 0x2605 ) );
+        const int width = option.fontMetrics.width( stars ) + 10;
+        myoptions.rect.adjust( 0, 0, -width, 0 );
     }
-    else
+    if ( index.data( VLCModel::CURRENT_ITEM_ROLE ).toBool() )
+        myoptions.font.setBold( true );
+    AbstractPlViewItemDelegate::paint( painter, myoptions, index );
+    if( rating > 0 )
     {
-        AbstractPlViewItemDelegate::paint( painter, option, index );
+        painter->save();
+        painter->setPen( option.palette.color(
+            option.state & QStyle::State_Selected
+                ? QPalette::HighlightedText : QPalette::Text ) );
+        painter->setFont( myoptions.font );
+        painter->drawText( option.rect.adjusted( 4, 0, -6, 0 ),
+            Qt::AlignRight | Qt::AlignVCenter,
+            QString( rating, QChar( 0x2605 ) ) );
+        painter->restore();
     }
 }
 
@@ -449,8 +463,19 @@ void PlTreeView::setModel( QAbstractItemModel * model )
     VLCModel *m = static_cast<VLCModel*>(model);
     connect( this, &PlTreeView::expanded,
              m, &VLCModel::ensureBrowsed );
+    connect( this, &PlTreeView::collapsed,
+             m, &VLCModel::releaseBrowsed );
     connect( this, &PlTreeView::expanded,
              m, &VLCModel::ensureArtRequested );
+}
+
+void PlTreeView::drawBranches( QPainter *painter, const QRect &rect,
+                               const QModelIndex &index ) const
+{
+    const PLModel *playlistModel = qobject_cast<const PLModel *>( model() );
+    if( playlistModel != NULL && playlistModel->isRandomAction( index ) )
+        return;
+    QTreeView::drawBranches( painter, rect, index );
 }
 
 void PlTreeView::startDrag ( Qt::DropActions supportedActions )
@@ -466,6 +491,16 @@ void PlTreeView::dragMoveEvent ( QDragMoveEvent * event )
 
 void PlTreeView::keyPressEvent( QKeyEvent *event )
 {
+    const QModelIndex selected = currentIndex();
+    if( event->modifiers() == Qt::NoModifier
+     && event->key() == Qt::Key_Right && selected.isValid()
+     && model()->hasChildren( selected ) && !isExpanded( selected ) )
+    {
+        expand( selected );
+        setCurrentIndex( selected );
+        event->accept();
+        return;
+    }
     //If the space key is pressed, override the standard list behaviour to allow pausing
     //to proceed.
     if ( event->modifiers() == Qt::NoModifier && event->key() == Qt::Key_Space )

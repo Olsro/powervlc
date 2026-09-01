@@ -35,7 +35,14 @@
 #import <OpenGL/OpenGL.h>
 #import <OpenGL/gl.h>
 #import <OpenGL/glext.h>
+#import <CoreVideo/CoreVideo.h>
+#if defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED >= 1060
+# import <IOSurface/IOSurface.h>
+# define VLC_GL1_HAVE_IOSURFACE 1
+#endif
 #import <dlfcn.h>
+#import <mach/mach_time.h>
+#import <mach/thread_policy.h>
 
 #include <vlc_common.h>
 #include <vlc_plugin.h>
@@ -46,7 +53,117 @@
 
 /* U4 — present HW piloté par le vout (contrat décodeur ↔ vout via bus libvlc). */
 #include "../codec/dvddriver_piccontext.h"
+#include "../codec/mvc_piccontext.h"
 #include "cgl_lock_compat.h"
+
+/* Framebuffer objects were added to the OpenGL framework after Jaguar.
+ * Keeping direct references here makes dyld reject the whole GL1 module on
+ * 10.2, even though the FBO presenter is only used by much newer NVIDIA
+ * hardware.  Resolve the five entry points lazily so the ordinary fixed
+ * pipeline remains loadable on the G3 while preserving the presenter on
+ * systems that provide GL_EXT_framebuffer_object. */
+typedef void (*vlc_gl1_bind_fbo_cb)(GLenum, GLuint);
+typedef GLenum (*vlc_gl1_check_fbo_cb)(GLenum);
+typedef void (*vlc_gl1_delete_fbo_cb)(GLsizei, const GLuint *);
+typedef void (*vlc_gl1_attach_fbo_cb)(GLenum, GLenum, GLenum, GLuint, GLint);
+typedef void (*vlc_gl1_gen_fbo_cb)(GLsizei, GLuint *);
+typedef CGLError (*vlc_gl1_fullscreen_display_cb)(CGLContextObj,
+                                                  CGOpenGLDisplayMask);
+
+/* CGLSetFullScreenOnDisplay appeared after Jaguar.  Keeping a direct
+ * reference makes dyld reject this whole output module on 10.2 even though
+ * exclusive scanout is only requested on much newer NVIDIA hardware. */
+static CGLError vlc_gl1_SetFullScreenOnDisplay(CGLContextObj context,
+                                               CGOpenGLDisplayMask mask)
+{
+    static vlc_gl1_fullscreen_display_cb cb;
+    static bool resolved;
+    if (!resolved) {
+        cb = (vlc_gl1_fullscreen_display_cb)
+            dlsym(RTLD_DEFAULT, "CGLSetFullScreenOnDisplay");
+        resolved = true;
+    }
+    if (cb != NULL)
+        return cb(context, mask);
+
+    /* Jaguar can only select the display through the pixel format, which is
+     * already constrained to the active screen when this context is made. */
+    return CGLSetFullScreen(context);
+}
+
+static void vlc_gl1_BindFramebufferEXT(GLenum target, GLuint framebuffer)
+{
+    static vlc_gl1_bind_fbo_cb cb;
+    static bool resolved;
+    if (!resolved) {
+        cb = (vlc_gl1_bind_fbo_cb)dlsym(RTLD_DEFAULT, "glBindFramebufferEXT");
+        resolved = true;
+    }
+    if (cb != NULL)
+        cb(target, framebuffer);
+}
+
+static GLenum vlc_gl1_CheckFramebufferStatusEXT(GLenum target)
+{
+    static vlc_gl1_check_fbo_cb cb;
+    static bool resolved;
+    if (!resolved) {
+        cb = (vlc_gl1_check_fbo_cb)dlsym(RTLD_DEFAULT,
+                                         "glCheckFramebufferStatusEXT");
+        resolved = true;
+    }
+    return cb != NULL ? cb(target) : 0;
+}
+
+static void vlc_gl1_DeleteFramebuffersEXT(GLsizei count,
+                                          const GLuint *framebuffers)
+{
+    static vlc_gl1_delete_fbo_cb cb;
+    static bool resolved;
+    if (!resolved) {
+        cb = (vlc_gl1_delete_fbo_cb)dlsym(RTLD_DEFAULT,
+                                          "glDeleteFramebuffersEXT");
+        resolved = true;
+    }
+    if (cb != NULL)
+        cb(count, framebuffers);
+}
+
+static void vlc_gl1_FramebufferTexture2DEXT(GLenum target, GLenum attachment,
+                                            GLenum texture_target,
+                                            GLuint texture, GLint level)
+{
+    static vlc_gl1_attach_fbo_cb cb;
+    static bool resolved;
+    if (!resolved) {
+        cb = (vlc_gl1_attach_fbo_cb)dlsym(RTLD_DEFAULT,
+                                          "glFramebufferTexture2DEXT");
+        resolved = true;
+    }
+    if (cb != NULL)
+        cb(target, attachment, texture_target, texture, level);
+}
+
+static void vlc_gl1_GenFramebuffersEXT(GLsizei count, GLuint *framebuffers)
+{
+    static vlc_gl1_gen_fbo_cb cb;
+    static bool resolved;
+    if (!resolved) {
+        cb = (vlc_gl1_gen_fbo_cb)dlsym(RTLD_DEFAULT,
+                                       "glGenFramebuffersEXT");
+        resolved = true;
+    }
+    if (cb != NULL)
+        cb(count, framebuffers);
+    else
+        memset(framebuffers, 0, count * sizeof(*framebuffers));
+}
+
+#define glBindFramebufferEXT         vlc_gl1_BindFramebufferEXT
+#define glCheckFramebufferStatusEXT  vlc_gl1_CheckFramebufferStatusEXT
+#define glDeleteFramebuffersEXT      vlc_gl1_DeleteFramebuffersEXT
+#define glFramebufferTexture2DEXT    vlc_gl1_FramebufferTexture2DEXT
+#define glGenFramebuffersEXT         vlc_gl1_GenFramebuffersEXT
 
 /* Per-stage timing of the display path, enabled by setting VLC_GL1_PROF in
  * the environment. Costs one gettimeofday per stage when off... nothing at
@@ -211,6 +328,13 @@ static int Control (vout_display_t *vd, int query, va_list ap);
 static int OpenglLock (vlc_gl_t *gl);
 static void OpenglUnlock (vlc_gl_t *gl);
 static void OpenglSwap (vlc_gl_t *gl);
+static void *GL1AsyncPresenter (void *opaque);
+static void *GL1FlipPresenter (void *opaque);
+static void GL1PresenterDidFlip(vout_display_sys_t *display);
+static CVReturn GL1DisplayLinkPresenter(CVDisplayLinkRef,
+                                        const CVTimeStamp *,
+                                        const CVTimeStamp *,
+                                        CVOptionFlags, CVOptionFlags *, void *);
 
 #define GL1_PLANAR_TEXT "GPU planar YUV (combiners)"
 #define GL1_PLANAR_LONGTEXT "Feed the raw Y/U/V planes to the GPU and let " \
@@ -239,6 +363,21 @@ static void OpenglSwap (vlc_gl_t *gl);
     "trade is that every pool buffer then stays pinned in the GPU aperture, " \
     "so turn this off on a GPU whose aperture is too small for that."
 
+#define GL1_POOL_MAX_TEXT "Maximum number of GL1 picture buffers"
+#define GL1_POOL_MAX_LONGTEXT "Limit the GL1 picture pool after normal cache " \
+    "sizing. Zero keeps the automatic size. This is mainly useful on legacy " \
+    "GPUs where keeping too many client-storage textures resident can exhaust " \
+    "the graphics aperture and stall both video decode and presentation."
+
+#define GL1_FULLSCREEN_CACHED_TEXT "Cache planar textures in fullscreen"
+#define GL1_FULLSCREEN_CACHED_LONGTEXT "Upload planar frames to video memory " \
+    "before drawing in fullscreen. Disable this on a unified GPU when video " \
+    "decoding and texture DMA contend for the same graphics engine."
+
+#define GL1_VSYNC_TEXT "Synchronize GL1 presentation to vertical retrace"
+#define GL1_VSYNC_LONGTEXT "Wait for vertical retrace before swapping the " \
+    "GL1 buffers. Disabling this is intended for performance diagnosis only."
+
 #define GL1_CACHED_TEXT "VRAM-cached packed textures"
 #define GL1_CACHED_LONGTEXT "Upload the packed 4:2:2 frame to VRAM once " \
     "per frame (GL_STORAGE_CACHED_APPLE, what Apple's DVD Player uses) " \
@@ -263,6 +402,10 @@ vlc_module_begin ()
     add_bool ("gl1-planar", true, GL1_PLANAR_TEXT, GL1_PLANAR_LONGTEXT, true)
     add_bool ("gl1-fragprog", true, GL1_FRAGPROG_TEXT, GL1_FRAGPROG_LONGTEXT, true)
     add_bool ("gl1-per-buffer-tex", true, GL1_PERBUF_TEXT, GL1_PERBUF_LONGTEXT, true)
+    add_integer ("gl1-pool-max", 0, GL1_POOL_MAX_TEXT, GL1_POOL_MAX_LONGTEXT, true)
+    add_bool ("gl1-fullscreen-cached", true, GL1_FULLSCREEN_CACHED_TEXT,
+              GL1_FULLSCREEN_CACHED_LONGTEXT, true)
+    add_bool ("gl1-vsync", true, GL1_VSYNC_TEXT, GL1_VSYNC_LONGTEXT, true)
     add_bool ("gl1-packed-cached", false, GL1_CACHED_TEXT, GL1_CACHED_LONGTEXT, true)
 vlc_module_end ()
 
@@ -306,6 +449,7 @@ vlc_module_end ()
 }
 - (void)setVoutDisplay:(vout_display_t *)vd;
 - (void)setVoutFlushing:(BOOL)flushing;
+- (void)vlcAsyncSwap;
 - (void)refreshSubsOverlay;
 + (void)vlcHideCursor;
 + (void)vlcHideCursorAgain;
@@ -350,6 +494,7 @@ typedef struct gl1_region
 
 struct vout_display_sys_t
 {
+    vout_display_t *owner_vd;
     VLCGL1VideoView *glView;
     id<VLCOpenGLVideoViewEmbedding> container;
 
@@ -378,16 +523,77 @@ struct vout_display_sys_t
     unsigned plane_tex_count;
     const GLuint *draw_tex_set;
     bool     per_buffer_tex;
+    bool     fullscreen_cached;
+    bool     vsync_requested;
+    bool     nvidia_320m;
+    int      swap_interval;
     bool fragprog;        /* planar in one pass, via ARB_fragment_program */
     GLuint fp;            /* the compiled fragment program, 0 = none */
     bool packed_cached;   /* gl1-packed-cached option */
     GLenum packed_type;   /* GL type matching the source's packed byte order */
     GLuint textures[2][3];
+    GLuint direct_mvc_tex[2][3];
+    struct { const void *pixels; GLuint tex[3]; }
+        direct_plane_tex[2][GL1_MAX_PLANAR_SETS];
+    unsigned direct_plane_tex_count[2];
+    GLuint direct_mvc_base_tex;
+    GLuint direct_mvc_base_fbo;
+    bool direct_mvc;
+    bool direct_mvc_has_packed_base;
+    unsigned direct_mvc_base_eye;
+    unsigned direct_mvc_width;
+    unsigned direct_mvc_height;
     unsigned tex_index;
     GLenum storage_hint;  /* current GL_TEXTURE_STORAGE_HINT_APPLE value */
     bool on_fullscreen_window; /* view lives in a borderless window
                                   covering its screen (set on main thread,
                                   read by the vout thread) */
+    bool hdmi_framepack;
+    unsigned framepack_eye_height;
+    unsigned framepack_gap;
+    /* Snow Leopard/NVIDIA frame-packed presentation.  Waiting for a beam
+     * position on the vout thread stalls the decoder once its picture pool
+     * fills.  The presenter owns that wait and only touches the GL context
+     * after PictureDisplay has finished drawing the back buffer. */
+    vlc_thread_t presenter_thread;
+    bool presenter_thread_started;
+    vlc_thread_t presenter_flip_thread;
+    bool presenter_flip_thread_started;
+    vlc_mutex_t presenter_lock;
+    vlc_cond_t presenter_cond;
+    bool presenter_started;
+    bool presenter_uses_display_link;
+    bool presenter_stop;
+    CVDisplayLinkRef presenter_display_link;
+    GLuint presenter_texture[2];
+    GLuint presenter_fbo[2];
+    unsigned presenter_texture_width;
+    unsigned presenter_texture_height;
+    int presenter_inflight;
+    int presenter_queued;
+    unsigned presenter_next;
+    unsigned presenter_presented;
+    unsigned presenter_dropped;
+    picture_t *presenter_picture_queued;
+    picture_t *presenter_picture_queued_next;
+    picture_t *presenter_picture_inflight;
+    subpicture_t *presenter_subpicture_queued;
+    subpicture_t *presenter_subpicture_queued_next;
+    subpicture_t *presenter_subpicture_inflight;
+    bool presenter_native_ready;
+    bool presenter_native_deferred;
+    uint64_t presenter_native_target_host_time;
+    uint64_t presenter_native_flip_serial;
+    vlc_tick_t presenter_report_start;
+    CGDirectDisplayID stereo_display;
+    int stereo_saved_private_mode;
+    bool stereo_private_mode_changed;
+    CGDirectDisplayID stereo_disabled_displays[4];
+    unsigned stereo_disabled_display_count;
+    bool stereo_fullscreen_forced;
+    bool stereo_fullscreen_display_overridden;
+    bool exclusive_capture;
+    int64_t stereo_saved_fullscreen_display;
     picture_t *held_pics[2];
     unsigned tex_width;   /* visible dimensions, in pixels */
     unsigned tex_height;
@@ -483,7 +689,296 @@ struct gl_sys
 {
     CGLContextObj locked_ctx;
     VLCGL1VideoView *glView;
+    vout_display_sys_t *display_sys;
 };
+
+/* The Snow Leopard 320M MVC path is no longer experimental: once the output
+ * has negotiated an HDMI frame-packed drawable, use the measured working
+ * pipeline by default.  Environment switches remain useful for diagnostics
+ * and for forcing individual stages on other legacy GPUs. */
+static bool GL1UseNvidiaMvcPath(const vout_display_sys_t *sys,
+                               const char *diagnostic_switch)
+{
+    return getenv(diagnostic_switch) != NULL ||
+           (sys->nvidia_320m && sys->hdmi_framepack);
+}
+
+typedef struct
+{
+    uint32_t mode_number;
+    uint32_t flags;
+    uint32_t width;
+    uint32_t height;
+    uint32_t depth;
+    uint8_t unknown[170];
+    uint16_t frequency;
+    uint8_t more_unknown[16];
+    float density;
+} gl1_cgs_display_mode_t;
+
+typedef CGError (*GL1CGSGetCurrentDisplayMode)(CGDirectDisplayID, int *);
+typedef void (*GL1CGSGetNumberOfDisplayModes)(CGDirectDisplayID, int *);
+typedef void (*GL1CGSGetDisplayModeDescriptionOfLength)(
+    CGDirectDisplayID, int, gl1_cgs_display_mode_t *, int);
+typedef CGError (*GL1CGSConfigureDisplayMode)(CGDisplayConfigRef,
+                                              CGDirectDisplayID, int);
+typedef CGError (*GL1ConfigureDisplayEnabled)(CGDisplayConfigRef,
+                                              CGDirectDisplayID, bool);
+
+static bool GL1LoadDisplayFunctions(GL1CGSGetCurrentDisplayMode *current,
+                                    GL1CGSGetNumberOfDisplayModes *count,
+                                    GL1CGSGetDisplayModeDescriptionOfLength *desc,
+                                    GL1CGSConfigureDisplayMode *configure)
+{
+    *current = (GL1CGSGetCurrentDisplayMode)
+        dlsym(RTLD_DEFAULT, "CGSGetCurrentDisplayMode");
+    *count = (GL1CGSGetNumberOfDisplayModes)
+        dlsym(RTLD_DEFAULT, "CGSGetNumberOfDisplayModes");
+    *desc = (GL1CGSGetDisplayModeDescriptionOfLength)
+        dlsym(RTLD_DEFAULT, "CGSGetDisplayModeDescriptionOfLength");
+    *configure = (GL1CGSConfigureDisplayMode)
+        dlsym(RTLD_DEFAULT, "CGSConfigureDisplayMode");
+    return *current != NULL && *count != NULL && *desc != NULL &&
+           *configure != NULL;
+}
+
+static CGError GL1ConfigurePrivateMode(CGDirectDisplayID display, int mode)
+{
+    GL1CGSGetCurrentDisplayMode current;
+    GL1CGSGetNumberOfDisplayModes count;
+    GL1CGSGetDisplayModeDescriptionOfLength desc;
+    GL1CGSConfigureDisplayMode configure;
+    if (!GL1LoadDisplayFunctions(&current, &count, &desc, &configure))
+        return kCGErrorNotImplemented;
+    VLC_UNUSED(current); VLC_UNUSED(count); VLC_UNUSED(desc);
+
+    CGDisplayConfigRef config = NULL;
+    CGError error = CGBeginDisplayConfiguration(&config);
+    if (error == kCGErrorSuccess)
+    {
+        error = configure(config, display, mode);
+        if (error == kCGErrorSuccess)
+            error = CGCompleteDisplayConfiguration(config,
+                                                    kCGConfigureForAppOnly);
+        else
+            CGCancelDisplayConfiguration(config);
+    }
+    return error;
+}
+
+static int GL1FindFramepackMode(CGDirectDisplayID display, unsigned width,
+                                unsigned height, double rate,
+                                int *saved_mode)
+{
+    GL1CGSGetCurrentDisplayMode current;
+    GL1CGSGetNumberOfDisplayModes count_fn;
+    GL1CGSGetDisplayModeDescriptionOfLength desc;
+    GL1CGSConfigureDisplayMode configure;
+    if (!GL1LoadDisplayFunctions(&current, &count_fn, &desc, &configure) ||
+        current(display, saved_mode) != kCGErrorSuccess)
+        return -1;
+    VLC_UNUSED(configure);
+
+    gl1_cgs_display_mode_t active = { 0 };
+    desc(display, *saved_mode, &active, sizeof(active));
+    int count = 0;
+    count_fn(display, &count);
+    const bool fractional = fabs(rate - 24000.0 / 1001.0) < 0.01;
+    int best = -1, depth_best = -1;
+    for (int i = 0; i < count; ++i)
+    {
+        gl1_cgs_display_mode_t mode = { 0 };
+        desc(display, i, &mode, sizeof(mode));
+        if (mode.width != width || mode.height != height ||
+            fabs((double)mode.frequency - rate) > 0.6)
+            continue;
+        if (best < 0 || !fractional)
+            best = i;
+        if (mode.depth == active.depth && (mode.flags & 0x80000000U) == 0 &&
+            (depth_best < 0 || !fractional))
+            depth_best = i;
+    }
+    return depth_best >= 0 ? depth_best : best;
+}
+
+static GL1ConfigureDisplayEnabled GL1DisplayEnableFunction(void)
+{
+    GL1ConfigureDisplayEnabled fn = (GL1ConfigureDisplayEnabled)
+        dlsym(RTLD_DEFAULT, "CGConfigureDisplayEnabled");
+    if (fn == NULL)
+        fn = (GL1ConfigureDisplayEnabled)
+            dlsym(RTLD_DEFAULT, "CGSConfigureDisplayEnabled");
+    return fn;
+}
+
+static bool GL1SetBuiltinDisplays(vout_display_t *vd, bool enabled)
+{
+    vout_display_sys_t *sys = vd->sys;
+    GL1ConfigureDisplayEnabled configure = GL1DisplayEnableFunction();
+    if (configure == NULL)
+        return false;
+
+    CGDirectDisplayID displays[8];
+    uint32_t count = 0;
+    if (CGGetOnlineDisplayList(8, displays, &count) != kCGErrorSuccess)
+        return false;
+
+    CGDisplayConfigRef config = NULL;
+    CGError error = CGBeginDisplayConfiguration(&config);
+    unsigned changed = 0;
+    if (enabled)
+    {
+        for (unsigned i = 0; error == kCGErrorSuccess &&
+                             i < sys->stereo_disabled_display_count; ++i)
+        {
+            error = configure(config, sys->stereo_disabled_displays[i], true);
+            if (error == kCGErrorSuccess)
+                ++changed;
+        }
+    }
+    else
+    {
+        sys->stereo_disabled_display_count = 0;
+        for (uint32_t i = 0; error == kCGErrorSuccess && i < count; ++i)
+        {
+            if (!CGDisplayIsBuiltin(displays[i]) ||
+                displays[i] == sys->stereo_display)
+                continue;
+            error = configure(config, displays[i], false);
+            if (error == kCGErrorSuccess &&
+                sys->stereo_disabled_display_count < 4)
+                sys->stereo_disabled_displays[
+                    sys->stereo_disabled_display_count++] = displays[i];
+        }
+        changed = sys->stereo_disabled_display_count;
+    }
+    if (error == kCGErrorSuccess && changed > 0)
+        error = CGCompleteDisplayConfiguration(config,
+                                                kCGConfigureForAppOnly);
+    else if (config != NULL)
+        CGCancelDisplayConfiguration(config);
+    if (enabled || error != kCGErrorSuccess)
+        sys->stereo_disabled_display_count = 0;
+    return error == kCGErrorSuccess;
+}
+
+static vlc_object_t *GL1RootObject(vout_display_t *vd)
+{
+    vlc_object_t *root = VLC_OBJECT(vd);
+    while (root->obj.parent != NULL)
+        root = root->obj.parent;
+    return root;
+}
+
+static bool GL1PrepareStereoDisplay(vout_display_t *vd)
+{
+    vout_display_sys_t *sys = vd->sys;
+    const bool stacked = vd->fmt.multiview_mode ==
+                         MULTIVIEW_STEREO_FRAMEPACKED ||
+                         (vd->fmt.i_sar_den != 0 &&
+                          vd->fmt.i_sar_num == 2 * vd->fmt.i_sar_den &&
+                          vd->fmt.i_visible_height == 2160);
+    if (!stacked || var_InheritInteger(vd, "stereo3d-display-mode") == 2 ||
+        floor(NSAppKitVersionNumber) >= 1138)
+        return false;
+
+    const unsigned eye_w = vd->fmt.i_visible_width;
+    const unsigned eye_h = vd->fmt.i_visible_height / 2;
+    const unsigned packed_h = eye_h == 1080 ? 2205 :
+                              eye_h == 720 ? 1470 : 0;
+    if (packed_h == 0)
+        return false;
+    double rate = vd->fmt.i_frame_rate_base != 0
+                ? (double)vd->fmt.i_frame_rate / vd->fmt.i_frame_rate_base
+                : 24.0;
+
+    int configured = var_InheritInteger(vd, "macosx-vdev");
+    if (configured > 0)
+        sys->stereo_display = (CGDirectDisplayID)configured;
+    else
+    {
+        CGDirectDisplayID displays[8];
+        uint32_t count = 0;
+        if (CGGetOnlineDisplayList(8, displays, &count) != kCGErrorSuccess)
+            return false;
+        for (uint32_t i = 0; i < count; ++i)
+            if (!CGDisplayIsBuiltin(displays[i]))
+            {
+                sys->stereo_display = displays[i];
+                break;
+            }
+    }
+    if (sys->stereo_display == kCGNullDirectDisplay)
+        return false;
+
+    int saved = -1;
+    int mode = GL1FindFramepackMode(sys->stereo_display, eye_w, packed_h,
+                                    rate, &saved);
+    if (mode < 0)
+        return false;
+    if (!GL1SetBuiltinDisplays(vd, false))
+        return false;
+    usleep(500000);
+    if (GL1ConfigurePrivateMode(sys->stereo_display, mode) != kCGErrorSuccess)
+    {
+        GL1SetBuiltinDisplays(vd, true);
+        return false;
+    }
+    sys->stereo_saved_private_mode = saved;
+    sys->stereo_private_mode_changed = true;
+
+    vlc_object_t *root = GL1RootObject(vd);
+    var_Create(root, "stereo3d-fullscreen-display",
+               VLC_VAR_INTEGER | VLC_VAR_DOINHERIT);
+    sys->stereo_saved_fullscreen_display =
+        var_GetInteger(root, "stereo3d-fullscreen-display");
+    sys->stereo_fullscreen_display_overridden = true;
+    var_SetInteger(root, "stereo3d-fullscreen-display",
+                   (int64_t)(uintptr_t)sys->stereo_display);
+    msg_Info(vd, "GL1 switched legacy HDMI scanout to private mode %d: "
+                 "%ux%u at %.3f Hz", mode, eye_w, packed_h, rate);
+    return true;
+}
+
+static void GL1EnterStereoFullscreen(vout_display_t *vd)
+{
+    vlc_object_t *vout = vd->obj.parent;
+    if (vout == NULL)
+        return;
+    if (!var_GetBool(vout, "fullscreen"))
+    {
+        vd->sys->stereo_fullscreen_forced = true;
+        var_SetBool(vout, "fullscreen", true);
+    }
+    else
+    {
+        var_SetBool(vout, "fullscreen", false);
+        var_SetBool(vout, "fullscreen", true);
+    }
+}
+
+static void GL1RestoreStereoDisplay(vout_display_t *vd)
+{
+    vout_display_sys_t *sys = vd->sys;
+    if (!sys->stereo_private_mode_changed &&
+        sys->stereo_disabled_display_count == 0)
+        return;
+    if (sys->stereo_fullscreen_display_overridden)
+    {
+        var_SetInteger(GL1RootObject(vd), "stereo3d-fullscreen-display",
+                       sys->stereo_saved_fullscreen_display);
+        sys->stereo_fullscreen_display_overridden = false;
+    }
+    if (sys->stereo_fullscreen_forced && vd->obj.parent != NULL)
+        var_SetBool(vd->obj.parent, "fullscreen", false);
+    if (sys->stereo_private_mode_changed)
+    {
+        GL1ConfigurePrivateMode(sys->stereo_display,
+                                sys->stereo_saved_private_mode);
+        sys->stereo_private_mode_changed = false;
+    }
+    GL1SetBuiltinDisplays(vd, true);
+}
 
 /*****************************************************************************
  * Fixed-pipeline renderer
@@ -492,6 +987,7 @@ struct gl_sys
 /* Context must be current. */
 static bool OpenglCheckSupport (vout_display_t *vd, unsigned width, unsigned height)
 {
+    vout_display_sys_t *sys = vd->sys;
     const char *exts = (const char *) glGetString (GL_EXTENSIONS);
     if (exts == NULL)
         return false;
@@ -499,9 +995,12 @@ static bool OpenglCheckSupport (vout_display_t *vd, unsigned width, unsigned hei
     /* "Apple Software Renderer" here means the driver could not handle
      * something in the pixel format and the whole context silently fell
      * back to the CPU — worth knowing on 1999-2003 GPUs. */
+    const char *renderer = (const char *) glGetString (GL_RENDERER);
     msg_Dbg (vd, "GL renderer: %s | %s",
-             (const char *) glGetString (GL_RENDERER),
+             renderer,
              (const char *) glGetString (GL_VERSION));
+    sys->nvidia_320m = renderer != NULL &&
+                       strstr(renderer, "NVIDIA GeForce 320M") != NULL;
     /* The planar (combiner) path depends on the exact fixed-function
      * feature set of these 1999-2003 GPUs: dump the facts once. */
     GLint units = 0;
@@ -515,7 +1014,6 @@ static bool OpenglCheckSupport (vout_display_t *vd, unsigned width, unsigned hei
       msg_Dbg (vd, "GL alpha bits: %d", (int) abits); }
     msg_Dbg (vd, "GL extensions: %s", exts);
 
-    vout_display_sys_t *sys = vd->sys;
     /* Planar mode requirements: MAD combiner stages + 3 texture units.
      * ARB_texture_env_combine is core since GL 1.3. */
     sys->planar = var_InheritBool (vd, "gl1-planar")
@@ -533,6 +1031,7 @@ static bool OpenglCheckSupport (vout_display_t *vd, unsigned width, unsigned hei
      * The cost is that every pool buffer stays pinned, so this is bounded
      * by the table (a bigger pool falls back to redefining slot 0). */
     sys->per_buffer_tex = sys->planar && var_InheritBool (vd, "gl1-per-buffer-tex");
+    sys->fullscreen_cached = var_InheritBool (vd, "gl1-fullscreen-cached");
 
     /* A GPU with a programmable fragment stage does the whole colour matrix
      * in ONE pass. The combiner path needs three (one per RGB channel, with
@@ -630,8 +1129,8 @@ static void UpdateStorageHint (vout_display_sys_t *sys)
     if (!sys->planar)
         return; /* packed: one pass, SHARED always wins */
 
-    GLenum want = sys->on_fullscreen_window ? GL_STORAGE_CACHED_APPLE
-                                            : GL_STORAGE_SHARED_APPLE;
+    GLenum want = sys->on_fullscreen_window && sys->fullscreen_cached
+                ? GL_STORAGE_CACHED_APPLE : GL_STORAGE_SHARED_APPLE;
     if (want == sys->storage_hint)
         return;
     sys->storage_hint = want;
@@ -749,6 +1248,347 @@ static void CombinerStage (GLenum combine, GLenum src0, GLenum op0,
     glTexEnvf (GL_TEXTURE_ENV, GL_OPERAND0_ALPHA, GL_SRC_ALPHA);
 }
 
+/* Upload Edge264's two reconstructed views without first copying them into a
+ * 1920x2160 VLC picture.  Client storage is deliberately disabled here: the
+ * DPB slots must be returned to Edge264 promptly, so the driver owns a cached
+ * texture copy by the time glFinish returns.  This is one GPU read of 6.2 MB
+ * instead of a CPU write followed by the same GPU read. */
+static bool OpenglUploadDirectMVC (vout_display_sys_t *sys, picture_t *pic)
+{
+    if (!sys->fragprog ||
+        !powervlc_mvc_context_is_direct(pic->context))
+        return false;
+
+    powervlc_mvc_piccontext *ctx =
+        (powervlc_mvc_piccontext *)pic->context;
+    if (ctx->uploaded)
+    {
+        /* Core redisplay (OSD/subtitle/paused refresh) of the same picture:
+         * its DPB slots were already returned after the first owned upload.
+         * Keep drawing the cached six textures; never fall through to the
+         * deliberately incomplete stacked VLC pool buffer. */
+        sys->direct_mvc = true;
+        return true;
+    }
+    const bool persistent_upload = GL1UseNvidiaMvcPath(
+        sys, "VLC_GL1_DIRECT_SUBIMAGE");
+    const bool direct_per_buffer =
+        getenv("VLC_GL1_DIRECT_PER_BUFFER") != NULL;
+    const bool client_storage =
+        getenv("VLC_GL1_DIRECT_CLIENT_STORAGE") != NULL ||
+        direct_per_buffer;
+    glPixelStorei (GL_UNPACK_CLIENT_STORAGE_APPLE,
+                   client_storage ? GL_TRUE : GL_FALSE);
+    for (unsigned eye = 0; eye < 2; ++eye)
+    {
+        if (ctx->packed_base && eye == ctx->base_eye)
+            continue;
+        bool direct_defined = false;
+        if (direct_per_buffer)
+        {
+            unsigned i;
+            for (i = 0; i < sys->direct_plane_tex_count[eye]; ++i)
+                if (sys->direct_plane_tex[eye][i].pixels ==
+                    ctx->planes[eye][0])
+                    break;
+            if (i < sys->direct_plane_tex_count[eye])
+                direct_defined = true;
+            else if (i < GL1_MAX_PLANAR_SETS)
+            {
+                glGenTextures(3, sys->direct_plane_tex[eye][i].tex);
+                sys->direct_plane_tex[eye][i].pixels =
+                    ctx->planes[eye][0];
+                sys->direct_plane_tex_count[eye]++;
+            }
+            else
+                i = 0;
+            for (unsigned plane = 0; plane < 3; ++plane)
+                sys->direct_mvc_tex[eye][plane] =
+                    sys->direct_plane_tex[eye][i].tex[plane];
+        }
+        for (unsigned plane = 0; plane < 3; ++plane)
+        {
+            if (!direct_per_buffer &&
+                sys->direct_mvc_tex[eye][plane] == 0)
+            {
+                glGenTextures (1, &sys->direct_mvc_tex[eye][plane]);
+                glBindTexture (GL_TEXTURE_RECTANGLE_EXT,
+                               sys->direct_mvc_tex[eye][plane]);
+                glTexParameteri (GL_TEXTURE_RECTANGLE_EXT, GL_TEXTURE_WRAP_S,
+                                 GL_CLAMP_TO_EDGE);
+                glTexParameteri (GL_TEXTURE_RECTANGLE_EXT, GL_TEXTURE_WRAP_T,
+                                 GL_CLAMP_TO_EDGE);
+                glTexParameteri (GL_TEXTURE_RECTANGLE_EXT, GL_TEXTURE_MAG_FILTER,
+                                 GL_LINEAR);
+                glTexParameteri (GL_TEXTURE_RECTANGLE_EXT, GL_TEXTURE_MIN_FILTER,
+                                 GL_LINEAR);
+                glTexParameteri (GL_TEXTURE_RECTANGLE_EXT,
+                                 GL_TEXTURE_STORAGE_HINT_APPLE,
+                                 client_storage ? GL_STORAGE_SHARED_APPLE
+                                                : GL_STORAGE_CACHED_APPLE);
+                if (persistent_upload)
+                    glTexImage2D (GL_TEXTURE_RECTANGLE_EXT, 0, GL_LUMINANCE,
+                                  ctx->widths[plane], ctx->heights[plane], 0,
+                                  GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
+            }
+            else
+            {
+                glBindTexture (GL_TEXTURE_RECTANGLE_EXT,
+                               sys->direct_mvc_tex[eye][plane]);
+                if (direct_per_buffer && !direct_defined)
+                {
+                    glTexParameteri (GL_TEXTURE_RECTANGLE_EXT,
+                                     GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri (GL_TEXTURE_RECTANGLE_EXT,
+                                     GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    glTexParameteri (GL_TEXTURE_RECTANGLE_EXT,
+                                     GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    glTexParameteri (GL_TEXTURE_RECTANGLE_EXT,
+                                     GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    glTexParameteri (GL_TEXTURE_RECTANGLE_EXT,
+                                     GL_TEXTURE_STORAGE_HINT_APPLE,
+                                     GL_STORAGE_SHARED_APPLE);
+                }
+            }
+            glPixelStorei (GL_UNPACK_ROW_LENGTH,
+                           ctx->strides[eye][plane]);
+            /* A full definition is intentional. On the Snow Leopard 320M
+             * driver, TexSubImage on a freshly allocated cached rectangle
+             * remained backed by the now-returned Edge264 DPB slot and read
+             * as zero. TexImage with client storage disabled makes an owned
+             * driver copy before returning. */
+            if (direct_per_buffer && direct_defined)
+                glTexSubImage2D (GL_TEXTURE_RECTANGLE_EXT, 0, 0, 0,
+                                 ctx->widths[plane], ctx->heights[plane],
+                                 GL_LUMINANCE, GL_UNSIGNED_BYTE,
+                                 ctx->planes[eye][plane]);
+            else if (persistent_upload)
+                glTexSubImage2D (GL_TEXTURE_RECTANGLE_EXT, 0, 0, 0,
+                                 ctx->widths[plane], ctx->heights[plane],
+                                 GL_LUMINANCE, GL_UNSIGNED_BYTE,
+                                 ctx->planes[eye][plane]);
+            else
+                glTexImage2D (GL_TEXTURE_RECTANGLE_EXT, 0, GL_LUMINANCE,
+                              ctx->widths[plane], ctx->heights[plane], 0,
+                              GL_LUMINANCE, GL_UNSIGNED_BYTE,
+                              ctx->planes[eye][plane]);
+        }
+    }
+    if (ctx->packed_base)
+    {
+#ifdef VLC_GL1_HAVE_IOSURFACE
+        const bool iosurface_upload = GL1UseNvidiaMvcPath(
+            sys, "VLC_GL1_DIRECT_IOSURFACE");
+#else
+        const bool iosurface_upload = false;
+#endif
+        if (sys->direct_mvc_base_tex == 0)
+        {
+            glGenTextures (1, &sys->direct_mvc_base_tex);
+            glBindTexture (GL_TEXTURE_RECTANGLE_EXT,
+                           sys->direct_mvc_base_tex);
+            glTexParameteri (GL_TEXTURE_RECTANGLE_EXT, GL_TEXTURE_WRAP_S,
+                             GL_CLAMP_TO_EDGE);
+            glTexParameteri (GL_TEXTURE_RECTANGLE_EXT, GL_TEXTURE_WRAP_T,
+                             GL_CLAMP_TO_EDGE);
+            glTexParameteri (GL_TEXTURE_RECTANGLE_EXT, GL_TEXTURE_MAG_FILTER,
+                             GL_LINEAR);
+            glTexParameteri (GL_TEXTURE_RECTANGLE_EXT, GL_TEXTURE_MIN_FILTER,
+                             GL_LINEAR);
+            glTexParameteri (GL_TEXTURE_RECTANGLE_EXT,
+                             GL_TEXTURE_STORAGE_HINT_APPLE,
+                             client_storage ? GL_STORAGE_SHARED_APPLE
+                                            : GL_STORAGE_CACHED_APPLE);
+            if (iosurface_upload) {
+                /* Private RGB target for the cheap GPU-side IOSurface copy.
+                 * Unlike the source binding, this texture no longer pins a
+                 * VDA output surface while the drawable waits for VSync. */
+                glTexImage2D(GL_TEXTURE_RECTANGLE_EXT, 0, GL_RGB,
+                             ctx->packed_base_width,
+                             ctx->packed_base_height, 0, GL_RGB,
+                             GL_UNSIGNED_BYTE, NULL);
+                glGenFramebuffersEXT(1, &sys->direct_mvc_base_fbo);
+                glBindFramebufferEXT(GL_FRAMEBUFFER_EXT,
+                                     sys->direct_mvc_base_fbo);
+                glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT,
+                                          GL_COLOR_ATTACHMENT0_EXT,
+                                          GL_TEXTURE_RECTANGLE_EXT,
+                                          sys->direct_mvc_base_tex, 0);
+                glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+            } else if (persistent_upload)
+                glTexImage2D (GL_TEXTURE_RECTANGLE_EXT, 0, GL_RGB,
+                              ctx->packed_base_width,
+                              ctx->packed_base_height, 0,
+                              GL_YCBCR_422_APPLE,
+                              GL_UNSIGNED_SHORT_8_8_APPLE, NULL);
+        }
+        else
+            glBindTexture (GL_TEXTURE_RECTANGLE_EXT,
+                           sys->direct_mvc_base_tex);
+        glPixelStorei (GL_UNPACK_ROW_LENGTH,
+                       ctx->packed_base_stride / 2);
+        if (persistent_upload && !iosurface_upload)
+            glTexSubImage2D (GL_TEXTURE_RECTANGLE_EXT, 0, 0, 0,
+                             ctx->packed_base_width,
+                             ctx->packed_base_height,
+                             GL_YCBCR_422_APPLE,
+                             GL_UNSIGNED_SHORT_8_8_APPLE,
+                             ctx->packed_base_pixels);
+        else if (!iosurface_upload)
+            glTexImage2D (GL_TEXTURE_RECTANGLE_EXT, 0, GL_RGB,
+                          ctx->packed_base_width, ctx->packed_base_height, 0,
+                          GL_YCBCR_422_APPLE, GL_UNSIGNED_SHORT_8_8_APPLE,
+                          ctx->packed_base_pixels);
+#ifdef VLC_GL1_HAVE_IOSURFACE
+        else
+        {
+            IOSurfaceRef surface = CVPixelBufferGetIOSurface(
+                (CVPixelBufferRef)ctx->packed_base_owner);
+            GLuint source_tex = 0;
+            if (surface != NULL) {
+                glGenTextures(1, &source_tex);
+                glBindTexture(GL_TEXTURE_RECTANGLE_EXT, source_tex);
+                glTexParameteri(GL_TEXTURE_RECTANGLE_EXT,
+                                GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_RECTANGLE_EXT,
+                                GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_RECTANGLE_EXT,
+                                GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_RECTANGLE_EXT,
+                                GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            }
+            CGLError err = surface != NULL && source_tex != 0
+                ? CGLTexImageIOSurface2D(CGLGetCurrentContext(),
+                      GL_TEXTURE_RECTANGLE_EXT, GL_RGB,
+                      ctx->packed_base_width, ctx->packed_base_height,
+                      GL_YCBCR_422_APPLE, GL_UNSIGNED_SHORT_8_8_APPLE,
+                      surface, 0)
+                : kCGLBadDrawable;
+            if (err != kCGLNoError)
+            {
+                static bool reported;
+                if (!reported)
+                {
+                    fprintf(stderr, "GL1 IOSURFACE bind failed: %d\n",
+                            (int)err);
+                    reported = true;
+                }
+                if (source_tex != 0)
+                    glDeleteTextures(1, &source_tex);
+                glBindTexture(GL_TEXTURE_RECTANGLE_EXT,
+                              sys->direct_mvc_base_tex);
+                glTexSubImage2D(GL_TEXTURE_RECTANGLE_EXT, 0, 0, 0,
+                                ctx->packed_base_width,
+                                ctx->packed_base_height,
+                                GL_YCBCR_422_APPLE,
+                                GL_UNSIGNED_SHORT_8_8_APPLE,
+                                ctx->packed_base_pixels);
+            }
+            else
+            {
+                glPushAttrib(GL_ALL_ATTRIB_BITS);
+                glBindFramebufferEXT(GL_FRAMEBUFFER_EXT,
+                                     sys->direct_mvc_base_fbo);
+                glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
+                glViewport(0, 0, ctx->packed_base_width,
+                           ctx->packed_base_height);
+                glDisable(GL_FRAGMENT_PROGRAM_ARB);
+                glDisable(GL_BLEND);
+                glDisable(GL_DEPTH_TEST);
+                glActiveTexture(GL_TEXTURE2);
+                glDisable(GL_TEXTURE_RECTANGLE_EXT);
+                glActiveTexture(GL_TEXTURE1);
+                glDisable(GL_TEXTURE_RECTANGLE_EXT);
+                glActiveTexture(GL_TEXTURE0);
+                glEnable(GL_TEXTURE_RECTANGLE_EXT);
+                glBindTexture(GL_TEXTURE_RECTANGLE_EXT, source_tex);
+                glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+                glMatrixMode(GL_PROJECTION);
+                glPushMatrix();
+                glLoadIdentity();
+                glMatrixMode(GL_MODELVIEW);
+                glPushMatrix();
+                glLoadIdentity();
+                glColor4f(1.f, 1.f, 1.f, 1.f);
+                const GLfloat width = ctx->packed_base_width;
+                const GLfloat height = ctx->packed_base_height;
+                glBegin(GL_QUADS);
+                glTexCoord2f(0.f, 0.f);      glVertex2f(-1.f, -1.f);
+                glTexCoord2f(width, 0.f);    glVertex2f( 1.f, -1.f);
+                glTexCoord2f(width, height); glVertex2f( 1.f,  1.f);
+                glTexCoord2f(0.f, height);   glVertex2f(-1.f,  1.f);
+                glEnd();
+                glPopMatrix();
+                glMatrixMode(GL_PROJECTION);
+                glPopMatrix();
+                glMatrixMode(GL_MODELVIEW);
+                glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+                glPopAttrib();
+                /* Deleting the source texture retires its IOSurface storage
+                 * after the already queued blit.  At that point OpenGL owns
+                 * the pending use, so the client's CVPixelBuffer reference
+                 * can be returned to VDA immediately. */
+                glFlush();
+                glDeleteTextures(1, &source_tex);
+                if (ctx->packed_base_owner != NULL) {
+                    ctx->release_packed_base(ctx->packed_base_owner);
+                    ctx->packed_base_owner = NULL;
+                    ctx->packed_base_pixels = NULL;
+                }
+                glBindTexture(GL_TEXTURE_RECTANGLE_EXT,
+                              sys->direct_mvc_base_tex);
+            }
+        }
+#endif
+    }
+    /* With the native async presenter an IOSurface must stay alive until the
+     * page flip.  The copied UYVY path is different: after glFinish the
+     * texture is owned by the driver, so retaining VDA's tiny surface pool
+     * for the remaining VSync wait only starves the next base-view decode. */
+    const bool presenter_render = GL1UseNvidiaMvcPath(
+        sys, "VLC_GL1_PRESENTER_RENDER") && sys->presenter_started;
+    const bool retained_iosurface = ctx->packed_base &&
+        GL1UseNvidiaMvcPath(sys, "VLC_GL1_DIRECT_IOSURFACE");
+    const bool deferred_presenter_release =
+        presenter_render && (!ctx->packed_base || retained_iosurface);
+    if (persistent_upload && !client_storage && !deferred_presenter_release)
+        glFinish();
+    /* The software MVC view has already been copied into driver-owned cached
+     * textures (client storage is disabled).  Do not retain Edge264's DPB
+     * slot merely because the same picture also carries a VDA IOSurface that
+     * must survive until the page flip.  Their lifetimes are independent. */
+    if (!client_storage && presenter_render && retained_iosurface &&
+        !ctx->edge_returned) {
+        ctx->return_frame(ctx->decoder, ctx->return_arg);
+        ctx->edge_returned = true;
+        ctx->return_arg = NULL;
+    }
+    glPixelStorei (GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei (GL_UNPACK_CLIENT_STORAGE_APPLE, GL_TRUE);
+
+    sys->direct_mvc_width = ctx->widths[0];
+    sys->direct_mvc_height = ctx->heights[0];
+    sys->direct_mvc = true;
+    if (!client_storage && !deferred_presenter_release &&
+        !ctx->edge_returned)
+    {
+        ctx->return_frame(ctx->decoder, ctx->return_arg);
+        ctx->edge_returned = true;
+        ctx->return_arg = NULL;
+    }
+    if (!client_storage && !deferred_presenter_release &&
+        ctx->packed_base_owner != NULL)
+    {
+        ctx->release_packed_base(ctx->packed_base_owner);
+        ctx->packed_base_owner = NULL;
+        ctx->packed_base_pixels = NULL;
+    }
+    sys->direct_mvc_base_eye = ctx->base_eye;
+    sys->direct_mvc_has_packed_base = ctx->packed_base;
+    ctx->uploaded = true;
+    return true;
+}
+
 /* Context must be current. Packed: dirty the persistent texture bound to
  * this pool buffer (glTexSubImage2D on an unchanged pointer = one queued
  * DMA; a glTexImage2D redefinition would make the driver revalidate and
@@ -757,6 +1597,9 @@ static void CombinerStage (GLenum combine, GLenum src0, GLenum op0,
  * redefinitions as before. */
 static void OpenglUpload (vout_display_sys_t *sys, picture_t *pic)
 {
+    if (OpenglUploadDirectMVC(sys, pic))
+        return;
+    sys->direct_mvc = false;
     UpdateStorageHint (sys);
 
     if (!sys->planar)
@@ -1097,6 +1940,71 @@ static void PlanarQuad (float x, float y, float w, float h,
     glEnd ();
 }
 
+/* Draw one eye of an already stacked MVC picture into its HDMI frame-packing
+ * active region. The 45-line (1080p) or 30-line (720p) blanking interval is
+ * deliberately left untouched between the two calls. MVC output is
+ * normalized to top/bottom, left eye first, before reaching the vout. */
+static void PlanarFramepackSlice(float x, float y, float w, float h,
+                                 float vertex_top, float vertex_bottom,
+                                 const bool chroma_unit[3])
+{
+    static const float vx[4] = { -1.0f, 1.0f, 1.0f, -1.0f };
+    const float vy[4] = { vertex_top, vertex_top,
+                         vertex_bottom, vertex_bottom };
+
+    glBegin(GL_QUADS);
+    for (int corner = 0; corner < 4; ++corner)
+    {
+        const float dx = (corner == 1 || corner == 2) ? 1.0f : 0.0f;
+        const float dy = corner >= 2 ? 1.0f : 0.0f;
+        const float tx = x + dx * w;
+        const float ty = y + dy * h;
+        for (int unit = 0; unit < 3; ++unit)
+        {
+            const float scale = chroma_unit[unit] ? 0.5f : 1.0f;
+            glMultiTexCoord2f(GL_TEXTURE0 + unit, tx * scale, ty * scale);
+        }
+        glVertex2f(vx[corner], vy[corner]);
+    }
+    glEnd();
+}
+
+static void PackedFramepackSlice(float x, float y, float w, float h,
+                                 float vertex_top, float vertex_bottom)
+{
+    static const float vx[4] = { -1.0f, 1.0f, 1.0f, -1.0f };
+    const float vy[4] = { vertex_top, vertex_top,
+                         vertex_bottom, vertex_bottom };
+
+    glBegin(GL_QUADS);
+    for (int corner = 0; corner < 4; ++corner)
+    {
+        const float dx = (corner == 1 || corner == 2) ? 1.0f : 0.0f;
+        const float dy = corner >= 2 ? 1.0f : 0.0f;
+        glTexCoord2f(x + dx * w, y + dy * h);
+        glVertex2f(vx[corner], vy[corner]);
+    }
+    glEnd();
+}
+
+static void PlanarGeometry(vout_display_sys_t *sys, float x, float y,
+                           float w, float h, const bool chroma_unit[3],
+                           video_orientation_t orient)
+{
+    if (!sys->hdmi_framepack || orient != ORIENT_NORMAL)
+    {
+        PlanarQuad(x, y, w, h, chroma_unit, orient);
+        return;
+    }
+
+    const float raster = 2.0f * sys->framepack_eye_height +
+                         sys->framepack_gap;
+    const float inner = 1.0f - 2.0f * sys->framepack_eye_height / raster;
+    PlanarFramepackSlice(x, y, w, h * 0.5f, 1.0f, inner, chroma_unit);
+    PlanarFramepackSlice(x, y + h * 0.5f, w, h * 0.5f,
+                         -inner, -1.0f, chroma_unit);
+}
+
 /* Context must be current. Composites the subpicture regions (DVD
  * SPU/menus, OSD) over the video just drawn: straight-alpha blend,
  * global alpha through GL_MODULATE on the primary color. */
@@ -1154,20 +2062,91 @@ static void OpenglDraw (vout_display_sys_t *sys)
             static const float vy[4] = {  1.0f, 1.0f, -1.0f, -1.0f };
 
             glBindTexture (GL_TEXTURE_RECTANGLE_EXT, sys->draw_tex);
-            glBegin (GL_QUADS);
-            /* picture row 0 is the top of the image */
-            for (int corner = 0; corner < 4; corner++)
+            if (sys->hdmi_framepack && orient == ORIENT_NORMAL)
             {
-                float dx = (corner == 1 || corner == 2) ? 1.0f : 0.0f;
-                float dy = (corner >= 2) ? 1.0f : 0.0f;
-                float fx, fy;
-
-                OrientTexCorner (orient, dx, dy, &fx, &fy);
-                glTexCoord2f (cx + fx * cw, cy + fy * ch);
-                glVertex2f (vx[corner], vy[corner]);
+                const float raster = 2.0f * sys->framepack_eye_height +
+                                     sys->framepack_gap;
+                const float inner = 1.0f - 2.0f *
+                                    sys->framepack_eye_height / raster;
+                PackedFramepackSlice(cx, cy, cw, ch * 0.5f,
+                                     1.0f, inner);
+                PackedFramepackSlice(cx, cy + ch * 0.5f, cw, ch * 0.5f,
+                                     -inner, -1.0f);
             }
-            glEnd ();
+            else
+            {
+                glBegin (GL_QUADS);
+                /* picture row 0 is the top of the image */
+                for (int corner = 0; corner < 4; corner++)
+                {
+                    float dx = (corner == 1 || corner == 2) ? 1.0f : 0.0f;
+                    float dy = (corner >= 2) ? 1.0f : 0.0f;
+                    float fx, fy;
+
+                    OrientTexCorner (orient, dx, dy, &fx, &fy);
+                    glTexCoord2f (cx + fx * cw, cy + fy * ch);
+                    glVertex2f (vx[corner], vy[corner]);
+                }
+                glEnd ();
+            }
         }
+        DrawRegions (sys);
+        return;
+    }
+
+    if (sys->direct_mvc && sys->fragprog && sys->hdmi_framepack &&
+        orient == ORIENT_NORMAL)
+    {
+        static const bool chromaYUV[3] = { false, true, true };
+        const float raster = 2.0f * sys->framepack_eye_height +
+                             sys->framepack_gap;
+        const float inner = 1.0f - 2.0f *
+                            sys->framepack_eye_height / raster;
+        glEnable (GL_FRAGMENT_PROGRAM_ARB);
+        glBindProgramARB (GL_FRAGMENT_PROGRAM_ARB, sys->fp);
+        for (unsigned eye = 0; eye < 2; ++eye)
+        {
+            const float vertex_top = eye == 0 ? 1.0f : -inner;
+            const float vertex_bottom = eye == 0 ? inner : -1.0f;
+            if (sys->direct_mvc_has_packed_base &&
+                eye == sys->direct_mvc_base_eye)
+            {
+                glDisable (GL_FRAGMENT_PROGRAM_ARB);
+                glActiveTexture (GL_TEXTURE2);
+                glDisable (GL_TEXTURE_RECTANGLE_EXT);
+                glActiveTexture (GL_TEXTURE1);
+                glDisable (GL_TEXTURE_RECTANGLE_EXT);
+                glActiveTexture (GL_TEXTURE0);
+                glBindTexture (GL_TEXTURE_RECTANGLE_EXT,
+                               sys->direct_mvc_base_tex);
+                PackedFramepackSlice (0.0f, 0.0f,
+                                      (float)sys->direct_mvc_width,
+                                      (float)sys->direct_mvc_height,
+                                      vertex_top, vertex_bottom);
+                glEnable (GL_FRAGMENT_PROGRAM_ARB);
+                glBindProgramARB (GL_FRAGMENT_PROGRAM_ARB, sys->fp);
+                continue;
+            }
+            for (unsigned plane = 0; plane < 3; ++plane)
+            {
+                glActiveTexture (GL_TEXTURE0 + plane);
+                if (plane > 0)
+                    glEnable (GL_TEXTURE_RECTANGLE_EXT);
+                glBindTexture (GL_TEXTURE_RECTANGLE_EXT,
+                               sys->direct_mvc_tex[eye][plane]);
+            }
+            PlanarFramepackSlice (0.0f, 0.0f,
+                                  (float)sys->direct_mvc_width,
+                                  (float)sys->direct_mvc_height,
+                                  vertex_top, vertex_bottom,
+                                  chromaYUV);
+        }
+        glDisable (GL_FRAGMENT_PROGRAM_ARB);
+        glActiveTexture (GL_TEXTURE2);
+        glDisable (GL_TEXTURE_RECTANGLE_EXT);
+        glActiveTexture (GL_TEXTURE1);
+        glDisable (GL_TEXTURE_RECTANGLE_EXT);
+        glActiveTexture (GL_TEXTURE0);
         DrawRegions (sys);
         return;
     }
@@ -1201,7 +2180,7 @@ static void OpenglDraw (vout_display_sys_t *sys)
                 glEnable (GL_TEXTURE_RECTANGLE_EXT);
             glBindTexture (GL_TEXTURE_RECTANGLE_EXT, tex[i]);
         }
-        PlanarQuad (cx, cy, cw, ch, chromaYUV, orient);
+        PlanarGeometry (sys, cx, cy, cw, ch, chromaYUV, orient);
         glDisable (GL_FRAGMENT_PROGRAM_ARB);
         /* DrawRegions draws with the fixed pipeline on unit 0: leaving the
          * chroma units enabled would modulate the subtitles with them. */
@@ -1244,7 +2223,7 @@ static void OpenglDraw (vout_display_sys_t *sys)
     glEnable (GL_TEXTURE_RECTANGLE_EXT);
     glBindTexture (GL_TEXTURE_RECTANGLE_EXT, tex[0]);
     CombinerStage (GL_SUBTRACT, GL_PREVIOUS, GL_SRC_COLOR, GL_CONSTANT, kR2, 2.0f);
-    PlanarQuad (cx, cy, cw, ch, chromaR, orient);
+    PlanarGeometry (sys, cx, cy, cw, ch, chromaR, orient);
 
     /* ---- G = 2 * (0.5822 Y + [0.1959(1-U) + 0.1635 + 0.4065(1-V)] - 0.5) ---- */
     static const bool chromaG[3] = { true, true, false };   /* U, V, Y */
@@ -1259,7 +2238,7 @@ static void OpenglDraw (vout_display_sys_t *sys)
     glActiveTexture (GL_TEXTURE2);
     glBindTexture (GL_TEXTURE_RECTANGLE_EXT, tex[0]);
     CombinerStage (GL_MODULATE_SIGNED_ADD_ATI, GL_TEXTURE, GL_SRC_COLOR, GL_PREVIOUS, kG2, 2.0f);
-    PlanarQuad (cx, cy, cw, ch, chromaG, orient);
+    PlanarGeometry (sys, cx, cy, cw, ch, chromaG, orient);
 
     /* ---- B = 4 * (0.2911 Y + 0.5043 U - 0.2714) ---- */
     static const bool chromaB[3] = { true, false, false };  /* U, Y, - */
@@ -1273,7 +2252,7 @@ static void OpenglDraw (vout_display_sys_t *sys)
     glActiveTexture (GL_TEXTURE2);
     glBindTexture (GL_TEXTURE_RECTANGLE_EXT, tex[0]);
     CombinerStage (GL_SUBTRACT, GL_PREVIOUS, GL_SRC_COLOR, GL_CONSTANT, kB2, 4.0f);
-    PlanarQuad (cx, cy, cw, ch, chromaB, orient);
+    PlanarGeometry (sys, cx, cy, cw, ch, chromaB, orient);
 
     /* restore sane state for the next frame / other users of the ctx */
     glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -1632,13 +2611,20 @@ static int Open (vlc_object_t *this)
     if (!sys)
         return VLC_ENOMEM;
 
+    vlc_mutex_init (&sys->presenter_lock);
+    vlc_cond_init (&sys->presenter_cond);
+    sys->presenter_inflight = -1;
+    sys->presenter_queued = -1;
+
     gl1_prof_on = getenv ("VLC_GL1_PROF") != NULL;
     memset (&gl1_prof, 0, sizeof (gl1_prof));
 
     /* explicit pool: @autoreleasepool is clang-only, this file is MRC */
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     {
+        bool stereo_prepared = false;
         vd->sys = sys;
+        sys->owner_vd = vd;
         sys->pool = NULL;
         sys->embed = NULL;
         sys->gl = NULL;
@@ -1667,6 +2653,11 @@ static int Open (vlc_object_t *this)
          * la créer aussi côté vout évite un avertissement quand le décodeur
          * n'est pas MPEG-2 HW. */
         var_Create(vd->obj.libvlc, DVDDRIVER_VAR_SUBS,    VLC_VAR_BOOL);
+
+        /* The legacy display transaction must happen before NSOpenGL creates
+         * a drawable, otherwise Snow Leopard keeps both VDA and presentation
+         * attached to the disappearing desktop framebuffer. */
+        stereo_prepared = GL1PrepareStereoDisplay(vd);
 
         /* Get the drawable object */
         id container = var_CreateGetAddress (vd, "drawable-nsobject");
@@ -1719,6 +2710,12 @@ static int Open (vlc_object_t *this)
             goto error;
         }
 
+        if (stereo_prepared)
+        {
+            GL1EnterStereoFullscreen(vd);
+            usleep(500000);
+        }
+
         /* GL context wrapper, same locking scheme as the macosx module */
         sys->gl = vlc_object_create(this, sizeof(*sys->gl));
         if (unlikely(!sys->gl))
@@ -1733,6 +2730,7 @@ static int Open (vlc_object_t *this)
         }
         glsys->locked_ctx = NULL;
         glsys->glView = sys->glView;
+        glsys->display_sys = sys;
         sys->gl->makeCurrent = OpenglLock;
         sys->gl->releaseCurrent = OpenglUnlock;
         sys->gl->swap = OpenglSwap;
@@ -1797,7 +2795,79 @@ static int Open (vlc_object_t *this)
             fmt.i_chroma = sys->planar ? VLC_CODEC_I420 : VLCGL1_CHROMA;
         sys->packed_cached = var_InheritBool (vd, "gl1-packed-cached");
         OpenglInit(sys);
+
+        if (sys->hdmi_framepack && GL1UseNvidiaMvcPath(
+                sys, "VLC_GL1_EXCLUSIVE_FULLSCREEN")) {
+            const CGError capture_error = CGDisplayCaptureWithOptions(
+                sys->stereo_display, kCGCaptureNoFill);
+            if (capture_error == kCGErrorSuccess) {
+                CGLContextObj cgl = vlc_CGLContextOf(
+                    [sys->glView openGLContext]);
+                const CGOpenGLDisplayMask mask =
+                    CGDisplayIDToOpenGLDisplayMask(sys->stereo_display);
+                const CGLError fullscreen_error =
+                    vlc_gl1_SetFullScreenOnDisplay(cgl, mask);
+                if (fullscreen_error == kCGLNoError) {
+                    sys->exclusive_capture = true;
+                    msg_Info(vd,
+                             "exclusive OpenGL scanout engaged on display %u",
+                             (unsigned)sys->stereo_display);
+                } else {
+                    CGDisplayRelease(sys->stereo_display);
+                    msg_Err(vd,
+                            "exclusive OpenGL drawable failed: %s",
+                            CGLErrorString(fullscreen_error));
+                }
+            } else {
+                msg_Err(vd, "display capture failed: CoreGraphics error %d",
+                        (int)capture_error);
+            }
+        }
         vlc_gl_ReleaseCurrent(sys->gl);
+
+        if (sys->nvidia_320m && GL1UseNvidiaMvcPath(
+                sys, "VLC_GL1_ASYNC_PRESENT")) {
+            const bool native_display_link =
+                GL1UseNvidiaMvcPath(sys, "VLC_GL1_DISPLAYLINK_NATIVE");
+            if (native_display_link &&
+                CVDisplayLinkCreateWithCGDisplay(sys->stereo_display,
+                    &sys->presenter_display_link) == kCVReturnSuccess &&
+                CVDisplayLinkSetOutputCallback(sys->presenter_display_link,
+                    GL1DisplayLinkPresenter, sys) == kCVReturnSuccess &&
+                CVDisplayLinkStart(sys->presenter_display_link) ==
+                    kCVReturnSuccess) {
+                sys->presenter_uses_display_link = true;
+                if (getenv("VLC_GL1_SPLIT_PRESENTER") != NULL &&
+                    vlc_clone(&sys->presenter_flip_thread,
+                              GL1FlipPresenter, sys,
+                              VLC_THREAD_PRIORITY_OUTPUT) == 0)
+                    sys->presenter_flip_thread_started = true;
+                if (vlc_clone(&sys->presenter_thread,
+                              GL1AsyncPresenter, sys,
+                              VLC_THREAD_PRIORITY_OUTPUT) == 0) {
+                    sys->presenter_thread_started = true;
+                    sys->presenter_started = true;
+                    msg_Dbg(vd, "CoreVideo-clocked native NVIDIA presenter started");
+                }
+            } else if (getenv("VLC_GL1_DISPLAYLINK_PRESENT") != NULL &&
+                CVDisplayLinkCreateWithCGDisplay != NULL &&
+                CVDisplayLinkCreateWithCGDisplay(sys->stereo_display,
+                    &sys->presenter_display_link) == kCVReturnSuccess &&
+                CVDisplayLinkSetOutputCallback(sys->presenter_display_link,
+                    GL1DisplayLinkPresenter, sys) == kCVReturnSuccess &&
+                CVDisplayLinkStart(sys->presenter_display_link) ==
+                    kCVReturnSuccess) {
+                sys->presenter_started = true;
+                sys->presenter_uses_display_link = true;
+                msg_Dbg(vd, "CoreVideo display-link NVIDIA presenter started");
+            } else if (vlc_clone (&sys->presenter_thread,
+                                  GL1AsyncPresenter, sys,
+                                  VLC_THREAD_PRIORITY_OUTPUT) == 0) {
+                sys->presenter_thread_started = true;
+                sys->presenter_started = true;
+                msg_Dbg(vd, "asynchronous NVIDIA HDMI presenter started");
+            }
+        }
 
         msg_Dbg(vd, "fixed-pipeline OpenGL output: %ux%u %4.4s texture",
                 sys->tex_width, sys->tex_height, (const char *) &fmt.i_chroma);
@@ -1814,6 +2884,13 @@ static int Open (vlc_object_t *this)
         info.has_pictures_invalid = false;
         info.subpicture_chromas = gl1_subpicture_chromas;
 
+        const bool stacked_stereo =
+            fmt.multiview_mode == MULTIVIEW_STEREO_FRAMEPACKED ||
+            (fmt.i_sar_den != 0 && fmt.i_sar_num == 2 * fmt.i_sar_den &&
+             fmt.i_visible_height == 2160);
+        var_Create(vd, "vout-presentation-advance", VLC_VAR_INTEGER);
+        var_SetInteger(vd, "vout-presentation-advance",
+                       sys->nvidia_320m && stacked_stereo ? 60000 : 0);
 
         /* Setup vout_display_t once everything is fine */
         vd->fmt = fmt;
@@ -1849,6 +2926,41 @@ void Close (vlc_object_t *this)
 
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     {
+        if (sys->presenter_started)
+        {
+            vlc_mutex_lock (&sys->presenter_lock);
+            sys->presenter_stop = true;
+            vlc_cond_broadcast (&sys->presenter_cond);
+            vlc_mutex_unlock (&sys->presenter_lock);
+            if (sys->presenter_uses_display_link) {
+                CVDisplayLinkStop(sys->presenter_display_link);
+                CVDisplayLinkRelease(sys->presenter_display_link);
+                sys->presenter_display_link = NULL;
+                sys->presenter_uses_display_link = false;
+            }
+            if (sys->presenter_thread_started) {
+                vlc_join (sys->presenter_thread, NULL);
+                sys->presenter_thread_started = false;
+            }
+            if (sys->presenter_flip_thread_started) {
+                vlc_join(sys->presenter_flip_thread, NULL);
+                sys->presenter_flip_thread_started = false;
+            }
+            sys->presenter_started = false;
+        }
+        if (sys->exclusive_capture) {
+            NSOpenGLContext *context = [sys->glView openGLContext];
+            CGLContextObj cgl = vlc_CGLContextOf(context);
+            if (cgl != NULL && vlc_CGLLockContext(cgl) == kCGLNoError) {
+                CGLSetCurrentContext(cgl);
+                CGLClearDrawable(cgl);
+                CGLSetCurrentContext(NULL);
+                vlc_CGLUnlockContext(cgl);
+            }
+            CGDisplayRelease(sys->stereo_display);
+            sys->exclusive_capture = false;
+        }
+        GL1RestoreStereoDisplay(vd);
         /* Rendre la fenêtre pleinement opaque AVANT de lâcher la vue : l'alpha
          * 0.99 n'est justifié que pendant le mode remplacement matériel (cf.
          * vlcHwEngagedRefresh) et la fenêtre, elle, survit au vout. */
@@ -1916,6 +3028,8 @@ void Close (vlc_object_t *this)
         if (sys->gl != NULL)
         {
             bool have_gl_objects = sys->textures[0][0] != 0
+                                || sys->direct_mvc_tex[0][0] != 0
+                                || sys->direct_mvc_base_tex != 0
                                 || sys->pic_tex_count > 0
                                 || sys->region_count > 0
                                 || sys->fp != 0;
@@ -1927,6 +3041,22 @@ void Close (vlc_object_t *this)
                     glDeleteTextures (3, sys->textures[0]);
                     glDeleteTextures (3, sys->textures[1]);
                 }
+                if (sys->direct_mvc_tex[0][0] != 0 &&
+                    sys->direct_plane_tex_count[0] == 0 &&
+                    sys->direct_plane_tex_count[1] == 0)
+                {
+                    glDeleteTextures (3, sys->direct_mvc_tex[0]);
+                    glDeleteTextures (3, sys->direct_mvc_tex[1]);
+                }
+                if (sys->direct_mvc_base_tex != 0)
+                    glDeleteTextures (1, &sys->direct_mvc_base_tex);
+                if (sys->direct_mvc_base_fbo != 0)
+                    glDeleteFramebuffersEXT(1,
+                                            &sys->direct_mvc_base_fbo);
+                if (sys->presenter_texture[0] != 0)
+                    glDeleteTextures (2, sys->presenter_texture);
+                if (sys->presenter_fbo[0] != 0)
+                    glDeleteFramebuffersEXT(2, sys->presenter_fbo);
                 for (unsigned i = 0; i < sys->pic_tex_count; i++)
                     glDeleteTextures (1, &sys->pic_tex[i].texture);
                 for (int i = 0; i < sys->region_count; i++)
@@ -1936,6 +3066,11 @@ void Close (vlc_object_t *this)
                     glDeleteProgramsARB (1, &sys->fp);
                 for (unsigned i = 0; i < sys->plane_tex_count; i++)
                     glDeleteTextures (3, sys->plane_tex[i].tex);
+                for (unsigned eye = 0; eye < 2; ++eye)
+                    for (unsigned i = 0;
+                         i < sys->direct_plane_tex_count[eye]; ++i)
+                        glDeleteTextures(3,
+                            sys->direct_plane_tex[eye][i].tex);
                 vlc_gl_ReleaseCurrent(sys->gl);
             }
             assert(((struct gl_sys *)sys->gl->sys)->locked_ctx == NULL);
@@ -1947,6 +3082,8 @@ void Close (vlc_object_t *this)
 
         if (sys->embed)
             vout_display_DeleteWindow (vd, sys->embed);
+        vlc_cond_destroy (&sys->presenter_cond);
+        vlc_mutex_destroy (&sys->presenter_lock);
         free (sys);
     }
     [pool release];
@@ -2106,6 +3243,24 @@ static picture_pool_t *Pool (vout_display_t *vd, unsigned requested_count)
         }
     }
 
+    int pool_max = var_InheritInteger (vd, "gl1-pool-max");
+    if (pool_max == 0 && sys->nvidia_320m &&
+        vd->fmt.i_visible_width == 1920 &&
+        vd->fmt.i_visible_height == 2160)
+    {
+        /* 26 resident I420 texture sets crowd VDA's decode surfaces out of
+         * the 320M's unified aperture. Eight and twelve starve the decoder
+         * pool; 20 still recovers slowly. Repeated 23.976 MVC measurements
+         * put 16 at the stable optimum. */
+        pool_max = 16;
+    }
+    if (pool_max >= 3 && count > (unsigned) pool_max)
+    {
+        msg_Dbg (vd, "limiting picture pool from %u to %d buffers", count,
+                 pool_max);
+        count = pool_max;
+    }
+
 
     picture_t *pics[count];
     unsigned i;
@@ -2146,6 +3301,13 @@ static picture_pool_t *Pool (vout_display_t *vd, unsigned requested_count)
 static void PictureRender (vout_display_t *vd, picture_t *pic, subpicture_t *subpicture)
 {
     vout_display_sys_t *sys = vd->sys;
+
+    /* The native-picture presenter owns upload and drawing so the vout can
+     * keep decoding while the completed back buffer waits for HDMI blanking. */
+    if (sys->presenter_started && sys->hdmi_framepack &&
+        GL1UseNvidiaMvcPath(sys, "VLC_GL1_PRESENTER_RENDER") &&
+        powervlc_mvc_context_is_direct(pic->context))
+        return;
 
     /* U4 — picture décodée sur le GPU ATI (contexte présent + device HW actif) :
      * les plans logiciels sont vides (mode remplacement) → inutile de les uploader
@@ -2473,15 +3635,164 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
                                        waitUntilDone:NO];
     }
 
+    const bool presenter_render = sys->presenter_started &&
+                                  sys->hdmi_framepack &&
+                                  sys->nvidia_320m &&
+                                  GL1UseNvidiaMvcPath(
+                                      sys, "VLC_GL1_PRESENTER_RENDER") &&
+                                  powervlc_mvc_context_is_direct(pic->context);
+    if (presenter_render)
+    {
+        picture_t *old_picture = NULL;
+        subpicture_t *old_subpicture = NULL;
+        vlc_mutex_lock(&sys->presenter_lock);
+        if (!sys->presenter_stop)
+        {
+            if (sys->presenter_picture_queued == NULL) {
+                sys->presenter_picture_queued = pic;
+                sys->presenter_subpicture_queued = subpicture;
+            } else if (sys->presenter_picture_queued_next == NULL) {
+                sys->presenter_picture_queued_next = pic;
+                sys->presenter_subpicture_queued_next = subpicture;
+            } else {
+                /* A single unusually long render/driver wake must not throw
+                 * away the following film frame.  Keep a two-frame cushion;
+                 * only when that cushion itself overflows do we discard the
+                 * oldest queued frame and retain the two freshest ones. */
+                old_picture = sys->presenter_picture_queued;
+                old_subpicture = sys->presenter_subpicture_queued;
+                sys->presenter_picture_queued =
+                    sys->presenter_picture_queued_next;
+                sys->presenter_subpicture_queued =
+                    sys->presenter_subpicture_queued_next;
+                sys->presenter_picture_queued_next = pic;
+                sys->presenter_subpicture_queued_next = subpicture;
+                sys->presenter_dropped++;
+            }
+            vlc_cond_signal(&sys->presenter_cond);
+            pic = NULL;
+            subpicture = NULL;
+        }
+        vlc_mutex_unlock(&sys->presenter_lock);
+        if (old_picture != NULL)
+            picture_Release(old_picture);
+        if (old_subpicture != NULL)
+            subpicture_Delete(old_subpicture);
+        if (pic != NULL)
+            picture_Release(pic);
+        if (subpicture != NULL)
+            subpicture_Delete(subpicture);
+        return;
+    }
+
+    const bool async_present = sys->presenter_started &&
+                               sys->hdmi_framepack &&
+                               sys->nvidia_320m &&
+                               getenv("VLC_GL1_FORCE_DRIVER_VSYNC") == NULL &&
+                               getenv("VLC_GL1_NO_ASYNC_PRESENT") == NULL;
+    /* Render straight into the drawable on the 320M.  Avoiding a full-size
+     * RGBA snapshot and blit for every frame keeps this thermally constrained
+     * GPU from slowing down after the first minute. */
+    const bool direct_back_present = async_present &&
+                                     getenv("VLC_GL1_FBO_PRESENT") == NULL;
+    int snapshot_index = -1;
+    if (async_present)
+    {
+        /* Reserve a GPU snapshot texture that the presenter is not currently
+         * reading.  A queued-but-not-yet-consumed texture may be overwritten:
+         * showing the newest complete film frame is preferable to building
+         * latency. */
+        vlc_mutex_lock (&sys->presenter_lock);
+        if (direct_back_present) {
+            while (!sys->presenter_stop &&
+                   (sys->presenter_queued >= 0 ||
+                    sys->presenter_inflight >= 0))
+                vlc_cond_wait (&sys->presenter_cond,
+                               &sys->presenter_lock);
+            snapshot_index = 0; /* completion token, not a texture index */
+        } else if (sys->presenter_queued >= 0) {
+            snapshot_index = sys->presenter_queued;
+            sys->presenter_queued = -1;
+            sys->presenter_dropped++;
+        } else {
+            snapshot_index = sys->presenter_next++ & 1;
+            if (snapshot_index == sys->presenter_inflight)
+                snapshot_index ^= 1;
+        }
+        vlc_mutex_unlock (&sys->presenter_lock);
+    }
+
     [sys->glView setVoutFlushing:YES];
     if (vlc_gl_MakeCurrent(sys->gl) == VLC_SUCCESS)
     {
+        if (async_present && !direct_back_present)
+        {
+            const unsigned width = sys->direct_mvc_width != 0
+                                 ? sys->direct_mvc_width : sys->tex_width;
+            const unsigned height = 2 * sys->framepack_eye_height +
+                                    sys->framepack_gap;
+            glActiveTextureARB(GL_TEXTURE0_ARB);
+            glPixelStorei(GL_UNPACK_CLIENT_STORAGE_APPLE, GL_FALSE);
+            if (sys->presenter_texture[0] == 0 ||
+                sys->presenter_texture_width != width ||
+                sys->presenter_texture_height != height)
+            {
+                if (sys->presenter_texture[0] != 0)
+                    glDeleteTextures(2, sys->presenter_texture);
+                if (sys->presenter_fbo[0] != 0)
+                    glDeleteFramebuffersEXT(2, sys->presenter_fbo);
+                glGenTextures(2, sys->presenter_texture);
+                glGenFramebuffersEXT(2, sys->presenter_fbo);
+                for (unsigned i = 0; i < 2; ++i) {
+                    glBindTexture(GL_TEXTURE_RECTANGLE_EXT,
+                                  sys->presenter_texture[i]);
+                    glTexParameteri(GL_TEXTURE_RECTANGLE_EXT,
+                                    GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                    glTexParameteri(GL_TEXTURE_RECTANGLE_EXT,
+                                    GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                    glTexParameteri(GL_TEXTURE_RECTANGLE_EXT,
+                                    GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_RECTANGLE_EXT,
+                                    GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    glTexImage2D(GL_TEXTURE_RECTANGLE_EXT, 0, GL_RGBA,
+                                 width, height, 0, GL_RGBA,
+                                 GL_UNSIGNED_BYTE, NULL);
+                    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT,
+                                         sys->presenter_fbo[i]);
+                    glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT,
+                                              GL_COLOR_ATTACHMENT0_EXT,
+                                              GL_TEXTURE_RECTANGLE_EXT,
+                                              sys->presenter_texture[i], 0);
+                    const GLenum status =
+                        glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
+                    if (status != GL_FRAMEBUFFER_COMPLETE_EXT)
+                        msg_Err(vd, "GL1 presenter FBO %u incomplete: 0x%x",
+                                i, (unsigned)status);
+                }
+                sys->presenter_texture_width = width;
+                sys->presenter_texture_height = height;
+            }
+            glBindFramebufferEXT(GL_FRAMEBUFFER_EXT,
+                                 sys->presenter_fbo[snapshot_index]);
+            glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
+            glViewport(0, 0, width, height);
+        }
         GL1_PROF_START (t0);
         OpenglDraw (sys);
         GL1_PROF_ADD (draw, t0);
-        GL1_PROF_START (t1);
-        vlc_gl_Swap (sys->gl);
-        GL1_PROF_ADD (swap, t1);
+        if (async_present && !direct_back_present)
+        {
+            glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+            glDrawBuffer(GL_BACK);
+        }
+        else if (!async_present)
+        {
+            GL1_PROF_START (t1);
+            vlc_gl_Swap (sys->gl);
+            GL1_PROF_ADD (swap, t1);
+            if (sys->hdmi_framepack && sys->nvidia_320m)
+                GL1PresenterDidFlip(sys);
+        }
         vlc_gl_ReleaseCurrent(sys->gl);
     }
     [sys->glView setVoutFlushing:NO];
@@ -2494,6 +3805,14 @@ static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *su
     sys->held_pics[sys->tex_index] = pic;
     sys->has_first_frame = true;
     sys->has_gl_frame = true;
+
+    if (async_present)
+    {
+        vlc_mutex_lock (&sys->presenter_lock);
+        sys->presenter_queued = snapshot_index;
+        vlc_cond_signal (&sys->presenter_cond);
+        vlc_mutex_unlock (&sys->presenter_lock);
+    }
 
     if (subpicture)
         subpicture_Delete(subpicture);
@@ -2586,13 +3905,920 @@ static int OpenglLock (vlc_gl_t *gl)
 static void OpenglUnlock (vlc_gl_t *gl)
 {
     struct gl_sys *sys = gl->sys;
+    /* CGLUnlockContext only releases the mutex; it does not stop the
+     * NSOpenGLContext from being current on this thread.  The asynchronous
+     * HDMI presenter must be able to acquire that same context after the vout
+     * has prepared a back buffer, so explicitly relinquish thread ownership
+     * before unlocking it.  The next OpenglLock calls -makeCurrentContext as
+     * usual. */
+    if (sys->display_sys->presenter_started)
+        [NSOpenGLContext clearCurrentContext];
     vlc_CGLUnlockContext (sys->locked_ctx);
     sys->locked_ctx = NULL;
+}
+
+static void GL1PresenterDidFlip(vout_display_sys_t *display)
+{
+    /* Never perform diagnostics from CoreVideo's real-time callback during
+     * normal playback.  On Snow Leopard an occasional stderr flush to the
+     * system disk can exceed one 41.7 ms HDMI refresh and is itself visible
+     * as the isolated repeated frame the metric was meant to observe. */
+    if (getenv("VLC_GL1_METRICS") == NULL)
+        return;
+
+    unsigned report_count = 0, report_dropped = 0;
+    vlc_tick_t report_elapsed = 0;
+    vlc_mutex_lock(&display->presenter_lock);
+    if (display->presenter_report_start == 0)
+        display->presenter_report_start = mdate();
+    display->presenter_presented++;
+    if (display->presenter_presented >= 120) {
+        report_count = display->presenter_presented;
+        report_dropped = display->presenter_dropped;
+        report_elapsed = mdate() - display->presenter_report_start;
+        display->presenter_presented = 0;
+        display->presenter_dropped = 0;
+        display->presenter_report_start = mdate();
+    }
+    vlc_mutex_unlock(&display->presenter_lock);
+    if (report_count != 0 && report_elapsed > 0)
+    {
+        msg_Err(display->gl, "GL1 HDMI presenter: %u flips in %.3f s "
+                "(%.2f fps), %u late pictures discarded",
+                report_count, report_elapsed / 1000000.0,
+                report_count * 1000000.0 / report_elapsed, report_dropped);
+        fprintf(stderr, "GL1_METRIC flips=%u elapsed=%.3f fps=%.2f dropped=%u\n",
+                report_count, report_elapsed / 1000000.0,
+                report_count * 1000000.0 / report_elapsed, report_dropped);
+        fflush(stderr);
+    }
+}
+
+/* CoreVideo calls this on its real-time display thread just ahead of the
+ * selected display's vertical retrace.  Do not commit the drawable here:
+ * Snow Leopard's 320M can return from an interval-0 CGLFlushDrawable while
+ * the scanout is still active.  Wake the presenter instead; it queues an
+ * interval-1 swap with the driver for the following retrace. */
+static CVReturn GL1DisplayLinkPresenter(CVDisplayLinkRef link,
+                                        const CVTimeStamp *now,
+                                        const CVTimeStamp *output,
+                                        CVOptionFlags in_flags,
+                                        CVOptionFlags *out_flags,
+                                        void *opaque)
+{
+    (void)link; (void)now; (void)output; (void)in_flags; (void)out_flags;
+    vout_display_sys_t *display = opaque;
+    typedef uint32_t (*CallbackBeamPosition)(CGDirectDisplayID);
+    static CallbackBeamPosition callback_beam_position;
+    if (callback_beam_position == NULL)
+        callback_beam_position = (CallbackBeamPosition)dlsym(
+            RTLD_DEFAULT, "CGDisplayBeamPosition");
+    const uint32_t callback_entry_beam = callback_beam_position != NULL
+        ? callback_beam_position(display->stereo_display) : 0;
+
+    vlc_mutex_lock(&display->presenter_lock);
+    const bool native_mode = display->presenter_thread_started &&
+                             getenv("VLC_GL1_PRESENTER_RENDER") != NULL;
+    if (native_mode) {
+        const bool callback_present =
+            getenv("VLC_GL1_CALLBACK_PRESENT") != NULL;
+        const bool ready = callback_present &&
+                           display->presenter_native_ready;
+        if (!display->presenter_stop) {
+            display->presenter_native_target_host_time = output->hostTime;
+            if (!callback_present) {
+                display->presenter_native_flip_serial++;
+                vlc_cond_broadcast(&display->presenter_cond);
+            } else if (ready) {
+                display->presenter_native_ready = false;
+            }
+        }
+        vlc_mutex_unlock(&display->presenter_lock);
+
+        if (!ready)
+            return kCVReturnSuccess;
+
+        /* The rendered back buffer is complete before native_ready is set.
+         * Commit it from CoreVideo's own real-time callback so Snow Leopard
+         * cannot delay a second worker-thread wake into active scanout. */
+        /* The callback itself is emitted at the current retrace.  On 10.6,
+         * output->hostTime describes the *following* refresh; waiting for it
+         * here occupies CoreVideo for a whole 24 Hz period and makes it skip
+         * every other callback (an exact 12 fps). */
+
+        NSOpenGLContext *context = [display->glView openGLContext];
+        CGLContextObj cgl = vlc_CGLContextOf(context);
+        bool did_flip = false;
+        const uint32_t callback_beam = callback_beam_position != NULL
+            ? callback_beam_position(display->stereo_display) : 0;
+        if (cgl != NULL && vlc_CGLLockContext(cgl) == kCGLNoError) {
+            if (display->swap_interval != 0) {
+                GLint interval[] = { 0 };
+                CGLSetParameter(cgl, kCGLCPSwapInterval, interval);
+                display->swap_interval = 0;
+            }
+            CGLSetCurrentContext(cgl);
+            CGLFlushDrawable(cgl);
+            CGLSetCurrentContext(NULL);
+            vlc_CGLUnlockContext(cgl);
+            did_flip = true;
+            GL1PresenterDidFlip(display);
+        }
+        static unsigned callback_beam_samples;
+        if (callback_beam_samples < 32)
+            msg_Dbg(display->gl,
+                    "GL1 PCM callback flush %u: entry %u, preflush %u",
+                    ++callback_beam_samples, callback_entry_beam,
+                    callback_beam);
+        vlc_mutex_lock(&display->presenter_lock);
+        if (!did_flip)
+            display->presenter_dropped++;
+        display->presenter_native_flip_serial++;
+        vlc_cond_broadcast(&display->presenter_cond);
+        vlc_mutex_unlock(&display->presenter_lock);
+        return kCVReturnSuccess;
+    }
+
+    const bool native_ready = display->presenter_native_ready;
+    if (display->presenter_stop ||
+        (!native_ready && display->presenter_queued < 0)) {
+        vlc_mutex_unlock(&display->presenter_lock);
+        return kCVReturnSuccess;
+    }
+    if (native_ready) {
+        /* output->hostTime is CoreVideo's hardware prediction of the next
+         * retrace.  Let the presenter wait for that exact timestamp while
+         * this real-time callback returns immediately. */
+        display->presenter_native_deferred = true;
+        display->presenter_native_target_host_time = output->hostTime;
+        display->presenter_native_ready = false;
+    } else {
+        display->presenter_inflight = display->presenter_queued;
+        display->presenter_queued = -1;
+    }
+    vlc_mutex_unlock(&display->presenter_lock);
+
+    NSOpenGLContext *context = [display->glView openGLContext];
+    CGLContextObj cgl = vlc_CGLContextOf(context);
+    if (cgl != NULL && vlc_CGLLockContext(cgl) == kCGLNoError) {
+        if (display->swap_interval != 0) {
+            GLint interval[] = { 0 };
+            CGLSetParameter(cgl, kCGLCPSwapInterval, interval);
+            display->swap_interval = 0;
+        }
+        CGLSetCurrentContext(cgl);
+        CGLFlushDrawable(cgl);
+        CGLSetCurrentContext(NULL);
+        vlc_CGLUnlockContext(cgl);
+        GL1PresenterDidFlip(display);
+    }
+
+    vlc_mutex_lock(&display->presenter_lock);
+    if (native_ready)
+        display->presenter_native_flip_serial++;
+    else
+        display->presenter_inflight = -1;
+    vlc_cond_broadcast(&display->presenter_cond);
+    vlc_mutex_unlock(&display->presenter_lock);
+    return kCVReturnSuccess;
+}
+
+/* Keep the display clock independent from MVC upload/rendering.  The render
+ * worker publishes one immutable back buffer; this thread consumes every
+ * CoreVideo target even while the next MVC picture is still being decoded. */
+static void *GL1FlipPresenter(void *opaque)
+{
+    vout_display_sys_t *display = opaque;
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+
+    mach_timebase_info_data_t timebase;
+    mach_timebase_info(&timebase);
+    const uint64_t ticks_per_ms =
+        1000000ULL * timebase.denom / timebase.numer;
+    thread_time_constraint_policy_data_t policy = {
+        .period = (uint32_t)(42 * ticks_per_ms),
+        .computation = (uint32_t)(10 * ticks_per_ms),
+        .constraint = (uint32_t)(15 * ticks_per_ms),
+        .preemptible = FALSE,
+    };
+    thread_port_t thread = mach_thread_self();
+    kern_return_t policy_error = thread_policy_set(thread,
+        THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&policy,
+        THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+    mach_port_deallocate(mach_task_self(), thread);
+    msg_Dbg(display->gl, "GL1 split flip real-time policy: %s",
+            policy_error == KERN_SUCCESS ? "enabled" : "unavailable");
+
+    typedef uint32_t (*FlipBeamPosition)(CGDirectDisplayID);
+    FlipBeamPosition beam_position = (FlipBeamPosition)dlsym(
+        RTLD_DEFAULT, "CGDisplayBeamPosition");
+    uint64_t consumed_serial = 0;
+
+    vlc_mutex_lock(&display->presenter_lock);
+    while (!display->presenter_stop) {
+        while (!display->presenter_stop &&
+               display->presenter_native_flip_serial == consumed_serial)
+            vlc_cond_wait(&display->presenter_cond,
+                          &display->presenter_lock);
+        if (display->presenter_stop)
+            break;
+        consumed_serial = display->presenter_native_flip_serial;
+        const uint64_t target =
+            display->presenter_native_target_host_time;
+        vlc_mutex_unlock(&display->presenter_lock);
+
+        if (target != 0) {
+            const uint64_t lead = 8000ULL * 1000ULL *
+                timebase.denom / timebase.numer;
+            const uint64_t wake = target > lead ? target - lead : target;
+            const uint64_t phase = 100ULL * 1000ULL *
+                timebase.denom / timebase.numer;
+            const uint64_t phased_target = target + phase;
+            if (mach_absolute_time() < wake)
+                mach_wait_until(wake);
+            while (mach_absolute_time() < phased_target)
+                ;
+        }
+
+        uint32_t beam = beam_position != NULL
+            ? beam_position(display->stereo_display) : 0;
+        const uint32_t total = 2 * display->framepack_eye_height +
+                               display->framepack_gap;
+        const uint32_t safe_start = total > 10 ? total - 10 : total;
+        const bool scan_safe = !display->exclusive_capture ||
+            beam_position == NULL || beam == 0 || beam >= safe_start;
+
+        vlc_mutex_lock(&display->presenter_lock);
+        const bool ready = display->presenter_native_ready;
+        vlc_mutex_unlock(&display->presenter_lock);
+
+        bool did_flip = false;
+        if (ready && scan_safe) {
+            NSOpenGLContext *context = [display->glView openGLContext];
+            CGLContextObj cgl = vlc_CGLContextOf(context);
+            if (cgl != NULL && vlc_CGLLockContext(cgl) == kCGLNoError) {
+                if (display->swap_interval != 0) {
+                    GLint interval[] = { 0 };
+                    CGLSetParameter(cgl, kCGLCPSwapInterval, interval);
+                    display->swap_interval = 0;
+                }
+                CGLSetCurrentContext(cgl);
+                CGLFlushDrawable(cgl);
+                CGLSetCurrentContext(NULL);
+                vlc_CGLUnlockContext(cgl);
+                did_flip = true;
+                GL1PresenterDidFlip(display);
+            }
+        }
+
+        static unsigned samples;
+        if (samples < 24)
+            msg_Dbg(display->gl,
+                    "GL1 split flip %u: target beam %u, ready %d, flip %d",
+                    ++samples, beam, (int)ready, (int)did_flip);
+
+        vlc_mutex_lock(&display->presenter_lock);
+        if (did_flip) {
+            display->presenter_native_ready = false;
+            vlc_cond_broadcast(&display->presenter_cond);
+        } else if (ready && !scan_safe) {
+            display->presenter_dropped++;
+        }
+    }
+    vlc_mutex_unlock(&display->presenter_lock);
+    [pool release];
+    return NULL;
+}
+
+static void *GL1AsyncPresenter (void *opaque)
+{
+    vout_display_sys_t *display = opaque;
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    const bool presenter_render =
+        getenv("VLC_GL1_PRESENTER_RENDER") != NULL;
+
+    if (presenter_render &&
+        getenv("VLC_GL1_PRESENTER_REALTIME") != NULL)
+    {
+        mach_timebase_info_data_t tb;
+        mach_timebase_info(&tb);
+        const uint64_t ticks_per_ms = 1000000ULL * tb.denom / tb.numer;
+        thread_time_constraint_policy_data_t policy = {
+            .period = (uint32_t)(42 * ticks_per_ms),
+            .computation = (uint32_t)(10 * ticks_per_ms),
+            .constraint = (uint32_t)(15 * ticks_per_ms),
+            .preemptible = FALSE,
+        };
+        thread_port_t thread = mach_thread_self();
+        kern_return_t kr = thread_policy_set(thread,
+            THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&policy,
+            THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+        mach_port_deallocate(mach_task_self(), thread);
+        msg_Dbg(display->gl,
+                "GL1 presenter real-time policy: %s",
+                kr == KERN_SUCCESS ? "enabled" : "unavailable");
+    }
+
+    uint64_t consumed_display_link_serial = 0;
+    vlc_mutex_lock (&display->presenter_lock);
+    while (!display->presenter_stop)
+    {
+        while ((presenter_render
+                    ? display->presenter_picture_queued == NULL
+                    : display->presenter_queued < 0) &&
+               !display->presenter_stop)
+            vlc_cond_wait (&display->presenter_cond, &display->presenter_lock);
+        if (display->presenter_stop)
+            break;
+
+        picture_t *presenter_picture = NULL;
+        subpicture_t *presenter_subpicture = NULL;
+        int snapshot_index = 0;
+        if (presenter_render)
+        {
+            presenter_picture = display->presenter_picture_queued;
+            presenter_subpicture = display->presenter_subpicture_queued;
+            display->presenter_picture_queued =
+                display->presenter_picture_queued_next;
+            display->presenter_subpicture_queued =
+                display->presenter_subpicture_queued_next;
+            display->presenter_picture_queued_next = NULL;
+            display->presenter_subpicture_queued_next = NULL;
+            display->presenter_picture_inflight = presenter_picture;
+            display->presenter_subpicture_inflight = presenter_subpicture;
+        }
+        else
+        {
+            snapshot_index = display->presenter_queued;
+            display->presenter_queued = -1;
+            display->presenter_inflight = snapshot_index;
+        }
+        vlc_mutex_unlock (&display->presenter_lock);
+
+        const vlc_tick_t presenter_cycle_start = mdate();
+        vlc_tick_t presenter_after_render = presenter_cycle_start;
+
+        if (presenter_render)
+        {
+            if (vlc_gl_MakeCurrent(display->gl) == VLC_SUCCESS)
+            {
+                OpenglUpload(display, presenter_picture);
+                UploadSubpictures(display->owner_vd, presenter_subpicture);
+                glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+                glDrawBuffer(GL_BACK);
+                OpenglDraw(display);
+                if (display->presenter_uses_display_link)
+                    /* Drain all frame-pack rendering before advertising the
+                     * back buffer to CoreVideo.  Its callback must perform
+                     * only the page flip while vertical blank is active. */
+                    glFinish();
+                vlc_gl_ReleaseCurrent(display->gl);
+            }
+            presenter_after_render = mdate();
+        }
+
+        /* CVDisplayLink supplies the cadence, while the GL driver owns the
+         * tear-free commit.  Queueing the interval-1 swap from this worker
+         * avoids doing a potentially blocking driver call on CoreVideo's
+         * real-time callback and avoids interval-0 scanout tears on 320M. */
+        if (presenter_render && display->presenter_uses_display_link)
+        {
+            if (display->presenter_flip_thread_started) {
+                /* The dedicated clock thread owns the page flip.  Publish a
+                 * completely rendered back buffer, then keep it immutable
+                 * until that thread has committed it at HDMI blanking. */
+                vlc_mutex_lock(&display->presenter_lock);
+                display->presenter_native_ready = true;
+                vlc_cond_broadcast(&display->presenter_cond);
+                while (!display->presenter_stop &&
+                       display->presenter_native_ready)
+                    vlc_cond_wait(&display->presenter_cond,
+                                  &display->presenter_lock);
+                vlc_mutex_unlock(&display->presenter_lock);
+
+                if (presenter_picture != NULL)
+                    picture_Release(presenter_picture);
+                if (presenter_subpicture != NULL)
+                    subpicture_Delete(presenter_subpicture);
+                vlc_mutex_lock(&display->presenter_lock);
+                display->presenter_picture_inflight = NULL;
+                display->presenter_subpicture_inflight = NULL;
+                vlc_cond_broadcast(&display->presenter_cond);
+                continue;
+            }
+            const bool callback_present =
+                getenv("VLC_GL1_CALLBACK_PRESENT") != NULL;
+            vlc_mutex_lock(&display->presenter_lock);
+            if (callback_present)
+                display->presenter_native_ready = true;
+            while (!display->presenter_stop &&
+                   display->presenter_native_flip_serial ==
+                       consumed_display_link_serial)
+                vlc_cond_wait(&display->presenter_cond,
+                              &display->presenter_lock);
+            consumed_display_link_serial =
+                display->presenter_native_flip_serial;
+            const bool deferred =
+                !callback_present &&
+                display->presenter_native_target_host_time != 0;
+            const uint64_t target_host_time =
+                display->presenter_native_target_host_time;
+            vlc_mutex_unlock(&display->presenter_lock);
+
+            if (deferred) {
+                typedef uint32_t (*PreciseBeamPosition)(CGDirectDisplayID);
+                typedef CGError (*WaitOutsideScanLines)(CGDirectDisplayID,
+                                                        uint32_t, uint32_t);
+                static PreciseBeamPosition precise_beam_position;
+                static WaitOutsideScanLines wait_outside_scan_lines;
+                if (precise_beam_position == NULL)
+                    precise_beam_position = (PreciseBeamPosition)dlsym(
+                        RTLD_DEFAULT, "CGDisplayBeamPosition");
+                if (wait_outside_scan_lines == NULL)
+                    wait_outside_scan_lines = (WaitOutsideScanLines)dlsym(
+                        RTLD_DEFAULT,
+                        "CGDisplayWaitForBeamPositionOutsideLines");
+                const vlc_tick_t beam_wait_start = mdate();
+                bool beam_at_boundary = false;
+                uint32_t beam_after_wait = 0;
+                if (display->exclusive_capture && target_host_time != 0) {
+                    /* CVDisplayLink predicts the beginning of the next
+                     * hardware refresh in mach absolute-time units.  On an
+                     * exclusive CGL drawable this is also the complete
+                     * frame-pack page-flip boundary.  Keep GL work out of
+                     * CoreVideo's real-time callback, but consume its target
+                     * here instead of trying to catch a sub-millisecond beam
+                     * interval by polling on Snow Leopard. */
+                    uint64_t wake_host_time = target_host_time;
+                    if (getenv("VLC_GL1_PRESENTER_DRIVER_VSYNC") != NULL) {
+                        static mach_timebase_info_data_t vsync_timebase;
+                        if (vsync_timebase.denom == 0)
+                            mach_timebase_info(&vsync_timebase);
+                        /* Submit shortly before retrace.  Interval 1 still
+                         * gives the NVIDIA driver ownership of the atomic
+                         * page flip, but it can now block VDA for at most a
+                         * few milliseconds instead of an entire 24 Hz
+                         * period.  The 320M needs more than two milliseconds
+                         * to arm a flip; keep the lead tunable so it can be
+                         * measured against both missed flips and VDA cadence. */
+                        unsigned lead_us = 8000;
+                        const char *lead_env =
+                            getenv("VLC_GL1_VSYNC_LEAD_US");
+                        if (lead_env != NULL) {
+                            const unsigned parsed = (unsigned)strtoul(
+                                lead_env, NULL, 10);
+                            if (parsed >= 1000 && parsed <= 20000)
+                                lead_us = parsed;
+                        }
+                        const uint64_t lead_ticks =
+                            (uint64_t)lead_us * 1000ULL *
+                            vsync_timebase.denom / vsync_timebase.numer;
+                        if (wake_host_time > lead_ticks)
+                            wake_host_time -= lead_ticks;
+                    } else {
+                        static mach_timebase_info_data_t flip_timebase;
+                        if (flip_timebase.denom == 0)
+                            mach_timebase_info(&flip_timebase);
+                        const uint64_t lead_ticks = 4000ULL * 1000ULL *
+                            flip_timebase.denom / flip_timebase.numer;
+                        if (wake_host_time > lead_ticks)
+                            wake_host_time -= lead_ticks;
+                    }
+                    if (mach_absolute_time() < wake_host_time)
+                        mach_wait_until(wake_host_time);
+                    if (getenv("VLC_GL1_PRESENTER_DRIVER_VSYNC") == NULL) {
+                        /* CoreVideo fires about 0.4 ms after the real wrap
+                         * once AUHAL PCM is active.  Arm from its prediction
+                         * for the following refresh and finish 0.4 ms early.
+                         * The non-preemptible final spin prevents AUHAL from
+                         * pushing this short commit into active scanout. */
+                        const uint64_t final_host_time = target_host_time;
+                        while (mach_absolute_time() < final_host_time)
+                            ;
+                        beam_at_boundary = true;
+                        if (precise_beam_position != NULL)
+                            beam_after_wait = precise_beam_position(
+                                                  display->stereo_display);
+                    }
+                    if (getenv("VLC_GL1_PRESENTER_DRIVER_VSYNC") != NULL) {
+                        beam_at_boundary = true;
+                        if (precise_beam_position != NULL)
+                            beam_after_wait = precise_beam_position(
+                                                  display->stereo_display);
+                    }
+                } else if (precise_beam_position != NULL &&
+                    display->framepack_eye_height != 0 &&
+                    display->framepack_gap != 0) {
+                    const uint32_t total =
+                        2 * display->framepack_eye_height +
+                        display->framepack_gap;
+                    const uint32_t target = total > 5 ? total - 5 : total;
+                    uint32_t beam = precise_beam_position(
+                                        display->stereo_display);
+                    if (beam >= target) {
+                        beam_at_boundary = true;
+                    } else {
+                        static mach_timebase_info_data_t beam_timebase;
+                        if (beam_timebase.denom == 0)
+                            mach_timebase_info(&beam_timebase);
+                        const vlc_tick_t deadline = mdate() + 50000;
+                        do {
+                            beam = precise_beam_position(
+                                       display->stereo_display);
+                            beam_at_boundary = beam >= target;
+                            if (!beam_at_boundary) {
+                                const uint32_t distance = target - beam;
+                                const uint64_t wait_us =
+                                    (uint64_t)distance * 41708 / total;
+                                if (wait_us > 1200) {
+                                    const uint64_t chunk_us =
+                                        __MIN(wait_us - 1200, 4000);
+                                    const uint64_t ticks = chunk_us * 1000ULL *
+                                        beam_timebase.denom /
+                                        beam_timebase.numer;
+                                    mach_wait_until(mach_absolute_time() +
+                                                    ticks);
+                                }
+                            }
+                        } while (!beam_at_boundary && mdate() < deadline);
+                    }
+                    beam_after_wait = precise_beam_position(
+                                          display->stereo_display);
+                }
+                static unsigned wait_samples;
+                if (wait_samples < 16)
+                    msg_Dbg(display->gl,
+                            "GL1 precise beam wait %u: %lld us, beam %u, boundary %d",
+                            ++wait_samples,
+                            (long long)(mdate() - beam_wait_start),
+                            beam_after_wait,
+                            beam_at_boundary);
+                NSOpenGLContext *context = [display->glView openGLContext];
+                CGLContextObj cgl = vlc_CGLContextOf(context);
+                uint32_t flush_beam_before = 0;
+                uint32_t flush_beam_after = 0;
+                const vlc_tick_t flush_start = mdate();
+                bool did_flip = false;
+                if (cgl != NULL &&
+                    vlc_CGLLockContext(cgl) == kCGLNoError) {
+                    const int wanted_swap =
+                        getenv("VLC_GL1_PRESENTER_DRIVER_VSYNC") != NULL
+                            ? 1 : 0;
+                    if (display->swap_interval != wanted_swap) {
+                        GLint interval[] = { wanted_swap };
+                        CGLSetParameter(cgl, kCGLCPSwapInterval, interval);
+                        display->swap_interval = wanted_swap;
+                    }
+                    if (precise_beam_position != NULL)
+                        flush_beam_before = precise_beam_position(
+                                                display->stereo_display);
+                    const bool safe_interval0 = wanted_swap != 0 ||
+                        !display->exclusive_capture ||
+                        precise_beam_position == NULL ||
+                        flush_beam_before == 0 ||
+                        flush_beam_before >= 2195;
+                    if (safe_interval0) {
+                        CGLSetCurrentContext(cgl);
+                        CGLFlushDrawable(cgl);
+                        if (precise_beam_position != NULL)
+                            flush_beam_after = precise_beam_position(
+                                                   display->stereo_display);
+                        CGLSetCurrentContext(NULL);
+                        did_flip = true;
+                    } else {
+                        display->presenter_dropped++;
+                        flush_beam_after = flush_beam_before;
+                    }
+                    vlc_CGLUnlockContext(cgl);
+                    if (did_flip)
+                        GL1PresenterDidFlip(display);
+                }
+                static unsigned flush_samples;
+                if (flush_samples < 24)
+                    msg_Dbg(display->gl,
+                            "GL1 timed flush %u: beam %u -> %u in %lld us%s",
+                            ++flush_samples, flush_beam_before,
+                            flush_beam_after,
+                            (long long)(mdate() - flush_start),
+                            did_flip ? "" : " (unsafe, discarded)");
+            }
+
+            if (presenter_picture != NULL)
+                picture_Release(presenter_picture);
+            if (presenter_subpicture != NULL)
+                subpicture_Delete(presenter_subpicture);
+
+            vlc_mutex_lock(&display->presenter_lock);
+            display->presenter_inflight = -1;
+            display->presenter_picture_inflight = NULL;
+            display->presenter_subpicture_inflight = NULL;
+            vlc_cond_broadcast(&display->presenter_cond);
+            continue;
+        }
+
+        typedef uint32_t (*BeamPosition)(CGDirectDisplayID);
+        static BeamPosition beam_position;
+        if (beam_position == NULL) {
+            beam_position = (BeamPosition)
+                dlsym(RTLD_DEFAULT, "CGDisplayBeamPosition");
+        }
+        uint32_t beam = 0;
+        uint32_t initial_beam = 0;
+        unsigned beam_attempts = 0;
+        const vlc_tick_t beam_wait_start = mdate();
+        bool safe_to_flip = true;
+        if (getenv("VLC_GL1_PRESENTER_DRIVER_VSYNC") == NULL &&
+            beam_position != NULL && display->framepack_eye_height != 0 &&
+            display->framepack_gap != 0) {
+            const uint32_t total = 2 * display->framepack_eye_height +
+                                   display->framepack_gap;
+            const uint32_t switch_line = display->framepack_eye_height +
+                                         display->framepack_gap / 2;
+            const uint32_t target_eye = switch_line > 220
+                                      ? switch_line - 220 : switch_line;
+            /* The beam counter was measured to reach line 2205 before it
+             * wraps.  The frame boundary is therefore a second invisible
+             * switching point, halfway around the scan from the inter-eye
+             * gap.  Selecting the next of both cuts the worst wait in half. */
+            /* The native presenter has already submitted all drawing before
+             * this wait; its interval-0 flush is effectively immediate.  The
+             * historical 220-line lead compensated a synchronous render in
+             * OpenglSwap and visibly switched the native drawable inside the
+             * bottom eye.  Aim at the last scan lines instead. */
+            const uint32_t frame_lead = presenter_render ? 5 : 220;
+            const uint32_t target_frame = total > frame_lead
+                                        ? total - frame_lead : 0;
+            const bool direct_back_present =
+                getenv("VLC_GL1_FBO_PRESENT") == NULL;
+            /* A drawable flip in the inter-eye gap would pair the first eye
+             * of the old film frame with the second eye of the new one.  The
+             * direct path therefore uses only the complete-frame boundary.
+             * An immutable FBO snapshot remains safe at either blank. */
+            safe_to_flip = false;
+            static mach_timebase_info_data_t timebase;
+            if (timebase.denom == 0)
+                mach_timebase_info(&timebase);
+            /* A late wake must never fall through into an interval-0 swap:
+             * that is a visible tear.  Retry at the following safe boundary;
+             * if both attempts miss, discard this picture and leave the
+             * complete previous frame on screen. */
+            for (unsigned attempt = 0; attempt < 1 && !safe_to_flip;
+                 ++attempt) {
+                beam = beam_position(display->stereo_display) % total;
+                if (attempt == 0)
+                    initial_beam = beam;
+                beam_attempts = attempt + 1;
+                uint32_t eye_distance =
+                    (target_eye + total - beam) % total;
+                uint32_t frame_distance =
+                    (target_frame + total - beam) % total;
+                uint32_t nearest = direct_back_present
+                                 ? frame_distance
+                                 : __MIN(eye_distance, frame_distance);
+                /* More than half a scan away means this picture completed
+                 * just after its safe boundary.  Waiting a whole refresh
+                 * here blocks the direct back buffer and makes every later
+                 * picture miss too.  Drop it immediately so the queued next
+                 * picture can recover the 24 Hz phase. */
+                if (nearest > total / 2 && !presenter_render)
+                    break;
+                if (nearest > 20 && nearest < total - 20) {
+                    const uint64_t wait_us =
+                        (uint64_t)nearest * 41708 / total;
+                    const uint64_t spin_guard = presenter_render ? 3000 : 100;
+                    if (wait_us > spin_guard) {
+                        const uint64_t sleep_us = wait_us - spin_guard;
+                        const uint64_t sleep_ticks = sleep_us * 1000ULL *
+                            timebase.denom / timebase.numer;
+                        mach_wait_until(mach_absolute_time() + sleep_ticks);
+                    }
+                }
+                const vlc_tick_t deadline = mdate() +
+                    (presenter_render ? 4000 : 700);
+                do {
+                    beam = beam_position(display->stereo_display) % total;
+                    eye_distance = (target_eye + total - beam) % total;
+                    frame_distance = (target_frame + total - beam) % total;
+                    const uint32_t tolerance = 20;
+                    const bool at_eye = eye_distance <= tolerance ||
+                                        eye_distance >= total - tolerance;
+                    const bool at_frame = frame_distance <= tolerance ||
+                                          frame_distance >= total - tolerance;
+                    safe_to_flip = at_frame ||
+                                   (!direct_back_present && at_eye);
+                } while (!safe_to_flip && mdate() < deadline);
+            }
+        }
+        if (!safe_to_flip) {
+            static unsigned safe_drop_count;
+            if (++safe_drop_count <= 16 || safe_drop_count % 120 == 0)
+                msg_Err(display->gl,
+                        "GL1 presenter missed safe scan boundary (%u): initial %u final %u waited %d us",
+                        safe_drop_count, initial_beam, beam,
+                        (int)(mdate() - beam_wait_start));
+            if (presenter_picture != NULL)
+                picture_Release(presenter_picture);
+            if (presenter_subpicture != NULL)
+                subpicture_Delete(presenter_subpicture);
+            vlc_mutex_lock(&display->presenter_lock);
+            display->presenter_dropped++;
+            display->presenter_inflight = -1;
+            display->presenter_picture_inflight = NULL;
+            display->presenter_subpicture_inflight = NULL;
+            vlc_cond_broadcast(&display->presenter_cond);
+            continue;
+        }
+        static unsigned samples;
+        if (samples < 32)
+            msg_Dbg(display->gl, "GL1 CGL beam swap %u initial %u "
+                    "pre-flush %u waited %d us attempts %u",
+                    ++samples, initial_beam, beam,
+                    (int)(mdate() - beam_wait_start), beam_attempts);
+
+        /* Use the CGL drawable directly.  Calling the Objective-C
+         * -flushBuffer wrapper from a worker did not page-flip reliably on
+         * the 320M, while dispatching it through AppKit only reached 13 fps.
+         * CGLFlushDrawable is the thread-safe primitive used by the classic
+         * CVDisplayLink recipe and keeps the driver VSync off the vout. */
+        NSOpenGLContext *context = [display->glView openGLContext];
+        CGLContextObj cgl = vlc_CGLContextOf(context);
+        if (cgl != NULL && vlc_CGLLockContext(cgl) == kCGLNoError) {
+            const int wanted_swap =
+                getenv("VLC_GL1_PRESENTER_DRIVER_VSYNC") != NULL ? 1 : 0;
+            if (display->swap_interval != wanted_swap) {
+                GLint interval[] = { wanted_swap };
+                CGLSetParameter(cgl, kCGLCPSwapInterval, interval);
+                display->swap_interval = wanted_swap;
+                msg_Dbg(display->gl,
+                        "GL1 CGL presenter uses swap interval %d",
+                        wanted_swap);
+            }
+            CGLSetCurrentContext(cgl);
+            if (getenv("VLC_GL1_FBO_PRESENT") != NULL) {
+                glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+                glDrawBuffer(GL_BACK);
+                glPushAttrib(GL_ALL_ATTRIB_BITS);
+                glDisable(GL_FRAGMENT_PROGRAM_ARB);
+                glDisable(GL_BLEND);
+                glDisable(GL_DEPTH_TEST);
+                for (unsigned unit = 0; unit < 3; ++unit) {
+                    glActiveTextureARB(GL_TEXTURE0_ARB + unit);
+                    glDisable(GL_TEXTURE_2D);
+                    glDisable(GL_TEXTURE_RECTANGLE_EXT);
+                }
+                glActiveTextureARB(GL_TEXTURE0_ARB);
+                glEnable(GL_TEXTURE_RECTANGLE_EXT);
+                glBindTexture(GL_TEXTURE_RECTANGLE_EXT,
+                              display->presenter_texture[snapshot_index]);
+                glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+                glViewport(0, 0, display->presenter_texture_width,
+                           display->presenter_texture_height);
+                glMatrixMode(GL_PROJECTION);
+                glPushMatrix();
+                glLoadIdentity();
+                glMatrixMode(GL_MODELVIEW);
+                glPushMatrix();
+                glLoadIdentity();
+                glColor4f(1.f, 1.f, 1.f, 1.f);
+                const GLfloat width = display->presenter_texture_width;
+                const GLfloat height = display->presenter_texture_height;
+                glBegin(GL_QUADS);
+                glTexCoord2f(0.f, 0.f);       glVertex2f(-1.f, -1.f);
+                glTexCoord2f(width, 0.f);     glVertex2f( 1.f, -1.f);
+                glTexCoord2f(width, height);  glVertex2f( 1.f,  1.f);
+                glTexCoord2f(0.f, height);    glVertex2f(-1.f,  1.f);
+                glEnd();
+                glPopMatrix();
+                glMatrixMode(GL_PROJECTION);
+                glPopMatrix();
+                glMatrixMode(GL_MODELVIEW);
+                glPopAttrib();
+            }
+            CGLFlushDrawable(cgl);
+            CGLSetCurrentContext(NULL);
+            vlc_CGLUnlockContext(cgl);
+            GL1PresenterDidFlip(display);
+        }
+        const vlc_tick_t presenter_after_flush = mdate();
+
+        if (presenter_picture != NULL)
+            picture_Release(presenter_picture);
+        if (presenter_subpicture != NULL)
+            subpicture_Delete(presenter_subpicture);
+        const vlc_tick_t presenter_after_release = mdate();
+
+        if (presenter_render) {
+            static unsigned timing_samples;
+            static vlc_tick_t timing_render, timing_wait_flush,
+                              timing_release, timing_total;
+            timing_render += presenter_after_render - presenter_cycle_start;
+            timing_wait_flush += presenter_after_flush - presenter_after_render;
+            timing_release += presenter_after_release - presenter_after_flush;
+            timing_total += presenter_after_release - presenter_cycle_start;
+            if (++timing_samples == 30) {
+                msg_Err(display->gl,
+                        "GL1 presenter timing: render %.1f ms, wait+flush %.1f ms, release %.1f ms, total %.1f ms",
+                        timing_render / 30000., timing_wait_flush / 30000.,
+                        timing_release / 30000., timing_total / 30000.);
+                timing_samples = 0;
+                timing_render = timing_wait_flush = timing_release =
+                    timing_total = 0;
+            }
+        }
+
+        vlc_mutex_lock (&display->presenter_lock);
+        display->presenter_inflight = -1;
+        display->presenter_picture_inflight = NULL;
+        display->presenter_subpicture_inflight = NULL;
+        vlc_cond_broadcast (&display->presenter_cond);
+    }
+    display->presenter_inflight = -1;
+    display->presenter_queued = -1;
+    picture_t *queued_picture = display->presenter_picture_queued;
+    subpicture_t *queued_subpicture = display->presenter_subpicture_queued;
+    picture_t *queued_picture_next =
+        display->presenter_picture_queued_next;
+    subpicture_t *queued_subpicture_next =
+        display->presenter_subpicture_queued_next;
+    display->presenter_picture_queued = NULL;
+    display->presenter_subpicture_queued = NULL;
+    display->presenter_picture_queued_next = NULL;
+    display->presenter_subpicture_queued_next = NULL;
+    vlc_mutex_unlock (&display->presenter_lock);
+    if (queued_picture != NULL)
+        picture_Release(queued_picture);
+    if (queued_subpicture != NULL)
+        subpicture_Delete(queued_subpicture);
+    if (queued_picture_next != NULL)
+        picture_Release(queued_picture_next);
+    if (queued_subpicture_next != NULL)
+        subpicture_Delete(queued_subpicture_next);
+    [pool release];
+    return NULL;
 }
 
 static void OpenglSwap (vlc_gl_t *gl)
 {
     struct gl_sys *sys = gl->sys;
+    vout_display_sys_t *display = sys->display_sys;
+    if (display->hdmi_framepack && display->nvidia_320m &&
+        getenv("VLC_GL1_FORCE_DRIVER_VSYNC") == NULL &&
+        getenv("VLC_GL1_NO_BEAMSYNC") == NULL)
+    {
+        typedef uint32_t (*BeamPosition)(CGDirectDisplayID);
+        static BeamPosition beam_position;
+        static bool looked_up;
+        if (!looked_up)
+        {
+            looked_up = true;
+            beam_position = (BeamPosition)
+                dlsym(RTLD_DEFAULT, "CGDisplayBeamPosition");
+        }
+        if (beam_position != NULL)
+        {
+            const uint32_t total = 2 * display->framepack_eye_height +
+                                   display->framepack_gap;
+            /* A frame-packed HDMI timing has a real vertical blanking gap
+             * between the two eyes (45 lines at 1080p).  Page-flipping in
+             * that gap is just as invisible as flipping after the bottom
+             * eye, but reaches it roughly half a frame earlier.  That is
+             * crucial on the 320M: waiting for the end of the complete 2205
+             * line scan serialises VDA and the MVC enhancement decoder.
+             *
+             * flushBuffer drains queued GL work before switching the
+             * interval-0 surface.  It takes about 4 ms, or 220 scan lines on
+             * this driver, so start that much before the middle of the gap.
+             * The measured surface switch then lands in HDMI blanking, not
+             * in either visible eye. */
+            const uint32_t switch_line = display->framepack_eye_height +
+                                         display->framepack_gap / 2;
+            const uint32_t target_eye = switch_line > 220
+                                      ? switch_line - 220 : switch_line;
+            const uint32_t target_frame = total > 220 ? total - 220 : 0;
+            uint32_t beam = beam_position(display->stereo_display);
+            static unsigned beam_samples;
+            if (beam_samples < 24)
+                msg_Dbg(gl, "GL1 dual-beam sample %u: start %u, targets %u/%u",
+                        ++beam_samples, beam, target_eye, target_frame);
+            /* The second safe point is the measured 2205 -> 0 frame wrap.
+             * The closest target is at most half a 24 Hz frame away, so this
+             * synchronous wait still returns well before the next picture.
+             * Keep it active: 10.6's timed sleeps routinely miss the narrow
+             * HDMI blank, whereas this output thread has fixed RR priority. */
+            const vlc_tick_t deadline = mdate() + 25000;
+            while (mdate() < deadline)
+            {
+                beam = beam_position(display->stereo_display) % total;
+                const uint32_t eye_distance =
+                    (target_eye + total - beam) % total;
+                const uint32_t frame_distance =
+                    (target_frame + total - beam) % total;
+                if (eye_distance <= 20 || eye_distance >= total - 20 ||
+                    frame_distance <= 20 || frame_distance >= total - 20)
+                    break;
+            }
+        }
+    }
     [[sys->glView openGLContext] flushBuffer];
 }
 
@@ -2616,7 +4842,11 @@ static void OpenglSwap (vlc_gl_t *gl)
 
     NSOpenGLPixelFormatAttribute attribs[] =
     {
-        NSOpenGLPFADoubleBuffer,
+        getenv("VLC_GL1_TRIPLE_BUFFER") != NULL
+            /* The attribute has always had value 3, but the 10.4 SDK does
+             * not expose its modern AppKit enum name. It is only attempted
+             * when the diagnostic environment switch is explicitly set. */
+            ? (NSOpenGLPixelFormatAttribute)3 : NSOpenGLPFADoubleBuffer,
         NSOpenGLPFAAccelerated,
         NSOpenGLPFANoRecovery,
         NSOpenGLPFAColorSize, 24,
@@ -2627,6 +4857,15 @@ static void OpenglSwap (vlc_gl_t *gl)
     };
 
     NSOpenGLPixelFormat *fmt = [[NSOpenGLPixelFormat alloc] initWithAttributes:attribs];
+
+    /* The GeForce 320M advertises the legacy triple-buffer token but its
+     * Snow Leopard window pixel format rejects it.  Never let an optional
+     * latency experiment take the whole video output down. */
+    if (!fmt && getenv("VLC_GL1_TRIPLE_BUFFER") != NULL)
+    {
+        attribs[0] = NSOpenGLPFADoubleBuffer;
+        fmt = [[NSOpenGLPixelFormat alloc] initWithAttributes:attribs];
+    }
 
     if (!fmt)
         return nil;
@@ -2693,6 +4932,15 @@ static void OpenglSwap (vlc_gl_t *gl)
     @synchronized(self) {
         vd = aVd;
     }
+    if (aVd != NULL) {
+        aVd->sys->vsync_requested = var_InheritBool (aVd, "gl1-vsync");
+        GLint interval[] = { aVd->sys->vsync_requested ? 1 : 0 };
+        CGLContextObj context = vlc_CGLContextOf([self openGLContext]);
+        if (context != NULL) {
+            CGLSetParameter (context, kCGLCPSwapInterval, interval);
+            aVd->sys->swap_interval = interval[0];
+        }
+    }
 }
 
 /**
@@ -2706,6 +4954,41 @@ static void OpenglSwap (vlc_gl_t *gl)
     @synchronized(self) {
         _hasPendingReshape = NO;
     }
+}
+
+/* Final page flip for the asynchronous Snow Leopard/GeForce 320M presenter.
+ * This must run on AppKit's main thread: flushing the same NSOpenGL window
+ * surface from a private pthread succeeds nominally but never becomes visible
+ * on this driver. */
+- (void)vlcAsyncSwap
+{
+    VLCAssertMainThread();
+    vout_display_t *display = NULL;
+    @synchronized(self) {
+        display = vd;
+    }
+    if (display == NULL || display->sys == NULL ||
+        !display->sys->presenter_started)
+        return;
+
+    /* Do not call vlc_gl_MakeCurrent here.  NSOpenGLView can enter this main
+     * thread while AppKit already owns the CGL window-surface mutex; taking
+     * CGLLockContext a second time deadlocks (observed on 10.6.8/320M after
+     * two or three flips).  The double GPU snapshot path prevents the vout
+     * thread from changing the texture selected for this presentation. */
+    NSOpenGLContext *context = [self openGLContext];
+    [context makeCurrentContext];
+    CGLContextObj cgl = vlc_CGLContextOf(context);
+    if (cgl != NULL && display->sys->swap_interval != 1) {
+        GLint interval[] = { 1 };
+        CGLSetParameter(cgl, kCGLCPSwapInterval, interval);
+        display->sys->swap_interval = 1;
+        msg_Dbg(display, "GL1 asynchronous HDMI presenter uses driver VSync");
+    }
+    [context flushBuffer];
+    [NSOpenGLContext clearCurrentContext];
+
+    GL1PresenterDidFlip(display->sys);
 }
 
 /**
@@ -3667,6 +5950,91 @@ static void OpenglSwap (vlc_gl_t *gl)
             cfg_tmp.display.height = bounds.size.height;
 
             vout_display_PlacePicture (&place, &vd->source, &cfg_tmp, false);
+            vd->sys->hdmi_framepack = false;
+            const bool stacked_stereo =
+                vd->source.multiview_mode == MULTIVIEW_STEREO_FRAMEPACKED ||
+                (vd->source.i_sar_den != 0 &&
+                 vd->source.i_sar_num == 2 * vd->source.i_sar_den &&
+                 vd->source.i_visible_height == 2160);
+            if (stacked_stereo &&
+                vd->source.i_visible_height >= 2)
+            {
+                const unsigned eye_h = vd->source.i_visible_height / 2;
+                const unsigned gap = eye_h == 1080 ? 45 :
+                                     eye_h == 720 ? 30 : 0;
+                const int view_w = (int)lround(bounds.size.width);
+                const int view_h = (int)lround(bounds.size.height);
+                if (gap != 0 &&
+                    abs(view_w - (int)vd->source.i_visible_width) <= 2 &&
+                    abs(view_h - (int)(2 * eye_h + gap)) <= 2)
+                {
+                    /* The stacked picture is not a single 8:9 image. Each
+                     * half fills one 16:9 active region and the standardized
+                     * vertical blanking interval stays black between them. */
+                    place.x = place.y = 0;
+                    place.width = view_w;
+                    place.height = view_h;
+                    vd->sys->hdmi_framepack = true;
+                    vd->sys->framepack_eye_height = eye_h;
+                    vd->sys->framepack_gap = gap;
+                    msg_Dbg(vd, "GL1 HDMI frame packing: %ux%u eyes, %u-line gap",
+                            vd->source.i_visible_width, eye_h, gap);
+                    if (!vd->sys->exclusive_capture &&
+                        getenv("VLC_GL1_EXCLUSIVE_FULLSCREEN") != NULL) {
+                        const CGError capture_error =
+                            CGDisplayCaptureWithOptions(
+                                vd->sys->stereo_display,
+                                kCGCaptureNoFill);
+                        if (capture_error == kCGErrorSuccess) {
+                            CGLContextObj cgl = vlc_CGLContextOf(
+                                [self openGLContext]);
+                            const CGOpenGLDisplayMask mask =
+                                CGDisplayIDToOpenGLDisplayMask(
+                                    vd->sys->stereo_display);
+                            const CGLError fullscreen_error =
+                                vlc_gl1_SetFullScreenOnDisplay(cgl, mask);
+                            if (fullscreen_error == kCGLNoError) {
+                                vd->sys->exclusive_capture = true;
+                                msg_Info(vd,
+                                    "exclusive OpenGL scanout engaged on display %u",
+                                    (unsigned)vd->sys->stereo_display);
+                            } else {
+                                CGDisplayRelease(vd->sys->stereo_display);
+                                msg_Err(vd,
+                                    "exclusive OpenGL drawable failed: %s",
+                                    CGLErrorString(fullscreen_error));
+                            }
+                        } else {
+                            msg_Err(vd,
+                                "display capture failed: CoreGraphics error %d",
+                                (int)capture_error);
+                        }
+                    }
+                }
+            }
+            /* Snow Leopard's 320M driver blocks a swap for 28-33 ms at the
+             * 24 Hz frame-packed timing, serializing the VDA engine behind
+             * presentation. VLC already schedules pictures against their
+             * PTS, so let the driver swap immediately in this one measured
+             * configuration. Other GL1 hardware keeps the user setting. */
+            const bool force_driver_vsync =
+                getenv("VLC_GL1_FORCE_DRIVER_VSYNC") != NULL;
+            const int wanted_swap = force_driver_vsync ? 1 :
+                                    (vd->sys->hdmi_framepack &&
+                                     vd->sys->nvidia_320m
+                                      ? 0 : (vd->sys->vsync_requested ? 1 : 0));
+            if (wanted_swap != vd->sys->swap_interval)
+            {
+                CGLContextObj context = vlc_CGLContextOf([self openGLContext]);
+                if (context != NULL)
+                {
+                    GLint interval[] = { wanted_swap };
+                    CGLSetParameter(context, kCGLCPSwapInterval, interval);
+                    vd->sys->swap_interval = wanted_swap;
+                    msg_Dbg(vd, "GL1 swap interval %d%s", wanted_swap,
+                            wanted_swap == 0 ? " for NVIDIA MVC" : "");
+                }
+            }
             vd->sys->place = place;
             /* Dimensions de la vue : le fond letterbox du mode sous-titres
              * matériel se peint en coordonnées VUE (cf. DrawHWBackdrop). */

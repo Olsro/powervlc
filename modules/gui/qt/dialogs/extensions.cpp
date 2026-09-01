@@ -36,14 +36,24 @@
 #include <QCheckBox>
 #include <QTreeWidget>
 #include <QHeaderView>
+#include <QScrollBar>
 #include <QComboBox>
 #include <QCloseEvent>
 #include <QKeyEvent>
 #include <QMenu>
 #include <QTimer>
 #include <QHash>
+#include <QSet>
+#include <QSignalBlocker>
 #include <QScreen>
 #include <QGuiApplication>
+#include <QApplication>
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFontInfo>
+#include <QFontMetrics>
+#include <QTextStream>
 #include "util/customwidgets.hpp"
 
 ExtensionsDialogProvider *ExtensionsDialogProvider::instance = NULL;
@@ -233,6 +243,7 @@ ExtensionDialog::ExtensionDialog( intf_thread_t *_p_intf,
          , p_dialog( _p_dialog ), has_lock(true)
 {
     assert( p_dialog );
+    qApp->installEventFilter( this );
     connect( ExtensionsDialogProvider::getInstance(), &ExtensionsDialogProvider::destroyed,
              this, &ExtensionDialog::parentDestroyed );
 
@@ -240,7 +251,6 @@ ExtensionDialog::ExtensionDialog( intf_thread_t *_p_intf,
     this->setWindowFlags( Qt::WindowMinMaxButtonsHint
                         | Qt::WindowCloseButtonHint );
     this->setWindowTitle( qfu( p_dialog->psz_title ) );
-
     layout = new QGridLayout( this );
     clickMapper = new QSignalMapper( this );
     connect( clickMapper, QSIGNALMAPPER_MAPPEDOBJ_SIGNAL, this, &ExtensionDialog::TriggerClick );
@@ -263,6 +273,7 @@ ExtensionDialog::ExtensionDialog( intf_thread_t *_p_intf,
 
 ExtensionDialog::~ExtensionDialog()
 {
+    qApp->removeEventFilter( this );
     msg_Dbg( p_intf, "Deleting extension dialog '%s'", qtu(windowTitle()) );
 }
 
@@ -273,6 +284,53 @@ static const QChar kCellSep = QLatin1Char( '\t' );
  * needs it as soon as the readable form and the real order disagree: a
  * localised date, or "565,000 subscribers". */
 static const QChar kSortKeySep = QLatin1Char( '\x1f' );
+
+#ifdef _WIN32
+/**
+ * XP draws an identical square both when Lua supplied U+FFFD and when GDI
+ * could not resolve a glyph. Record a few real extension rows so the next
+ * test tells those two causes apart instead of prompting another font guess.
+ */
+static void DiagnoseUnicodeExtensionRow( const QTreeWidget *list,
+                                         const QString &text )
+{
+    static int rowsWritten = 0;
+    if( rowsWritten >= 24 )
+        return;
+
+    bool nonAscii = false;
+    for( int i = 0; i < text.size(); ++i )
+        nonAscii |= text.at( i ).unicode() > 0x7f;
+    if( !nonAscii )
+        return;
+
+    const QString path = QDir( QCoreApplication::applicationDirPath() )
+            .filePath( QStringLiteral("portable/powervlc-font-diagnostic.txt") );
+    QFile file( path );
+    if( !file.open( QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text ) )
+        return;
+
+    const QFont font = list->font();
+    const QFontInfo info( font );
+    const QFontMetrics metrics( font );
+    QTextStream report( &file );
+    report.setCodec( "UTF-8" );
+    report << "row-family=" << font.family()
+           << " resolved=" << info.family()
+           << " exact=" << info.exactMatch()
+           << " text=" << text << "\ncodepoints=";
+    for( int i = 0; i < text.size(); ++i )
+    {
+        const uint cp = text.at( i ).unicode();
+        if( cp > 0x7f )
+            report << QStringLiteral("U+%1:%2 ")
+                      .arg( cp, 4, 16, QLatin1Char('0') )
+                      .arg( metrics.inFontUcs4( cp ) ? 1 : 0 );
+    }
+    report << "\n";
+    ++rowsWritten;
+}
+#endif
 
 /**
  * Split one tab-separated string into its cells, and each cell into its
@@ -337,6 +395,36 @@ private:
 };
 
 /**
+ * QAbstractItemView makes the cell pressed with the right mouse button the
+ * current index.  On Qt 5/Windows that also calls scrollTo(index): clicking a
+ * long filename in column zero therefore moves the horizontal scrollbar
+ * before customContextMenuRequested is emitted.  A click in the short size
+ * column happens to remain visible and masks the bug.
+ *
+ * The current-index scroll can be scheduled after the mouse event and even
+ * after the context menu's nested event loop has started. Restoring around
+ * mousePressEvent(), mouseReleaseEvent() or menu.exec() is consequently too
+ * early on XP. These extension lists are flat rows: selecting a row may need
+ * to reveal it vertically, but must never change the horizontal position the
+ * user explicitly chose. Enforce that invariant at the scrollTo() boundary,
+ * regardless of which input event or delayed layout requested the scroll.
+ */
+class ExtensionTreeWidget : public QTreeWidget
+{
+public:
+    explicit ExtensionTreeWidget( QWidget *parent ) : QTreeWidget( parent ) {}
+
+protected:
+    void scrollTo( const QModelIndex &index,
+                   ScrollHint hint = EnsureVisible ) override
+    {
+        const int horizontalPosition = horizontalScrollBar()->value();
+        QTreeWidget::scrollTo( index, hint );
+        horizontalScrollBar()->setValue( horizontalPosition );
+    }
+};
+
+/**
  * (Re)build a list widget from the values the extension put in it.
  *
  * Cells are tab-separated and become real columns, with the widget's own text
@@ -348,6 +436,29 @@ void ExtensionDialog::FillList( QTreeWidget *list,
                                 extension_widget_t *p_widget )
 {
     struct extension_widget_t::extension_widget_value_t *p_value;
+    const bool hadItems = list->topLevelItemCount() > 0;
+    const int verticalPosition = list->verticalScrollBar()->value();
+    const int horizontalPosition = list->horizontalScrollBar()->value();
+
+    /* Keep Qt from feeding the temporary state of the view back into Lua.
+     * In particular, clear() used to emit itemSelectionChanged with an empty
+     * selection, and SyncSelection() consequently erased the selection the
+     * extension had just restored before the new rows were even inserted. */
+    const QSignalBlocker signalBlocker( list );
+
+    QSet<int> selectedIds;
+    for( const QTreeWidgetItem *item : list->selectedItems() )
+        selectedIds.insert( item->data( 0, Qt::UserRole ).toInt() );
+    const bool hadCurrentItem = list->currentItem() != NULL;
+    const int currentId = hadCurrentItem
+                        ? list->currentItem()->data( 0, Qt::UserRole ).toInt()
+                        : 0;
+    const int currentColumn = hadCurrentItem ? list->currentColumn() : 0;
+
+    bool extensionSelectedRows = false;
+    for( p_value = p_widget->p_values; p_value != NULL;
+         p_value = p_value->p_next )
+        extensionSelectedRows |= p_value->b_selected;
 
     QStringList headers, headerKeys;
     if( p_widget->psz_text != NULL && *p_widget->psz_text != '\0' )
@@ -369,11 +480,12 @@ void ExtensionDialog::FillList( QTreeWidget *list,
     /* Was this view already sorting -- because the script asked for an order,
      * or because the user clicked a header? Refilling must undo neither. */
     const bool wasSorting = list->isSortingEnabled();
+    const int previousSortColumn = list->sortColumn();
+    const Qt::SortOrder previousSortOrder = list->header()->sortIndicatorOrder();
 
     /* Sorting off while filling: with it on, every insertion re-sorts the
      * whole tree, which a few thousand rows would make painful. */
     list->setSortingEnabled( false );
-    list->clear();
     list->setColumnCount( columns );
 
     if( headers.isEmpty() )
@@ -388,24 +500,78 @@ void ExtensionDialog::FillList( QTreeWidget *list,
         list->setHeaderHidden( false );
     }
 
-    for( p_value = p_widget->p_values; p_value != NULL;
-         p_value = p_value->p_next )
+    /* Reuse rows by their extension id. Besides avoiding a model reset for
+     * every progress update, this lets Qt recognise the second click of a
+     * double-click while Soulseek/eMule refresh in the background. */
+    QHash<int, QTreeWidgetItem *> oldItems;
+    for( int row = 0; row < list->topLevelItemCount(); row++ )
     {
-        QStringList texts, keys;
-        SplitCells( qfu( p_value->psz_text ), texts, keys );
+        QTreeWidgetItem *item = list->topLevelItem( row );
+        oldItems.insert( item->data( 0, Qt::UserRole ).toInt(), item );
+    }
 
-        ExtensionListItem *item = new ExtensionListItem();
+    QSet<QTreeWidgetItem *> retainedItems;
+    QTreeWidgetItem *currentItem = NULL;
+    int desiredRow = 0;
+    for( p_value = p_widget->p_values; p_value != NULL;
+         p_value = p_value->p_next, desiredRow++ )
+    {
+        const QString rowText = qfu( p_value->psz_text );
+#ifdef _WIN32
+        DiagnoseUnicodeExtensionRow( list, rowText );
+#endif
+        QStringList texts, keys;
+        SplitCells( rowText, texts, keys );
+
+        QTreeWidgetItem *item = oldItems.take( p_value->i_id );
+        if( item == NULL )
+        {
+            item = new ExtensionListItem();
+            list->insertTopLevelItem( desiredRow, item );
+        }
+        else if( list->indexOfTopLevelItem( item ) != desiredRow )
+        {
+            /* Preserve insertion order when the view is not sorted. A
+             * selected row is restored below if moving it detached it. */
+            const int oldRow = list->indexOfTopLevelItem( item );
+            list->takeTopLevelItem( oldRow );
+            list->insertTopLevelItem( desiredRow, item );
+        }
+
         for( int c = 0; c < columns; c++ )
         {
             item->setText( c, texts.value( c ) );
-            if( !keys.value( c ).isEmpty() )
-                item->setData( c, Qt::UserRole + 1, keys.value( c ) );
+            item->setData( c, Qt::UserRole + 1, keys.value( c ) );
         }
         /* ⚠ The row is identified by its i_id and never by its position:
          * sorting reorders the view, not p_values. Selection is mapped back
          * through this, the same lesson the macOS side learned the hard way. */
         item->setData( 0, Qt::UserRole, p_value->i_id );
-        list->addTopLevelItem( item );
+        retainedItems.insert( item );
+
+        /* An explicit selection supplied by the extension wins. Otherwise
+         * keep the user's current selection for every row that survived. */
+        item->setSelected( extensionSelectedRows ? p_value->b_selected
+                                                 : selectedIds.contains( p_value->i_id ) );
+        if( hadCurrentItem && p_value->i_id == currentId )
+            currentItem = item;
+    }
+
+    /* Delete only rows which actually disappeared. */
+    for( int row = list->topLevelItemCount() - 1; row >= 0; row-- )
+    {
+        QTreeWidgetItem *item = list->topLevelItem( row );
+        if( !retainedItems.contains( item ) )
+            delete list->takeTopLevelItem( row );
+    }
+
+    if( currentItem != NULL )
+    {
+        const int row = list->indexOfTopLevelItem( currentItem );
+        const int column = qBound( 0, currentColumn, columns - 1 );
+        list->selectionModel()->setCurrentIndex(
+                list->model()->index( row, column ),
+                QItemSelectionModel::NoUpdate );
     }
 
     /* The order the script asked for (1-based, 0 = leave as added).
@@ -425,10 +591,12 @@ void ExtensionDialog::FillList( QTreeWidget *list,
                                                        : Qt::DescendingOrder );
         list->setSortingEnabled( true );
     }
-    else if( wasSorting )
+    else if( wasSorting && previousSortColumn >= 0
+             && previousSortColumn < columns )
     {
-        /* The user picked a column earlier: refilling keeps their choice,
-         * since the header still carries that indicator. */
+        /* Reapply the user's exact column and direction explicitly. Header
+         * state is not guaranteed to survive clear()+setColumnCount(). */
+        list->sortByColumn( previousSortColumn, previousSortOrder );
         list->setSortingEnabled( true );
     }
     else
@@ -446,6 +614,16 @@ void ExtensionDialog::FillList( QTreeWidget *list,
 
     for( int c = 0; c < columns; c++ )
         list->resizeColumnToContents( c );
+
+    /* Search providers append results progressively and rebuild the Lua
+     * widget to expose them. QTreeWidget::clear() resets its scrollbar, so
+     * put an existing viewport back after the refill. A new list naturally
+     * remains at its first row. */
+    if( hadItems )
+    {
+        list->verticalScrollBar()->setValue( verticalPosition );
+        list->horizontalScrollBar()->setValue( horizontalPosition );
+    }
 }
 
 /**
@@ -552,6 +730,11 @@ QWidget* ExtensionDialog::CreateWidget( extension_widget_t *p_widget )
             textArea = new QTextBrowser( this );
             textArea->setOpenExternalLinks( true );
             textArea->setHtml( qfu( p_widget->psz_text ) );
+            if( p_widget->i_height > 0 )
+            {
+                textArea->setMinimumHeight( p_widget->i_height );
+                textArea->setMaximumHeight( p_widget->i_height );
+            }
             p_widget->p_sys_intf = textArea;
             return textArea;
 
@@ -632,7 +815,7 @@ QWidget* ExtensionDialog::CreateWidget( extension_widget_t *p_widget )
             return comboBox;
 
         case EXTENSION_WIDGET_LIST:
-            list = new QTreeWidget( this );
+            list = new ExtensionTreeWidget( this );
             list->setSelectionMode( QAbstractItemView::ExtendedSelection );
             /* a flat list of rows, not a tree: no expanders, no indent */
             list->setRootIsDecorated( false );
@@ -754,6 +937,7 @@ void ExtensionDialog::ListContextMenu( QTreeWidget *list,
                                        extension_widget_t *p_widget,
                                        const QPoint &pos )
 {
+    const int horizontalPosition = list->horizontalScrollBar()->value();
     QTreeWidgetItem *item = list->itemAt( pos );
     if( item == NULL )
         return;
@@ -779,15 +963,26 @@ void ExtensionDialog::ListContextMenu( QTreeWidget *list,
     if( labels.isEmpty() )
         return;
 
-    /* a user action: the selection change does reach the extension, so
-     * its state follows the highlight */
+    /* A user action: the selection change does reach the extension, so its
+     * state follows the highlight. Do not use QTreeWidget::setCurrentItem()
+     * here: QAbstractItemView scrolls the current index into view and thus
+     * jumps horizontally back to column zero as soon as a context menu is
+     * opened on a long filename. Updating the selection model directly keeps
+     * the user's horizontal position unchanged. */
     if( !item->isSelected() )
-        list->setCurrentItem( item );
+    {
+        const QModelIndex index = list->indexAt( pos );
+        list->selectionModel()->setCurrentIndex(
+                index, QItemSelectionModel::ClearAndSelect |
+                       QItemSelectionModel::Rows );
+        list->horizontalScrollBar()->setValue( horizontalPosition );
+    }
 
     QMenu menu( list );
     for( int i = 0; i < labels.count(); i++ )
         menu.addAction( labels.at( i ) )->setData( i + 1 );
     QAction *picked = menu.exec( list->viewport()->mapToGlobal( pos ) );
+    list->horizontalScrollBar()->setValue( horizontalPosition );
     if( picked == NULL )
         return;
     p_widget->i_menu_choice = picked->data().toInt();
@@ -1172,6 +1367,22 @@ void ExtensionDialog::keyPressEvent( QKeyEvent *event )
         QDialog::keyPressEvent( event );
         return;
     }
+}
+
+bool ExtensionDialog::eventFilter( QObject *watched, QEvent *event )
+{
+    Q_UNUSED( watched );
+    if( event->type() == QEvent::KeyPress && isActiveWindow() )
+    {
+        QKeyEvent *keyEvent = static_cast<QKeyEvent *>( event );
+        if( keyEvent->key() == Qt::Key_Escape )
+        {
+            keyEvent->accept();
+            close();
+            return true;
+        }
+    }
+    return QDialog::eventFilter( watched, event );
 }
 
 void ExtensionDialog::parentDestroyed()

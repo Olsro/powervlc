@@ -1,0 +1,15 @@
+diff --git a/cmake/cryptopp.cmake b/cmake/cryptopp.cmake
+index f384466a1..66d10a55b 100644
+--- a/cmake/cryptopp.cmake
++++ b/cmake/cryptopp.cmake
+@@ -5,6 +5,10 @@ add_library (CRYPTOPP::CRYPTOPP
+ 	IMPORTED
+ )
+ 
++if (CRYPTOPP_INCLUDE_DIR)
++	set (CMAKE_REQUIRED_INCLUDES "${CRYPTOPP_INCLUDE_DIR}")
++endif()
++
+ set (CRYPTOPP_SEARCH_PREFIXES "cryptopp" "crypto++")
+ 
+ if (NOT CRYPTOPP_INCLUDE_PREFIX)

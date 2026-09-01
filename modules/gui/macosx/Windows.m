@@ -24,14 +24,27 @@
 
 #import "Windows.h"
 #import "VLCMain.h"
+#import "VLCInputManager.h"
 #import "VLCCoreInteraction.h"
 #import "VLCControlsBarCommon.h"
+#import "VLCStringUtility.h"
 #import "VLCVoutView.h"
 #import "CompatibilityFixes.h"
 #import "NSScreen+VLCAdditions.h"
 
+#import <vlc_actions.h>
 #import <vlc_playlist.h>
 #import <vlc_input.h>
+
+static BOOL VLCModernWindowInputIsBluRayDiscSession(void)
+{
+    input_thread_t *input = playlist_CurrentInput(pl_Get(getIntf()));
+    if (input == NULL)
+        return NO;
+    const BOOL disc = var_GetBool(input, "bluray-disc-session");
+    vlc_object_release(input);
+    return disc;
+}
 
 /*****************************************************************************
  * VLCWindow
@@ -277,19 +290,63 @@
  * VLCVoutView keyDown path is unreachable in embedded playback) */
 - (void)keyDown:(NSEvent *)event
 {
-    if ([[VLCCoreInteraction sharedInstance] clipCreationMode]) {
-        NSString *characters = [event charactersIgnoringModifiers];
-        if ([characters length] == 1
-            && !([event modifierFlags]
-                 & (NSShiftKeyMask | NSControlKeyMask | NSAlternateKeyMask
-                    | NSCommandKeyMask))) {
-            unichar key = [characters characterAtIndex:0];
+    /* In embedded playback this window, rather than VLCVoutView, is commonly
+     * the key responder. Any keyboard activity must still stop the resume
+     * prompt's automatic ten-second dismissal. Prompt-owned arrows/Enter/Esc
+     * are handled in VLCVoutView when it is the responder; all other keys keep
+     * their normal path below. */
+    [[[VLCMain sharedInstance] inputManager]
+        noteResumeOSDUserInteraction];
+
+    NSString *characters = [event charactersIgnoringModifiers];
+    BOOL bareKey = [characters length] == 1
+        && !([event modifierFlags]
+             & (NSShiftKeyMask | NSControlKeyMask | NSAlternateKeyMask
+                | NSCommandKeyMask));
+    if (bareKey) {
+        unichar cocoaKey = [characters characterAtIndex:0];
+        unsigned int vlcKey = CocoaKeyToVLC(cocoaKey);
+
+        /* The embedded video lives in a borderless child window which does
+         * not become key. Its parent consequently receives arrows and Enter,
+         * while VLCVoutView (the normal hotkey forwarding path) never sees
+         * them. This left initial BD-J language selectors keyboard-inert even
+         * though the same keys worked later after focus happened to move.
+         * Handle the resume OSD here too for the same responder topology. */
+        if ([[[VLCMain sharedInstance] inputManager]
+                handleResumeOSDKey:vlcKey])
+            return;
+
+        if ([[VLCCoreInteraction sharedInstance] clipCreationMode]) {
+            unichar key = cocoaKey;
             if (key == NSLeftArrowFunctionKey
                 || key == NSRightArrowFunctionKey) {
                 [[VLCCoreInteraction sharedInstance]
                     clipStepFrames:(key == NSRightArrowFunctionKey ? 1 : -1)];
                 return;
             }
+        }
+
+        switch (vlcKey) {
+            case KEY_UP:
+            case KEY_DOWN:
+            case KEY_LEFT:
+            case KEY_RIGHT: {
+                var_SetInteger(getIntf()->obj.libvlc, "key-pressed", vlcKey);
+                if (!VLCModernWindowInputIsBluRayDiscSession()) {
+                    VLCCoreInteraction *core = [VLCCoreInteraction sharedInstance];
+                    if (vlcKey == KEY_UP || vlcKey == KEY_DOWN)
+                        [core scheduleVolumeOSD];
+                    else
+                        [core schedulePositionOSD];
+                }
+                return;
+            }
+            case KEY_ENTER:
+                var_SetInteger(getIntf()->obj.libvlc, "key-pressed", vlcKey);
+                return;
+            default:
+                break;
         }
     }
     [super keyDown:event];
@@ -1218,7 +1275,14 @@
     NSRect rect;
     BOOL blackout_other_displays = var_InheritBool(getIntf(), "macosx-black");
 
-    screen = [NSScreen screenWithDisplayID:(CGDirectDisplayID)var_InheritInteger(getIntf(), "macosx-vdev")];
+    int64_t stereoDisplay = var_InheritInteger(getIntf(),
+                                                "stereo3d-fullscreen-display");
+    int64_t doviDisplay = var_InheritInteger(getIntf(),
+                                             "dovi-fullscreen-display");
+    int64_t configuredDisplay = var_InheritInteger(getIntf(), "macosx-vdev");
+    screen = [NSScreen screenWithDisplayID:(CGDirectDisplayID)
+              (stereoDisplay > 0 ? stereoDisplay :
+               doviDisplay > 0 ? doviDisplay : configuredDisplay)];
 
     if (!screen) {
         msg_Dbg(getIntf(), "chosen screen isn't present, using current screen for fullscreen mode");
@@ -1420,6 +1484,7 @@
     _videoView.frame = video_frame;
 
     [[[[VLCMain sharedInstance] mainWindow] fspanel] setNonActive];
+    [NSCursor setHiddenUntilMouseMoves:NO];
     [[o_fullscreen_window screen] setNonFullscreenPresentationOptions];
 
     if (o_fullscreen_anim1) {
@@ -1501,6 +1566,7 @@
 - (void)hasEndedFullscreen
 {
     _inFullscreenTransition = NO;
+    [NSCursor setHiddenUntilMouseMoves:NO];
 
     /* This function is private and should be only triggered at the end of the fullscreen change animation */
     /* Make sure we don't see the _videoView disappearing of the screen during this operation */

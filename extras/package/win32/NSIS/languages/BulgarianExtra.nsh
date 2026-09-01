@@ -57,6 +57,7 @@ ${LangFileString} Action_OnArrivalSVCDMovie "Възпроизведи филма
 ${LangFileString} Action_OnArrivalVideoFiles "Възпроизведи видео файлове"
 ${LangFileString} Action_OnArrivalMusicFiles "Възпроизведи аудио файлове"
 ${LangFileString} Action_OnArrivalDVDAudio "Възпроизведи аудио от DVD"
+${LangFileString} Action_OnArrivalBluray "Възпроизведи Blu-ray"
 ${LangFileString} License_NextText "Вече сте наясно с вашите права. Натиснете $\"Напред$\" за да продължите."
 
 ${LangFileString} Detail_CheckProcesses "Проверяване на процеси..."

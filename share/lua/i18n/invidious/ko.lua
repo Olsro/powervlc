@@ -34,6 +34,7 @@ return {
   mode_playlists = "재생 목록",
   btn_search = "검색",
   btn_open = "선택 항목 열기",
+  btn_open_channel = "선택 항목의 채널 열기",
   btn_change_instance = "< 인스턴스",
   msg_enter_query = "검색할 내용을 입력하십시오",
   msg_searching = "검색하는 중…",
@@ -44,7 +45,13 @@ return {
   msg_target_found = "주소를 인식했습니다 — 바로 엽니다",
   msg_search_fail = "검색 실패: ",
   msg_select_result = "먼저 목록에서 결과를 선택하십시오",
+  msg_channel_unavailable = "이 선택 항목에 연결된 채널을 사용할 수 없습니다",
   lbl_quality = "화질:",
+  lbl_audio_track = "오디오 트랙:",
+  audio_default = "기본 오디오",
+  audio_original = "원본",
+  lbl_subtitles = "자막:",
+  subtitles_none = "없음",
   lbl_by = "—",
   audio_only = "소리만",
   combined = "소리+영상",
@@ -144,4 +151,14 @@ return {
             .. "즐겨찾기를 눌러도 아무 일도 일어나지 않습니다. 재생기에서 <strong>도움말 &gt; PowerVLC 확장 "
             .. "기능 설치</strong>를 고르면 같은 일을 스스로 해내는 작은 확장 기능이 브라우저에 설치됩니다 — "
             .. "즐겨찾기도, 클릭도 필요 없이 모든 페이지에서 동작합니다.",
+  web_addon_lead = "확장 기능을 설치했습니까? 끌어다 놓거나 누를 필요가 없습니다. "
+                 .. "아래 인스턴스를 열고 확인을 통과하기만 하십시오. 연결되면 이 "
+                 .. "페이지에서 알려 줍니다.",
+  web_steps_title = "확장 기능을 쓰지 않는 경우: 즐겨찾기",
+  web_relay_on_addon = "브라우저 확장 기능을 통해 PowerVLC에 연결되었습니다. 누를 "
+                     .. "것은 없습니다. 이 창과 인스턴스 탭을 열어 두십시오.",
+  web_m_taking = "PowerVLC가 이 동영상을 재생하고 있습니다. 이 탭은 일부러 바로 "
+               .. "비웠습니다. 여기서 사이트 재생기가 로드를 마치게 두면 기기에 두 번의 "
+               .. "디코딩과 두 번의 내려받기가 필요하고 인스턴스에도 불필요한 부하를 "
+               .. "줍니다. 탭을 열어 두십시오.",
 }

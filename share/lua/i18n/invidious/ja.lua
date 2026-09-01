@@ -34,6 +34,7 @@ return {
   mode_playlists = "再生リスト",
   btn_search = "検索",
   btn_open = "選択項目を開く",
+  btn_open_channel = "選択項目のチャンネルを開く",
   btn_change_instance = "< インスタンス",
   msg_enter_query = "検索する語句を入力してください",
   msg_searching = "検索しています…",
@@ -44,7 +45,13 @@ return {
   msg_target_found = "アドレスを認識しました — そのまま開きます",
   msg_search_fail = "検索に失敗しました: ",
   msg_select_result = "先に一覧から結果を選んでください",
+  msg_channel_unavailable = "この選択項目に関連するチャンネルは利用できません",
   lbl_quality = "画質:",
+  lbl_audio_track = "音声トラック:",
+  audio_default = "既定の音声",
+  audio_original = "オリジナル",
+  lbl_subtitles = "字幕:",
+  subtitles_none = "なし",
   lbl_by = "—",
   audio_only = "音声のみ",
   combined = "音声+映像",
@@ -142,4 +149,15 @@ return {
             .. "&gt; PowerVLC "
             .. "拡張機能をインストール</strong>を選ぶと、同じことを自動で行う小さな拡張機能がブラウザに入ります — "
             .. "ブックマークも操作も不要で、どのページでも働きます。",
+  web_addon_lead = "拡張機能をインストールしましたか? ドラッグもクリックも必要ありません。"
+                 .. "下のインスタンスを開いて確認を通過するだけです。接続が確立すると、"
+                 .. "このページがお知らせします。",
+  web_steps_title = "拡張機能を使わない場合: ブックマーク",
+  web_relay_on_addon = "ブラウザの拡張機能を通じて PowerVLC に接続しました。"
+                     .. "クリックするものはありません。このウィンドウとインスタンスのタブを"
+                     .. "開いたままにしてください。",
+  web_m_taking = "PowerVLC がこの動画を再生しています。このタブは意図的にすぐ空にしました。"
+               .. "ここでサイトのプレーヤーを最後まで読み込ませると、二重のデコードと二重の"
+               .. "ダウンロードが発生し、インスタンスにも無用な負荷がかかります。タブは開いたままに"
+               .. "してください。",
 }

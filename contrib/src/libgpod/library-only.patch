@@ -1,0 +1,10 @@
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -437,5 +437,5 @@
+ top_srcdir = @top_srcdir@
+ udevdir = @udevdir@
+-SUBDIRS = src tools tests po m4 docs bindings 
++SUBDIRS = src
+ 
+ # build documentation when doing a distcheck.
+ DISTCHECK_CONFIGURE_FLAGS = \

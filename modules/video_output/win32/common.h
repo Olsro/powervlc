@@ -28,6 +28,15 @@
  *****************************************************************************/
 #include "events.h"
 
+static inline bool Win32IsFramePackableStereo(video_multiview_mode_t mode)
+{
+    return mode == MULTIVIEW_STEREO_FRAMEPACKED ||
+           mode == MULTIVIEW_STEREO_SBS ||
+           mode == MULTIVIEW_STEREO_TB ||
+           mode == MULTIVIEW_STEREO_SBS_RIGHT_FIRST ||
+           mode == MULTIVIEW_STEREO_TB_RIGHT_FIRST;
+}
+
 /*****************************************************************************
  * vout_sys_t: video output method descriptor
  *****************************************************************************
@@ -102,6 +111,11 @@ void UpdateRects (vout_display_t *,
 void AlignRect(RECT *, int align_boundary, int align_size);
 
 picture_pool_t *CommonPool(vout_display_t *, unsigned);
+
+/* Cache the user's automatic HDMI 3D decision on the parent vout rather than
+ * on a display plugin instance.  A display fallback/restart during the same
+ * playback must not ask the same question twice. */
+bool CommonShouldSwitchToStereoDisplay(vout_display_t *);
 
 /*****************************************************************************
  * Constants

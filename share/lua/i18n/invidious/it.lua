@@ -37,6 +37,7 @@ return {
     mode_playlists = "Playlist",
     btn_search = "Cerca",
     btn_open = "Apri la selezione",
+    btn_open_channel = "Apri il canale dell'elemento selezionato",
     btn_change_instance = "< Istanza",
     msg_enter_query = "Scrivi qualcosa da cercare",
     msg_searching = "Ricerca in corso…",
@@ -47,7 +48,13 @@ return {
     msg_target_found = "Indirizzo riconosciuto — viene aperto direttamente",
     msg_search_fail = "Ricerca non riuscita: ",
     msg_select_result = "Seleziona prima un risultato nell'elenco",
+    msg_channel_unavailable = "Il canale collegato a questa selezione non è disponibile",
     lbl_quality = "Qualità:",
+    lbl_audio_track = "Traccia audio:",
+    audio_default = "Audio predefinito",
+    audio_original = "originale",
+    lbl_subtitles = "Sottotitoli:",
+    subtitles_none = "Nessuno",
     lbl_by = "di",
     audio_only = "Solo audio",
     combined = "audio+video",
@@ -173,4 +180,17 @@ return {
           .. "PowerVLC</strong> mette nel tuo browser una piccola estensione "
           .. "che se ne occupa da sola — niente segnalibro, niente clic, su "
           .. "ogni pagina.",
+    web_addon_lead = "Estensione installata? Non c'è nulla da trascinare né su "
+                   .. "cui fare clic: apri semplicemente l'istanza qui sotto e "
+                   .. "supera la sua verifica. Questa pagina ti dirà quando il "
+                   .. "collegamento è attivo.",
+    web_steps_title = "Senza l'estensione: il segnalibro",
+    web_relay_on_addon = "Collegato a PowerVLC tramite l'estensione del browser. "
+                       .. "Non c'è nulla su cui fare clic: lascia aperte questa "
+                       .. "finestra e la scheda dell'istanza.",
+    web_m_taking = "PowerVLC sta riproducendo questo video. La scheda è stata "
+                 .. "svuotata subito di proposito: lasciare che il lettore del "
+                 .. "sito finisca di caricarsi qui costerebbe una seconda "
+                 .. "decodifica e un secondo scaricamento e solleciterebbe "
+                 .. "inutilmente l'istanza. Lasciala aperta.",
 }

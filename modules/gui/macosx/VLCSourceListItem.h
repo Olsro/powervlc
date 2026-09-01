@@ -30,6 +30,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property NSInteger sdtype;
 @property NSInteger playlistItemId;
 @property (readwrite, copy, nullable) NSString *networkMRL;
+/* Immutable playlist-root name for service-discovery entries.  The visible
+ * title may contain live status, free space or progress and must never be
+ * used as the lookup key. */
+@property (readwrite, copy, nullable) NSString *serviceRootTitle;
 
 @end
 

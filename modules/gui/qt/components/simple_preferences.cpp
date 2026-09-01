@@ -29,6 +29,7 @@
 
 #include "qt.hpp"
 #include "components/simple_preferences.hpp"
+#include "components/powervlc_media_preferences.hpp"
 #include "components/preferences_widgets.hpp"
 #include "util/powervlc_links.hpp"
 
@@ -41,6 +42,8 @@
 #include <QButtonGroup>
 #include <QSignalMapper>
 #include <QVBoxLayout>
+#include <QFormLayout>
+#include <QGroupBox>
 #include <QScrollArea>
 #include <QHeaderView>
 
@@ -256,8 +259,14 @@ SPrefsCatList::SPrefsCatList( intf_thread_t *_p_intf, QWidget *_parent ) :
                   cone_subtitles_64, 3 );
     ADD_CATEGORY( SPrefsInputAndCodecs, qtr(INPUT_TITLE), qtr("Input & Codecs Settings"),
                   cone_input_64, 4 );
+    ADD_CATEGORY( SPrefsMediaLibrary, qtr("Media Library"),
+                  qtr("Configure the PowerVLC Media Library"),
+                  cone_medialibrary_64, 5 );
+    ADD_CATEGORY( SPrefsPortablePlayers, qtr("Portable Players"),
+                  qtr("Configure Portable Players"),
+                  cone_devices_64, 6 );
     ADD_CATEGORY( SPrefsHotkeys, qtr("Hotkeys"), qtr("Configure Hotkeys"),
-                  cone_hotkeys_64, 5 );
+                  cone_hotkeys_64, 7 );
 
 #undef ADD_CATEGORY
 
@@ -266,7 +275,7 @@ SPrefsCatList::SPrefsCatList( intf_thread_t *_p_intf, QWidget *_parent ) :
     layout->setSpacing( 1 );
 
     setSizePolicy(QSizePolicy::MinimumExpanding,QSizePolicy::Preferred);
-    setMinimumWidth( ICON_HEIGHT * 6 + 10 );
+    setMinimumWidth( ICON_HEIGHT * 8 + 10 );
     setLayout( layout );
 }
 
@@ -286,6 +295,8 @@ SPrefsPanel::SPrefsPanel( intf_thread_t *_p_intf, QWidget *_parent,
     number = _number;
     lang = NULL;
     radioGroup = NULL;
+    mediaLibraryPrefs = NULL;
+    portablePlayersPrefs = NULL;
 
 #define CONFIG_GENERIC( option, type, label, qcontrol )                   \
             p_config =  config_FindConfig( option );                      \
@@ -869,6 +880,39 @@ SPrefsPanel::SPrefsPanel( intf_thread_t *_p_intf, QWidget *_parent,
 
             CONFIG_BOOL( "metadata-network-access", MetadataNetworkAccessMode );
 
+            /* Keep the stereoscopic controls backed by the core options so
+             * that Qt, macOS Modern and macOS Legacy share one policy.  The
+             * display backend remains responsible for selecting a genuine
+             * HDMI frame-packed timing and entering fullscreen. */
+            QGroupBox *stereo3DBox = new QGroupBox( qtr( "Stereoscopic 3D" ), panel );
+            QFormLayout *stereo3DLayout = new QFormLayout( stereo3DBox );
+            QLabel *stereo3DDisplayLabel = new QLabel(
+                qtr( "Change display mode for 3D video" ), stereo3DBox );
+            QComboBox *stereo3DDisplay = new QComboBox( stereo3DBox );
+            stereo3DDisplayLabel->setBuddy( stereo3DDisplay );
+            stereo3DLayout->addRow( stereo3DDisplayLabel, stereo3DDisplay );
+            CONFIG_GENERIC_NO_UI( "stereo3d-display-mode", IntegerList,
+                                  stereo3DDisplayLabel, stereo3DDisplay );
+
+            QLabel *stereo3DInputLabel = new QLabel(
+                qtr( "Stereoscopic input layout" ), stereo3DBox );
+            QComboBox *stereo3DInput = new QComboBox( stereo3DBox );
+            stereo3DInputLabel->setBuddy( stereo3DInput );
+            stereo3DLayout->addRow( stereo3DInputLabel, stereo3DInput );
+            CONFIG_GENERIC_NO_UI( "stereo3d-input-mode", IntegerList,
+                                  stereo3DInputLabel, stereo3DInput );
+
+            QLabel *stereo3DDepthLabel = new QLabel(
+                qtr( "3D depth for subtitles, OSD and controls" ), stereo3DBox );
+            QComboBox *stereo3DDepth = new QComboBox( stereo3DBox );
+            stereo3DDepthLabel->setBuddy( stereo3DDepth );
+            stereo3DLayout->addRow( stereo3DDepthLabel, stereo3DDepth );
+            CONFIG_GENERIC_NO_UI( "stereo3d-overlay-depth", IntegerList,
+                                  stereo3DDepthLabel, stereo3DDepth );
+
+            ui.verticalLayout->insertWidget(
+                ui.verticalLayout->indexOf( ui.groupBox_2 ), stereo3DBox );
+
             /* UPDATE options */
 #ifdef UPDATE_CHECK
             CONFIG_BOOL( "qt-updates-notif", updatesBox );
@@ -946,6 +990,24 @@ SPrefsPanel::SPrefsPanel( intf_thread_t *_p_intf, QWidget *_parent,
             optionWidgets["backgroundCB"] = ui.backgroundCheck;
 
         END_SPREFS_CAT;
+
+        case SPrefsMediaLibrary:
+        {
+            panel_label->setText( qtr( "Media Library" ) );
+            QVBoxLayout *layout = new QVBoxLayout( panel );
+            mediaLibraryPrefs = new PowerVLCMediaLibraryPrefs( p_intf, panel );
+            layout->addWidget( mediaLibraryPrefs );
+            break;
+        }
+
+        case SPrefsPortablePlayers:
+        {
+            panel_label->setText( qtr( "Portable Players" ) );
+            QVBoxLayout *layout = new QVBoxLayout( panel );
+            portablePlayersPrefs = new PowerVLCPortablePlayersPrefs( p_intf, panel );
+            layout->addWidget( portablePlayersPrefs );
+            break;
+        }
 
         case SPrefsHotkeys:
         {
@@ -1108,6 +1170,12 @@ void SPrefsPanel::apply()
 
     switch( number )
     {
+    case SPrefsMediaLibrary:
+        if( mediaLibraryPrefs ) mediaLibraryPrefs->apply();
+        break;
+    case SPrefsPortablePlayers:
+        if( portablePlayersPrefs ) portablePlayersPrefs->apply();
+        break;
     case SPrefsInputAndCodecs:
     {
         /* Device default selection */
@@ -1570,4 +1638,3 @@ void SPrefsPanel::saveAsso()
 }
 
 #endif /* _WIN32 */
-

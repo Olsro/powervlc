@@ -105,6 +105,24 @@ int OpenIntf (vlc_object_t *p_this)
     var_Create(p_intf->obj.libvlc, "macosx-nativefullscreenmode", VLC_VAR_BOOL);
     var_SetBool(p_intf->obj.libvlc, "macosx-nativefullscreenmode", false);
 
+    /* Created before any input starts so an MVC decoder can mark the whole
+     * interval between stream recognition and the final HDMI fullscreen as a
+     * display transition.  Resume UI and cursor polling consume this shared
+     * state without probing a half-constructed vout. */
+    var_Create(p_intf->obj.libvlc, "stereo3d-display-transition",
+               VLC_VAR_BOOL);
+    var_SetBool(p_intf->obj.libvlc, "stereo3d-display-transition", false);
+    var_Create(p_intf->obj.libvlc, "dovi-fullscreen-display",
+               VLC_VAR_INTEGER);
+    var_SetInteger(p_intf->obj.libvlc, "dovi-fullscreen-display", 0);
+
+    /* Both Cocoa interfaces provide a "vout window" module.  The modern one
+     * has the higher module priority, but it cannot create a window when only
+     * the legacy interface is running.  Select our provider explicitly, as
+     * the Qt interface does for its own window provider, so the common macOS
+     * OpenGL vout can embed in the legacy main or detached video window. */
+    var_SetString(p_intf->obj.libvlc, "window", "legacy_macosx,any");
+
     Run(p_intf);
 
     /* Menu, main window and dialogs: built on the main thread, owned
@@ -137,6 +155,14 @@ void CloseIntf (vlc_object_t *p_this)
      * quitting during playback crashes in WindowClose() once libvlc
      * destroys the playlist after the interface (the Qt interface calls
      * this in its Close for the same reason). */
+    /* Match the modern Cocoa interface's termination ordering. Dolby Vision
+     * display restoration observes this notification and must run on the
+     * main thread before playlist_Deactivate() joins the vout. Otherwise the
+     * main thread waits for the vout while the vout synchronously waits for
+     * that same main thread, deadlocking a quit during Dolby playback. */
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:NSApplicationWillTerminateNotification
+                      object:nil];
     playlist_Deactivate(pl_Get(p_intf));
 
     VLCLegacyMain *main = (VLCLegacyMain *)p_intf->p_sys;
@@ -147,6 +173,7 @@ void CloseIntf (vlc_object_t *p_this)
                         waitUntilDone:YES];
     [main release];
     p_intf->p_sys = NULL;
+    var_SetString(p_intf->obj.libvlc, "window", "");
     [pool release];
 }
 
@@ -261,6 +288,7 @@ int WindowOpen(vout_window_t *p_wnd, const vout_window_cfg_t *cfg)
         [request release];
 
         if (view) {
+            msg_Dbg(p_wnd, "returning embedded legacy video view");
             p_wnd->handle.nsobject = (void *)[view retain];
             p_wnd->type = VOUT_WINDOW_TYPE_NSOBJECT;
             /* Retained: the window can outlive the interface during
@@ -394,19 +422,40 @@ static int WindowControl(vout_window_t *p_wnd, int i_query, va_list args)
  * l'état est gardé ici pour ne jamais les déséquilibrer (sinon pointeur perdu).
  */
 static bool b_vlc_cursor_hidden = false;
+static CGDirectDisplayID i_vlc_cursor_display = 0;
 
 void VLCLegacyCursorSetHidden(bool b_hide);
+void VLCLegacyCursorSetHiddenOnDisplay(bool b_hide,
+                                       CGDirectDisplayID display);
 void VLCLegacyCursorActivity(void);
+
+void VLCLegacyCursorSetHiddenOnDisplay(bool b_hide,
+                                       CGDirectDisplayID display)
+{
+    if (display == 0)
+        display = kCGDirectMainDisplay;
+
+    /* Hide/show counters are per display.  If the HDMI display changed while
+     * its private 3D mode was being published, balance the old display before
+     * hiding on the new one. */
+    if (b_vlc_cursor_hidden && b_hide && display != i_vlc_cursor_display) {
+        CGDisplayShowCursor(i_vlc_cursor_display);
+        b_vlc_cursor_hidden = false;
+    }
+    if (b_hide == b_vlc_cursor_hidden)
+        return;
+    if (b_hide) {
+        CGDisplayHideCursor(display);
+        i_vlc_cursor_display = display;
+    } else {
+        CGDisplayShowCursor(i_vlc_cursor_display);
+    }
+    b_vlc_cursor_hidden = b_hide;
+}
 
 void VLCLegacyCursorSetHidden(bool b_hide)
 {
-    if (b_hide == b_vlc_cursor_hidden)
-        return;
-    if (b_hide)
-        CGDisplayHideCursor(kCGDirectMainDisplay);
-    else
-        CGDisplayShowCursor(kCGDirectMainDisplay);
-    b_vlc_cursor_hidden = b_hide;
+    VLCLegacyCursorSetHiddenOnDisplay(b_hide, kCGDirectMainDisplay);
 }
 
 void VLCLegacyCursorActivity(void)

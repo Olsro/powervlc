@@ -19,16 +19,26 @@
 #   powervlc-<ver>-<arch>-portable.zip  the app tree, settings kept next to
 #                                       powervlc.exe (see package.mak)
 #   linux-arm64-appimage  PowerVLC-<ver>-aarch64.AppImage   (native on arm64 host: fast)
-#   linux-amd64-appimage  PowerVLC-<ver>-x86_64.AppImage    (emulated on arm64 host: slow)
-#   linux-i386-appimage   PowerVLC-<ver>-i386.AppImage      (emulated, legacy)
+#   linux-amd64-appimage  PowerVLC-<ver>-x86_64.AppImage    (native cross-build on arm64)
+#   linux-i386-appimage   PowerVLC-<ver>-i386.AppImage      (native cross-build on arm64)
+#   linux-amd64-cross-check  verify native arm64 -> amd64 GCC/sysroot
+#   linux-i386-cross-check   verify native arm64 -> i386 GCC/sysroot
+#   linux-amd64-cross-configure  configure a minimal native-cross VLC build
+#   linux-i386-cross-configure   configure a minimal native-cross VLC build
+#   linux-amd64-cross-ffmpeg     build the FFmpeg contrib natively-cross
+#   linux-i386-cross-ffmpeg      build the FFmpeg contrib natively-cross
+#   linux-amd64-cross-build      compile the configured VLC core natively-cross
+#   linux-i386-cross-build       compile the configured VLC core natively-cross
+#   linux-amd64-cross-toolchain  build the glibc-2.27 GCC C/C++ toolchain
+#   linux-i386-cross-toolchain   build the glibc-2.27 GCC C/C++ toolchain
 #
 # Housekeeping subcommands (instead of a target):
 #   reclaim               drop the per-target build dirs, KEEP the contribs
 #   clean                 delete the build volumes outright (contribs included)
 #
 # Speed note (arm64 host): Windows targets cross-compile with a NATIVE arm64
-# toolchain (fast). linux-arm64 is native (fast). linux-amd64 / linux-i386 run
-# under QEMU emulation and can take hours. See README.md.
+# toolchain (fast). linux-arm64 is native; linux-amd64 / linux-i386 are native
+# arm64 cross-compilations with Bionic sysroots. See README.md.
 #
 # Disk: Docker Desktop's virtual disk is a hard ceiling and the three Windows
 # targets share one volume (~23 GB of contribs plus 2-5 GB per target). Each
@@ -98,6 +108,13 @@ SEED='set -e; git config --global --add safe.directory /src;
 # Reset with:  ./build-in-docker.sh clean
 WORK_VOL=""
 
+cross_image() {
+  case "$1" in
+    amd64) printf '%s\n' powervlc-linux-cross-qt-amd64-v6 ;;
+    i386)  printf '%s\n' powervlc-linux-cross-qt-i386-v2 ;;
+  esac
+}
+
 # Docker Desktop's virtual disk is a hard ceiling (Settings > Resources), and
 # it is easy to hit: the three Windows targets SHARE one volume, where the
 # contribs alone are ~23 GB and each target's build directory adds 2-5 GB more.
@@ -115,11 +132,11 @@ WORK_VOL=""
 PVLC_MIN_FREE_GB="${PVLC_MIN_FREE_GB:-20}"
 
 docker_run() { # docker_run <platform> <image> <shell-command>
-  docker run --rm --platform "$1" \
+  docker run --rm --platform "$1" --entrypoint /bin/sh \
     -v "$REPO":/src:ro -v "$OUT":/out -v "${WORK_VOL}":/work \
     -e "PVLC_VER=$PVLC_VER" -e "REVISION=$REVISION" \
     -e "PVLC_MIN_FREE_GB=$PVLC_MIN_FREE_GB" \
-    "$2" sh -eu -c "$3"
+    "$2" -eu -c "$3"
 }
 
 # Shell snippet evaluated INSIDE the container (prepended to the build command,
@@ -136,6 +153,12 @@ pvlc_free_gb() {
 }
 pvlc_reclaim() {  # pvlc_reclaim <name of the target being built>
   keep=$1
+  case "$keep" in
+    win32) keep_arch=i686 ;;
+    win64) keep_arch=x86_64 ;;
+    winarm64) keep_arch=aarch64 ;;
+    *) keep_arch="$keep" ;;
+  esac
   min=${PVLC_MIN_FREE_GB:-10}
   free=$(pvlc_free_gb)
   echo "  disk: ${free}G free in the work volume (reclaim below ${min}G)"
@@ -146,6 +169,14 @@ pvlc_reclaim() {  # pvlc_reclaim <name of the target being built>
       /work/${keep}*) continue ;;
     esac
     echo "  disk: below ${min}G — dropping stale build dir $d (contribs kept)"
+    rm -rf "$d"
+  done
+  for d in /work/build/dependencies/amule/windows-*; do
+    [ -d "$d" ] || continue
+    case "$d" in
+      /work/build/dependencies/amule/windows-$keep_arch) continue ;;
+    esac
+    echo "  disk: dropping stale private-engine build $d"
     rm -rf "$d"
   done
   echo "  disk: $(pvlc_free_gb)G free after reclaim"
@@ -281,12 +312,31 @@ build_linux_appimage() { # build_linux_appimage <platform> <base-image> <appimag
      # neither is present in the old distro images. Build both with the
      # in-tree tools (a no-op after the per-architecture volume has cached
      # them).
-     ( cd extras/tools && ./bootstrap && make .buildnasm && \
-       { command -v cmake >/dev/null 2>&1 || make .buildcmake; } )
+    ( cd extras/tools && ./bootstrap && make .buildnasm && \
+      { command -v cmake >/dev/null 2>&1 || make .buildcmake; } )
      export PATH=\"/work/extras/tools/build/bin:\$PATH\"
+     # Meson 1.x requires Python >= 3.7, while the glibc 2.27 base deliberately
+     # uses Ubuntu 18.04 and Python 3.6. Keep a checked, target-local Meson for
+     # that old runtime instead of lowering the tools used by other platforms.
+     if ! python3 -c 'import sys; assert sys.version_info >= (3, 7)' 2>/dev/null; then
+       meson_root=/work/.scratch-tools/meson-0.60.3
+       meson_tar=/work/.scratch-tools/meson-0.60.3.tar.gz
+       mkdir -p /work/.scratch-tools
+       if [ ! -f \"\$meson_tar\" ]; then
+         curl -fL --retry 3 -o \"\$meson_tar\" \
+           https://github.com/mesonbuild/meson/releases/download/0.60.3/meson-0.60.3.tar.gz
+       fi
+       echo '0aa6ef71c20cd899ebb0b202c6319e093e1df1c39fa58c94a1bb479efe630213272127346eab589948898d115d02d64f4bdffd892fbb9700884c1edf2dc6c6dc  '\"\$meson_tar\" | sha512sum -c -
+       if [ ! -x \"\$meson_root/meson.py\" ]; then
+         tar -xzf \"\$meson_tar\" -C /work/.scratch-tools
+       fi
+       ln -sf \"\$meson_root/meson.py\" /work/extras/tools/build/bin/meson
+     else
+       ( cd extras/tools && make .buildmeson )
+     fi
      ( cd contrib && mkdir -p native && cd native && \
        ../bootstrap && VLC_FFMPEG_NO_OPENJPEG=1 \
-       make -j\$(nproc) .ffmpeg .postproc .afpclient .smb2 )
+       make -j\$(nproc) .ffmpeg .postproc .afpclient .smb2 .bluray )
      CONTRIB_PREFIX=\$(ls -d /work/contrib/*-linux-gnu* 2>/dev/null | grep -v contrib- | head -1)
      export PKG_CONFIG_PATH=\"\$CONTRIB_PREFIX/lib/pkgconfig\${PKG_CONFIG_PATH:+:\$PKG_CONFIG_PATH}\"
      ./bootstrap
@@ -305,6 +355,114 @@ build_linux_appimage() { # build_linux_appimage <platform> <base-image> <appimag
   package_zip "linux-$3" "PowerVLC-*-$3.AppImage" "$STAMP"
   rm -f "$STAMP"
 }
+
+check_linux_cross() { # check_linux_cross <amd64|i386>
+  # Do not set --platform to an x86 value here: this image and both compiler
+  # processes are arm64 programs.  The produced ELF alone is x86.
+  docker image inspect powervlc-linux-cross-v2 >/dev/null 2>&1 || \
+  docker build --platform linux/arm64 -t powervlc-linux-cross-v2 \
+    -f "$DOCKER_DIR/Dockerfile.linux-cross" "$DOCKER_DIR"
+  docker run --rm --platform linux/arm64 powervlc-linux-cross-v2 \
+    /work/check-linux-cross.sh "$1"
+}
+
+configure_linux_cross() { # configure_linux_cross <amd64|i386>
+  case "$1" in amd64) triplet=x86_64-linux-gnu; sysarch=x86_64-linux-gnu ;; i386) triplet=i686-linux-gnu; sysarch=i386-linux-gnu ;; esac
+  WORK_VOL="powervlc-build-linux-cross-$1"
+  docker_run linux/arm64 "$(cross_image "$1")" \
+    "git config --global --add safe.directory /src
+     ( cd /src && git ls-files -co --exclude-standard -z | tar --null -T - -cf - ) | tar -C /work -xf -
+     mkdir -p /work/src; printf '%s\\n' \"$REVISION\" > /work/src/revision.txt
+     cd /work
+     sysroot=/opt/sysroots/$triplet-glibc-2.27
+     contrib=/work/contrib-$triplet-glibc227
+     test -f \"\$contrib/lib/pkgconfig/libavcodec.pc\"
+     toolchain=/work/.toolchains/prefix/$triplet
+     test -x "\$toolchain/bin/$triplet-gcc"
+     export PATH="/opt/protoc-3.0/src/.libs:/opt/qt-host/bin:\$toolchain/driver-bin:\$PATH"
+     export LD_LIBRARY_PATH="/opt/protoc-3.0/src/.libs:/opt/qt-host/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+     export CC="\$toolchain/driver-bin/$triplet-gcc" CXX="\$toolchain/driver-bin/$triplet-g++" AR=$triplet-ar RANLIB=$triplet-ranlib
+     export CFLAGS=\"--sysroot=\$sysroot -isystem \$sysroot/usr/include/$sysarch -I\$sysroot/usr/include/freetype2 -I\$sysroot/usr/include/libxml2 -B\$toolchain/bin -B\$sysroot/usr/lib/$sysarch -L\$sysroot/usr/lib/$sysarch\" CXXFLAGS=\"--sysroot=\$sysroot -isystem \$sysroot/usr/include/$sysarch -I\$sysroot/usr/include/freetype2 -I\$sysroot/usr/include/libxml2 -B\$toolchain/bin -B\$sysroot/usr/lib/$sysarch -L\$sysroot/usr/lib/$sysarch\" LDFLAGS=\"--sysroot=\$sysroot -B\$toolchain/bin -B\$sysroot/usr/lib/$sysarch -L\$sysroot/usr/lib/$sysarch -Wl,-rpath-link,/work/cross-$1/src/.libs\"
+     export PKG_CONFIG_SYSROOT_DIR=\"\$sysroot\" PKG_CONFIG_LIBDIR=\"\$contrib/lib/pkgconfig:\$sysroot/usr/lib/$sysarch/pkgconfig:\$sysroot/usr/lib/pkgconfig:\$sysroot/usr/share/pkgconfig\" PKG_CONFIG_PATH=\"\$contrib/lib/pkgconfig\"
+     export MOC=/opt/qt-host/bin/moc RCC=/opt/qt-host/bin/rcc UIC=/opt/qt-host/bin/uic QMAKE=/opt/qt-host/bin/qmake
+     ./bootstrap
+     mkdir -p /work/cross-$1 && cd /work/cross-$1
+     ../configure --host=$triplet --build=aarch64-linux-gnu --with-contrib=\"\$contrib\" --prefix=/usr \\
+       --disable-wayland --enable-merge-ffmpeg --enable-smb2 --disable-update-check
+     find . -name Makefile -type f -exec sed -i \"s#\$sysroot/work/contrib-$triplet-glibc227#/work/contrib-$triplet-glibc227#g\" {} \;
+     sed -i \"s#-lbluray #/work/contrib-$triplet-glibc227/lib/libbluray.a #g\" modules/Makefile
+     for lib in avcodec avformat avutil postproc swscale; do
+       sed -i \"s#-l\$lib #/work/contrib-$triplet-glibc227/lib/lib\$lib.a #g\" modules/Makefile
+     done
+     # FFmpeg 7 removed two VDPAU helper symbols still used by VLC's VDPAU
+     # module. Keep modern FFmpeg for normal playback, but link that single
+     # compatibility module to Bionic's libavcodec 57, which exports them.
+     sed -i '/^libvdpau_avcodec_plugin_la_LIBADD =/,/^\$/ s#\$(AVCODEC_LIBS)#-Wl,/opt/sysroots/$triplet-glibc-2.27/usr/lib/$sysarch/libavcodec.so -Wl,/opt/sysroots/$triplet-glibc-2.27/usr/lib/$sysarch/libavutil.so#g' modules/Makefile
+     echo \"OK: VLC configured natively for $triplet with glibc 2.27.\""
+}
+
+build_linux_cross_ffmpeg() { # build_linux_cross_ffmpeg <amd64|i386>
+  case "$1" in amd64) triplet=x86_64-linux-gnu; sysarch=x86_64-linux-gnu ;; i386) triplet=i686-linux-gnu; sysarch=i386-linux-gnu ;; esac
+  WORK_VOL="powervlc-build-linux-cross-$1"
+  docker_run linux/arm64 "$(cross_image "$1")" \
+    "git config --global --add safe.directory /src
+     ( cd /src && git ls-files -co --exclude-standard -z | tar --null -T - -cf - ) | tar -C /work -xf -
+     cd /work
+     sysroot=/opt/sysroots/$triplet-glibc-2.27
+     ( cd extras/tools && ./bootstrap && rm -rf nasm .nasm && CC=gcc CXX=g++ make .buildnasm )
+     export PATH=/work/extras/tools/build/bin:\$PATH
+     toolchain=/work/.toolchains/prefix/$triplet
+     test -x "\$toolchain/bin/$triplet-gcc"
+     export PATH="\$toolchain/driver-bin:\$PATH"
+     export CC="\$toolchain/driver-bin/$triplet-gcc" CXX="\$toolchain/driver-bin/$triplet-g++" AR=$triplet-ar RANLIB=$triplet-ranlib
+     export CFLAGS=\"--sysroot=\$sysroot -isystem \$sysroot/usr/include/$sysarch -B\$toolchain/bin -B\$sysroot/usr/lib/$sysarch -L\$sysroot/usr/lib/$sysarch\" CXXFLAGS=\"--sysroot=\$sysroot -isystem \$sysroot/usr/include/$sysarch -B\$toolchain/bin -B\$sysroot/usr/lib/$sysarch -L\$sysroot/usr/lib/$sysarch\" LDFLAGS=\"--sysroot=\$sysroot -B\$toolchain/bin -B\$sysroot/usr/lib/$sysarch -L\$sysroot/usr/lib/$sysarch\"
+     mkdir -p /work/contrib-cross-$1-glibc227 && cd /work/contrib-cross-$1-glibc227
+     ../contrib/bootstrap --build=aarch64-linux-gnu --host=$triplet --prefix=../contrib-$triplet-glibc227
+     # libbluray's Meson invocation intentionally isolates pkg-config.  Make
+     # the Bionic fontconfig metadata visible there while keeping its matching
+     # Bionic library in the sysroot.
+     for pc in fontconfig expat; do
+       cp "\$sysroot/usr/lib/$sysarch/pkgconfig/\$pc.pc" "../contrib-$triplet-glibc227/lib/pkgconfig/"
+     done
+     # Keep Bionic's fontconfig/freetype pair, but build libbluray itself: VLC
+     # uses a non-public libbluray header not shipped by Ubuntu's -dev package.
+     touch .fontconfig .dep-fontconfig
+     make -j\$(nproc) .ffmpeg .postproc .afpclient .smb2 .bluray
+     test -f ../contrib-$triplet-glibc227/lib/pkgconfig/libavcodec.pc
+     echo \"OK: FFmpeg contrib built natively for $triplet.\""
+}
+
+build_linux_cross_core() { # build_linux_cross_core <amd64|i386>
+  WORK_VOL="powervlc-build-linux-cross-$1"
+  docker_run linux/arm64 "$(cross_image "$1")" \
+    "export PATH=/opt/protoc-3.0/src/.libs:/opt/qt-host/bin:\$PATH
+     export LD_LIBRARY_PATH=/opt/protoc-3.0/src/.libs:/opt/qt-host/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}
+     test -f /work/cross-$1/config.status
+     make -C /work/cross-$1/modules stream_out/chromecast/3.0/cast_channel.pb.cc
+     find /work/cross-$1/modules/stream_out/chromecast -name '*.pb.cc' -exec sed -i 's/::google::protobuf::internal::NewPermanentCallback/::google::protobuf::NewPermanentCallback/g' {} \;
+     make -C /work/cross-$1 -j\$(nproc)
+     echo \"OK: VLC core built natively for $1.\""
+}
+
+build_linux_cross_appimage() { # build_linux_cross_appimage <amd64|i386>
+  case "$1" in amd64) label=x86_64 ;; i386) label=i386 ;; esac
+  build_legacy_cross_toolchain "$1"
+  build_linux_cross_ffmpeg "$1"
+  configure_linux_cross "$1"
+  build_linux_cross_core "$1"
+  WORK_VOL="powervlc-build-linux-cross-$1"
+  docker_run linux/arm64 "$(cross_image "$1")" \
+    "package-cross-appimage $1
+     cp -v /work/PowerVLC-\$PVLC_VER-$label.AppImage /out/"
+}
+
+build_legacy_cross_toolchain() { # build_legacy_cross_toolchain <amd64|i386>
+  WORK_VOL="powervlc-build-linux-cross-$1"
+  docker run --rm --platform linux/arm64 --entrypoint /bin/sh \
+    -v "$REPO":/src:ro -v "${WORK_VOL}":/work \
+    powervlc-linux-cross-v13 -eu -c "sh /src/extras/package/docker/build-legacy-gcc.sh $1"
+}
+
 
 [ "$#" -ge 1 ] || { grep '^#   ' "$0" | sed 's/^#  //'; exit 1; }
 
@@ -344,8 +502,18 @@ for TARGET in "$@"; do
     win64)    build_windows "-a x86_64"      "win64"    ;;
     winarm64) build_windows "-a aarch64 -u"  "winarm64" ;;
     linux-arm64-appimage) build_linux_appimage linux/arm64 ubuntu:18.04 aarch64 ;;
-    linux-amd64-appimage) build_linux_appimage linux/amd64 ubuntu:18.04 x86_64 ;;
-    linux-i386-appimage)  build_linux_appimage linux/386  i386/debian:bullseye i386 ;;
+    linux-amd64-appimage) build_linux_cross_appimage amd64 ;;
+    linux-i386-appimage)  build_linux_cross_appimage i386 ;;
+    linux-amd64-cross-check) check_linux_cross amd64 ;;
+    linux-i386-cross-check)  check_linux_cross i386 ;;
+    linux-amd64-cross-configure) configure_linux_cross amd64 ;;
+    linux-i386-cross-configure)  configure_linux_cross i386 ;;
+    linux-amd64-cross-ffmpeg) build_linux_cross_ffmpeg amd64 ;;
+    linux-i386-cross-ffmpeg)  build_linux_cross_ffmpeg i386 ;;
+    linux-amd64-cross-build) build_linux_cross_core amd64 ;;
+    linux-i386-cross-build)  build_linux_cross_core i386 ;;
+    linux-amd64-cross-toolchain) build_legacy_cross_toolchain amd64 ;;
+    linux-i386-cross-toolchain)  build_legacy_cross_toolchain i386 ;;
     *) echo "unknown target: $TARGET"; exit 1 ;;
   esac
 done

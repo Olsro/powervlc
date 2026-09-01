@@ -37,6 +37,7 @@ return {
     mode_playlists = "Wiedergabelisten",
     btn_search = "Suchen",
     btn_open = "Auswahl öffnen",
+    btn_open_channel = "Kanal des ausgewählten Elements öffnen",
     btn_change_instance = "< Instanz",
     msg_enter_query = "Geben Sie einen Suchbegriff ein",
     msg_searching = "Suche läuft …",
@@ -47,7 +48,13 @@ return {
     msg_target_found = "Adresse erkannt — sie wird direkt geöffnet",
     msg_search_fail = "Suche fehlgeschlagen: ",
     msg_select_result = "Wählen Sie zuerst ein Ergebnis in der Liste aus",
+    msg_channel_unavailable = "Der mit dieser Auswahl verknüpfte Kanal ist nicht verfügbar",
     lbl_quality = "Qualität:",
+    lbl_audio_track = "Audiospur:",
+    audio_default = "Standard-Audiospur",
+    audio_original = "Original",
+    lbl_subtitles = "Untertitel:",
+    subtitles_none = "Keine",
     lbl_by = "von",
     audio_only = "Nur Ton",
     combined = "Ton+Video",
@@ -177,4 +184,17 @@ return {
           .. "<strong>Hilfe &gt; PowerVLC-Erweiterung installieren</strong> "
           .. "eine kleine Erweiterung in Ihren Browser, die dasselbe von allein "
           .. "erledigt — kein Lesezeichen, kein Klicken, auf jeder Seite.",
+    web_addon_lead = "Erweiterung installiert? Sie müssen nichts ziehen und nichts "
+                   .. "anklicken: Öffnen Sie einfach die Instanz unten und bestehen "
+                   .. "Sie ihre Prüfung. Diese Seite meldet Ihnen, sobald die "
+                   .. "Verbindung steht.",
+    web_steps_title = "Ohne Erweiterung: das Lesezeichen",
+    web_relay_on_addon = "Über die Browser-Erweiterung mit PowerVLC verbunden. Sie "
+                       .. "müssen nichts anklicken: Lassen Sie dieses Fenster und "
+                       .. "den Tab der Instanz geöffnet.",
+    web_m_taking = "PowerVLC spielt dieses Video ab. Der Tab wurde absichtlich "
+                 .. "sofort geleert: Den Player der Website hier fertig laden zu "
+                 .. "lassen, würde die Maschine ein zweites Dekodieren und einen "
+                 .. "zweiten Download kosten und die Instanz unnötig belasten. "
+                 .. "Lassen Sie ihn geöffnet.",
 }

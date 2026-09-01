@@ -30,6 +30,99 @@
 #import "VLCMain.h"
 #import "VLCSeekThumbnailer.h"
 
+#include <dlfcn.h>
+
+@interface VLCFramePackedFeedbackView : NSView
+@property (copy) NSString *feedbackText;
+@property NSInteger feedbackValue;
+@property BOOL feedbackShowsBar;
+@end
+
+@implementation VLCFramePackedFeedbackView
+
+- (BOOL)isOpaque
+{
+    return NO;
+}
+
+- (void)drawRect:(NSRect)dirtyRect
+{
+    VLC_UNUSED(dirtyRect);
+    NSRect bounds = self.bounds;
+    [[NSColor colorWithCalibratedWhite:0.05 alpha:0.88] setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(bounds, 1., 1.)
+                                      xRadius:10. yRadius:10.] fill];
+
+    NSDictionary *attributes = @{
+        NSFontAttributeName: [NSFont boldSystemFontOfSize:19.],
+        NSForegroundColorAttributeName: [NSColor whiteColor]
+    };
+    CGFloat textY = self.feedbackShowsBar ? 30. : 22.;
+    [self.feedbackText drawInRect:NSMakeRect(18., textY,
+                                             NSWidth(bounds) - 36., 25.)
+                       withAttributes:attributes];
+
+    if (!self.feedbackShowsBar)
+        return;
+
+    NSRect track = NSMakeRect(18., 14., NSWidth(bounds) - 36., 8.);
+    [[NSColor colorWithCalibratedWhite:1. alpha:0.22] setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:track xRadius:4. yRadius:4.] fill];
+    CGFloat fraction = MIN(100., MAX(0., self.feedbackValue)) / 100.;
+    NSRect fill = track;
+    fill.size.width *= fraction;
+    [[NSColor colorWithCalibratedRed:0.12 green:0.55 blue:1. alpha:1.] setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:fill xRadius:4. yRadius:4.] fill];
+}
+
+@end
+
+@interface VLCFSPanelController (StereoMirrorForwarding)
+- (void)forwardStereoMirrorMouseMoved:(NSEvent *)event;
+- (void)forwardStereoMirrorMouseDown:(NSEvent *)event;
+- (void)hideStereoMirrorSliderTooltip;
+@end
+
+@interface VLCFSPanelMirrorView : NSImageView {
+    NSTrackingArea *_mouseTrackingArea;
+}
+@property (assign) VLCFSPanelController *panelController;
+@end
+
+@implementation VLCFSPanelMirrorView
+
+- (void)updateTrackingAreas
+{
+    [super updateTrackingAreas];
+    if (_mouseTrackingArea)
+        [self removeTrackingArea:_mouseTrackingArea];
+    _mouseTrackingArea = [[NSTrackingArea alloc]
+        initWithRect:self.bounds
+             options:(NSTrackingMouseEnteredAndExited |
+                      NSTrackingMouseMoved |
+                      NSTrackingActiveInActiveApp)
+               owner:self userInfo:nil];
+    [self addTrackingArea:_mouseTrackingArea];
+}
+
+- (void)mouseMoved:(NSEvent *)event
+{
+    [self.panelController forwardStereoMirrorMouseMoved:event];
+}
+
+- (void)mouseExited:(NSEvent *)event
+{
+    (void)event;
+    [self.panelController hideStereoMirrorSliderTooltip];
+}
+
+- (void)mouseDown:(NSEvent *)event
+{
+    [self.panelController forwardStereoMirrorMouseDown:event];
+}
+
+@end
+
 @interface VLCFSPanelController () {
     BOOL _isCounting;
     BOOL _isFadingIn;
@@ -39,16 +132,61 @@
     // Used to ask for current constraining rect on movement
     NSWindow *_associatedVoutWindow;
 
+    /* A frame-packed display is one tall desktop surface containing the
+     * left and right eye images. Keep the normal panel interactive in one
+     * eye and mirror its pixels into the other eye so WindowServer composes
+     * a comfortable stereoscopic controller instead of a one-eye overlay. */
+    NSPanel *_stereoMirrorWindow;
+    NSImageView *_stereoMirrorImageView;
+    BOOL _stereoMirrorUpdateScheduled;
+
+    NSPanel *_stereoFeedbackWindow;
+    NSPanel *_stereoFeedbackMirrorWindow;
+    VLCFramePackedFeedbackView *_stereoFeedbackView;
+    VLCFramePackedFeedbackView *_stereoFeedbackMirrorView;
+    BOOL _hasAssociatedVoutWindow;
+    BOOL _stereoInitialOffsetApplied;
+
     int _chaptersRetryTicks;
     /* identité seule, jamais déréférencée (cf. -updateChapters) */
     char *_chaptersUri;     /* identité du média, cf. -updateChapters */
 }
 
+- (void)scheduleStereoMirrorUpdate;
+- (void)updateStereoMirror;
+- (void)hideStereoMirror;
+- (void)showStereoFeedback:(NSNotification *)notification;
+- (void)hideStereoFeedback;
 @end
 
 @implementation VLCFSPanelController
 
 static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect";
+
+static BOOL moveFullscreenPanelViaWindowServer(NSWindow *window,
+                                               CGFloat x, CGFloat y)
+{
+    typedef int (*CGSMainConnectionIDFunc)(void);
+    typedef int (*CGSMoveWindowFunc)(int, int, const CGPoint *);
+    static CGSMainConnectionIDFunc mainConnection;
+    static CGSMoveWindowFunc moveWindow;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        void *framework = dlopen(
+            "/System/Library/Frameworks/ApplicationServices.framework/"
+            "ApplicationServices", RTLD_LAZY | RTLD_LOCAL);
+        if (framework) {
+            mainConnection = (CGSMainConnectionIDFunc)
+                dlsym(framework, "CGSMainConnectionID");
+            moveWindow = (CGSMoveWindowFunc)
+                dlsym(framework, "CGSMoveWindow");
+        }
+    });
+    if (!window || !mainConnection || !moveWindow)
+        return NO;
+    CGPoint point = CGPointMake(x, y);
+    return moveWindow(mainConnection(), (int)window.windowNumber, &point) == 0;
+}
 
 + (void)initialize
 {
@@ -82,6 +220,9 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
     [self.window setLevel:NSModalPanelWindowLevel];
     [self.window setStyleMask:self.window.styleMask | NSResizableWindowMask];
     [self.window setBackgroundColor:[NSColor clearColor]];
+    /* This borderless panel is deliberately never key, but its seek slider
+     * still needs mouseMoved events for the live hover tooltip. */
+    [self.window setAcceptsMouseMovedEvents:YES];
 
     /* Set autosave name after we changed window mask to resizable */
     [self.window setFrameAutosaveName:@"VLCFullscreenControls"];
@@ -111,6 +252,9 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
 #endif
 
     [self setupControls];
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self selector:@selector(showStereoFeedback:)
+               name:VLCFullscreenFeedbackNotification object:nil];
 }
 
 #define setupButton(target, title, desc)                                              \
@@ -177,6 +321,10 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
                selector:@selector(fsChaptersPossiblyChanged:)
                    name:VLCInputTitleChangedNotification
                  object:nil];
+    [center addObserver:self
+               selector:@selector(fsBookmarksPossiblyChanged:)
+                   name:VLCBookmarksChangedNotification
+                 object:nil];
     /* the clip creation mode drives this seek bar exactly like the one of
      * the windowed controls: two knobs for the bounds, a marker for the
      * playback position */
@@ -185,6 +333,7 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
                    name:VLCClipCreationModeChangedNotification
                  object:nil];
     [self updateChapters];
+    [_timeSlider reloadBookmarks];
     [self syncClipCreationMode];
 }
 
@@ -213,6 +362,12 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
 - (void)fsChaptersPossiblyChanged:(NSNotification *)aNotification
 {
     [self updateChapters];
+    [_timeSlider reloadBookmarks];
+}
+
+- (void)fsBookmarksPossiblyChanged:(NSNotification *)aNotification
+{
+    [_timeSlider reloadBookmarks];
 }
 
 /* same INPUT_GET_TITLE_INFO rules as VLCControlsBarCommon: only usable
@@ -407,7 +562,8 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
 
 - (IBAction)volumeSliderUpdate:(id)sender
 {
-    [[VLCCoreInteraction sharedInstance] setVolume:[sender intValue]];
+    [[VLCCoreInteraction sharedInstance]
+        setVolumeFromVisibleControl:[sender intValue]];
 }
 
 #pragma mark -
@@ -440,6 +596,7 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
         [_timeSlider setMediaDuration:0.];
         [_elapsedTime setStringValue:@""];
         [_remainingOrTotalTime setHidden:YES];
+        [self scheduleStereoMirrorUpdate];
         return;
     }
 
@@ -496,6 +653,7 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
 
     [_elapsedTime setStringValue:playbackPosition];
     vlc_object_release(p_input);
+    [self scheduleStereoMirrorUpdate];
 }
 
 - (void)setSeekable:(BOOL)seekable
@@ -514,16 +672,327 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
     [_timeSlider setEnabled:seekable];
     [_forwardButton setEnabled:seekable];
     [_backwardButton setEnabled:seekable];
+    [self scheduleStereoMirrorUpdate];
 }
 
 - (void)setVolumeLevel:(int)value
 {
     [_volumeSlider setIntValue:value];
     [_volumeSlider setToolTip: [NSString stringWithFormat:_NS("Volume: %i %%"), (value*200)/AOUT_VOLUME_MAX]];
+    [self scheduleStereoMirrorUpdate];
+}
+
+static BOOL stereoEyeLayoutForScreen(NSScreen *screen, CGFloat *stride)
+{
+    if (!screen)
+        return NO;
+    CGFloat height = NSHeight(screen.frame);
+    CGFloat gap;
+    if (fabs(height - 2205.) < 2.)
+        gap = 45.;
+    else if (fabs(height - 1470.) < 2.)
+        gap = 30.;
+    else
+        return NO;
+    *stride = (height - gap) / 2. + gap;
+    return YES;
+}
+
+- (BOOL)stereoFramePackingActive
+{
+    return var_InheritInteger(getIntf(),
+                              "stereo3d-fullscreen-display") > 0;
+}
+
+- (void)ensureStereoMirror
+{
+    if (_stereoMirrorWindow)
+        return;
+
+    _stereoMirrorWindow = [[NSPanel alloc]
+        initWithContentRect:self.window.frame
+                  styleMask:NSBorderlessWindowMask
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    [_stereoMirrorWindow setOpaque:NO];
+    [_stereoMirrorWindow setBackgroundColor:[NSColor clearColor]];
+    [_stereoMirrorWindow setHasShadow:NO];
+    /* The projector fuses this copy with the source panel. Depending on which
+     * physical eye contains the macOS pointer, this can be the window that
+     * receives the click, so it must proxy drags to the source. */
+    [_stereoMirrorWindow setIgnoresMouseEvents:NO];
+    [_stereoMirrorWindow setAcceptsMouseMovedEvents:YES];
+    [_stereoMirrorWindow setHidesOnDeactivate:NO];
+    [_stereoMirrorWindow setReleasedWhenClosed:NO];
+    [_stereoMirrorWindow setCollectionBehavior:
+        NSWindowCollectionBehaviorFullScreenAuxiliary];
+
+    _stereoMirrorImageView = (NSImageView *)[[VLCFSPanelMirrorView alloc]
+        initWithFrame:_stereoMirrorWindow.contentView.bounds];
+    [(VLCFSPanelMirrorView *)_stereoMirrorImageView setPanelController:self];
+    [_stereoMirrorImageView setImageScaling:NSImageScaleAxesIndependently];
+    [_stereoMirrorImageView setAutoresizingMask:
+        NSViewWidthSizable | NSViewHeightSizable];
+    [_stereoMirrorWindow.contentView addSubview:_stereoMirrorImageView];
+}
+
+- (void)hideStereoMirror
+{
+    [_stereoMirrorWindow orderOut:self];
+}
+
+- (void)ensureStereoFeedbackWindows
+{
+    if (_stereoFeedbackWindow)
+        return;
+
+    NSRect frame = NSMakeRect(0., 0., 320., 68.);
+    _stereoFeedbackWindow = [[NSPanel alloc]
+        initWithContentRect:frame styleMask:NSBorderlessWindowMask
+                    backing:NSBackingStoreBuffered defer:NO];
+    _stereoFeedbackMirrorWindow = [[NSPanel alloc]
+        initWithContentRect:frame styleMask:NSBorderlessWindowMask
+                    backing:NSBackingStoreBuffered defer:NO];
+    for (NSPanel *window in @[_stereoFeedbackWindow,
+                              _stereoFeedbackMirrorWindow]) {
+        [window setOpaque:NO];
+        [window setBackgroundColor:[NSColor clearColor]];
+        [window setHasShadow:NO];
+        [window setIgnoresMouseEvents:YES];
+        [window setHidesOnDeactivate:NO];
+        [window setReleasedWhenClosed:NO];
+        [window setCollectionBehavior:
+            NSWindowCollectionBehaviorFullScreenAuxiliary];
+    }
+    _stereoFeedbackView = [[VLCFramePackedFeedbackView alloc]
+        initWithFrame:frame];
+    _stereoFeedbackMirrorView = [[VLCFramePackedFeedbackView alloc]
+        initWithFrame:frame];
+    [_stereoFeedbackWindow setContentView:_stereoFeedbackView];
+    [_stereoFeedbackMirrorWindow setContentView:_stereoFeedbackMirrorView];
+}
+
+- (void)showStereoFeedback:(NSNotification *)notification
+{
+    if (![self stereoFramePackingActive])
+        return;
+
+    NSScreen *screen = _associatedVoutWindow.screen ?: self.window.screen;
+    CGFloat eyeStride;
+    if (!stereoEyeLayoutForScreen(screen, &eyeStride)) {
+        screen = nil;
+        for (NSScreen *candidate in [NSScreen screens]) {
+            if (stereoEyeLayoutForScreen(candidate, &eyeStride)) {
+                screen = candidate;
+                break;
+            }
+        }
+    }
+    if (!screen)
+        return;
+
+    NSString *text = [notification.userInfo objectForKey:@"text"];
+    NSNumber *value = [notification.userInfo objectForKey:@"value"];
+    NSNumber *showsBar = [notification.userInfo objectForKey:@"showsBar"];
+    if (![text length] || !value)
+        return;
+
+    [self ensureStereoFeedbackWindows];
+    for (VLCFramePackedFeedbackView *view in
+         @[_stereoFeedbackView, _stereoFeedbackMirrorView]) {
+        view.feedbackText = text;
+        view.feedbackValue = value.integerValue;
+        view.feedbackShowsBar = showsBar == nil || showsBar.boolValue;
+        [view setNeedsDisplay:YES];
+    }
+
+    CGFloat width = NSWidth(_stereoFeedbackWindow.frame);
+    CGFloat x = NSMinX(screen.frame) + NSWidth(screen.frame) - width - 48.;
+    CGFloat y = 48.;
+    int depth = (int)var_InheritInteger(getIntf(),
+                                        "stereo3d-overlay-depth");
+    depth = MAX(-100, MIN(100, depth));
+    CGFloat disparity = NSWidth(screen.frame) * .04 * depth / 100.;
+
+    [_stereoFeedbackWindow setLevel:self.window.level + 1];
+    [_stereoFeedbackMirrorWindow setLevel:self.window.level + 1];
+    [_stereoFeedbackWindow orderFront:self];
+    [_stereoFeedbackMirrorWindow orderFront:self];
+    moveFullscreenPanelViaWindowServer(_stereoFeedbackWindow, x, y);
+    moveFullscreenPanelViaWindowServer(_stereoFeedbackMirrorWindow,
+                                       x + disparity, y + eyeStride);
+
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(hideStereoFeedback)
+                                               object:nil];
+    [self performSelector:@selector(hideStereoFeedback)
+               withObject:nil afterDelay:2.5];
+}
+
+- (void)hideStereoFeedback
+{
+    [_stereoFeedbackWindow orderOut:self];
+    [_stereoFeedbackMirrorWindow orderOut:self];
+}
+
+- (void)scheduleStereoMirrorUpdate
+{
+    if (_stereoMirrorUpdateScheduled)
+        return;
+    _stereoMirrorUpdateScheduled = YES;
+    [self performSelector:@selector(updateStereoMirror)
+               withObject:nil afterDelay:0.];
+}
+
+- (void)updateStereoMirror
+{
+    _stereoMirrorUpdateScheduled = NO;
+    if (![self stereoFramePackingActive] || !self.window.isVisible) {
+        if (![self stereoFramePackingActive])
+            _stereoInitialOffsetApplied = NO;
+        [self hideStereoMirror];
+        return;
+    }
+
+    NSScreen *screen = _associatedVoutWindow.screen ?: self.window.screen;
+    CGFloat eyeStride;
+    if (!stereoEyeLayoutForScreen(screen, &eyeStride)) {
+        [self hideStereoMirror];
+        return;
+    }
+
+    [self ensureStereoMirror];
+    if (!_stereoInitialOffsetApplied) {
+        /* Put the authoritative (interactive) panel in the lower eye, close
+         * to its bottom edge.  Applying a relative offset to the stale 4K
+         * frame left it much too high after the mode switch. */
+        NSRect lowered = self.window.frame;
+        lowered.origin.x = NSMinX(screen.frame) +
+            (NSWidth(screen.frame) - NSWidth(lowered)) / 2.;
+        lowered.origin.y = NSMinY(screen.frame) + 48.;
+        [self.window setFrame:lowered display:NO animate:NO];
+        _stereoInitialOffsetApplied = YES;
+    }
+    NSView *content = self.window.contentView;
+    [content displayIfNeeded];
+    NSRect bounds = content.bounds;
+    NSBitmapImageRep *rep = [content bitmapImageRepForCachingDisplayInRect:bounds];
+    if (!rep)
+        return;
+    [content cacheDisplayInRect:bounds toBitmapImageRep:rep];
+    NSImage *image = [[NSImage alloc] initWithSize:bounds.size];
+    [image addRepresentation:rep];
+    [_stereoMirrorImageView setImage:image];
+
+    int depth = (int)var_InheritInteger(getIntf(),
+                                        "stereo3d-overlay-depth");
+    depth = MAX(-100, MIN(100, depth));
+    CGFloat fullDisparity = NSWidth(screen.frame) * .04 * depth / 100.;
+
+    /* Do not sample the physical pointer against the authoritative eye here.
+     * updatePositionAndTime refreshes this mirror several times per second.
+     * When the pointer is over the other frame-packed eye, that sample is
+     * outside self.window and used to hide a tooltip which the mirror view's
+     * real mouseMoved event had just displayed.  Tracking events from both
+     * windows already update and dismiss the tooltip at the right times. */
+
+    /* The interactive panel is user-positionable.  Mirroring used to move it
+     * back to a hard-coded centre on every content refresh, so a drag visibly
+     * snapped back and the two WindowServer moves made the controls flicker.
+     * Keep its AppKit frame authoritative and place only the non-interactive
+     * copy in the other eye. */
+    NSRect frame = self.window.frame;
+    frame.origin.x += fullDisparity;
+    CGFloat splitY = NSMinY(screen.frame) + NSHeight(screen.frame) / 2.;
+    if (NSMidY(frame) >= splitY)
+        frame.origin.y -= eyeStride;
+    else
+        frame.origin.y += eyeStride;
+    [_stereoMirrorWindow setFrame:frame display:NO];
+    [_stereoMirrorWindow setLevel:self.window.level];
+    [_stereoMirrorWindow setAlphaValue:self.window.alphaValue];
+    [_stereoMirrorWindow orderFront:self];
 }
 
 #pragma mark -
 #pragma mark Window interactions
+
+- (void)forwardStereoMirrorMouseMoved:(NSEvent *)event
+{
+    if (!event || !self.window)
+        return;
+
+    /* The two eye panels have identical content coordinates.  Sending a
+     * synthetic mouseMoved event through NSWindow proved unreliable because
+     * AppKit still hit-tests against the pointer's physical (mirror-window)
+     * screen position. Address the real slider directly with the equivalent
+     * host-window point instead. */
+    [_timeSlider refreshHoverForHostWindowPoint:event.locationInWindow];
+}
+
+- (void)hideStereoMirrorSliderTooltip
+{
+    [_timeSlider hideHoverTooltip];
+}
+
+- (void)forwardStereoMirrorMouseDown:(NSEvent *)event
+{
+    if (!event || !self.window)
+        return;
+
+    /* Both eye windows have the same content size. Re-create the initial
+     * mouse-down for the authoritative window: AppKit's normal NSControl
+     * tracking then consumes the following drag/up events, so buttons and
+     * sliders retain their native behaviour even when the physical pointer
+     * happens to be in the mirrored HDMI eye. Empty panel areas still hit
+     * VLCFSPanelDraggableView and therefore keep the panel draggable. */
+    NSEvent *forwarded = [NSEvent
+        mouseEventWithType:event.type
+                  location:event.locationInWindow
+             modifierFlags:event.modifierFlags
+                 timestamp:event.timestamp
+              windowNumber:self.window.windowNumber
+                   context:nil
+               eventNumber:event.eventNumber
+                clickCount:event.clickCount
+                  pressure:event.pressure];
+    if (forwarded)
+        [self.window sendEvent:forwarded];
+}
+
+- (void)dragFullscreenPanelWithEvent:(NSEvent *)event
+                      trackingWindow:(NSWindow *)trackingWindow
+{
+    if (!trackingWindow)
+        return;
+
+    [self stopAutohideTimer];
+    NSPoint originalMouseLocation = [NSEvent mouseLocation];
+    NSRect originalFrame = self.window.frame;
+
+    while (YES) {
+        NSEvent *newEvent = [trackingWindow
+            nextEventMatchingMask:(NSLeftMouseDraggedMask |
+                                   NSLeftMouseUpMask)];
+        if (!newEvent || newEvent.type == NSLeftMouseUp)
+            break;
+
+        NSPoint mouseLocation = [NSEvent mouseLocation];
+        NSRect frame = originalFrame;
+        frame.origin.x += mouseLocation.x - originalMouseLocation.x;
+        frame.origin.y += mouseLocation.y - originalMouseLocation.y;
+        frame = [self contrainFrameToAssociatedVoutWindow:frame];
+        [self.window setFrame:frame display:NO animate:NO];
+
+        /* The tracking loop owns the run loop while the button is down, so a
+         * scheduled refresh would not run until mouse-up and would look like
+         * an immovable panel. Move the second eye synchronously. */
+        [self updateStereoMirror];
+    }
+
+    [self scheduleStereoMirrorUpdate];
+    [self startAutohideTimer];
+}
 
 - (void)fadeIn
 {
@@ -534,10 +1003,12 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
         return;
 
     [self stopAutohideTimer];
+    [self updateStereoMirror];
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext * _Nonnull context) {
         _isFadingIn = YES;
         [context setDuration:0.4f];
         [[self.window animator] setAlphaValue:1.0f];
+        [[_stereoMirrorWindow animator] setAlphaValue:1.0f];
     } completionHandler:^{
         _isFadingIn = NO;
         [self startAutohideTimer];
@@ -552,6 +1023,7 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext * _Nonnull context) {
         [context setDuration:0.4f];
         [[self.window animator] setAlphaValue:0.0f];
+        [[_stereoMirrorWindow animator] setAlphaValue:0.0f];
     } completionHandler:nil];
 }
 
@@ -564,12 +1036,20 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
     NSRect limitFrame = _associatedVoutWindow.frame;
     windowFrame.origin.x = (limitFrame.size.width - windowFrame.size.width) / 2 + limitFrame.origin.x;
     windowFrame.origin.y = (limitFrame.size.height / 5) - windowFrame.size.height + limitFrame.origin.y;
-
     [self.window setFrame:windowFrame display:YES animate:NO];
+    [self scheduleStereoMirrorUpdate];
 }
 
 - (NSRect)contrainFrameToAssociatedVoutWindow:(NSRect)frame
 {
+    /* During HDMI frame packing, _associatedVoutWindow.frame can still be
+     * expressed in the former 4K desktop coordinates. Clamping every drag to
+     * that stale rectangle made the panel appear immovable. The custom drag
+     * already uses global pointer deltas, and the mirror is derived from the
+     * resulting authoritative panel frame. */
+    if ([self stereoFramePackingActive])
+        return frame;
+
     NSRect limitFrame = _associatedVoutWindow.frame;
 
     // Limit rect to limitation view
@@ -595,12 +1075,17 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
 - (void)setNonActive
 {
     [_timeSlider hideHoverTooltip];
+    /* Do not let cursor auto-hiding survive a fullscreen/display transition. */
+    [NSCursor setHiddenUntilMouseMoves:NO];
     [self.window orderOut:self];
+    [self hideStereoMirror];
+    [self hideStereoFeedback];
 }
 
 - (void)setActive
 {
     [self.window orderFront:self];
+    [self updateStereoMirror];
     [self fadeIn];
 }
 
@@ -617,20 +1102,36 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
     _associatedVoutWindow = voutWindow;
 
     NSRect voutRect = voutWindow.frame;
+    const BOOL firstAssociation = !_hasAssociatedVoutWindow;
+    _hasAssociatedVoutWindow = YES;
 
-    // In some cases, the FSPanel frame has moved outside of the
-    // vout view --> Also re-center in this case
     NSRect currentFrame = [self.window frame];
     NSRect constrainedFrame = [self contrainFrameToAssociatedVoutWindow: currentFrame];
 
-    if (!NSEqualRects(_associatedVoutFrame, voutRect) ||
-        !NSEqualRects(currentFrame, constrainedFrame)) {
+    if (!NSEqualRects(_associatedVoutFrame, voutRect)) {
         _associatedVoutFrame = voutRect;
         [[NSUserDefaults standardUserDefaults] setObject:NSStringFromRect(_associatedVoutFrame) forKey:kAssociatedFullscreenRect];
-
-        [self centerPanel];
     }
 
+    /* A frame-packed transition publishes a succession of intermediate
+     * drawable sizes while AppKit moves the fullscreen window onto the HDMI
+     * raster. Re-centering for every one made the panel flash and snap back
+     * after the user dragged it. Centre only on first attachment; later
+     * geometry updates may clamp an out-of-bounds panel but must preserve its
+     * chosen position. */
+    if (firstAssociation)
+        [self centerPanel];
+    else if (!NSEqualRects(currentFrame, constrainedFrame))
+        [self.window setFrame:constrainedFrame display:NO animate:NO];
+
+    [self scheduleStereoMirrorUpdate];
+
+}
+
+- (void)windowDidMove:(NSNotification *)notification
+{
+    if (notification.object == self.window)
+        [self scheduleStereoMirrorUpdate];
 }
 
 #pragma mark -
@@ -661,7 +1162,11 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
 
 - (void)autohideCallback:(NSTimer *)timer
 {
-    if (!NSMouseInRect([NSEvent mouseLocation], [self.window frame], NO)) {
+    NSPoint mouse = [NSEvent mouseLocation];
+    BOOL mouseInPanel = NSMouseInRect(mouse, self.window.frame, NO);
+    if (_stereoMirrorWindow.isVisible)
+        mouseInPanel |= NSMouseInRect(mouse, _stereoMirrorWindow.frame, NO);
+    if (!mouseInPanel) {
         [self fadeOut];
         [self hideMouse];
     }
@@ -758,6 +1263,8 @@ static NSString *kAssociatedFullscreenRect = @"VLCFullscreenAssociatedWindowRect
 
 - (void)dealloc
 {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [self stopAutohideTimer];
 }
 

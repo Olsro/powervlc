@@ -22,6 +22,7 @@
 
 #include <vlc_common.h>
 #include <vlc_interface.h>
+#include <vlc_services_discovery.h>
 
 /* NSInteger only appeared with the 10.5 SDK; the 10.4 toolchain needs the
  * historical definitions (32-bit only, which is all 10.4 GUIs ever were) */
@@ -115,6 +116,15 @@ typedef float CGFloat;
     BOOL podcastBarVisible;
     NSString *searchString;
     NSString *searchStringFolded;   /* accent/case-folded, see vlc_strfold */
+    NSString *pendingSearchString;
+    NSTimer *searchDelayTimer;
+    NSMutableSet *searchExpandedItemIds;
+    NSMutableSet *searchScopeItemIds;
+    NSUInteger searchGeneration;
+    NSUInteger searchLoadRetries;
+    BOOL searchUsesMemoryIndex;
+    uint64_t searchBucketMasks[SD_POWERVLC_LIBRARY_VIEW_COUNT];
+    NSArray *searchBranchMatches;
     NSMutableArray *visibleColumns; /* playlist column identifiers */
 
     /* embedded video */
@@ -124,7 +134,9 @@ typedef float CGFloat;
      * dessus toute seule (transitions de menus, engagement matériel…). */
     BOOL playlistViewWanted;
     NSWindow *fsVideoWindow;
-    BOOL videoActive;
+    /* DVD/BD-J transitions can open the replacement vout before closing the
+     * previous one. Both may briefly own the embedded container. */
+    NSUInteger videoViewUsers;
     /* Chantier F — fenêtre ENFANT hébergeant la vidéo intégrée (option
      * legacy-macosx-childvideo). Elle existe tant que la vidéo est active et
      * son numéro CGS ne change JAMAIS : le plein écran n'est plus qu'un
@@ -135,6 +147,10 @@ typedef float CGFloat;
     NSWindow *videoHostWindow;
     BOOL videoHostFullscreen;
     NSRect videoHostWindowedFrame;
+    /* A private HDMI mode change reaches CoreGraphics before AppKit rebuilds
+     * +[NSScreen screens].  Keep the fullscreen request pending instead of
+     * accidentally falling back to the built-in display during that gap. */
+    unsigned stereoFullscreenScreenRetries;
     /* Cadre RÉEL de la vue vidéo juste avant le passage en plein écran, pour le
      * restituer tel quel au retour. Le cadre du splitView, utilisé jusqu'ici,
      * avait entre-temps rétréci (mesuré : 1024x576 au démarrage de la vidéo,
@@ -148,6 +164,7 @@ typedef float CGFloat;
      * the playlist directly during drawing. */
     NSMutableArray *items;
     NSMutableSet *expandedItemIds;       /* ids kept open across reloads */
+    NSMutableDictionary *playlistScrollPositions; /* sidebar key -> NSPoint */
     NSMutableDictionary *artworkCache;   /* arturl -> NSImage */
     NSArray *draggedItems;               /* snapshot dicts being dragged
                                           * (VLCPLModel _draggedItems port) */
@@ -157,10 +174,18 @@ typedef float CGFloat;
     NSMutableArray *sidebarItems;
     NSMutableArray *networkLocations;   /* dictionaries for live network roots */
     NSMutableSet *activatedServices;     /* sd names already added */
+    NSMutableDictionary *deviceTransferPanels; /* service -> panel/table/history */
     int sidebarSelection;                /* selected row in sidebarItems */
     NSTimer *updateTimer;
     BOOL playing;
     int currentItemId;      /* playlist id of the playing item (bold row) */
+    NSString *currentItemURI; /* matches visible copies of Random tracks */
+    int currentRandomScopeId; /* parent branch of the active Random action */
+    int pendingRandomPlaybackItemId; /* lazy global Random XSPF being loaded */
+    int pendingRandomBranchItemId; /* canonical letter/artist chosen at click */
+    int pendingRandomRevealItemId; /* canonical result to expand and select */
+    int pendingVisibleNodePlaybackItemId; /* node whose first displayed leaf
+                                          * is being resolved lazily */
     int refreshTicks;       /* safety-net counter for snapshot rebuilds */
     int lastSeenChangeCount;/* playlist change burst detection */
     int burstTicks;         /* ticks since the current burst started */
@@ -182,6 +207,16 @@ typedef float CGFloat;
     int64_t resumeLastTime;              /* µs, last observed position */
     int64_t resumeLastLength;            /* µs */
     BOOL resumeHandled;                  /* offer already made for input */
+    NSTimer *resumeOSDTimer;
+    NSString *resumeOSDURI;              /* input owning the pending choice */
+    int64_t resumeOSDTarget;             /* µs */
+    NSTimeInterval resumeOSDDeadline;    /* starts once the vout exists */
+    NSTimeInterval resumeOSDLastDraw;
+    int resumeOSDLastCountdown;
+    BOOL resumeOSDContinueSelected;
+    BOOL resumeOSDAutoCloseCancelled;
+    NSPoint resumeOSDLastMouseLocation;
+    BOOL resumeOSDHasMouseLocation;
 
     /* Pause the video playback when minimized */
     BOOL pausedByMiniaturize;
@@ -223,6 +258,8 @@ typedef float CGFloat;
     /* Black screens in fullscreen */
     NSMutableArray *fsBlackWindows;
 }
+
+- (void)reloadPowerVLCDevices;
 
 - (id)initWithCore:(VLCLegacyCoreInteraction *)interaction;
 
@@ -283,5 +320,13 @@ typedef float CGFloat;
 - (void)setVideoViewSizeFromValue:(NSValue *)size;
 - (void)setVideoFullscreenFromNumber:(NSNumber *)fullscreen;
 - (void)setVideoAboveOthersFromNumber:(NSNumber *)above;
+
+/* Consumes navigation keys while the resume choice is drawn in the video
+ * OSD, before Escape/fullscreen and the regular hotkey engine see them. */
+- (BOOL)handleResumeOSDKey:(unsigned int)key;
+/* Any input while the resume question is pending gives the user unlimited
+ * time to choose. Kept public because the legacy vout windows route keyboard
+ * events through misc.m rather than through this controller. */
+- (void)noteResumeOSDUserInteraction;
 
 @end

@@ -41,6 +41,7 @@ public:
     void importPlaylistWidget( PlaylistWidget * );
     bool hasPlaylistWidget();
     bool addNetworkLocation( const QString& mrl );
+    void reloadPowerDevices();
 
 protected:
     void hideEvent( QHideEvent * ) Q_DECL_OVERRIDE;

@@ -65,12 +65,10 @@
 #include <vlc_common.h>
 #include <vlc_fs.h>
 
-#if !defined(HAVE_ACCEPT4) || !defined HAVE_MKOSTEMP
 static inline void vlc_cloexec(int fd)
 {
     fcntl(fd, F_SETFD, FD_CLOEXEC | fcntl(fd, F_GETFD));
 }
-#endif
 
 int vlc_open (const char *filename, int flags, ...)
 {
@@ -224,14 +222,20 @@ char *vlc_getcwd (void)
 
 int vlc_dup (int oldfd)
 {
+    int newfd;
 #ifdef F_DUPFD_CLOEXEC
-    return fcntl (oldfd, F_DUPFD_CLOEXEC, 0);
-#else
-    int newfd = dup (oldfd);
+    newfd = fcntl (oldfd, F_DUPFD_CLOEXEC, 0);
+    if (newfd != -1 || errno != EINVAL)
+        return newfd;
+
+    /* The Tiger SDK exposes F_DUPFD_CLOEXEC, but Jaguar's kernel does not
+     * implement it and returns EINVAL.  Fall back to the portable sequence
+     * instead of reporting a false connection failure to Lua extensions. */
+#endif
+    newfd = dup (oldfd);
     if (newfd != -1)
         vlc_cloexec(newfd);
     return newfd;
-#endif
 }
 
 int vlc_pipe (int fds[2])

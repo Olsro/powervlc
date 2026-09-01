@@ -1,0 +1,28 @@
+--- a/py-compile
++++ b/py-compile
+@@ -116,7 +116,11 @@
+ fi
+ 
+ $PYTHON -c "
+-import sys, os, py_compile, imp
++import sys, os, py_compile
++try:
++    import imp
++except ImportError:
++    import importlib.util as imp
+ 
+ files = '''$files'''
+ 
+@@ -137,7 +141,11 @@
+ sys.stdout.write('\n')" || exit $?
+ 
+ $PYTHON -O -c "
+-import sys, os, py_compile, imp
++import sys, os, py_compile
++try:
++    import imp
++except ImportError:
++    import importlib.util as imp
+ 
+ # pypy does not use .pyo optimization
+ if hasattr(sys, 'pypy_translation_info'):

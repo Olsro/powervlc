@@ -1,0 +1,19 @@
+--- a/edge264/src/edge264.c
++++ b/edge264/src/edge264.c
+@@ -489,8 +489,15 @@ int edge264_get_frame(Edge264Decoder *dec, Edge264Frame *out, int borrow) {
+ 
+ 
+ void edge264_return_frame(Edge264Decoder *dec, void *return_arg) {
+-	if (dec != NULL)
++	if (dec != NULL) {
++		if (dec->n_threads)
++			pthread_mutex_lock(&dec->lock);
+ 		dec->output_frames &= ~(size_t)return_arg;
++		if (dec->n_threads) {
++			pthread_cond_broadcast(&dec->task_complete);
++			pthread_mutex_unlock(&dec->lock);
++		}
++	}
+ }
+ 
+ void edge264_release_frame(Edge264Decoder *dec, void *return_arg) {

@@ -304,6 +304,12 @@ static input_thread_t *Create( vlc_object_t *p_parent, input_item_t *p_item,
 
     /* Parse input options */
     input_item_ApplyOptions( VLC_OBJECT(p_input), p_item );
+    /* Determine this before taking p_item->lock below: the public helper
+     * takes that same lock.  Calling it from the locked initialization block
+     * would self-deadlock the lazy preparser and every worker queued behind
+     * it. */
+    const bool b_powervlc_lazy_index =
+        input_item_IsPowerVLCLazyIndex( p_item );
 
     p_input->obj.header = psz_header ? strdup( psz_header ) : NULL;
 
@@ -324,6 +330,9 @@ static input_thread_t *Create( vlc_object_t *p_parent, input_item_t *p_item,
     priv->i_rate = INPUT_RATE_DEFAULT;
     memset( &priv->bookmark, 0, sizeof(priv->bookmark) );
     TAB_INIT( priv->i_bookmark, priv->pp_bookmark );
+    priv->i_bookmark_title = 0;
+    priv->b_bookmarks_ready = false;
+    priv->b_bookmarks_loading = false;
     TAB_INIT( priv->i_attachment, priv->attachment );
     priv->attachment_demux = NULL;
     priv->p_sout   = NULL;
@@ -369,7 +378,17 @@ static input_thread_t *Create( vlc_object_t *p_parent, input_item_t *p_item,
             p_item->i_preparse_depth = -1;
     }
     else
-        p_input->obj.flags |= OBJECT_FLAGS_QUIET | OBJECT_FLAGS_NOINTERACT;
+    {
+        /* Compact PowerVLC indexes are real lazy directories.  Keeping their
+         * preparser input quiet makes failures completely opaque and, more
+         * importantly, also prevents the normal directory-input diagnostics
+         * from identifying an unavailable local cache.  They remain strictly
+         * non-interactive, but retain logs unlike ordinary metadata probes. */
+        if( b_powervlc_lazy_index )
+            p_input->obj.flags |= OBJECT_FLAGS_NOINTERACT;
+        else
+            p_input->obj.flags |= OBJECT_FLAGS_QUIET | OBJECT_FLAGS_NOINTERACT;
+    }
 
     /* Make sure the interaction option is honored */
     if( !var_InheritBool( p_input, "interact" ) )
@@ -1441,6 +1460,7 @@ static int Init( input_thread_t * p_input )
     if( !priv->b_preparsing )
     {
         StartTitle( p_input );
+        input_BookmarksInitialize( p_input );
         SetSubtitlesOptions( p_input );
         LoadSlaves( p_input );
         InitPrograms( p_input );
@@ -1544,6 +1564,8 @@ error:
 static void End( input_thread_t * p_input )
 {
     input_thread_private_t *priv = input_priv(p_input);
+
+    input_BookmarksPersist( p_input );
 
     /* We are at the end */
     input_ChangeState( p_input, END_S );
@@ -2325,6 +2347,7 @@ static bool Control( input_thread_t *p_input,
             if( i_title < 0 || i_title >= input_priv(p_input)->master->i_title )
                 break;
 
+            input_BookmarksSwitchTitle( p_input, i_title );
             es_out_SetTime( input_priv(p_input)->p_es_out, -1 );
             demux_Control( input_priv(p_input)->master->p_demux,
                            DEMUX_SET_TITLE, i_title );
@@ -2595,7 +2618,11 @@ static int UpdateTitleSeekpointFromDemux( input_thread_t *p_input )
 
     /* TODO event-like */
     if( demux_TestAndClearFlags( p_demux, INPUT_UPDATE_TITLE ) )
-        input_SendEventTitle( p_input, demux_GetTitle( p_demux ) );
+    {
+        int i_title = demux_GetTitle( p_demux );
+        input_BookmarksSwitchTitle( p_input, i_title );
+        input_SendEventTitle( p_input, i_title );
+    }
 
     if( demux_TestAndClearFlags( p_demux, INPUT_UPDATE_SEEKPOINT ) )
         input_SendEventSeekpoint( p_input, demux_GetTitle( p_demux ),
@@ -3050,6 +3077,33 @@ static input_source_t *InputSourceNew( input_thread_t *p_input,
         }
 
         demux_Control( in->p_demux, DEMUX_GET_PTS_DELAY, &in->i_pts_delay );
+
+        /* Finite network files are reopened from scratch at every playlist
+         * transition. AFP, SMB/SMB2, NFS, SFTP and FTP all establish a new
+         * server session here; HTTP/WebDAV may also need a fresh TCP/TLS
+         * connection when their pool cannot be reused. On a normal one-second
+         * network cache that setup can consume almost the entire parked audio
+         * tail and make an otherwise gapless join underrun.
+         *
+         * Keep one additional second for seekable, finite network files only.
+         * Live HTTP/radio, RTSP, UDP and other unbounded streams are excluded,
+         * as are users who explicitly selected zero network caching. */
+        bool b_network_file;
+        input_item_t *p_item = input_priv(p_input)->p_item;
+        vlc_mutex_lock( &p_item->lock );
+        b_network_file = p_item->b_net
+                      && p_item->i_type == ITEM_TYPE_FILE;
+        vlc_mutex_unlock( &p_item->lock );
+        vlc_tick_t i_length;
+        if( !b_slave && b_network_file && b_can_seek
+         && in->i_pts_delay > 0
+         && demux_Control( in->p_demux, DEMUX_GET_LENGTH, &i_length ) == 0
+         && i_length > 0 )
+        {
+            in->i_pts_delay += CLOCK_FREQ;
+            msg_Dbg( p_input, "network file: reserving one extra second "
+                     "for gapless hand-off" );
+        }
         if( in->i_pts_delay > INPUT_PTS_DELAY_MAX )
             in->i_pts_delay = INPUT_PTS_DELAY_MAX;
         else if( in->i_pts_delay < 0 )

@@ -5,15 +5,15 @@
 #USE_FFMPEG ?= 1
 
 ifndef USE_LIBAV
-FFMPEG_HASH=71fb6132637a2a430375c24afc381fff8b854fe7
-FFMPEG_MAJVERSION := 8.1
-FFMPEG_REVISION := 2
+FFMPEG_HASH=bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa
+FFMPEG_MAJVERSION := 9.0
+FFMPEG_REVISION := 1
 FFMPEG_VERSION := $(FFMPEG_MAJVERSION).$(FFMPEG_REVISION)
 # FFMPEG_VERSION := $(FFMPEG_MAJVERSION)
 FFMPEG_BRANCH=release/$(FFMPEG_MAJVERSION)
 FFMPEG_URL := https://ffmpeg.org/releases/ffmpeg-$(FFMPEG_VERSION).tar.xz
 FFMPEG_GITURL := https://code.ffmpeg.org/FFmpeg/FFmpeg.git
-FFMPEG_LAVC_MIN := 57.37.100
+FFMPEG_LAVC_MIN := 63.1.101
 USE_FFMPEG := 1
 else
 FFMPEG_HASH=e5afa1b556542fd7a52a0a9b409c80f2e6e1e9bb
@@ -24,7 +24,8 @@ endif
 
 FFMPEG_BASENAME := $(subst .,_,$(subst \,_,$(subst /,_,$(FFMPEG_HASH))))
 
-# bsf=vp9_superframe is needed to mux VP9 inside webm/mkv
+# vp9_superframe is needed to mux VP9 inside webm/mkv. dovi_split exposes
+# the base and enhancement layers of single-track Dolby Vision Profile 7.
 FFMPEGCONF = --prefix="$(PREFIX)" --enable-static --disable-shared \
 	--extra-ldflags="$(LDFLAGS)" \
 	--cc="$(CC)" \
@@ -42,7 +43,8 @@ FFMPEGCONF = --prefix="$(PREFIX)" --enable-static --disable-shared \
 	--disable-bsfs \
 	--disable-bzlib \
 	--disable-libvpx \
-	--enable-bsf=vp9_superframe
+	--enable-bsf=vp9_superframe \
+	--enable-bsf=dovi_split
 
 ifdef USE_FFMPEG
 FFMPEGCONF += \

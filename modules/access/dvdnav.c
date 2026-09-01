@@ -513,6 +513,29 @@ static int AccessDemuxOpen ( vlc_object_t *p_this )
     if( unlikely(psz_file == NULL) )
         return VLC_EGENERIC;
 
+    /* The dvdnav module also advertises the generic "file" shortcut, so it
+     * is probed for ordinary audio files. ProbeDVD() opens and reads the
+     * source path directly. On a slow or unhealthy iPod this needless probe
+     * can block the input thread for minutes before the real audio demuxer is
+     * even tried. Known audio suffixes cannot be DVD structures, so reject
+     * them without touching the filesystem. */
+    if( !forced )
+    {
+        static const char *const audio_extensions[] = {
+            ".aac", ".ac3", ".aif", ".aiff", ".alac", ".ape", ".dts",
+            ".flac", ".m4a", ".m4b", ".mp2", ".mp3", ".oga", ".ogg",
+            ".opus", ".wav", ".wma", NULL
+        };
+        const char *extension = strrchr( psz_file, '.' );
+        if( extension != NULL )
+            for( size_t i = 0; audio_extensions[i] != NULL; ++i )
+                if( !strcasecmp( extension, audio_extensions[i] ) )
+                {
+                    free( psz_file );
+                    return VLC_EGENERIC;
+                }
+    }
+
     /* Try some simple probing to avoid going through dvdnav_open too often */
     if( !forced && ProbeDVD( psz_file ) != VLC_SUCCESS )
         goto bailout;

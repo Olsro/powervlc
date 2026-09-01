@@ -34,7 +34,7 @@ Grab the latest build from the [**Releases page**](https://github.com/Olsro/powe
 | PC Windows 32-bit | `win32-nsis` or `win32-portable` | XP SP3 and later |
 | PC Windows 64-bit | `win64-nsis` or `win64-portable` | Vista and later |
 | PC Windows on ARM | `winarm64-nsis` or `winarm64-portable` | Windows 10 and later |
-| PC Linux x86_64 / i386 / aarch64 | `linux-*` (AppImage) | AppImage support required in your distro |
+| PC Linux x86_64 / i386 / aarch64 | `linux-*` (AppImage) | Any distro with AppImage support and glibc 2.27+ (for Ubuntu, it's 18.04 or newer) |
 
 The universal bundle runs on **every** supported Mac and architecture out of a single download — it is simply much bigger, since it carries all the slices at once. On a legacy Mac with a small disk, the per-architecture archive is the better pick.
 
@@ -44,18 +44,26 @@ Building it yourself is documented in [BUILD-POWERVLC.md](BUILD-POWERVLC.md).
 - Look-ahead cache & general optimisations to improve smoothness & compatibility on older hardware
 - SSL/TLS using gnuTLS with bundled certs on all platforms. Benefits particularily on outdated OS that has antique TLS and root certs.
 - Gapless playback
+- h.264 3D MVC (Blu-rays 3D), with menus. Frame packed 3D supported, can switch your screen automatically in 3D mode.
+- mp3/rockbox players & iPods syncing
+- Persistent bookmarks
+- Dolby Vision (HEVC Profiles 7 + 8.1), including FEL. When playing Dolby Vision content, PowerVLC will automatically use MacOS private system APIs to proceed the display mode switch.
+- CJK & special characters support on Windows (including XP)
+- CRT TV filters, with all the RetroArch CRT filters (including the very famous CRT-Royale which looks gorgeous)
+- Superfast organized multimedia library
 - Hardware GPU MPEG-2 acceleration with some Mac G3 ATI cards
 - Crystal HD (BCM70015) hardware decoding on macOS
 - Easy to play commercial Blu-Rays: just drag & drop the keydb.cfg into the window and it's enough to play a commercial blu-ray on all platforms supported by PowerVLC (excepted Mac OS X 10.2/10.3). If you don't intend to use Blu-Ray menus, PowerVLC can now select automatically the right obfuscated playlist defined in the keydb.cfg file. In general, a lot of efforts has been done in PowerVLC to make the playback of commercial discs as reliable & smooth as possible.
 - Heavily tuned, refined subtly, & bugs fixed
 - Technical backports & contrib updates from upstream VLC 4
-- Revamped extensions system where you can find complete content browsers to find content in a very optimised & lite way. Includes out of the box in-app optimised browsers for Invidious (YouTube), Jellyfin, Subsonic / Navidrome / Airsonic, and Podcast discovery.
+- Revamped extensions system where you can find complete content browsers to find content in a very optimised & lite way. Includes out of the box in-app optimised browsers for Invidious (YouTube), PeerTube (including SepiaSearch, format/audio/subtitle selection and downloads), Internet Archive (movies and audio), Jellyfin, Audiobookshelf, Subsonic / Navidrome / Airsonic, Soulseek (download and direct streaming, without chat or uploads), eMule/eD2k/Kad (direct EC control of a headless engine), and Podcast discovery.
 - Radios Browser: find stations all over the world, save your favourites in your library and play randomly a station to discover new ones
 - Web Browser add-on companion compatible with PowerFox, Basilisk (all kind of Legacy Firefox based on the XUL platform)
 - Picture-In-Picture mode (all window controls hidden) available on all OS (on Mac OS X 10.2 to 10.5, the title bar from the window can't be removed though)
 - Hover the seekbar to see a thumbnail of the targetted time
 - Clip creation mode: optimised & ergonic way to export a customised part of a content
 - Automatic cropping of the black bars (auto crop) depending on the content you're watching. No more manual adjustment and need to know the ratio of your files/IPTV streams by yourself.
+- Native CRT display filter for low-resolution and broadcast-era video, with resolution-aware scanlines, phosphor masks, halation, diffusion, and a vintage-anime preset. It is built for every PowerVLC platform and keeps subtitles outside the effect.
 - Mac OS X: can now show the album cover art on the main window + see chapters marks on the seekbar
 - AppImage on Linux, which contains all dependencies on its own so is very easy to use & very compatible with a large amount of different Linux distros
 - IPTV/adaptative streams handling improvements: define exactly the quality you want and select automatically the lowest/highest one as a favourite for the next streams you're going to watch
@@ -76,7 +84,7 @@ Building it yourself is documented in [BUILD-POWERVLC.md](BUILD-POWERVLC.md).
 
 - Use also some other *neo-retro* projects like Basilisk (10.7+) or PowerFox (10.4+) so you can find radio streams links to send on to PowerVLC from the modern web; enjoy synergies.
 - https://macintoshgarden.org/ is awesome, browsing this site from old Safari works really well and this site is very "old browsers" friendly.
-- If you have access to a Jellyfin server, the bundled Jellyfin extension browses it directly from PowerVLC — no browser needed at all.
+- If you have access to a Jellyfin or Audiobookshelf server, the bundled extensions browse it directly from PowerVLC — no browser needed at all.
 - Best way to share files to an old Mac from a modern machine is by setting up the AFP protocol with netatalk using Docker: https://netatalk.io/docker — PowerVLC was tested and it can stream files just fine directly from an AFP shared drive.
 - On G3 machines, forget about USB because USB1.1 is nightmarishly slow as hell. Though if you still own Firewire 400 devices, those will be fast, Firewire 400 is close to USB2.
 
@@ -90,6 +98,7 @@ Building it yourself is documented in [BUILD-POWERVLC.md](BUILD-POWERVLC.md).
 | [LINUX_REAL_HARDWARE_TESTS.md](LINUX_REAL_HARDWARE_TESTS.md) | Running it on an old Linux netbook, and the one setup step it needs |
 | [BUILD-POWERVLC.md](BUILD-POWERVLC.md) | Building every target, and the universal bundle |
 | [ACCELERATED-MPEG2-COMPATIBILITY.md](ACCELERATED-MPEG2-COMPATIBILITY.md) | Which GPUs get accelerated DVD playback, and why |
+| [CRT-FILTER.md](CRT-FILTER.md) | Using and tuning the built-in CRT display filter |
 | [MACOS_INCOMPATIBILITIES.md](MACOS_INCOMPATIBILITIES.md) | What each old macOS version can and cannot do |
 
 ## Get help
@@ -132,6 +141,11 @@ You can support this work by putting a star in this GitHub project, writing posi
 - Jean-Baptiste Kempf for being a source of inspiration & motivation. VLC is really one of the most important programs coming from the "french tech", using it since years and it was always installed on all of my computers as the must-have program that can play anything I throw at it.
 - All the contributors from all the open source contrib projects related to this project
 - All of my Patreons for supporting me financially
+
+## Legal
+For interoperability, some extensions may include the ability to access peer-2-peer networks and content discovery platforms so users can conveniently find copyright-free content. It's up to the user to download only rightfully owned content, and up to the platforms to moderate themselves and remove copyright-infringing content.
+
+PowerVLC just lists what the platform sends to it like a web browser does for a webpage, and just plays what the user wants it to play.
 
 ---
 

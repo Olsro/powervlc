@@ -40,6 +40,7 @@
 #include <sys/stat.h>
 
 #ifdef __APPLE__
+# include <CoreFoundation/CoreFoundation.h>
 # include <sys/param.h>
 # include <sys/ucred.h>
 # include <sys/mount.h>
@@ -54,6 +55,7 @@
 #include <vlc_atomic.h>
 #include <vlc_dialog.h>                     /* BD+/AACS warnings */
 #include <vlc_vout.h>                       /* vout_PutSubpicture / subpicture_t */
+#include <vlc_vout_osd.h>                   /* vout_OSDMessage */
 #include <vlc_url.h>                        /* vlc_path2uri */
 #include <vlc_iso_lang.h>
 #include <vlc_fs.h>
@@ -71,6 +73,8 @@
 #include <libbluray/meta_data.h>
 #include <libbluray/overlay.h>
 #include <libbluray/clpi_data.h>
+#include <libbluray/filesystem.h>
+#include <libbluray/mpls_data.h>
 
 #include "bluray_keydb.h"
 
@@ -85,6 +89,11 @@
                                 "that keeps one processor core busy for as "\
                                 "long as the disc is playing, so disabling "\
                                 "menus can matter on an older machine.")
+#define BD_LIVE_TEXT        N_("Allow BD-Live network access")
+#define BD_LIVE_LONGTEXT    N_("Allow Blu-ray Java applications to contact "\
+                                "Internet servers. Disabled by default for "\
+                                "privacy and because many BD-Live services "\
+                                "are obsolete; enabling it may delay menus.")
 #define BD_REGION_TEXT      N_("Region code")
 #define BD_REGION_LONGTEXT  N_("Blu-Ray player region code. "\
                                 "Some discs can be played only with a correct region code.")
@@ -119,6 +128,18 @@ static const char *const ppsz_region_code_text[] = {
 #define BD_CLUSTER_SIZE 6144
 #define BD_READ_SIZE    (10 * BD_CLUSTER_SIZE)
 
+/* Main and dependent M2TS files do not have proportional byte offsets when
+ * their elementary-stream bitrates vary.  Rio's 00945/00948 pair, for
+ * example, has identical PTS for all 3888 access units but the dependent
+ * offset runs as much as 14 MiB ahead of the whole-file byte ratio.  Keep a
+ * small timestamp lead and catch up in bounded bursts instead of waiting for
+ * that approximation to starve one eye. */
+#define MVC_TARGET_TIME_LEAD VLC_TICK_FROM_MS(750)
+#define MVC_FEED_BURST       (4 * BD_READ_SIZE)
+#define MVC_MAX_BYTE_LEAD    (UINT64_C(64) * 1024 * 1024)
+#define MVC_QUEUE_LIMIT      256
+#define MVC_TIMESTAMP_TOLERANCE VLC_TICK_FROM_MS(1)
+
 /* Callbacks */
 static int  blurayOpen (vlc_object_t *);
 static void blurayClose(vlc_object_t *);
@@ -131,6 +152,7 @@ vlc_module_begin ()
     set_subcategory(SUBCAT_INPUT_ACCESS)
     set_capability("access_demux", 200)
     add_bool("bluray-menu", true, BD_MENU_TEXT, BD_MENU_LONGTEXT, false)
+    add_bool("bluray-bd-live", false, BD_LIVE_TEXT, BD_LIVE_LONGTEXT, true)
     add_bool("bluray-forced-subs", true, BD_FORCED_SUBS_TEXT, BD_FORCED_SUBS_LONGTEXT, false)
     add_string("bluray-region", ppsz_region_code[REGION_DEFAULT], BD_REGION_TEXT, BD_REGION_LONGTEXT, false)
         change_string_list(ppsz_region_code, ppsz_region_code_text)
@@ -169,6 +191,11 @@ typedef struct bluray_overlay_t
     OverlayStatus       status;
     subpicture_region_t *p_regions;
     int                 width, height;
+    int                 stereo_offset;
+    int64_t             i_pts;
+    vlc_tick_t          i_update_date;
+    video_palette_t     palette;
+    bool                b_palette_valid;
 
     /* pointer to last subpicture updater.
      * used to disconnect this overlay from vout when:
@@ -182,6 +209,13 @@ struct  demux_sys_t
 {
     BLURAY              *bluray;
     bool                b_draining;
+    bool                b_bdj_session_held;
+    /* A target is armed only by PowerVLC's explicit time/position/chapter
+     * controls.  BD-J also emits BD_EVENT_SEEK for its own menu and play-item
+     * transitions, so deriving preroll from every PCR reset makes feature
+     * video leak underneath menu overlays. */
+    bool                b_user_seek_preroll;
+    vlc_tick_t          i_user_seek_preroll;
 
     /* Titles */
     unsigned int        i_title;
@@ -218,10 +252,21 @@ struct  demux_sys_t
     bool                b_fatal_error;
     bool                b_menu;
     bool                b_menu_open;
+    /* A newly opened disc may inherit a live HDMI 3D session and the exact
+     * same MVC vout format, in which case the display module is not reopened. */
+    bool                b_inherited_stereo_presentation;
+    bool                b_stereo_presentation_checked;
+    uint64_t            i_uo_mask;
     bool                b_bdj_overlay;      /* BD-J ARGB plane is up, see
                                              * blurayCacheInhibitUpdate() */
     bool                b_popup_available;
+    vlc_tick_t          i_last_ig_user_input;
+    vlc_tick_t          i_last_ig_activation;
     vlc_tick_t          i_still_end_time;
+    bool                b_bdj_still_codec_override;
+    bool                b_bdj_still_codec_restart_pending;
+    bool                b_had_input_codec;
+    char                *psz_codec_before_bdj_still;
 
     vlc_mutex_t         bdj_overlay_lock; /* used to lock BD-J overlay open/close while overlays are being sent to vout */
 
@@ -236,8 +281,27 @@ struct  demux_sys_t
     es_out_t            *p_esc_out;
     bool                b_spu_enable;       /* enabled / disabled */
     vlc_demux_chained_t *p_parser;
+    vlc_demux_chained_t *p_mvc_parser;      /* stereoscopic extension TS */
+    es_out_t            *p_mvc_out;         /* filters the extension to PID 0x1012 */
+    BD_FILE_H           *p_mvc_file;
+    int                 i_mvc_sub_path;
+    int                 i_mvc_clip;
+    uint64_t            i_mvc_main_size;
+    uint64_t            i_mvc_clip_size;
+    uint64_t            i_mvc_main_read;
+    uint64_t            i_mvc_clip_read;
+    bool                b_mvc_feed_catching_up;
     bool                b_flushed;
     bool                b_pl_playing;       /* true when playing playlist */
+    bool                b_have_playitem;    /* the first item establishes the
+                                             * input clock; later ones join clips */
+    bool                b_playitem_reset_pending; /* suppress the duplicate
+                                                   * discontinuity event in
+                                                   * the same read batch */
+    int                 i_playitem_seen_in_batch; /* libbluray can enqueue the
+                                                   * same PLAYITEM twice */
+    bool                b_mvc_playlist_handoff; /* keep the HDMI 3D vout while
+                                                 * two MVC playlists join */
     bool                b_cache_inhibited;  /* look-ahead cache, see blurayCacheInhibitUpdate() */
 
     /* stream input */
@@ -251,6 +315,42 @@ struct  demux_sys_t
 #endif
 };
 
+/* libbluray embeds one process-wide JVM and its Java bridge keeps process-wide
+ * static state (nativePointer, registered native methods and action manager).
+ * An input can be opened while the preceding input is still being destroyed,
+ * so serialize complete BD-J lifetimes rather than merely individual calls. */
+static vlc_mutex_t bdj_session_lock = VLC_STATIC_MUTEX;
+static vlc_cond_t bdj_session_wait = VLC_STATIC_COND;
+static bool bdj_session_active = false;
+
+static void blurayAcquireBdjSession(demux_t *p_demux)
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+
+    vlc_mutex_lock(&bdj_session_lock);
+    while (bdj_session_active) {
+        msg_Dbg(p_demux, "waiting for the previous BD-J session to shut down");
+        vlc_cond_wait(&bdj_session_wait, &bdj_session_lock);
+    }
+    bdj_session_active = true;
+    p_sys->b_bdj_session_held = true;
+    vlc_mutex_unlock(&bdj_session_lock);
+}
+
+static void blurayReleaseBdjSession(demux_t *p_demux)
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+
+    if (!p_sys->b_bdj_session_held)
+        return;
+
+    vlc_mutex_lock(&bdj_session_lock);
+    p_sys->b_bdj_session_held = false;
+    bdj_session_active = false;
+    vlc_cond_signal(&bdj_session_wait);
+    vlc_mutex_unlock(&bdj_session_lock);
+}
+
 /*
  * Local ES index storage
  */
@@ -261,6 +361,59 @@ typedef struct
     int i_next_block_flags;
     bool b_recyling;
 } es_pair_t;
+
+/* MVC base and dependent views are carried as separate PES streams in an
+ * SSIF/M2TS.  The decoder must receive the NAL units belonging to the same
+ * access unit together, just as a demuxer would deliver a single AVC stream. */
+typedef struct
+{
+    block_t *first;
+    block_t **last;
+    unsigned count;
+} mvc_block_queue_t;
+
+static void mvcQueueInit(mvc_block_queue_t *queue)
+{
+    queue->first = NULL;
+    queue->last = &queue->first;
+    queue->count = 0;
+}
+
+static void mvcQueueRelease(mvc_block_queue_t *queue)
+{
+    block_ChainRelease(queue->first);
+    mvcQueueInit(queue);
+}
+
+static void mvcQueuePush(mvc_block_queue_t *queue, block_t *block)
+{
+    if (block->p_next != NULL)
+        block = block_ChainGather(block);
+    if (block == NULL)
+        return;
+    block->p_next = NULL;
+    *queue->last = block;
+    queue->last = &block->p_next;
+    queue->count++;
+}
+
+static block_t *mvcQueuePop(mvc_block_queue_t *queue)
+{
+    block_t *block = queue->first;
+    if (block == NULL)
+        return NULL;
+    queue->first = block->p_next;
+    block->p_next = NULL;
+    queue->count--;
+    if (queue->first == NULL)
+        queue->last = &queue->first;
+    return block;
+}
+
+static vlc_tick_t mvcBlockDate(const block_t *block)
+{
+    return block->i_dts != VLC_TICK_INVALID ? block->i_dts : block->i_pts;
+}
 
 static bool es_pair_Add(vlc_array_t *p_array, const es_format_t *p_fmt,
                         es_out_id_t *p_es)
@@ -414,6 +567,59 @@ static const char *DemuxGetUILanguage( char *psz_buffer, size_t i_size )
         return psz_buffer;
     }
 
+#ifdef __APPLE__
+    /* Finder-launched applications normally have no useful POSIX locale, and
+     * inherited shells can even provide C.UTF-8 while AppKit correctly uses
+     * French.  Ask the same native preference that macOS uses for the UI. */
+    /* CFLocaleCopyPreferredLanguages() was added after the 10.4 SDK.  The
+     * underlying AppleLanguages preference has existed since the first OS X
+     * releases and is also what Finder-launched applications use there. */
+    CFPropertyListRef language_pref = CFPreferencesCopyAppValue(
+        CFSTR("AppleLanguages"), kCFPreferencesCurrentApplication );
+    CFArrayRef languages = NULL;
+    if( language_pref != NULL )
+    {
+        if( CFGetTypeID( language_pref ) == CFArrayGetTypeID() )
+            languages = (CFArrayRef)language_pref;
+        else
+        {
+            CFRelease( language_pref );
+            language_pref = NULL;
+        }
+    }
+    if( languages != NULL )
+    {
+        if( CFArrayGetCount( languages ) > 0 )
+        {
+            CFStringRef preferred = CFArrayGetValueAtIndex( languages, 0 );
+            CFStringRef canonical =
+                CFLocaleCreateCanonicalLanguageIdentifierFromString(
+                    kCFAllocatorDefault, preferred );
+            char psz_locale[64];
+
+            if( canonical != NULL &&
+                CFStringGetCString( canonical, psz_locale, sizeof(psz_locale),
+                                    kCFStringEncodingUTF8 ) )
+            {
+                size_t i_len = 0;
+                while( isalpha( (unsigned char)psz_locale[i_len] ) )
+                    i_len++;
+                if( i_len >= 2 && i_len <= 3 && i_len < i_size )
+                {
+                    memcpy( psz_buffer, psz_locale, i_len );
+                    psz_buffer[i_len] = '\0';
+                    CFRelease( canonical );
+                    CFRelease( languages );
+                    return psz_buffer;
+                }
+            }
+            if( canonical != NULL )
+                CFRelease( canonical );
+        }
+        CFRelease( languages );
+    }
+#endif
+
 #ifdef _WIN32
     /* An empty environment does not mean "no preference" here: winvlc only
      * exports LANG when a language was picked by hand, and on "auto" gettext
@@ -476,12 +682,15 @@ static const char *DemuxGetLanguageCode( demux_t *p_demux, const char *psz_var )
  *****************************************************************************/
 static es_out_t *esOutNew(vlc_object_t*, es_out_t *, void *);
 static es_out_t *escape_esOutNew(vlc_object_t *, es_out_t *);
+static es_out_t *mvc_esOutNew(es_out_t *);
 
 static int   blurayControl(demux_t *, int, va_list);
 static int   blurayDemux(demux_t *);
 
 static void  blurayInitTitles(demux_t *p_demux, uint32_t menu_titles);
 static int   bluraySetTitle(demux_t *p_demux, int i_title);
+static bool  blurayIsBdjTitle(demux_t *p_demux);
+static void  bluraySetBdjStillDecoder(demux_t *p_demux, bool enable);
 
 static void  blurayOverlayProc(void *ptr, const BD_OVERLAY * const overlay);
 static void  blurayArgbOverlayProc(void *ptr, const BD_ARGB_OVERLAY * const overlay);
@@ -492,6 +701,10 @@ static int   onIntfEvent(vlc_object_t *, char const *,
                          vlc_value_t, vlc_value_t, void *);
 
 static void  blurayRestartParser(demux_t *p_demux, bool, bool);
+static void  blurayCloseMVCClip(demux_t *p_demux);
+static void  blurayOpenMVCClip(demux_t *p_demux, uint32_t clip);
+static void  blurayFeedMVC(demux_t *p_demux, size_t main_bytes);
+static void  bluraySeekMVC(demux_t *p_demux);
 static void  notifyDiscontinuityToParser( demux_sys_t *p_sys );
 
 
@@ -676,7 +889,11 @@ static void blurayReleaseVout(demux_t *p_demux)
             if (p_ov) {
                 vlc_mutex_lock(&p_ov->lock);
                 if (p_ov->i_channel != -1) {
-                    msg_Err(p_demux, "blurayReleaseVout: subpicture channel exists\n");
+                    /* A title transition can retire the current vout while a
+                     * BD-J graphics plane is still registered.  Flushing its
+                     * channel here is the normal hand-off to the replacement
+                     * vout, not a playback failure. */
+                    msg_Dbg(p_demux, "flushing Blu-ray subpicture channel before releasing vout");
                     vout_FlushSubpictureChannel(p_sys->p_vout, p_ov->i_channel);
                 }
                 p_ov->i_channel = -1;
@@ -724,6 +941,12 @@ static es_out_id_t * blurayCreateBackgroundUnlocked(demux_t *p_demux)
         goto out;
     }
 
+    /* A stalled playlist may already own the selected video slot even though
+     * it has never produced a frame.  Explicitly select the synthetic ES so
+     * the ARGB plane gets a vout; relying on automatic selection only works
+     * when the BD-J application has no playlist at all. */
+    es_out_Control(p_demux->out, ES_OUT_SET_ES, p_sys->p_dummy_video);
+
     block_t *p_block = block_Alloc(fmt.video.i_width * fmt.video.i_height *
                                    fmt.video.i_bits_per_pixel / 8);
     if (!p_block) {
@@ -731,15 +954,35 @@ static es_out_id_t * blurayCreateBackgroundUnlocked(demux_t *p_demux)
         goto out;
     }
 
-    // XXX TODO: what would be correct timestamp ???
-    p_block->i_dts = p_block->i_pts = mdate() + CLOCK_FREQ/25;
+    /* This is a demux timestamp, not a wall-clock deadline.  Using mdate()
+     * here injects the machine uptime into the shared Blu-ray input clock.
+     * A short-lived BD-J plane can be created between the title reset and
+     * the first real movie PCR (Angry Birds does this for roughly 30 ms),
+     * leaving all following movie pictures scheduled thousands of seconds
+     * away until the late-picture recovery eventually purges them.
+     *
+     * Stay on the current media timeline when one exists.  Immediately after
+     * a reset GET_CURRENT_PCR deliberately fails, so start the self-contained
+     * synthetic stream at VLC_TICK_0 instead.  The next authored PCR can then
+     * establish its own reference without inheriting machine uptime. */
+    vlc_tick_t i_background_pcr = VLC_TICK_0;
+    (void)es_out_Control(p_demux->out, ES_OUT_GET_CURRENT_PCR,
+                         &i_background_pcr);
+    const vlc_tick_t i_background_date =
+        i_background_pcr + CLOCK_FREQ / 25;
+    p_block->i_dts = p_block->i_pts = i_background_date;
 
     uint8_t *p = p_block->p_buffer;
     memset(p, 0, fmt.video.i_width * fmt.video.i_height);
     p += fmt.video.i_width * fmt.video.i_height;
     memset(p, 0x80, fmt.video.i_width * fmt.video.i_height / 2);
 
+    /* Establish a clock reference for the synthetic stream.  Cars 3 keeps a
+     * real but empty playlist selected, whose reset clock otherwise rejects
+     * this absolute timestamp as being far in the future. */
+    es_out_SetPCR(p_demux->out, i_background_pcr);
     es_out_Send(p_demux->out, p_sys->p_dummy_video, p_block);
+    es_out_SetPCR(p_demux->out, i_background_date);
 
  out:
     es_format_Clean(&fmt);
@@ -1050,6 +1293,20 @@ static int blurayOpen(vlc_object_t *object)
             return VLC_EGENERIC;
         }
 
+        /* Do not touch ordinary audio files while probing access-demux
+         * modules. On network libraries probeFile() adds several synchronous
+         * reads per track before the metadata reader is reached. */
+        static const char *const audio_extensions[] = {
+            ".aac", ".ac3", ".aif", ".aiff", ".alac", ".ape", ".dts",
+            ".flac", ".m4a", ".m4b", ".mp2", ".mp3", ".oga", ".ogg",
+            ".opus", ".wav", ".wma", NULL
+        };
+        const char *extension = strrchr(p_demux->psz_file, '.');
+        if (extension != NULL)
+            for (size_t i = 0; audio_extensions[i] != NULL; ++i)
+                if (!strcasecmp(extension, audio_extensions[i]))
+                    return VLC_EGENERIC;
+
         if (probeFile(p_demux->psz_file) != VLC_SUCCESS) {
             return VLC_EGENERIC;
         }
@@ -1061,7 +1318,12 @@ static int blurayOpen(vlc_object_t *object)
         return VLC_ENOMEM;
 
     p_sys->i_still_end_time = STILL_IMAGE_NOT_SET;
-
+    p_sys->i_last_ig_user_input = VLC_TICK_INVALID;
+    p_sys->i_last_ig_activation = VLC_TICK_INVALID;
+    p_sys->i_mvc_sub_path = -1;
+    p_sys->i_mvc_clip = -1;
+    p_sys->b_inherited_stereo_presentation =
+        var_InheritInteger(p_demux, "stereo3d-fullscreen-display") > 0;
     /* init demux info fields */
     p_demux->info.i_update    = 0;
     p_demux->info.i_title     = 0;
@@ -1307,6 +1569,12 @@ static int blurayOpen(vlc_object_t *object)
     psz_code = DemuxGetLanguageCode( p_demux, "menu-language" );
     bd_set_player_setting_str(p_sys->bluray, BLURAY_PLAYER_SETTING_MENU_LANG,  psz_code);
 
+    /* Network access by on-disc Java code is opt-in. Apart from avoiding
+     * unexpected third-party connections, this prevents dead BD-Live
+     * services from holding old menus on their loading screen indefinitely. */
+    bd_set_player_setting(p_sys->bluray, BLURAY_PLAYER_SETTING_NETWORK_ACCESS,
+                          var_InheritBool(p_demux, "bluray-bd-live"));
+
     /* Get disc metadata */
     p_sys->p_meta = bd_get_meta(p_sys->bluray);
     if (!p_sys->p_meta)
@@ -1352,8 +1620,10 @@ static int blurayOpen(vlc_object_t *object)
     if (p_sys->b_menu) {
 
         /* Register ARGB overlay handler for BD-J */
-        if (disc_info->num_bdj_titles)
+        if (disc_info->num_bdj_titles) {
+            blurayAcquireBdjSession(p_demux);
             bd_register_argb_overlay_proc(p_sys->bluray, p_demux, blurayArgbOverlayProc, NULL);
+        }
 
         /* libbluray will start playback from "First-Title" title */
         if (bd_play(p_sys->bluray) == 0)
@@ -1367,7 +1637,8 @@ static int blurayOpen(vlc_object_t *object)
         }
     }
 
-    p_sys->p_tf_out = timestamps_filter_es_out_New(p_demux->out);
+    p_sys->p_tf_out = timestamps_filter_es_out_New(p_demux->out,
+                                                    VLC_OBJECT(p_demux));
     if(unlikely(!p_sys->p_tf_out))
         goto error;
 
@@ -1385,6 +1656,20 @@ static int blurayOpen(vlc_object_t *object)
     if (unlikely(p_sys->p_out == NULL))
         goto error;
 
+    p_sys->p_mvc_out = mvc_esOutNew(p_sys->p_out);
+    if (unlikely(p_sys->p_mvc_out == NULL))
+        goto error;
+
+#if defined(__arm64__) || defined(__aarch64__)
+    /* Prefer a valid authored clock (needed for stable LPCM on Albator), but
+     * let the TS demuxer derive one when a playlist starts its PES timeline
+     * several seconds away from PCR (Dragons). */
+    var_Create(p_demux, "ts-trust-pcr", VLC_VAR_BOOL);
+    var_SetBool(p_demux, "ts-trust-pcr", true);
+    var_Create(p_demux, "ts-pcr-autofallback", VLC_VAR_BOOL);
+    var_SetBool(p_demux, "ts-pcr-autofallback", true);
+#endif
+
     p_sys->p_parser = vlc_demux_chained_New(VLC_OBJECT(p_demux), "ts", p_sys->p_out);
     if (!p_sys->p_parser) {
         msg_Err(p_demux, "Failed to create TS demuxer");
@@ -1399,6 +1684,14 @@ static int blurayOpen(vlc_object_t *object)
      * title is actually playing. */
     p_sys->b_cache_inhibited = true;
     es_out_Control(p_demux->out, ES_OUT_SET_VIDEO_CACHE_INHIBIT, true);
+
+    /* A Blu-ray presentation is one continuous display session even though
+     * libbluray replaces all video ESes between first-play clips, menus and
+     * titles. Tell the input core not to destroy its recyclable vout in those
+     * short no-ES gaps: on HDMI MVC that teardown also restores the 4K
+     * desktop and makes the projector leave 3D before the next clip exists. */
+    var_Create(p_demux->p_input, "bluray-disc-session", VLC_VAR_BOOL);
+    var_SetBool(p_demux->p_input, "bluray-disc-session", true);
 
     return VLC_SUCCESS;
 
@@ -1428,10 +1721,23 @@ static void blurayClose(vlc_object_t *object)
     demux_t *p_demux = (demux_t*)object;
     demux_sys_t *p_sys = p_demux->p_sys;
 
+    if (var_Type(p_demux->p_input, "bluray-disc-session") != 0)
+        var_SetBool(p_demux->p_input, "bluray-disc-session", false);
+
+    bluraySetBdjStillDecoder(p_demux, false);
+
     var_DelCallback( p_demux->p_input, "intf-event", onIntfEvent, p_demux );
     var_Destroy( p_demux->p_input, INPUT_POPUP_MENU_VAR );
 
     setTitleInfo(p_sys, NULL);
+
+    /* The extension file belongs to libbluray's disc object, so it must be
+     * closed before bd_close(). */
+    blurayCloseMVCClip(p_demux);
+    if (p_sys->p_mvc_out != NULL) {
+        es_out_Delete(p_sys->p_mvc_out);
+        p_sys->p_mvc_out = NULL;
+    }
 
     /*
      * Close libbluray first.
@@ -1441,6 +1747,7 @@ static void blurayClose(vlc_object_t *object)
     if (p_sys->bluray) {
         bd_close(p_sys->bluray);
     }
+    blurayReleaseBdjSession(p_demux);
 
 #ifdef __APPLE__
     /* After libbluray, which still had libaacs holding our interface. Exclusive
@@ -1549,6 +1856,63 @@ static void setStreamLang(demux_sys_t *p_sys, es_format_t *p_fmt)
     vlc_mutex_unlock(&p_sys->pl_info_lock);
 }
 
+static void setStreamVideoRate(demux_sys_t *p_sys, es_format_t *p_fmt)
+{
+    unsigned numerator = 0, denominator = 1;
+
+    vlc_mutex_lock(&p_sys->pl_info_lock);
+    const BLURAY_STREAM_INFO *p_stream = NULL;
+    if (p_sys->p_clip_info != NULL)
+    {
+        const BLURAY_CLIP_INFO *p_clip = p_sys->p_clip_info;
+        for (uint8_t i = 0; i < p_clip->video_stream_count; ++i)
+            if (p_clip->video_streams[i].pid == p_fmt->i_id)
+            {
+                p_stream = &p_clip->video_streams[i];
+                break;
+            }
+        for (uint8_t i = 0; p_stream == NULL &&
+             i < p_clip->sec_video_stream_count; ++i)
+            if (p_clip->sec_video_streams[i].pid == p_fmt->i_id)
+            {
+                p_stream = &p_clip->sec_video_streams[i];
+                break;
+            }
+    }
+
+    if (p_stream != NULL)
+        switch (p_stream->rate)
+        {
+            case BLURAY_VIDEO_RATE_24000_1001:
+                numerator = 24000; denominator = 1001; break;
+            case BLURAY_VIDEO_RATE_24:
+                numerator = 24; break;
+            case BLURAY_VIDEO_RATE_25:
+                numerator = 25; break;
+            case BLURAY_VIDEO_RATE_30000_1001:
+                numerator = 30000; denominator = 1001; break;
+            case BLURAY_VIDEO_RATE_50:
+                numerator = 50; break;
+            case BLURAY_VIDEO_RATE_60000_1001:
+                numerator = 60000; denominator = 1001; break;
+            default:
+                break;
+        }
+    vlc_mutex_unlock(&p_sys->pl_info_lock);
+
+    /* The MPEG-TS parser commonly rounds 24000/1001 to 24/1 before the vout
+     * is created.  That is harmless on a normal desktop, but it selects the
+     * distinct exact-24.000 private HDMI timing on Mavericks and forces a
+     * periodic cadence correction.  The clip declaration is authoritative
+     * for Blu-ray and preserves the fractional clock all the way to the HDMI
+     * mode selector. */
+    if (numerator != 0)
+    {
+        p_fmt->video.i_frame_rate = numerator;
+        p_fmt->video.i_frame_rate_base = denominator;
+    }
+}
+
 static int blurayGetStreamPID(demux_sys_t *p_sys, int i_stream_type, uint8_t i_stream_idx)
 {
     vlc_mutex_lock(&p_sys->pl_info_lock);
@@ -1578,6 +1942,16 @@ typedef struct
     bool b_disable_output;
     bool b_lowdelay;
     bool b_forced_subs; /* show forced captions of a hidden PG stream */
+    mvc_block_queue_t mvc_base;
+    mvc_block_queue_t mvc_dependent;
+    bool b_mvc_active;
+    bool b_mvc_expected;
+    bool b_mvc_base_right;
+    bool b_mvc_sync_warning;
+    bool b_mvc_discontinuity;
+    vlc_tick_t i_mvc_dependent_pts_offset;
+    vlc_tick_t i_mvc_base_date;
+    vlc_tick_t i_mvc_dependent_date;
     vlc_mutex_t lock;
     struct
     {
@@ -1585,6 +1959,25 @@ typedef struct
         int i_spu_pid;   /* Selected spu stream. -1 if default */
     } selected;
 } bluray_esout_sys_t;
+
+static void blurayResetMVCUnlocked(bluray_esout_sys_t *sys)
+{
+    mvcQueueRelease(&sys->mvc_base);
+    mvcQueueRelease(&sys->mvc_dependent);
+    sys->b_mvc_discontinuity = false;
+    sys->i_mvc_base_date = VLC_TICK_INVALID;
+    sys->i_mvc_dependent_date = VLC_TICK_INVALID;
+}
+
+static void bluraySetMVCFormat(es_format_t *fmt, bool base_right)
+{
+    fmt->i_cat = VIDEO_ES;
+    fmt->i_codec = VLC_CODEC_H264_MVC;
+    fmt->b_packetized = true;
+    fmt->video.multiview_mode = base_right
+                              ? MULTIVIEW_STEREO_FRAMEPACKED_RIGHT_BASE
+                              : MULTIVIEW_STEREO_FRAMEPACKED;
+}
 
 enum
 {
@@ -1597,6 +1990,11 @@ enum
     BLURAY_ES_OUT_CONTROL_ENABLE_LOW_DELAY,
     BLURAY_ES_OUT_CONTROL_DISABLE_LOW_DELAY,
     BLURAY_ES_OUT_CONTROL_RANDOM_ACCESS,
+    BLURAY_ES_OUT_CONTROL_RESTART_PRIMARY_VIDEO,
+    BLURAY_ES_OUT_CONTROL_RESTART_2D_AV,
+    BLURAY_ES_OUT_CONTROL_STOP_RETAINED_AV,
+    BLURAY_ES_OUT_CONTROL_SET_MVC_EXPECTED,
+    BLURAY_ES_OUT_CONTROL_GET_MVC_PROGRESS,
 };
 
 static es_out_id_t *bluray_esOutAdd(es_out_t *p_out, const es_format_t *p_fmt)
@@ -1606,6 +2004,7 @@ static es_out_id_t *bluray_esOutAdd(es_out_t *p_out, const es_format_t *p_fmt)
     demux_sys_t *p_sys = p_demux->p_sys;
     es_format_t fmt;
     bool b_select = false;
+    bool b_new_es = false;
 
     es_format_Copy(&fmt, p_fmt);
 
@@ -1618,7 +2017,18 @@ static es_out_id_t *bluray_esOutAdd(es_out_t *p_out, const es_format_t *p_fmt)
             fmt.video.i_frame_rate = 1; fmt.video.i_frame_rate_base = 1;
             fmt.b_packetized = true;
         }
+        else
+            setStreamVideoRate(p_sys, &fmt);
         b_select = (p_fmt->i_id == 0x1011);
+        /* PID 0x1011 is the AVC-compatible base view and 0x1012 is the MVC
+         * dependent view in an HDMV transport stream.  Once either side has
+         * exposed the pair, make the selected base ES use the MVC decoder. */
+        if (p_fmt->i_id == 0x1012 ||
+            (p_fmt->i_id == 0x1011 && esout_sys->b_mvc_expected))
+        {
+            esout_sys->b_mvc_active = true;
+            bluraySetMVCFormat(&fmt, esout_sys->b_mvc_base_right);
+        }
         fmt.i_priority = ES_PRIORITY_NOT_SELECTABLE;
         break;
     case AUDIO_ES:
@@ -1656,7 +2066,26 @@ static es_out_id_t *bluray_esOutAdd(es_out_t *p_out, const es_format_t *p_fmt)
         {
             msg_Info(p_demux, "Adding ES %d select %d", p_fmt->i_id, b_select);
             p_es = es_out_Add(esout_sys->p_dst_out, &fmt);
+            b_new_es = true;
             es_pair_Add(&esout_sys->es, &fmt, p_es);
+
+            if (p_fmt->i_id == 0x1012)
+            {
+                es_pair_t *p_base = getEsPairByPID(&esout_sys->es, 0x1011);
+                if (p_base != NULL && p_base->fmt.i_codec != VLC_CODEC_H264_MVC)
+                {
+                    es_format_t mvc_fmt;
+                    es_format_Copy(&mvc_fmt, &p_base->fmt);
+                    bluraySetMVCFormat(&mvc_fmt,
+                                       esout_sys->b_mvc_base_right);
+                    msg_Info(p_demux, "Blu-ray 3D MVC pair detected (PIDs 0x1011/0x1012)");
+                    es_out_Control(esout_sys->p_dst_out, ES_OUT_SET_ES_FMT,
+                                   p_base->p_es, &mvc_fmt);
+                    es_format_Clean(&p_base->fmt);
+                    es_format_Copy(&p_base->fmt, &mvc_fmt);
+                    es_format_Clean(&mvc_fmt);
+                }
+            }
         }
         else
         {
@@ -1682,6 +2111,17 @@ static es_out_id_t *bluray_esOutAdd(es_out_t *p_out, const es_format_t *p_fmt)
             es_out_Control(esout_sys->p_dst_out, ES_OUT_SET_ES, p_es);
         else
             es_out_Control(esout_sys->p_dst_out, ES_OUT_SET_ES_STATE, p_es, false);
+
+        /* A same-process disc change can recycle PID 0x1011 before the BD-J
+         * play item reaches its one-frame still. Merely changing the inherited
+         * codec preference does not replace that already-running VideoToolbox
+         * decoder, so explicitly recreate it while the override is active. */
+        if (p_fmt->i_id == 0x1011 &&
+            p_sys->b_bdj_still_codec_restart_pending) {
+            if (!b_new_es)
+                es_out_Control(esout_sys->p_dst_out, ES_OUT_RESTART_ES, p_es);
+            p_sys->b_bdj_still_codec_restart_pending = false;
+        }
     }
     es_format_Clean(&fmt);
 
@@ -1710,16 +2150,149 @@ static void bluray_esOutDeleteNonReusedESUnlocked(es_out_t *p_out)
         es_out_Del(esout_sys->p_dst_out, p_pair->p_es);
         es_pair_Remove(&esout_sys->es, p_pair);
     }
+
+    if (!esout_sys->b_mvc_expected &&
+        (getEsPairByPID(&esout_sys->es, 0x1011) == NULL ||
+         getEsPairByPID(&esout_sys->es, 0x1012) == NULL))
+    {
+        esout_sys->b_mvc_active = false;
+        blurayResetMVCUnlocked(esout_sys);
+    }
+}
+
+static block_t *blurayGatherMVCUnlocked(bluray_esout_sys_t *sys)
+{
+    block_t *outputs = NULL;
+    block_t **last = &outputs;
+
+    while (sys->mvc_base.first != NULL && sys->mvc_dependent.first != NULL)
+    {
+        vlc_tick_t base_date = mvcBlockDate(sys->mvc_base.first);
+        vlc_tick_t dependent_date = mvcBlockDate(sys->mvc_dependent.first);
+
+        if (base_date != VLC_TICK_INVALID && dependent_date != VLC_TICK_INVALID &&
+            (base_date - dependent_date > MVC_TIMESTAMP_TOLERANCE ||
+             dependent_date - base_date > MVC_TIMESTAMP_TOLERANCE))
+        {
+            mvc_block_queue_t *older = base_date < dependent_date
+                                     ? &sys->mvc_base : &sys->mvc_dependent;
+            block_Release(mvcQueuePop(older));
+            /* Skipping either view breaks MVC inter-picture dependencies.
+             * Flush the decoder on the first pair where the two timelines
+             * meet again, rather than letting the missing reference poison
+             * every picture until the next playlist. */
+            sys->b_mvc_discontinuity = true;
+            if (!sys->b_mvc_sync_warning)
+            {
+                msg_Warn(sys->p_obj, "discarding an unmatched Blu-ray MVC "
+                         "access unit: base date %"PRId64", dependent date "
+                         "%"PRId64" (delta %"PRId64" us, dropped %s, "
+                         "queued %u/%u)",
+                         base_date, dependent_date,
+                         base_date - dependent_date,
+                         older == &sys->mvc_base ? "base" : "dependent",
+                         sys->mvc_base.count, sys->mvc_dependent.count);
+                sys->b_mvc_sync_warning = true;
+            }
+            continue;
+        }
+
+        block_t *base = mvcQueuePop(&sys->mvc_base);
+        block_t *dependent = mvcQueuePop(&sys->mvc_dependent);
+        base->i_flags |= dependent->i_flags;
+        if (sys->b_mvc_discontinuity)
+        {
+            base->i_flags |= BLOCK_FLAG_DISCONTINUITY;
+            sys->b_mvc_discontinuity = false;
+        }
+        base->p_next = dependent;
+        block_t *stereo = block_ChainGather(base);
+        if (stereo == NULL)
+            continue;
+        *last = stereo;
+        last = &stereo->p_next;
+    }
+
+    /* A corrupt playlist must not grow queues indefinitely.  A normal MVC
+     * stream stays below the H.264 reorder depth and never reaches this. */
+    while (sys->mvc_base.count > MVC_QUEUE_LIMIT)
+    {
+        block_Release(mvcQueuePop(&sys->mvc_base));
+        sys->b_mvc_discontinuity = true;
+    }
+    while (sys->mvc_dependent.count > MVC_QUEUE_LIMIT)
+    {
+        block_Release(mvcQueuePop(&sys->mvc_dependent));
+        sys->b_mvc_discontinuity = true;
+    }
+
+    return outputs;
 }
 
 static int bluray_esOutSend(es_out_t *p_out, es_out_id_t *p_es, block_t *p_block)
 {
     bluray_esout_sys_t *esout_sys = (bluray_esout_sys_t *)p_out->p_sys;
+    block_t *mvc_output = NULL;
+    es_out_id_t *mvc_es = NULL;
     vlc_mutex_lock(&esout_sys->lock);
 
-    bluray_esOutDeleteNonReusedESUnlocked(p_out);
-
     es_pair_t *p_pair = getEsPairByES(&esout_sys->es, p_es);
+#if defined(__APPLE__) && defined(__aarch64__)
+    /* The primary and dependent M2TS files are parsed on independent worker
+     * threads.  On Apple Silicon the primary parser can consume its input
+     * more than twenty seconds ahead of the dependent parser in a fraction
+     * of a second (Raiponce 00056.mpls).  The generic queue limit then drops
+     * MVC access units, which looks like an instantly skipped or frozen
+     * trailer.
+     *
+     * Briefly yield the primary parser only when its decoded timestamp is
+     * genuinely ahead and its pairing queue is already deep.  Releasing the
+     * mutex lets the dependent parser publish the missing units.  The wait
+     * is bounded so a menu jump or malformed dependent stream can never
+     * deadlock parser teardown.  This is parser back-pressure, not the old
+     * NVIDIA per-input-block throttle that starved interleaved audio. */
+    if (p_pair != NULL && p_pair->fmt.i_id == 0x1011 &&
+        esout_sys->b_mvc_active)
+    {
+        for (unsigned wait = 0; wait < 100; ++wait)
+        {
+            const bool dependent_behind =
+                esout_sys->i_mvc_base_date != VLC_TICK_INVALID &&
+                (esout_sys->i_mvc_dependent_date == VLC_TICK_INVALID ||
+                 esout_sys->i_mvc_dependent_date + MVC_TARGET_TIME_LEAD <
+                     esout_sys->i_mvc_base_date);
+            /* During HDMI frame-packing setup the two latest timestamps can
+             * be only a few frames apart while the primary parser has still
+             * accumulated hundreds of same-timestamp/sliced blocks and the
+             * dependent queue is empty. Queue imbalance is therefore the
+             * authoritative pressure signal; the timestamp test additionally
+             * covers a non-empty but genuinely lagging dependent queue. */
+            const bool unpaired_primary =
+                esout_sys->mvc_base.count >= 64 &&
+                esout_sys->mvc_dependent.count == 0;
+            if (!unpaired_primary &&
+                (esout_sys->mvc_base.count < 64 || !dependent_behind))
+                break;
+
+            vlc_mutex_unlock(&esout_sys->lock);
+            msleep(VLC_TICK_FROM_MS(10));
+            vlc_mutex_lock(&esout_sys->lock);
+            p_pair = getEsPairByES(&esout_sys->es, p_es);
+            if (p_pair == NULL || p_pair->fmt.i_id != 0x1011 ||
+                !esout_sys->b_mvc_active)
+                break;
+        }
+    }
+#endif
+    /* The dependent MVC parser is deliberately primed before the primary
+     * parser at a play-item boundary.  It must not finalize the shared ES
+     * recycling pass: doing so deletes PID 0x1011 while it is merely waiting
+     * for the new primary PMT, then recreates the decoder after the only
+     * dependent still-picture AU has already passed.  The first primary (or
+     * any ordinary non-dependent) packet remains responsible for cleanup. */
+    if (p_pair == NULL || p_pair->fmt.i_id != 0x1012)
+        bluray_esOutDeleteNonReusedESUnlocked(p_out);
+
     if(p_pair && p_pair->i_next_block_flags)
     {
         p_block->i_flags |= p_pair->i_next_block_flags;
@@ -1730,8 +2303,47 @@ static int bluray_esOutSend(es_out_t *p_out, es_out_id_t *p_es, block_t *p_block
         block_Release(p_block);
         p_block = NULL;
     }
+
+    if (p_block != NULL && p_pair != NULL && esout_sys->b_mvc_active &&
+        (p_pair->fmt.i_id == 0x1011 || p_pair->fmt.i_id == 0x1012))
+    {
+        if (p_pair->fmt.i_id == 0x1012 &&
+            esout_sys->i_mvc_dependent_pts_offset != 0) {
+            if (p_block->i_pts != VLC_TICK_INVALID)
+                p_block->i_pts -= esout_sys->i_mvc_dependent_pts_offset;
+            if (p_block->i_dts != VLC_TICK_INVALID)
+                p_block->i_dts -= esout_sys->i_mvc_dependent_pts_offset;
+        }
+        vlc_tick_t date = mvcBlockDate(p_block);
+        if (date != VLC_TICK_INVALID)
+        {
+            if (p_pair->fmt.i_id == 0x1011)
+                esout_sys->i_mvc_base_date = date;
+            else
+                esout_sys->i_mvc_dependent_date = date;
+        }
+        mvcQueuePush(p_pair->fmt.i_id == 0x1011 ? &esout_sys->mvc_base
+                                                : &esout_sys->mvc_dependent,
+                     p_block);
+        p_block = NULL;
+        mvc_output = blurayGatherMVCUnlocked(esout_sys);
+        es_pair_t *base = getEsPairByPID(&esout_sys->es, 0x1011);
+        mvc_es = base != NULL ? base->p_es : NULL;
+    }
     vlc_mutex_unlock(&esout_sys->lock);
-    return (p_block) ? es_out_Send(esout_sys->p_dst_out, p_es, p_block) : VLC_SUCCESS;
+
+    int result = VLC_SUCCESS;
+    while (mvc_output != NULL)
+    {
+        block_t *next = mvc_output->p_next;
+        mvc_output->p_next = NULL;
+        if (mvc_es != NULL)
+            result = es_out_Send(esout_sys->p_dst_out, mvc_es, mvc_output);
+        else
+            block_Release(mvc_output);
+        mvc_output = next;
+    }
+    return (p_block) ? es_out_Send(esout_sys->p_dst_out, p_es, p_block) : result;
 }
 
 static void bluray_esOutDel(es_out_t *p_out, es_out_id_t *p_es)
@@ -1840,12 +2452,82 @@ static int bluray_esOutControl(es_out_t *p_out, int i_query, va_list args)
         case BLURAY_ES_OUT_CONTROL_FLAG_DISCONTINUITY:
         {
             esout_sys->b_discontinuity = true;
+            blurayResetMVCUnlocked(esout_sys);
             i_ret = VLC_SUCCESS;
         } break;
 
         case BLURAY_ES_OUT_CONTROL_RANDOM_ACCESS:
         {
             esout_sys->b_restart_decoders_on_reuse = !va_arg(args, int);
+            i_ret = VLC_SUCCESS;
+        } break;
+
+        case BLURAY_ES_OUT_CONTROL_RESTART_PRIMARY_VIDEO:
+        {
+            es_pair_t *video = getEsPairByPID(&esout_sys->es, 0x1011);
+            i_ret = video != NULL
+                  ? es_out_Control(esout_sys->p_dst_out, ES_OUT_RESTART_ES,
+                                   video->p_es)
+                  : VLC_EGENERIC;
+        } break;
+
+        case BLURAY_ES_OUT_CONTROL_RESTART_2D_AV:
+        {
+            unsigned restarted = 0;
+
+            /* A chained TS parser is replaced at every non-MVC play item,
+             * but the Blu-ray ES proxy deliberately keeps tracks with the
+             * same PID alive.  ES_OUT_SET_ES_FMT only recreates their
+             * decoder when the next PMT happens to change the format.  VC-1
+             * clips normally reuse the exact same format, leaving both its
+             * packetizer and reference pictures from the preceding M2TS in
+             * place.  Hopper consequently corrupts the first GOP of every
+             * joined clip even though each M2TS decodes cleanly alone.
+             *
+             * Restart every selected audio/video decoder after the old TS
+             * parser has been joined.  The next PMT may recreate audio once
+             * more when the codec changes (AC-3/DTS), which is intentional;
+             * it then starts with the new clip's format and timestamps. */
+            for (size_t i = 0; i < vlc_array_count(&esout_sys->es); ++i)
+            {
+                es_pair_t *pair = vlc_array_item_at_index(&esout_sys->es, i);
+                if (pair->fmt.i_cat != VIDEO_ES && pair->fmt.i_cat != AUDIO_ES)
+                    continue;
+
+                es_out_Control(esout_sys->p_dst_out, ES_OUT_RESTART_ES,
+                               pair->p_es);
+                pair->i_next_block_flags |= BLOCK_FLAG_DISCONTINUITY;
+                restarted++;
+            }
+            msg_Dbg(esout_sys->p_obj, "restarted %u retained 2D Blu-ray A/V ES",
+                    restarted);
+            i_ret = VLC_SUCCESS;
+        } break;
+
+        case BLURAY_ES_OUT_CONTROL_STOP_RETAINED_AV:
+        {
+            unsigned stopped = 0;
+
+            /* At the first play item of a replacement playlist there can be
+             * a live decoder behind a recycled PID, although the new PMT has
+             * not arrived yet.  Updating that selected ES from H.264 to
+             * MPEG-2 is asynchronous in the input core; a one-frame menu can
+             * overtake the update and be submitted to the old decoder.  Tear
+             * selected A/V down first. bluray_esOutAdd() applies the new
+             * format and selects it again before forwarding any new block. */
+            for (size_t i = 0; i < vlc_array_count(&esout_sys->es); ++i)
+            {
+                es_pair_t *pair = vlc_array_item_at_index(&esout_sys->es, i);
+                if (pair->fmt.i_cat != VIDEO_ES && pair->fmt.i_cat != AUDIO_ES)
+                    continue;
+
+                es_out_Control(esout_sys->p_dst_out, ES_OUT_SET_ES_STATE,
+                               pair->p_es, false);
+                pair->i_next_block_flags |= BLOCK_FLAG_DISCONTINUITY;
+                stopped++;
+            }
+            msg_Dbg(esout_sys->p_obj, "stopped %u retained Blu-ray A/V ES "
+                    "before replacement playlist", stopped);
             i_ret = VLC_SUCCESS;
         } break;
 
@@ -1860,6 +2542,70 @@ static int bluray_esOutControl(es_out_t *p_out, int i_query, va_list args)
         case BLURAY_ES_OUT_CONTROL_DISABLE_LOW_DELAY:
         {
             esout_sys->b_lowdelay = (i_query == BLURAY_ES_OUT_CONTROL_ENABLE_LOW_DELAY);
+            i_ret = VLC_SUCCESS;
+        } break;
+
+        case BLURAY_ES_OUT_CONTROL_SET_MVC_EXPECTED:
+        {
+            const bool expected = va_arg(args, int);
+            const bool base_right = va_arg(args, int);
+            const vlc_tick_t dependent_pts_offset = va_arg(args, vlc_tick_t);
+            esout_sys->b_mvc_expected = expected;
+            esout_sys->b_mvc_base_right = base_right;
+            esout_sys->b_mvc_active = expected;
+            esout_sys->b_mvc_sync_warning = false;
+            blurayResetMVCUnlocked(esout_sys);
+            esout_sys->i_mvc_dependent_pts_offset = dependent_pts_offset;
+
+            /* Usually this is set before the main TS has advertised PID
+             * 0x1011. Also handle menu-driven playlist changes where the
+             * base decoder already exists. */
+            es_pair_t *base = getEsPairByPID(&esout_sys->es, 0x1011);
+            if (expected && base != NULL &&
+                base->fmt.i_codec != VLC_CODEC_H264_MVC)
+            {
+                es_format_t mvc_fmt;
+                es_format_Copy(&mvc_fmt, &base->fmt);
+                bluraySetMVCFormat(&mvc_fmt, base_right);
+                i_ret = es_out_Control(esout_sys->p_dst_out,
+                                       ES_OUT_SET_ES_FMT, base->p_es,
+                                       &mvc_fmt);
+                es_format_Clean(&base->fmt);
+                es_format_Copy(&base->fmt, &mvc_fmt);
+                es_format_Clean(&mvc_fmt);
+            }
+            else if (!expected && base != NULL &&
+                     base->fmt.i_codec == VLC_CODEC_H264_MVC)
+            {
+                /* A BD-J menu can jump directly from an MVC background to
+                 * a 2D AVC trailer while PID 0x1012 is still present in the
+                 * ES recycling table.  Leaving the selected base stream as
+                 * mvc1 makes Edge264 wait forever for the now-absent second
+                 * view: the input clock and seek bar advance over a frozen
+                 * last menu frame.  Restore the AVC-compatible base view as
+                 * soon as the MVC sub-path closes, before the new PMT reuses
+                 * PID 0x1011. */
+                es_format_t avc_fmt;
+                es_format_Copy(&avc_fmt, &base->fmt);
+                avc_fmt.i_codec = VLC_CODEC_H264;
+                avc_fmt.video.multiview_mode = MULTIVIEW_2D;
+                i_ret = es_out_Control(esout_sys->p_dst_out,
+                                       ES_OUT_SET_ES_FMT, base->p_es,
+                                       &avc_fmt);
+                es_format_Clean(&base->fmt);
+                es_format_Copy(&base->fmt, &avc_fmt);
+                es_format_Clean(&avc_fmt);
+            }
+            else
+                i_ret = VLC_SUCCESS;
+        } break;
+
+        case BLURAY_ES_OUT_CONTROL_GET_MVC_PROGRESS:
+        {
+            *va_arg(args, vlc_tick_t *) = esout_sys->i_mvc_base_date;
+            *va_arg(args, vlc_tick_t *) = esout_sys->i_mvc_dependent_date;
+            *va_arg(args, unsigned *) = esout_sys->mvc_base.count;
+            *va_arg(args, unsigned *) = esout_sys->mvc_dependent.count;
             i_ret = VLC_SUCCESS;
         } break;
 
@@ -1924,8 +2670,13 @@ static void bluray_esOutDestroy(es_out_t *p_out)
 {
     bluray_esout_sys_t *esout_sys = (bluray_esout_sys_t *)p_out->p_sys;
 
+    blurayResetMVCUnlocked(esout_sys);
     for (size_t i = 0; i < vlc_array_count(&esout_sys->es); ++i)
-        free(vlc_array_item_at_index(&esout_sys->es, i));
+    {
+        es_pair_t *pair = vlc_array_item_at_index(&esout_sys->es, i);
+        es_format_Clean(&pair->fmt);
+        free(pair);
+    }
     vlc_array_clear(&esout_sys->es);
     vlc_mutex_destroy(&esout_sys->lock);
     free(p_out->p_sys);
@@ -1961,10 +2712,140 @@ static es_out_t *esOutNew(vlc_object_t *p_obj, es_out_t *p_dst_out, void *priv)
     esout_sys->b_restart_decoders_on_reuse = true;
     esout_sys->b_lowdelay = false;
     esout_sys->b_forced_subs = var_InheritBool(p_obj, "bluray-forced-subs");
+    mvcQueueInit(&esout_sys->mvc_base);
+    mvcQueueInit(&esout_sys->mvc_dependent);
+    esout_sys->b_mvc_active = false;
+    esout_sys->b_mvc_expected = false;
+    esout_sys->b_mvc_base_right = false;
+    esout_sys->b_mvc_sync_warning = false;
+    esout_sys->b_mvc_discontinuity = false;
+    esout_sys->i_mvc_dependent_pts_offset = 0;
+    esout_sys->i_mvc_base_date = VLC_TICK_INVALID;
+    esout_sys->i_mvc_dependent_date = VLC_TICK_INVALID;
     esout_sys->selected.i_audio_pid = -1;
     esout_sys->selected.i_spu_pid = -1;
     vlc_mutex_init(&esout_sys->lock);
     return p_out;
+}
+
+/* The MVC extension clip is a complete transport stream with its own PAT,
+ * PMT and PCR, but only its dependent video elementary stream belongs in the
+ * primary playback graph. Forwarding the second PCR would make two demuxers
+ * fight over the same input clock; forwarding its other streams would also
+ * duplicate audio and subtitles. This small es_out keeps only PID 0x1012 and
+ * deliberately consumes all program/timing controls locally. */
+typedef struct
+{
+    es_out_id_t *dst;
+} mvc_es_id_t;
+
+typedef struct
+{
+    es_out_t *dst;
+} mvc_esout_sys_t;
+
+static es_out_id_t *mvc_esOutAdd(es_out_t *out, const es_format_t *fmt)
+{
+    mvc_esout_sys_t *sys = (mvc_esout_sys_t *)out->p_sys;
+    mvc_es_id_t *id = malloc(sizeof(*id));
+    if (unlikely(id == NULL))
+        return NULL;
+
+    id->dst = NULL;
+    if (fmt->i_cat == VIDEO_ES && fmt->i_id == 0x1012)
+        id->dst = es_out_Add(sys->dst, fmt);
+
+    /* The TS demuxer needs a stable non-NULL token even for discarded ES. */
+    return (es_out_id_t *)id;
+}
+
+static int mvc_esOutSend(es_out_t *out, es_out_id_t *es, block_t *block)
+{
+    mvc_esout_sys_t *sys = (mvc_esout_sys_t *)out->p_sys;
+    mvc_es_id_t *id = (mvc_es_id_t *)es;
+    if (id->dst != NULL)
+        return es_out_Send(sys->dst, id->dst, block);
+    block_Release(block);
+    return VLC_SUCCESS;
+}
+
+static void mvc_esOutDel(es_out_t *out, es_out_id_t *es)
+{
+    mvc_esout_sys_t *sys = (mvc_esout_sys_t *)out->p_sys;
+    mvc_es_id_t *id = (mvc_es_id_t *)es;
+    if (id->dst != NULL)
+        es_out_Del(sys->dst, id->dst);
+    free(id);
+}
+
+static int mvc_esOutControl(es_out_t *out, int query, va_list args)
+{
+    mvc_esout_sys_t *sys = (mvc_esout_sys_t *)out->p_sys;
+
+    switch (query)
+    {
+        case ES_OUT_GET_ES_STATE:
+        {
+            mvc_es_id_t *id = (mvc_es_id_t *)va_arg(args, es_out_id_t *);
+            bool *selected = va_arg(args, bool *);
+            *selected = id->dst != NULL;
+            return VLC_SUCCESS;
+        }
+        case ES_OUT_SET_ES_FMT:
+        {
+            mvc_es_id_t *id = (mvc_es_id_t *)va_arg(args, es_out_id_t *);
+            es_format_t *fmt = va_arg(args, es_format_t *);
+            return id->dst != NULL
+                 ? es_out_Control(sys->dst, ES_OUT_SET_ES_FMT, id->dst, fmt)
+                 : VLC_SUCCESS;
+        }
+        case ES_OUT_SET_ES_STATE:
+        {
+            mvc_es_id_t *id = (mvc_es_id_t *)va_arg(args, es_out_id_t *);
+            bool selected = va_arg(args, int);
+            return id->dst != NULL
+                 ? es_out_Control(sys->dst, ES_OUT_SET_ES_STATE,
+                                  id->dst, selected)
+                 : VLC_SUCCESS;
+        }
+        case ES_OUT_SET_ES_SCRAMBLED_STATE:
+        {
+            mvc_es_id_t *id = (mvc_es_id_t *)va_arg(args, es_out_id_t *);
+            bool scrambled = va_arg(args, int);
+            return id->dst != NULL
+                 ? es_out_Control(sys->dst, ES_OUT_SET_ES_SCRAMBLED_STATE,
+                                  id->dst, scrambled)
+                 : VLC_SUCCESS;
+        }
+        default:
+            return VLC_SUCCESS;
+    }
+}
+
+static void mvc_esOutDestroy(es_out_t *out)
+{
+    free(out->p_sys);
+    free(out);
+}
+
+static es_out_t *mvc_esOutNew(es_out_t *dst)
+{
+    es_out_t *out = malloc(sizeof(*out));
+    mvc_esout_sys_t *sys = malloc(sizeof(*sys));
+    if (unlikely(out == NULL || sys == NULL))
+    {
+        free(out);
+        free(sys);
+        return NULL;
+    }
+    sys->dst = dst;
+    out->p_sys = (es_out_sys_t *)sys;
+    out->pf_add = mvc_esOutAdd;
+    out->pf_send = mvc_esOutSend;
+    out->pf_del = mvc_esOutDel;
+    out->pf_control = mvc_esOutControl;
+    out->pf_destroy = mvc_esOutDestroy;
+    return out;
 }
 
 /*****************************************************************************
@@ -2014,7 +2895,9 @@ static int subpictureUpdaterValidate(subpicture_t *p_subpic,
         return 1;
     }
 
-    int res = p_overlay->status == Outdated;
+    int res = p_overlay->status == Outdated &&
+              (p_overlay->i_update_date <= VLC_TICK_INVALID ||
+               i_ts >= p_overlay->i_update_date);
 
     updater_unlock_overlay(p_upd_sys);
 
@@ -2051,12 +2934,14 @@ static void subpictureUpdaterUpdate(subpicture_t *p_subpic,
         *p_dst = subpicture_region_Copy(p_src);
         if (*p_dst == NULL)
             break;
+        (*p_dst)->i_stereo_offset = p_overlay->stereo_offset;
         p_dst = &(*p_dst)->p_next;
         p_src = p_src->p_next;
     }
     if (*p_dst != NULL)
         (*p_dst)->p_next = NULL;
     p_overlay->status = Displayed;
+    p_overlay->i_update_date = VLC_TICK_INVALID;
 
     updater_unlock_overlay(p_upd_sys);
 }
@@ -2119,13 +3004,36 @@ static int onMouseEvent(vlc_object_t *p_vout, const char *psz_var, vlc_value_t o
 {
     demux_t     *p_demux = (demux_t*)p_data;
     demux_sys_t *p_sys   = p_demux->p_sys;
+    int x = val.coords.x;
+    int y = val.coords.y;
     VLC_UNUSED(old);
     VLC_UNUSED(p_vout);
+    p_sys->i_last_ig_user_input = mdate();
+
+    /* PowerVLC exposes an MVC title to the vout as two vertically stacked
+     * 1920x1080 views.  Blu-ray interactive graphics, however, always use a
+     * single-view coordinate space.  Let either displayed eye drive the same
+     * BD-J button instead of sending the lower eye's out-of-range Y value. */
+    if (p_sys->i_mvc_sub_path >= 0)
+    {
+        int plane_height = 0;
+
+        vlc_mutex_lock(&p_sys->bdj_overlay_lock);
+        for (int plane = 0; plane < MAX_OVERLAY; ++plane)
+            if (p_sys->p_overlays[plane] != NULL &&
+                p_sys->p_overlays[plane]->height > plane_height)
+                plane_height = p_sys->p_overlays[plane]->height;
+        vlc_mutex_unlock(&p_sys->bdj_overlay_lock);
+
+        if (plane_height > 0 && y >= plane_height)
+            y %= plane_height;
+    }
 
     if (psz_var[6] == 'm')   //Mouse moved
-        bd_mouse_select(p_sys->bluray, -1, val.coords.x, val.coords.y);
+        bd_mouse_select(p_sys->bluray, -1, x, y);
     else if (psz_var[6] == 'c') {
-        bd_mouse_select(p_sys->bluray, -1, val.coords.x, val.coords.y);
+        bd_mouse_select(p_sys->bluray, -1, x, y);
+        p_sys->i_last_ig_activation = mdate();
         bd_user_input(p_sys->bluray, -1, BD_VK_MOUSE_ACTIVATE);
     } else {
         vlc_assert_unreachable();
@@ -2135,8 +3043,19 @@ static int onMouseEvent(vlc_object_t *p_vout, const char *psz_var, vlc_value_t o
 
 static int sendKeyEvent(demux_sys_t *p_sys, unsigned int key)
 {
-    if (bd_user_input(p_sys->bluray, -1, key) < 0)
-        return VLC_EGENERIC;
+    p_sys->i_last_ig_user_input = mdate();
+    if (key == BD_VK_ENTER)
+        p_sys->i_last_ig_activation = p_sys->i_last_ig_user_input;
+
+    /* Navigation keys belong to the disc for the whole Blu-ray session,
+     * including the short interval between two interactive pages. libbluray
+     * can reject an input while the new page is being assembled. Reporting
+     * that rejection to the input core makes it reinterpret the same arrow as
+     * generic playback control (up/down = volume, left/right = seek), which
+     * both changes playback state and displays an unsolicited OSD. The event
+     * was nevertheless addressed to a navigation-capable demux: consume it
+     * here even when the current HDMV/BD-J page cannot use it yet. */
+    (void)bd_user_input(p_sys->bluray, -1, key);
 
     return VLC_SUCCESS;
 }
@@ -2172,7 +3091,20 @@ static void blurayCloseOverlay(demux_t *p_demux, int plane)
         if (p_sys->p_overlays[i])
             return;
 
-    /* All overlays have been closed */
+    /* All overlays have been closed. A full-screen HDMV still no longer
+     * needs to keep the last video picture through decoder flushes, and the
+     * next feature may use the viewer's automatic crop again. */
+    if (p_sys->p_vout != NULL) {
+        vout_ChangeStaticFrameHold(p_sys->p_vout, false);
+        vout_ChangeInteractiveOverlay(p_sys->p_vout, false);
+    } else {
+        vout_thread_t *vout = input_GetVout(p_demux->p_input);
+        if (vout != NULL) {
+            vout_ChangeStaticFrameHold(vout, false);
+            vout_ChangeInteractiveOverlay(vout, false);
+            vlc_object_release(vout);
+        }
+    }
     blurayReleaseVout(p_demux);
 }
 
@@ -2199,6 +3131,7 @@ static void blurayActivateOverlay(demux_t *p_demux, int plane)
     if (ov->status >= Displayed && p_sys->p_vout) {
         ov->status = Outdated;
         vlc_mutex_unlock(&ov->lock);
+        vout_RefreshSubpicture(p_sys->p_vout);
         return;
     }
 
@@ -2209,6 +3142,7 @@ static void blurayActivateOverlay(demux_t *p_demux, int plane)
      */
     ov->status = ToDisplay;
     vlc_mutex_unlock(&ov->lock);
+
 }
 
 /**
@@ -2255,16 +3189,38 @@ static void blurayInitOverlay(demux_t *p_demux, int plane, int width, int height
     ov->width = width;
     ov->height = height;
     ov->i_channel = -1;
+    ov->i_update_date = VLC_TICK_INVALID;
 
     vlc_mutex_init(&ov->lock);
 
     p_sys->p_overlays[plane] = ov;
+
+    /* HDMV can retire and immediately recreate its video decoder between
+     * the final background picture and an infinite interactive still. Mark
+     * the active vout before that asynchronous teardown reaches it. Without
+     * the retained picture, focus changes are accepted by libbluray but the
+     * updated IG plane has nothing against which it can be recomposited.
+     * BD-J has its own synthetic-background path and does not use this hold. */
+    if (!p_sys->b_bdj_overlay && !p_sys->b_popup_available) {
+        vout_thread_t *vout = input_GetVout(p_demux->p_input);
+        if (vout != NULL) {
+            vout_ChangeStaticFrameHold(vout, true);
+            vlc_object_release(vout);
+        }
+    }
 }
 
 /*
  * This will draw to the overlay by adding a region to our region list
  * This will have to be copied to the subpicture used to render the overlay.
  */
+/* ARGB in word order -> byte order */
+#ifdef WORDS_BIG_ENDIAN
+# define ARGB_OVERLAY_CHROMA VLC_CODEC_ARGB
+#else
+# define ARGB_OVERLAY_CHROMA VLC_CODEC_BGRA
+#endif
+
 static void blurayDrawOverlay(demux_t *p_demux, const BD_OVERLAY* const eventov)
 {
     demux_sys_t *p_sys = p_demux->p_sys;
@@ -2279,42 +3235,57 @@ static void blurayDrawOverlay(demux_t *p_demux, const BD_OVERLAY* const eventov)
      */
     vlc_mutex_lock(&ov->lock);
 
+    const bool ig_canvas = eventov->plane == BD_OVERLAY_IG;
+    const int reg_x = ig_canvas ? 0 : eventov->x;
+    const int reg_y = ig_canvas ? 0 : eventov->y;
+    const unsigned reg_w = ig_canvas ? ov->width : eventov->w;
+    const unsigned reg_h = ig_canvas ? ov->height : eventov->h;
+    const vlc_fourcc_t reg_chroma = ig_canvas ? VLC_CODEC_YUVA
+                                              : VLC_CODEC_YUVP;
+
+    if (eventov->palette != NULL) {
+        ov->palette.i_entries = 256;
+        for (int i = 0; i < 256; ++i) {
+            ov->palette.palette[i][0] = eventov->palette[i].Y;
+            ov->palette.palette[i][1] = eventov->palette[i].Cb;
+            ov->palette.palette[i][2] = eventov->palette[i].Cr;
+            ov->palette.palette[i][3] = eventov->palette[i].T;
+        }
+        ov->b_palette_valid = true;
+    }
+
     /* Find a region to update */
-    subpicture_region_t **pp_reg = &ov->p_regions;
     subpicture_region_t *p_reg = ov->p_regions;
     subpicture_region_t *p_last = NULL;
     while (p_reg != NULL) {
         p_last = p_reg;
-        if (p_reg->i_x == eventov->x &&
-            p_reg->i_y == eventov->y &&
-            p_reg->fmt.i_width == eventov->w &&
-            p_reg->fmt.i_height == eventov->h &&
-            p_reg->fmt.i_chroma == VLC_CODEC_YUVP)
+        if (p_reg->i_x == reg_x && p_reg->i_y == reg_y &&
+            p_reg->fmt.i_width == reg_w &&
+            p_reg->fmt.i_height == reg_h &&
+            p_reg->fmt.i_chroma == reg_chroma)
             break;
-        pp_reg = &p_reg->p_next;
         p_reg = p_reg->p_next;
-    }
-
-    if (!eventov->img) {
-        if (p_reg) {
-            /* drop region */
-            *pp_reg = p_reg->p_next;
-            subpicture_region_Delete(p_reg);
-        }
-        vlc_mutex_unlock(&ov->lock);
-        return;
     }
 
     /* If there is no region to update, create a new one. */
     if (!p_reg) {
         video_format_t fmt;
         video_format_Init(&fmt, 0);
-        video_format_Setup(&fmt, VLC_CODEC_YUVP, eventov->w, eventov->h, eventov->w, eventov->h, 1, 1);
+        video_format_Setup(&fmt, reg_chroma, reg_w, reg_h,
+                           reg_w, reg_h, 1, 1);
 
         p_reg = subpicture_region_New(&fmt);
         if (p_reg) {
-            p_reg->i_x = eventov->x;
-            p_reg->i_y = eventov->y;
+            p_reg->i_x = reg_x;
+            p_reg->i_y = reg_y;
+            if (ig_canvas) {
+                for (int c = 0; c < 4; ++c) {
+                    plane_t *plane = &p_reg->p_picture->p[c];
+                    for (unsigned y = 0; y < reg_h; ++y)
+                        memset(plane->p_pixels + y * plane->i_pitch, 0,
+                               reg_w);
+                }
+            }
             /* Append it to our list. */
             if (p_last != NULL)
                 p_last->p_next = p_reg;
@@ -2328,17 +3299,48 @@ static void blurayDrawOverlay(demux_t *p_demux, const BD_OVERLAY* const eventov)
         }
     }
 
+    uint8_t yuva_palette[256][4];
+    if (ig_canvas) {
+        memset(yuva_palette, 0, sizeof(yuva_palette));
+        if (ov->b_palette_valid) {
+            memcpy(yuva_palette, ov->palette.palette,
+                   sizeof(yuva_palette));
+        }
+    }
+
     /* Now we can update the region, regardless it's an update or an insert */
     const BD_PG_RLE_ELEM *img = eventov->img;
     for (int y = 0; y < eventov->h; y++)
         for (int x = 0; x < eventov->w;) {
-            plane_t *p = &p_reg->p_picture->p[0];
-            memset(&p->p_pixels[y * p->i_pitch + x], img->color, img->len);
+            if (ig_canvas) {
+                picture_t *picture = p_reg->p_picture;
+                const unsigned palette_index = img->color & 0xff;
+                const uint8_t *src = yuva_palette[palette_index];
+                for (unsigned pixel = 0; pixel < img->len; ++pixel) {
+                    const unsigned px = eventov->x + x + pixel;
+                    const unsigned py = eventov->y + y;
+                    /* DRAW updates the overlay plane, it is not a source-over
+                     * blend operation. libbluray deliberately omits WIPE when
+                     * a button state changes to an object with identical
+                     * bounds; transparent pixels in the new object must then
+                     * erase the previous selection. Keeping the full YUVA
+                     * canvas still avoids overlapping VLC regions, while
+                     * replacing all four components preserves HDMV plane
+                     * semantics. */
+                    for (int c = 0; c < 4; ++c)
+                        picture->p[c].p_pixels[
+                            py * picture->p[c].i_pitch + px] = src[c];
+                }
+            } else {
+                plane_t *p = &p_reg->p_picture->p[0];
+                memset(&p->p_pixels[y * p->i_pitch + x],
+                       img->color, img->len);
+            }
             x += img->len;
             img++;
         }
 
-    if (eventov->palette) {
+    if (!ig_canvas && eventov->palette) {
         p_reg->fmt.p_palette->i_entries = 256;
         for (int i = 0; i < 256; ++i) {
             p_reg->fmt.p_palette->palette[i][0] = eventov->palette[i].Y;
@@ -2354,6 +3356,66 @@ static void blurayDrawOverlay(demux_t *p_demux, const BD_OVERLAY* const eventov)
      */
 }
 
+/* BD_OVERLAY_WIPE describes an arbitrary plane rectangle, not necessarily the
+ * exact bounds of a preceding DRAW. Interactive buttons are often assembled
+ * from several regions and libbluray wipes their union before drawing the new
+ * selection. Keeping partially intersecting regions leaves fragments of the
+ * previous screen visible until a later full clear. */
+static void blurayWipeOverlay(demux_t *p_demux, const BD_OVERLAY *eventov)
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+    bluray_overlay_t *ov = p_sys->p_overlays[eventov->plane];
+    if (ov == NULL)
+        return;
+
+    const unsigned wipe_x2 = eventov->x + eventov->w;
+    const unsigned wipe_y2 = eventov->y + eventov->h;
+
+    vlc_mutex_lock(&ov->lock);
+    subpicture_region_t **link = &ov->p_regions;
+    while (*link != NULL) {
+        subpicture_region_t *region = *link;
+        const unsigned reg_x1 = region->i_x;
+        const unsigned reg_y1 = region->i_y;
+        const unsigned reg_x2 = reg_x1 + region->fmt.i_width;
+        const unsigned reg_y2 = reg_y1 + region->fmt.i_height;
+        const unsigned x1 = __MAX((unsigned)eventov->x, reg_x1);
+        const unsigned y1 = __MAX((unsigned)eventov->y, reg_y1);
+        const unsigned x2 = __MIN(wipe_x2, reg_x2);
+        const unsigned y2 = __MIN(wipe_y2, reg_y2);
+
+        if (x1 >= x2 || y1 >= y2) {
+            link = &region->p_next;
+            continue;
+        }
+
+        if (x1 == reg_x1 && y1 == reg_y1 &&
+            x2 == reg_x2 && y2 == reg_y2) {
+            *link = region->p_next;
+            subpicture_region_Delete(region);
+            continue;
+        }
+
+        if (region->fmt.i_chroma == VLC_CODEC_YUVA) {
+            for (int c = 0; c < 4; ++c) {
+                plane_t *plane = &region->p_picture->p[c];
+                for (unsigned y = y1 - reg_y1; y < y2 - reg_y1; ++y)
+                    memset(plane->p_pixels + y * plane->i_pitch +
+                           x1 - reg_x1, 0, x2 - x1);
+            }
+        } else {
+            plane_t *plane = &region->p_picture->p[0];
+            for (unsigned y = y1 - reg_y1; y < y2 - reg_y1; ++y)
+                /* Palette entry 0xff is guaranteed transparent by the
+                 * Blu-ray overlay contract. */
+                memset(plane->p_pixels + y * plane->i_pitch + x1 - reg_x1,
+                       0xff, x2 - x1);
+        }
+        link = &region->p_next;
+    }
+    vlc_mutex_unlock(&ov->lock);
+}
+
 static void blurayOverlayProc(void *ptr, const BD_OVERLAY *const overlay)
 {
     demux_t *p_demux = (demux_t*)ptr;
@@ -2361,9 +3423,8 @@ static void blurayOverlayProc(void *ptr, const BD_OVERLAY *const overlay)
 
     if (!overlay) {
         msg_Info(p_demux, "Closing overlays.");
-        if (p_sys->p_vout)
-            for (int i = 0; i < MAX_OVERLAY; i++)
-                blurayCloseOverlay(p_demux, i);
+        for (int i = 0; i < MAX_OVERLAY; i++)
+            blurayCloseOverlay(p_demux, i);
         return;
     }
 
@@ -2384,27 +3445,104 @@ static void blurayOverlayProc(void *ptr, const BD_OVERLAY *const overlay)
         vlc_mutex_unlock(&p_sys->bdj_overlay_lock);
         break;
     case BD_OVERLAY_CLEAR:
+        msg_Dbg(p_demux, "Blu-ray overlay clear plane %u", overlay->plane);
         blurayClearOverlay(p_demux, overlay->plane);
         break;
-    case BD_OVERLAY_FLUSH:
+    case BD_OVERLAY_HIDE:
+        msg_Dbg(p_demux, "Blu-ray overlay hide plane %u", overlay->plane);
+        blurayClearOverlay(p_demux, overlay->plane);
+        break;
+    case BD_OVERLAY_FLUSH: {
+        vlc_tick_t update_date = VLC_TICK_INVALID;
+        vlc_tick_t current = VLC_TICK_INVALID;
+        const bool recent_user_input =
+            p_sys->i_last_ig_user_input != VLC_TICK_INVALID &&
+            mdate() - p_sys->i_last_ig_user_input <= VLC_TICK_FROM_MS(500);
+        if (overlay->plane == BD_OVERLAY_IG &&
+            !recent_user_input &&
+            es_out_Control(p_demux->out, ES_OUT_GET_CURRENT_PCR,
+                           &current) == VLC_SUCCESS) {
+            uint64_t title_time = bd_tell_time(p_sys->bluray);
+            uint64_t clip_start = 0;
+            uint64_t clip_in = 0;
+
+            vlc_mutex_lock(&p_sys->pl_info_lock);
+            if (p_sys->p_clip_info != NULL) {
+                clip_start = p_sys->p_clip_info->start_time;
+                clip_in = p_sys->p_clip_info->in_time;
+            }
+            vlc_mutex_unlock(&p_sys->pl_info_lock);
+
+            if (title_time >= clip_start) {
+                vlc_tick_t target = FROM_SCALE_NZ(clip_in +
+                                                  title_time - clip_start);
+                if (target > current) {
+                    vlc_tick_t delay = target - current;
+                    if (delay < VLC_TICK_FROM_SEC(10)) {
+                        update_date = mdate() + delay;
+                        msg_Dbg(p_demux, "scheduling Blu-ray IG in %"PRId64
+                                " ms (target=%"PRId64", current=%"PRId64")",
+                                MS_FROM_VLC_TICK(delay), target, current);
+                    }
+                }
+            }
+        }
+        /* libbluray commonly leaves IG flushes undated.  Its automatic page
+         * construction then reaches us at the demux head, roughly pts_delay
+         * before the matching menu background is presented.  Use that known
+         * output delay when the local play-item clock cannot be mapped onto
+         * the filter's continuous timeline.  Never delay hover/key redraws:
+         * those are direct UI feedback and must remain immediate. */
+        if (overlay->plane == BD_OVERLAY_IG &&
+            update_date == VLC_TICK_INVALID &&
+            !recent_user_input) {
+            vlc_tick_t system_origin;
+            vlc_tick_t presentation_delay;
+            if (es_out_Control(p_demux->out, ES_OUT_GET_PCR_SYSTEM,
+                               &system_origin, &presentation_delay) == VLC_SUCCESS &&
+                presentation_delay > 0 &&
+                presentation_delay < VLC_TICK_FROM_SEC(10)) {
+                update_date = mdate() + presentation_delay;
+                msg_Dbg(p_demux, "scheduling automatic Blu-ray IG by output "
+                        "delay: %"PRId64" ms",
+                        MS_FROM_VLC_TICK(presentation_delay));
+            }
+        }
+        if (p_sys->p_overlays[overlay->plane]) {
+            vlc_mutex_lock(&p_sys->p_overlays[overlay->plane]->lock);
+            p_sys->p_overlays[overlay->plane]->i_pts = overlay->pts;
+            /* Preserve a previously armed deadline across the short PCR
+             * reset at a menu-loop boundary, when the fresh clock is not yet
+             * queryable but libbluray redraws the same page. */
+            if (update_date > VLC_TICK_INVALID)
+                p_sys->p_overlays[overlay->plane]->i_update_date = update_date;
+            vlc_mutex_unlock(&p_sys->p_overlays[overlay->plane]->lock);
+        }
+        msg_Dbg(p_demux, "Blu-ray overlay flush plane %u pts=%"PRId64
+                " (%.3fs), disc=%.3fs, input=%.3fs",
+                overlay->plane, overlay->pts,
+                overlay->pts / 90000.0,
+                bd_tell_time(p_sys->bluray) / 90000.0,
+                var_GetInteger(p_demux->p_input, "time") /
+                    (double)CLOCK_FREQ);
         blurayActivateOverlay(p_demux, overlay->plane);
         break;
+    }
     case BD_OVERLAY_DRAW:
-    case BD_OVERLAY_WIPE:
+        msg_Dbg(p_demux, "Blu-ray overlay draw plane %u, region %u,%u %ux%u",
+                overlay->plane, overlay->x, overlay->y, overlay->w, overlay->h);
         blurayDrawOverlay(p_demux, overlay);
+        break;
+    case BD_OVERLAY_WIPE:
+        msg_Dbg(p_demux, "Blu-ray overlay wipe plane %u, region %u,%u %ux%u",
+                overlay->plane, overlay->x, overlay->y, overlay->w, overlay->h);
+        blurayWipeOverlay(p_demux, overlay);
         break;
     default:
         msg_Warn(p_demux, "Unknown BD overlay command: %u", overlay->cmd);
         break;
     }
 }
-
-/* ARGB in word order -> byte order */
-#ifdef WORDS_BIG_ENDIAN
-  #define ARGB_OVERLAY_CHROMA VLC_CODEC_ARGB
-#else
-  #define ARGB_OVERLAY_CHROMA VLC_CODEC_BGRA
-#endif
 
 /*
  * ARGB overlay (BD-J)
@@ -2437,8 +3575,32 @@ static void blurayDrawArgbOverlay(demux_t *p_demux, const BD_ARGB_OVERLAY* const
     /* Find a region to update */
     subpicture_region_t *p_reg = ov->p_regions;
     if (!p_reg || p_reg->fmt.i_chroma != ARGB_OVERLAY_CHROMA ||
-        eventov->x + eventov->w > p_reg->fmt.i_width ||
+        p_reg->fmt.i_width < (unsigned)ov->width ||
+        p_reg->fmt.i_height < (unsigned)ov->height) {
+        /* A title/playlist transition can clear the VLC region while the
+         * Java graphics plane remains open.  libbluray consequently sends
+         * DRAW/FLUSH updates without another INIT.  Recreate the backing
+         * region here instead of silently dropping all subsequent menu text. */
+        msg_Dbg(p_demux, "recreating missing BD-J ARGB backing region");
+        subpicture_region_ChainDelete(ov->p_regions);
+        ov->p_regions = NULL;
+
+        video_format_t fmt;
+        video_format_Init(&fmt, 0);
+        video_format_Setup(&fmt, ARGB_OVERLAY_CHROMA,
+                          ov->width, ov->height,
+                          ov->width, ov->height, 1, 1);
+        p_reg = subpicture_region_New(&fmt);
+        ov->p_regions = p_reg;
+    }
+    if (!p_reg || eventov->x + eventov->w > p_reg->fmt.i_width ||
         eventov->y + eventov->h > p_reg->fmt.i_height) {
+        msg_Warn(p_demux,
+                 "rejecting BD-J ARGB update %u,%u %ux%u (region=%p, %ux%u)",
+                 eventov->x, eventov->y, eventov->w, eventov->h,
+                 (void *)p_reg,
+                 p_reg ? p_reg->fmt.i_width : 0,
+                 p_reg ? p_reg->fmt.i_height : 0);
         vlc_mutex_unlock(&ov->lock);
         return;
     }
@@ -2477,12 +3639,17 @@ static void blurayArgbOverlayProc(void *ptr, const BD_ARGB_OVERLAY *const overla
 
     switch (overlay->cmd) {
     case BD_ARGB_OVERLAY_INIT:
+        msg_Dbg(p_demux, "BD-J ARGB overlay init plane %u, %ux%u",
+                overlay->plane, overlay->w, overlay->h);
         vlc_mutex_lock(&p_sys->bdj_overlay_lock);
         /* libbluray raises BD_EVENT_MENU alongside this very command;
          * remember that the flag now tracks a BD-J plane rather than an
          * open menu (see blurayCacheInhibitUpdate). */
         p_sys->b_bdj_overlay = true;
         blurayInitArgbOverlay(p_demux, overlay->plane, overlay->w, overlay->h);
+        if (p_sys->p_overlays[overlay->plane])
+            p_sys->p_overlays[overlay->plane]->stereo_offset =
+                overlay->stereo_offset;
         vlc_mutex_unlock(&p_sys->bdj_overlay_lock);
         break;
     case BD_ARGB_OVERLAY_CLOSE:
@@ -2493,9 +3660,19 @@ static void blurayArgbOverlayProc(void *ptr, const BD_ARGB_OVERLAY *const overla
         vlc_mutex_unlock(&p_sys->bdj_overlay_lock);
         break;
     case BD_ARGB_OVERLAY_FLUSH:
+        msg_Dbg(p_demux, "BD-J ARGB overlay flush plane %u, region %u,%u %ux%u",
+                overlay->plane, overlay->x, overlay->y, overlay->w, overlay->h);
+        if (p_sys->p_overlays[overlay->plane]) {
+            vlc_mutex_lock(&p_sys->p_overlays[overlay->plane]->lock);
+            p_sys->p_overlays[overlay->plane]->stereo_offset =
+                overlay->stereo_offset;
+            vlc_mutex_unlock(&p_sys->p_overlays[overlay->plane]->lock);
+        }
         blurayActivateOverlay(p_demux, overlay->plane);
         break;
     case BD_ARGB_OVERLAY_DRAW:
+        msg_Dbg(p_demux, "BD-J ARGB overlay draw plane %u, region %u,%u %ux%u",
+                overlay->plane, overlay->x, overlay->y, overlay->w, overlay->h);
         blurayDrawArgbOverlay(p_demux, overlay);
         break;
     default:
@@ -2522,9 +3699,13 @@ static void bluraySendOverlayToVout(demux_t *p_demux, bluray_overlay_t *p_ov)
         return;
     }
 
-    p_pic->i_start = p_pic->i_stop = mdate();
+    p_pic->i_start = p_pic->i_stop =
+        p_ov->i_update_date > VLC_TICK_INVALID ? p_ov->i_update_date : mdate();
     p_pic->i_channel = vout_RegisterSubpictureChannel(p_sys->p_vout);
     p_ov->i_channel = p_pic->i_channel;
+    vout_ChangeInteractiveOverlay(p_sys->p_vout, true);
+    msg_Dbg(p_demux, "sending Blu-ray overlay %ux%u to vout channel %d",
+            p_ov->width, p_ov->height, p_ov->i_channel);
 
     /*
      * After this point, the picture should not be accessed from the demux thread,
@@ -2731,6 +3912,417 @@ static void blurayRestartParser(demux_t *p_demux, bool b_flush, bool b_random_ac
     es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_RANDOM_ACCESS, b_random_access);
 }
 
+static void blurayCloseMVCClip(demux_t *p_demux)
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+
+    if (p_sys->p_mvc_parser != NULL)
+    {
+        vlc_demux_chained_Delete(p_sys->p_mvc_parser);
+        p_sys->p_mvc_parser = NULL;
+    }
+    if (p_sys->p_mvc_file != NULL)
+    {
+        p_sys->p_mvc_file->close(p_sys->p_mvc_file);
+        p_sys->p_mvc_file = NULL;
+    }
+    p_sys->i_mvc_clip = -1;
+    p_sys->i_mvc_main_size = 0;
+    p_sys->i_mvc_clip_size = 0;
+    p_sys->i_mvc_main_read = 0;
+    p_sys->i_mvc_clip_read = 0;
+    p_sys->b_mvc_feed_catching_up = false;
+    if (p_sys->p_out != NULL)
+        es_out_Control(p_sys->p_out,
+                       BLURAY_ES_OUT_CONTROL_SET_MVC_EXPECTED, false, false,
+                       (vlc_tick_t)0);
+}
+
+static bool blurayClpiPresentationStart(const CLPI_CL *clpi, uint8_t stc_id,
+                                        uint32_t *start)
+{
+    if (clpi == NULL || start == NULL)
+        return false;
+
+    for (uint8_t i = 0; i < clpi->sequence.num_atc_seq; ++i) {
+        const CLPI_ATC_SEQ *atc = &clpi->sequence.atc_seq[i];
+        if (atc->stc_seq == NULL || stc_id < atc->offset_stc_id ||
+            stc_id >= atc->offset_stc_id + atc->num_stc_seq)
+            continue;
+
+        *start = atc->stc_seq[stc_id - atc->offset_stc_id]
+                         .presentation_start_time;
+        return true;
+    }
+    return false;
+}
+
+static bool blurayReadMVC(demux_t *p_demux, size_t bytes)
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+    if (p_sys->p_mvc_file == NULL || p_sys->p_mvc_parser == NULL)
+        return false;
+
+    block_t *block = block_Alloc(bytes);
+    if (unlikely(block == NULL))
+        return false;
+    int64_t read = p_sys->p_mvc_file->read(p_sys->p_mvc_file,
+                                           block->p_buffer, bytes);
+    if (read <= 0)
+    {
+        block_Release(block);
+        p_sys->p_mvc_file->close(p_sys->p_mvc_file);
+        p_sys->p_mvc_file = NULL;
+        if (read < 0)
+            msg_Warn(p_demux, "error reading Blu-ray MVC extension clip");
+        return false;
+    }
+
+    block->i_buffer = read;
+    p_sys->i_mvc_clip_read += read;
+    vlc_demux_chained_Send(p_sys->p_mvc_parser, block);
+    return true;
+}
+
+static void blurayOpenMVCClip(demux_t *p_demux, uint32_t clip)
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+    blurayCloseMVCClip(p_demux);
+
+    /* A one-picture HDMV menu is safer and visually equivalent as mono. Its
+     * dependent stream can terminate in the same access unit as its base;
+     * Edge264 then legally outputs the AVC-compatible base before the MVC
+     * extension reaches it, leaving no second chance once STILL is entered.
+     * The frame-packed OpenGL path duplicates MULTIVIEW_2D into both eyes, so
+     * keeping this play item on ordinary H.264 also preserves HDMI 3D mode. */
+    bool hdmv_still = false;
+    vlc_mutex_lock(&p_sys->pl_info_lock);
+    if (p_sys->p_clip_info != NULL)
+        hdmv_still = p_sys->p_clip_info->still_mode != 0;
+    vlc_mutex_unlock(&p_sys->pl_info_lock);
+    if (hdmv_still) {
+        msg_Dbg(p_demux, "duplicating HDMV still menu into both HDMI 3D eyes");
+        return;
+    }
+
+    MPLS_PL *pl = bd_get_title_mpls(p_sys->bluray);
+    if (p_sys->i_mvc_sub_path < 0 || pl == NULL ||
+        (unsigned)p_sys->i_mvc_sub_path >= pl->ext_sub_count ||
+        clip >= pl->list_count)
+        return;
+
+    MPLS_SUB *path = &pl->ext_sub_path[p_sys->i_mvc_sub_path];
+    if (clip >= path->sub_playitem_count)
+        return;
+    MPLS_SUB_PI *sub = &path->sub_play_item[clip];
+    if (sub->clip_count == 0 || sub->clip == NULL)
+        return;
+
+    msg_Dbg(p_demux, "MVC play-item timing: main=%u..%u, dependent=%u..%u, "
+            "sync item=%u pts=%u", pl->play_item[clip].in_time,
+            pl->play_item[clip].out_time, sub->in_time, sub->out_time,
+            sub->sync_play_item_id, sub->sync_pts);
+
+    char filename[sizeof(sub->clip[0].clip_id) + sizeof(".m2ts")];
+    snprintf(filename, sizeof(filename), "%.5s.m2ts", sub->clip[0].clip_id);
+    p_sys->p_mvc_file = bd_clip_open(p_sys->bluray, filename);
+    if (p_sys->p_mvc_file == NULL)
+    {
+        msg_Warn(p_demux, "cannot open Blu-ray MVC extension clip %s", filename);
+        return;
+    }
+
+    /* BD_FILE_H::seek() is documented to return the resulting offset, but
+     * libbluray's native Windows file backend currently forwards fseeko64's
+     * status code instead (zero on success).  That made every dependent MVC
+     * clip opened from a mounted volume look empty, while ISO stream access
+     * worked because its UDF backend returns the offset.  Query tell() after
+     * the successful end seek so both conforming and status-returning
+     * backends produce the real size. */
+    int64_t size = -1;
+    if (p_sys->p_mvc_file->seek(p_sys->p_mvc_file, 0, SEEK_END) >= 0)
+        size = p_sys->p_mvc_file->tell(p_sys->p_mvc_file);
+    if (size <= 0 || p_sys->p_mvc_file->seek(p_sys->p_mvc_file, 0, SEEK_SET) < 0)
+    {
+        msg_Warn(p_demux, "cannot size Blu-ray MVC extension clip %s", filename);
+        blurayCloseMVCClip(p_demux);
+        return;
+    }
+
+    vlc_mutex_lock(&p_sys->pl_info_lock);
+    const uint64_t main_size = p_sys->p_clip_info != NULL
+                             ? (uint64_t)p_sys->p_clip_info->pkt_count * 192 : 0;
+    vlc_mutex_unlock(&p_sys->pl_info_lock);
+    if (main_size == 0)
+    {
+        msg_Warn(p_demux, "Blu-ray main clip has no packet count for MVC sync");
+        blurayCloseMVCClip(p_demux);
+        return;
+    }
+
+    p_sys->p_mvc_parser = vlc_demux_chained_New(VLC_OBJECT(p_demux), "ts",
+                                                 p_sys->p_mvc_out);
+    if (p_sys->p_mvc_parser == NULL)
+    {
+        msg_Err(p_demux, "cannot create Blu-ray MVC extension demuxer");
+        blurayCloseMVCClip(p_demux);
+        return;
+    }
+
+    p_sys->i_mvc_clip = clip;
+    p_sys->i_mvc_main_size = main_size;
+    p_sys->i_mvc_clip_size = size;
+    vlc_mutex_lock(&p_sys->pl_info_lock);
+    const bool base_right = p_sys->p_pl_info != NULL &&
+                            p_sys->p_pl_info->mvc_base_view_r_flag;
+    vlc_mutex_unlock(&p_sys->pl_info_lock);
+
+    /* Main and dependent M2TS files can use different STC origins even when
+     * their MPLS in/out times are identical.  Pairing their raw PTS made the
+     * decoder skip the base-view pre-roll and start from a non-random POC,
+     * which showed as macroblocks after a BD-J top-menu jump. */
+    vlc_tick_t dependent_pts_offset = 0;
+    CLPI_CL *main_clpi = bd_get_clpi(p_sys->bluray, clip);
+    CLPI_CL *dependent_clpi =
+        bd_get_clip_clpi(p_sys->bluray, sub->clip[0].clip_id);
+    uint32_t main_start, dependent_start;
+    if (pl->play_item[clip].clip != NULL &&
+        blurayClpiPresentationStart(main_clpi,
+                                   pl->play_item[clip].clip[0].stc_id,
+                                   &main_start) &&
+        blurayClpiPresentationStart(dependent_clpi,
+                                   sub->clip[0].stc_id,
+                                   &dependent_start)) {
+        dependent_pts_offset =
+            ((int64_t)dependent_start - (int64_t)main_start) * CLOCK_FREQ /
+            INT64_C(45000);
+        msg_Dbg(p_demux, "MVC STC alignment: main=%u dependent=%u, offset=%"PRId64
+                " us", main_start, dependent_start, dependent_pts_offset);
+    }
+    bd_free_clpi(main_clpi);
+    bd_free_clpi(dependent_clpi);
+
+    es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_SET_MVC_EXPECTED,
+                   true, base_right, dependent_pts_offset);
+    msg_Info(p_demux, "Blu-ray 3D MVC extension: %s (%" PRIu64
+             " bytes, main %" PRIu64 " bytes)", filename,
+             p_sys->i_mvc_clip_size, p_sys->i_mvc_main_size);
+
+    /* The VDA/320M path needs a larger initial dependent-view burst to avoid
+     * waiting for its hardware hand-off.  With dual Edge264 on Apple Silicon,
+     * a low-bitrate menu can fit hundreds of access units in that burst and
+     * overflow the MVC pairing queue before the first base unit arrives.
+     * Retain the original one-block PAT/PMT priming on that architecture. */
+#if defined(__APPLE__) && defined(__aarch64__)
+    /* Even one 6144-byte cluster contains more than 256 tiny dependent-view
+     * access units in Albator's menu background. Do not run that parser ahead
+     * at all: the first normal demux iteration submits primary and
+     * proportional dependent data back-to-back, and both TS streams repeat
+     * PAT/PMT often enough to initialize from there. */
+    const uint64_t prime = 0;
+#else
+    const uint64_t prime = MVC_FEED_BURST;
+#endif
+    if (prime != 0)
+        blurayReadMVC(p_demux, __MIN(prime, p_sys->i_mvc_clip_size));
+}
+
+static void blurayFeedMVC(demux_t *p_demux, size_t main_bytes)
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+    if (p_sys->p_mvc_file == NULL || p_sys->i_mvc_main_size == 0)
+        return;
+
+    p_sys->i_mvc_main_read += main_bytes;
+    uint64_t proportional = (uint64_t)((double)p_sys->i_mvc_main_read *
+                                       (double)p_sys->i_mvc_clip_size /
+                                       (double)p_sys->i_mvc_main_size);
+    if (proportional > p_sys->i_mvc_clip_size)
+        proportional = p_sys->i_mvc_clip_size;
+    /* The primary and dependent TS parsers are asynchronous.  The byte ratio
+     * is needed to keep reading while the primary parser is temporarily
+     * behind its input; timestamps alone can otherwise leave the dependent
+     * file half-read when bd_read() reaches the end of the play item.  Apply
+     * the ratio in bounded bursts and throttle it with the decoded queues. */
+    uint64_t target = p_sys->i_mvc_clip_read;
+
+    vlc_tick_t base_date = VLC_TICK_INVALID;
+    vlc_tick_t dependent_date = VLC_TICK_INVALID;
+    unsigned base_queued = 0, dependent_queued = 0;
+    bool have_progress =
+        es_out_Control(p_sys->p_out,
+                       BLURAY_ES_OUT_CONTROL_GET_MVC_PROGRESS,
+                       &base_date, &dependent_date,
+                       &base_queued, &dependent_queued) == VLC_SUCCESS;
+
+    /* Do not let the demux thread enqueue an entire primary play item while
+     * its chained parser is still behind the faster dependent parser.  Once
+     * the parsed dependent queue reaches roughly 1.3 seconds, wait for the
+     * already-enqueued primary blocks to consume it.  Without this pressure
+     * bd_read_ext() can reach a menu still and stop calling the feeder while
+     * tens of seconds of primary data remain inside the chained parser. */
+    if (have_progress && base_date != VLC_TICK_INVALID &&
+        dependent_queued >= 32 && base_queued == 0)
+    {
+#if !(defined(__APPLE__) && defined(__aarch64__))
+        /* The VDA/GeForce 320M path needs to yield the single primary-parser
+         * core while the already-fed dependent parser is far ahead.  Doing
+         * this after every 60 KiB block on Apple Silicon hard-caps the whole
+         * primary multiplex at roughly 6 MiB/s.  A short high-bitrate peak
+         * then holds back the interleaved AC-3 packets even though decoded
+         * video remains buffered, producing repeatable HDMI underruns.  The
+         * asynchronous parsers have independent cores on Apple Silicon, so
+         * query their progress without imposing that legacy throttle. */
+        msleep(10000);
+#endif
+        have_progress =
+            es_out_Control(p_sys->p_out,
+                           BLURAY_ES_OUT_CONTROL_GET_MVC_PROGRESS,
+                           &base_date, &dependent_date,
+                           &base_queued, &dependent_queued) == VLC_SUCCESS;
+    }
+
+    const bool catching_up = have_progress && base_date != VLC_TICK_INVALID &&
+        (dependent_date == VLC_TICK_INVALID ||
+         dependent_date < base_date + MVC_TARGET_TIME_LEAD);
+    const bool queue_has_room = !have_progress || dependent_queued < 32 ||
+                                base_queued > dependent_queued;
+
+    if (queue_has_room &&
+        (p_sys->i_mvc_clip_read < proportional || catching_up))
+    {
+        /* Let the chained parser publish its new queue state between bursts.
+         * A single 60 KiB block is about 17 low-bitrate menu pictures on
+         * Apple Silicon, already enough to cover normal scheduling jitter. */
+#if defined(__APPLE__) && defined(__aarch64__)
+        const uint64_t burst_size = BD_READ_SIZE;
+#else
+        const uint64_t burst_size = MVC_FEED_BURST;
+#endif
+        uint64_t burst = p_sys->i_mvc_clip_read + burst_size;
+        uint64_t cap = proportional;
+#if defined(__APPLE__) && defined(__aarch64__)
+        /* Do not manufacture a 64 MiB lead on a low-bitrate menu.  One input
+         * block primes PAT/PMT and the proportional target supplies the rest
+         * in lockstep with bd_read_ext(). */
+        if (cap < p_sys->i_mvc_clip_size &&
+            p_sys->i_mvc_clip_read == 0)
+            cap += __MIN((uint64_t)BD_READ_SIZE,
+                         p_sys->i_mvc_clip_size - cap);
+#else
+        if (UINT64_MAX - cap < MVC_MAX_BYTE_LEAD)
+            cap = UINT64_MAX;
+        else
+            cap += MVC_MAX_BYTE_LEAD;
+#endif
+        if (cap > p_sys->i_mvc_clip_size)
+            cap = p_sys->i_mvc_clip_size;
+        if (burst > cap)
+            burst = cap;
+        target = burst;
+    }
+
+    if (catching_up != p_sys->b_mvc_feed_catching_up)
+    {
+        if (catching_up)
+            msg_Dbg(p_demux, "MVC dependent view catch-up: timeline %"PRId64
+                    " us, queued %u/%u, byte lead %"PRIu64,
+                    dependent_date == VLC_TICK_INVALID ? INT64_MIN :
+                    dependent_date - base_date,
+                    base_queued, dependent_queued,
+                    p_sys->i_mvc_clip_read > proportional ?
+                    p_sys->i_mvc_clip_read - proportional : 0);
+        else
+            msg_Dbg(p_demux, "MVC dependent view recovered its timestamp lead");
+        p_sys->b_mvc_feed_catching_up = catching_up;
+    }
+
+    while (p_sys->i_mvc_clip_read + BD_CLUSTER_SIZE <= target)
+    {
+        uint64_t due = target - p_sys->i_mvc_clip_read;
+        size_t bytes = due > BD_READ_SIZE ? BD_READ_SIZE : (size_t)due;
+        bytes -= bytes % BD_CLUSTER_SIZE;
+        if (bytes == 0 || !blurayReadMVC(p_demux, bytes))
+            break;
+    }
+}
+
+static void bluraySeekMVC(demux_t *p_demux)
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+    const int clip = p_sys->i_mvc_clip;
+    if (clip < 0)
+        return;
+
+    const uint64_t title_time = bd_tell_time(p_sys->bluray);
+    uint64_t start = 0, duration = 0;
+    vlc_mutex_lock(&p_sys->pl_info_lock);
+    if (p_sys->p_clip_info != NULL)
+    {
+        start = p_sys->p_clip_info->start_time;
+        duration = p_sys->p_clip_info->out_time - p_sys->p_clip_info->in_time;
+    }
+    vlc_mutex_unlock(&p_sys->pl_info_lock);
+
+    blurayOpenMVCClip(p_demux, clip);
+    if (p_sys->p_mvc_file == NULL || duration == 0 || title_time <= start)
+        return;
+
+    double position = (double)(title_time - start) / (double)duration;
+    if (position > 1.0)
+        position = 1.0;
+    uint64_t offset = (uint64_t)(position * p_sys->i_mvc_clip_size);
+    offset -= offset % BD_CLUSTER_SIZE;
+    if (offset > p_sys->i_mvc_clip_read &&
+        p_sys->p_mvc_file->seek(p_sys->p_mvc_file, offset, SEEK_SET) >= 0)
+    {
+        /* blurayOpenMVCClip() primes PAT/PMT from byte zero. Seeking only the
+         * file used to leave those first dependent-view access units queued
+         * in the chained TS demuxer; after a BD-J playlist jump they could be
+         * hundreds of seconds away from the new base-view timestamp. Start a
+         * fresh parser at the packet-aligned offset so no pre-seek PES or
+         * timestamp state can leak into the new MVC pair. PAT/PMT tables are
+         * repeated in the transport stream and are picked up by the prime
+         * read below. */
+        vlc_demux_chained_Delete(p_sys->p_mvc_parser);
+        p_sys->p_mvc_parser = vlc_demux_chained_New(VLC_OBJECT(p_demux), "ts",
+                                                     p_sys->p_mvc_out);
+        if (p_sys->p_mvc_parser == NULL)
+        {
+            msg_Err(p_demux, "cannot recreate Blu-ray MVC extension demuxer after seek");
+            blurayCloseMVCClip(p_demux);
+            return;
+        }
+
+        es_out_Control(p_sys->p_out,
+                       BLURAY_ES_OUT_CONTROL_FLAG_DISCONTINUITY);
+        p_sys->i_mvc_clip_read = offset;
+        p_sys->i_mvc_main_read = (uint64_t)(position * p_sys->i_mvc_main_size);
+        const uint64_t remaining = p_sys->i_mvc_clip_size - offset;
+        if (remaining != 0)
+            blurayReadMVC(p_demux, __MIN((uint64_t)BD_READ_SIZE, remaining));
+        msg_Dbg(p_demux, "MVC extension seek to %.3f (%" PRIu64 " bytes)",
+                position, offset);
+    }
+}
+
+static void blurayTopMenuRefused(demux_t *p_demux)
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+    vout_thread_t *vout = input_GetVout(p_demux->p_input);
+    if (vout == NULL)
+        return;
+
+    const char *message = p_sys->i_uo_mask & BLURAY_UO_MENU_CALL
+                        ? _("Operation prohibited by the disc")
+                        : _("Top Menu is not available");
+    /* Use an explicit, long-lived centred message. The default helper is
+     * deliberately brief and bottom-aligned; the Legacy controller can cover
+     * it before the user sees the refusal. */
+    vout_OSDText(vout, VOUT_SPU_CHANNEL_OSD, 0, 3 * CLOCK_FREQ, message);
+    vlc_object_release(vout);
+}
+
 /*****************************************************************************
  * bluraySetTitle: select new BD title
  *****************************************************************************/
@@ -2742,6 +4334,10 @@ static int bluraySetTitle(demux_t *p_demux, int i_title)
         int result;
         if (i_title <= 0) {
             msg_Dbg(p_demux, "Playing TopMenu Title");
+            if (p_sys->i_uo_mask & BLURAY_UO_MENU_CALL) {
+                blurayTopMenuRefused(p_demux);
+                return VLC_EGENERIC;
+            }
             result = bd_menu_call(p_sys->bluray, -1);
         } else if (i_title >= (int)p_sys->i_title - 1) {
             msg_Dbg(p_demux, "Playing FirstPlay Title");
@@ -2753,6 +4349,8 @@ static int bluraySetTitle(demux_t *p_demux, int i_title)
 
         if (result == 0) {
             msg_Err(p_demux, "cannot play bd title '%d'", i_title);
+            if (i_title <= 0)
+                blurayTopMenuRefused(p_demux);
             return VLC_EGENERIC;
         }
 
@@ -2857,6 +4455,19 @@ static int blurayControl(demux_t *p_demux, int query, va_list args)
     case DEMUX_GET_PTS_DELAY:
         pi_64 = va_arg(args, int64_t *);
         *pi_64 = INT64_C(1000) * var_InheritInteger(p_demux, "disc-caching");
+#if defined(__arm64__) || defined(__aarch64__)
+        /* CoreAudio must tear down and reopen the encoded HDMI stream when a
+         * Blu-ray play item switches passthrough codec (Hopper changes from
+         * AC-3 to DTS after its first eight seconds).  The stock 300 ms disc
+         * cache is almost entirely consumed by that device reconfiguration,
+         * leaving only about 100 ms scheduled and causing immediate
+         * underruns for the remainder of the clip.  Keep one second queued
+         * on Apple Silicon so both encoded formats survive natural M2TS
+         * boundaries without changing the user's caching preference when it
+         * is already larger. */
+        if (*pi_64 < VLC_TICK_FROM_SEC(1))
+            *pi_64 = VLC_TICK_FROM_SEC(1);
+#endif
         break;
 
     case DEMUX_SET_PAUSE_STATE:
@@ -2894,6 +4505,8 @@ static int blurayControl(demux_t *p_demux, int query, va_list args)
     {
         int i_chapter = va_arg(args, int);
         bd_seek_chapter(p_sys->bluray, i_chapter);
+        p_sys->b_user_seek_preroll = true;
+        p_sys->i_user_seek_preroll = FROM_SCALE_NZ(bd_tell_time(p_sys->bluray));
         blurayRestartParser(p_demux, true, false);
         notifyDiscontinuityToParser(p_sys);
         p_sys->b_draining = false;
@@ -2940,6 +4553,8 @@ static int blurayControl(demux_t *p_demux, int query, va_list args)
     case DEMUX_SET_TIME:
     {
         int64_t i_time = va_arg(args, int64_t);
+        p_sys->b_user_seek_preroll = true;
+        p_sys->i_user_seek_preroll = i_time;
         bd_seek_time(p_sys->bluray, TO_SCALE_NZ(i_time));
         blurayRestartParser(p_demux, true, true);
         notifyDiscontinuityToParser(p_sys);
@@ -2970,7 +4585,10 @@ static int blurayControl(demux_t *p_demux, int query, va_list args)
     case DEMUX_SET_POSITION:
     {
         double f_position = va_arg(args, double);
-        bd_seek_time(p_sys->bluray, TO_SCALE_NZ(f_position*CUR_LENGTH));
+        const vlc_tick_t i_time = f_position * CUR_LENGTH;
+        p_sys->b_user_seek_preroll = true;
+        p_sys->i_user_seek_preroll = i_time;
+        bd_seek_time(p_sys->bluray, TO_SCALE_NZ(i_time));
         blurayRestartParser(p_demux, true, true);
         notifyDiscontinuityToParser(p_sys);
         p_sys->b_draining = false;
@@ -3056,12 +4674,18 @@ static int blurayControl(demux_t *p_demux, int query, va_list args)
         return sendKeyEvent(p_sys, BD_VK_POPUP);
     case DEMUX_NAV_MENU:
         if (p_sys->b_menu) {
+            if (p_sys->i_uo_mask & BLURAY_UO_MENU_CALL) {
+                msg_Dbg(p_demux, "Top Menu call prohibited by the disc");
+                blurayTopMenuRefused(p_demux);
+                return VLC_EGENERIC;
+            }
             if (bd_menu_call(p_sys->bluray, -1) == 1) {
                 p_demux->info.i_update |= INPUT_UPDATE_TITLE | INPUT_UPDATE_SEEKPOINT;
                 return VLC_SUCCESS;
             }
             msg_Err(p_demux, "Can't select Top Menu title");
-            return sendKeyEvent(p_sys, BD_VK_POPUP);
+            blurayTopMenuRefused(p_demux);
+            return VLC_EGENERIC;
         }
         return VLC_EGENERIC;
 
@@ -3199,8 +4823,14 @@ static void blurayResetStillImage( demux_t *p_demux )
     if (p_sys->i_still_end_time != STILL_IMAGE_NOT_SET) {
         p_sys->i_still_end_time = STILL_IMAGE_NOT_SET;
 
+        vout_thread_t *vout = input_GetVout(p_demux->p_input);
+        if (vout != NULL) {
+            vout_ChangeStaticFrameHold(vout, false);
+            vlc_object_release(vout);
+        }
+
         blurayRestartParser(p_demux, false, false);
-        es_out_Control( p_demux->out, ES_OUT_RESET_PCR );
+        es_out_Control(p_demux->out, ES_OUT_RESET_PCR);
     }
 }
 
@@ -3229,8 +4859,47 @@ static void blurayStillImage( demux_t *p_demux, unsigned i_timeout )
             p_sys->i_still_end_time = STILL_IMAGE_INFINITE;
         }
 
-        /* flush demuxer and decoder (there won't be next video packet starting with ts PUSI) */
-        streamFlush(p_sys);
+        /* Flush the final unterminated PES for ordinary still pictures.  Do
+         * not do this for an HDMV interactive plane: the synthetic H.264 EOS
+         * retires the decoder/vout before blurayHandleOverlays() runs later
+         * in this demux iteration.  With no following picture an infinite
+         * menu still can never acquire another vout, so its decoded buttons
+         * remain permanently ToDisplay (Up's language menu is one example).
+         * Keeping the existing decoder alive also keeps the real menu
+         * background instead of replacing it with a dummy black picture.
+         * BD-J stills retain the flush that Rio needs for its pre-menu Xlet. */
+        bool b_keep_hdmv_vout = false;
+        if (!blurayIsBdjTitle(p_demux)) {
+            vlc_mutex_lock(&p_sys->bdj_overlay_lock);
+            for (int i = 0; i < MAX_OVERLAY; ++i) {
+                if (p_sys->p_overlays[i] != NULL) {
+                    b_keep_hdmv_vout = true;
+                    break;
+                }
+            }
+            vlc_mutex_unlock(&p_sys->bdj_overlay_lock);
+        }
+
+        if (b_keep_hdmv_vout) {
+            msg_Dbg(p_demux, "Keeping video output alive for HDMV menu still");
+            /* A frame-packed HDMV menu can consist of one very short MVC
+             * access unit.  Both TS files have been read by the time the
+             * STILL event arrives, but the unterminated final PES can still
+             * be sitting in the asynchronous parser/decoder.  Without the
+             * normal EOS flush no first picture ever reaches the retained
+             * vout: the IG buttons are decoded, yet the window stays black.
+             * The Blu-ray session vout hold now preserves that output across
+             * this targeted flush, so draining MVC here is safe. */
+            streamFlush(p_sys);
+        } else {
+            /* The synchronous decoder selected for one-frame BD-J stills
+             * below delivers their real background before the ARGB plane is
+             * attached. Do not arm the HDMV last-frame policy here: when the
+             * vout is recycled it still contains the preceding disc's frame
+             * (Cars 2's castle while opening Cars 3), which that policy would
+             * deliberately preserve across this flush. */
+            streamFlush(p_sys);
+        }
 
         /* stop buffering */
         bool b_empty;
@@ -3356,6 +5025,8 @@ static void blurayUpdatePlaylist(demux_t *p_demux, unsigned i_playlist)
 {
     demux_sys_t *p_sys = p_demux->p_sys;
 
+    blurayCloseMVCClip(p_demux);
+    p_sys->i_mvc_sub_path = -1;
     blurayRestartParser(p_demux, true, false);
 
     /* read title info and init some values */
@@ -3373,12 +5044,31 @@ static void blurayUpdatePlaylist(demux_t *p_demux, unsigned i_playlist)
     blurayUpdateVideoInfo(p_demux, p_title_info);
     setTitleInfo(p_sys, p_title_info);
 
+    MPLS_PL *pl = bd_get_title_mpls(p_sys->bluray);
+    if (pl != NULL)
+    {
+        for (unsigned i = 0; i < pl->ext_sub_count; ++i)
+        {
+            if (pl->ext_sub_path[i].type == mpls_sub_path_ss_video &&
+                pl->ext_sub_path[i].sub_playitem_count == pl->list_count)
+            {
+                p_sys->i_mvc_sub_path = i;
+                msg_Info(p_demux, "Blu-ray stereoscopic MVC sub-path %u "
+                         "detected (base view is %s eye)", i,
+                         p_title_info != NULL &&
+                         p_title_info->mvc_base_view_r_flag ? "right" : "left");
+                break;
+            }
+        }
+    }
+
     blurayResetStillImage(p_demux);
 }
 
 static void blurayOnClipUpdate(demux_t *p_demux, uint32_t clip)
 {
     demux_sys_t *p_sys = p_demux->p_sys;
+    bool b_short_bdj_still = false;
 
     vlc_mutex_lock(&p_sys->pl_info_lock);
 
@@ -3388,6 +5078,14 @@ static void blurayOnClipUpdate(demux_t *p_demux, uint32_t clip)
 
         p_sys->p_clip_info = &p_sys->p_pl_info->clips[clip];
 
+        /* VideoToolbox can lose an H.264 stream made of a single still frame
+         * while its asynchronous session is being configured and drained.
+         * BD-J language screens commonly use exactly that construction. */
+        b_short_bdj_still = p_sys->p_clip_info->still_mode != 0 &&
+                            p_sys->p_clip_info->video_stream_count > 0 &&
+                            p_sys->p_clip_info->video_streams[0].coding_type ==
+                                BLURAY_STREAM_TYPE_VIDEO_H264;
+
     /* Let's assume a single video track for now.
      * This may brake later, but it's enough for now.
      */
@@ -3395,22 +5093,65 @@ static void blurayOnClipUpdate(demux_t *p_demux, uint32_t clip)
     }
 
     CLPI_CL *clpi = bd_get_clpi(p_sys->bluray, clip);
-    if(clpi && clpi->clip.application_type != p_sys->clip_application_type)
-    {
-        if(p_sys->clip_application_type == BD_CLIP_APP_TYPE_TS_MAIN_PATH_TIMED_SLIDESHOW ||
-           clpi->clip.application_type == BD_CLIP_APP_TYPE_TS_MAIN_PATH_TIMED_SLIDESHOW)
-            blurayRestartParser(p_demux, false, false);
+    if (clpi != NULL) {
+        if (clpi->clip.application_type != p_sys->clip_application_type) {
+            if(p_sys->clip_application_type == BD_CLIP_APP_TYPE_TS_MAIN_PATH_TIMED_SLIDESHOW ||
+               clpi->clip.application_type == BD_CLIP_APP_TYPE_TS_MAIN_PATH_TIMED_SLIDESHOW)
+                blurayRestartParser(p_demux, false, false);
 
-        if(clpi->clip.application_type == BD_CLIP_APP_TYPE_TS_MAIN_PATH_TIMED_SLIDESHOW)
-            es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_ENABLE_LOW_DELAY);
-        else
-            es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_DISABLE_LOW_DELAY);
+            if(clpi->clip.application_type == BD_CLIP_APP_TYPE_TS_MAIN_PATH_TIMED_SLIDESHOW)
+                es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_ENABLE_LOW_DELAY);
+            else
+                es_out_Control(p_sys->p_out, BLURAY_ES_OUT_CONTROL_DISABLE_LOW_DELAY);
+        }
         bd_free_clpi(clpi);
+    } else {
+        msg_Dbg(p_demux, "current Blu-ray clip metadata unavailable during title transition");
     }
 
     vlc_mutex_unlock(&p_sys->pl_info_lock);
 
+    /* The same one-frame loss occurs in an HDMV still after an MVC-to-mono
+     * menu handoff. Keep VideoToolbox for normal H.264 clips, but use the
+     * synchronous decoder for every authored one-picture menu. */
+    bluraySetBdjStillDecoder(p_demux,
+                             b_short_bdj_still && p_sys->b_menu);
+
     blurayResetStillImage(p_demux);
+}
+
+static void bluraySetBdjStillDecoder(demux_t *p_demux, bool enable)
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+
+    if (enable == p_sys->b_bdj_still_codec_override)
+        return;
+
+    if (enable) {
+        p_sys->b_had_input_codec =
+            var_Type(p_demux->p_input, "codec") != 0;
+        p_sys->psz_codec_before_bdj_still =
+            var_InheritString(p_demux->p_input, "codec");
+        var_Create(p_demux->p_input, "codec", VLC_VAR_STRING);
+        var_SetString(p_demux->p_input, "codec", "avcodec");
+        p_sys->b_bdj_still_codec_override = true;
+        p_sys->b_bdj_still_codec_restart_pending = true;
+        msg_Dbg(p_demux, "using synchronous decoder for BD-J still frame");
+        return;
+    }
+
+    if (p_sys->b_had_input_codec)
+        var_SetString(p_demux->p_input, "codec",
+                      p_sys->psz_codec_before_bdj_still != NULL
+                          ? p_sys->psz_codec_before_bdj_still : "");
+    else
+        var_Destroy(p_demux->p_input, "codec");
+
+    free(p_sys->psz_codec_before_bdj_still);
+    p_sys->psz_codec_before_bdj_still = NULL;
+    p_sys->b_bdj_still_codec_override = false;
+    p_sys->b_bdj_still_codec_restart_pending = true;
+    msg_Dbg(p_demux, "restored preferred decoder after BD-J still frame");
 }
 
 /*
@@ -3450,24 +5191,63 @@ static void blurayCacheInhibitUpdate(demux_t *p_demux)
      * when it is not a pop-up -- verified on the same disc, which still
      * inhibits correctly on its real full-screen menu page.
      *
-     * BD-J has the same trap by a different route (read from libbluray,
-     * not measured here -- this disc is HDMV): bd_bdj_osd_cb() raises
+     * BD-J has the same trap by a different route: bd_bdj_osd_cb() raises
      * BD_EVENT_MENU the moment the application CREATES its ARGB plane
      * and only drops it when that plane closes, while a feature title
      * keeps the plane up throughout to serve its pop-up menu. Once that
-     * plane exists the flag likewise says nothing about a menu. */
+     * plane exists the flag likewise says nothing about a menu. The explicit
+     * top-menu title flag is different: Angry Birds keeps its ARGB plane open
+     * there while a sequence of 46-second menu backgrounds plays. Letting the
+     * cache read those clips ahead delivers their end events to the Xlet
+     * before presentation; its controls remain transparent and the apparent
+     * intro loops forever. */
+    bool b_bdj_top_menu = p_sys->b_bdj_overlay &&
+                          p_demux->info.i_title >= 0 &&
+                          p_demux->info.i_title < (int)p_sys->i_title &&
+                          (CURRENT_TITLE->i_flags & INPUT_TITLE_MENU);
     bool b_menu_shown = p_sys->b_menu_open
-                     && !p_sys->b_bdj_overlay
+                     && (!p_sys->b_bdj_overlay || b_bdj_top_menu)
                      && !p_sys->b_popup_available;
 
     bool b_inhibit = !p_sys->b_pl_playing            /* menu / first play */
                   || b_menu_shown                    /* interactive menu up */
-                  || p_sys->i_still_end_time != STILL_IMAGE_NOT_SET;
+                  || p_sys->i_still_end_time != STILL_IMAGE_NOT_SET
+                  /* The base video and audio share one chained TS parser.
+                   * A large decoded MVC look-ahead fills the video fifo and
+                   * blocks that parser before it can deliver later audio PES,
+                   * producing periodic HDMI underruns. Edge264 and the vout
+                   * retain their ordinary decode/display pools; only the
+                   * optional user look-ahead cache is disabled here. */
+                  || p_sys->p_mvc_parser != NULL;
 
     if (b_inhibit != p_sys->b_cache_inhibited) {
         p_sys->b_cache_inhibited = b_inhibit;
         es_out_Control(p_demux->out, ES_OUT_SET_VIDEO_CACHE_INHIBIT, b_inhibit);
     }
+}
+
+/* A BD-J application normally closes its ARGB plane when it hands playback
+ * to another title. Some language selectors only clear it and terminate
+ * without sending CLOSE (Frozen does this). Retire a plane that is known to
+ * be empty, or one crossing into HDMV, rather than leaving its subpicture
+ * attached above the next video's vout. */
+static void blurayCloseStaleBdjOverlay(demux_t *p_demux)
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+
+    vlc_mutex_lock(&p_sys->bdj_overlay_lock);
+    if (p_sys->b_bdj_overlay) {
+        msg_Dbg(p_demux, "Closing stale BD-J overlay at title handoff");
+        p_sys->b_bdj_overlay = false;
+        for (int i = 0; i < MAX_OVERLAY; ++i) {
+            blurayClearOverlay(p_demux, i);
+            blurayCloseOverlay(p_demux, i);
+        }
+    }
+    vlc_mutex_unlock(&p_sys->bdj_overlay_lock);
+
+    p_sys->b_menu_open = false;
+    p_sys->b_popup_available = false;
 }
 
 static void blurayHandleEvent(demux_t *p_demux, const BD_EVENT *e, bool b_delayed)
@@ -3476,30 +5256,200 @@ static void blurayHandleEvent(demux_t *p_demux, const BD_EVENT *e, bool b_delaye
 
     switch (e->event) {
     case BD_EVENT_TITLE:
+    {
+        const bool b_was_bdj = blurayIsBdjTitle(p_demux);
+        msg_Dbg(p_demux, "Blu-ray title selected: %u", e->param);
         if (e->param == BLURAY_TITLE_FIRST_PLAY)
             p_demux->info.i_title = p_sys->i_title - 1;
         else
             p_demux->info.i_title = e->param;
+        /* An empty plane is not necessarily stale: Disney BD-J applications
+         * clear it while handing off between their own video titles, then
+         * reuse the same still-open Java plane for the main menu.  Closing it
+         * here discards every later DRAW because libbluray does not emit a
+         * second INIT.  Retire it only when playback actually leaves BD-J. */
+        if (b_was_bdj && !blurayIsBdjTitle(p_demux))
+            blurayCloseStaleBdjOverlay(p_demux);
         /* this is feature title, we don't know yet which playlist it will play (if any) */
         setTitleInfo(p_sys, NULL);
         /* reset title infos here ? */
         p_demux->info.i_update |= INPUT_UPDATE_TITLE | INPUT_UPDATE_SEEKPOINT; /* might be BD-J title with no video */
         break;
+    }
     case BD_EVENT_PLAYLIST:
         /* Start of playlist playback (?????.mpls) */
+        msg_Dbg(p_demux, "Blu-ray playlist selected: %05u.mpls", e->param);
         blurayUpdatePlaylist(p_demux, e->param);
-        if (p_sys->b_pl_playing) {
+        bool b_first_playitem_still = false;
+        vlc_mutex_lock(&p_sys->pl_info_lock);
+        if (p_sys->p_pl_info != NULL && p_sys->p_pl_info->clip_count > 0)
+            b_first_playitem_still =
+                p_sys->p_pl_info->clips[0].still_mode != 0;
+        vlc_mutex_unlock(&p_sys->pl_info_lock);
+
+        if (b_first_playitem_still) {
+            /* Some HDMV menus expose a one-frame MPEG-2 still immediately
+             * after a short H.264 first-play title (Toy Story 3). Retiring
+             * the selected A/V decoder here ensures that the new PMT creates
+             * MPEG-2 before the final PES is flushed below. Scope this to
+             * authored still playlists: ordinary and MVC playlist handoffs
+             * retain their established seamless path. */
+            es_out_Control(p_sys->p_out,
+                           BLURAY_ES_OUT_CONTROL_STOP_RETAINED_AV);
+            blurayRestartParser(p_demux, true, false);
+            es_out_Control(p_demux->out, ES_OUT_RESET_PCR);
+        } else if (p_sys->b_pl_playing) {
             /* previous playlist was stopped in middle. flush to avoid delay */
             msg_Info(p_demux, "Stopping playlist playback");
             blurayRestartParser(p_demux, false, false);
-            es_out_Control( p_demux->out, ES_OUT_RESET_PCR );
+            es_out_Control(p_demux->out, ES_OUT_RESET_PCR);
         }
         p_sys->b_pl_playing = true;
+        p_sys->b_have_playitem = false;
         break;
     case BD_EVENT_PLAYITEM:
-        notifyDiscontinuityToParser(p_sys);
+    {
+        if (p_sys->i_playitem_seen_in_batch == (int)e->param) {
+            msg_Dbg(p_demux, "ignoring duplicate Blu-ray play item %u in the same event batch",
+                    e->param);
+            break;
+        }
+        p_sys->i_playitem_seen_in_batch = e->param;
+        const bool b_continuing_playlist = p_sys->b_have_playitem;
+        const bool b_user_activated_playitem =
+            p_sys->i_last_ig_activation != VLC_TICK_INVALID &&
+            mdate() - p_sys->i_last_ig_activation <= VLC_TICK_FROM_SEC(2);
+        p_sys->b_have_playitem = true;
+        msg_Dbg(p_demux, "Blu-ray play item selected: %u", e->param);
+        /* The parser teardown below was introduced for the Intel/NVIDIA
+         * asynchronous MVC path.  On Apple Silicon both views are decoded by
+         * Edge264 and the teardown erases the timestamp filter's learned
+         * PCR/PES offset at every BD-J play item (Dragons starts PES about
+         * 11.7 seconds after PCR).  Keep the original lightweight handoff on
+         * arm64: mark the old elementary streams discontinuous, then replace
+         * only the dependent clip. */
+#if defined(__arm64__) || defined(__aarch64__)
+        /* With dual Edge264, feed the current play item in a burst so the
+         * primary TS parser always has enough interleaved audio through
+         * bitrate peaks. At a NATURAL end only, wait for that asynchronous
+         * primary FIFO to drain before replacing the dependent parser. The
+         * former 320M per-block throttle kept libbluray and the parser close
+         * together but starved both audio and video; removing it without this
+         * handoff let PLAYITEM close the old dependent view while its queued
+         * base pictures were still being parsed, yielding a black intro.
+         *
+         * A user menu jump occurs before i_mvc_main_read reaches the declared
+         * clip size and deliberately bypasses this wait, so navigation stays
+         * immediate. While draining, continue feeding the already-complete
+         * dependent file in bounded bursts so every remaining base AU can be
+         * paired. */
+        if (p_sys->p_mvc_parser != NULL && p_sys->p_parser != NULL &&
+            p_sys->i_mvc_main_size != 0 &&
+            p_sys->i_mvc_main_read + BD_READ_SIZE >= p_sys->i_mvc_main_size)
+        {
+            const vlc_tick_t started = mdate();
+            const vlc_tick_t deadline = started + VLC_TICK_FROM_SEC(60);
+            /* bd_read_ext() has reached the declared end of the primary
+             * clip.  Round the accounting up to that exact boundary: the
+             * last read can be shorter than BD_READ_SIZE, and using its byte
+             * ratio otherwise leaves the tail of the dependent file unread.
+             * Keep servicing both asynchronous parsers until the dependent
+             * file has also been submitted and consumed. */
+            p_sys->i_mvc_main_read = p_sys->i_mvc_main_size;
+            while (vlc_demux_chained_GetBytes(p_sys->p_parser) != 0 ||
+                   p_sys->i_mvc_clip_read < p_sys->i_mvc_clip_size ||
+                   vlc_demux_chained_GetBytes(p_sys->p_mvc_parser) != 0)
+            {
+                blurayFeedMVC(p_demux, 0);
+                if (mdate() >= deadline)
+                    break;
+                msleep(VLC_TICK_FROM_MS(10));
+            }
+
+            msg_Dbg(p_demux, "natural MVC parser drain submitted %"PRIu64
+                    "/%"PRIu64" dependent bytes",
+                    p_sys->i_mvc_clip_read, p_sys->i_mvc_clip_size);
+
+            /* Emptying the chained TS FIFO only means that the compressed
+             * blocks reached the decoders.  With a multi-second input lead,
+             * most of the clip can still be in the decoder/vout FIFOs.  If
+             * PLAYITEM tears the ES down now, those queued pictures are
+             * discarded while the already-scheduled S/PDIF audio continues
+             * to play (Dragons' DreamWorks logo consequently stays black).
+             *
+             * Keep this natural clip end alive until the video decoder and
+             * the vout have actually emptied. ES_OUT_GET_EMPTY includes both
+             * the compressed decoder FIFO and the decoded-picture FIFO.  A
+             * bounded wait keeps a malformed disc from wedging navigation
+             * forever. */
+            bool empty = false;
+            do
+            {
+                es_out_Control(p_sys->p_out, ES_OUT_GET_EMPTY, &empty);
+                if (!empty)
+                    msleep(10000);
+            }
+            while (!empty && mdate() < deadline);
+
+            msg_Dbg(p_demux, "drained natural MVC play-item handoff in %"PRId64
+                    " ms%s", (mdate() - started) / 1000,
+                    empty ? "" : " (timed out)");
+        }
+        /* A 2D Blu-ray playlist may change both video GOP and passthrough
+         * audio codec at a play-item boundary (Hopper alternates VC-1 with
+         * AC-3/DTS clips).  The chained TS parser is asynchronous: resetting
+         * the input clock while its old FIFO is still alive lets an old PCR
+         * re-anchor that freshly reset clock.  New packets then arrive up to
+         * several seconds late, while old and new VC-1 access units coexist
+         * in the decoder and corrupt its reference pictures.
+         *
+         * Join and discard the old parser first, reset the timestamp filter,
+         * and only then reset the input clock.  MVC uses the carefully
+         * drained seamless handoff above and must retain its continuous
+         * parser and clock. */
+        if (b_continuing_playlist && p_sys->p_mvc_parser == NULL) {
+            blurayRestartParser(p_demux, true, false);
+            es_out_Control(p_sys->p_out,
+                           BLURAY_ES_OUT_CONTROL_FLAG_DISCONTINUITY);
+            es_out_Control(p_sys->p_out,
+                           BLURAY_ES_OUT_CONTROL_RESTART_2D_AV);
+            es_out_Control(p_demux->out, ES_OUT_RESET_PCR);
+            msg_Dbg(p_demux, "joined parser and restarted retained A/V before "
+                             "2D Blu-ray play-item reset");
+        } else if (b_continuing_playlist && b_user_activated_playitem) {
+            /* An authored menu command is a non-seamless jump even when it
+             * happens to stay inside the same MVC playlist.  Keeping the
+             * several seconds of already-decoded menu background made the
+             * button look unresponsive and delayed the selected title. Drop
+             * that old lead just as an explicit seek does; natural clip
+             * boundaries retain the seamless, fully-drained path above. */
+            blurayCloseMVCClip(p_demux);
+            blurayRestartParser(p_demux, true, false);
+            es_out_Control(p_sys->p_out,
+                           BLURAY_ES_OUT_CONTROL_FLAG_DISCONTINUITY);
+            es_out_Control(p_demux->out, ES_OUT_RESET_PCR);
+            p_sys->b_draining = false;
+            p_sys->i_last_ig_activation = VLC_TICK_INVALID;
+            msg_Dbg(p_demux, "flushed buffered MVC menu background after "
+                     "user activation");
+        } else if (b_continuing_playlist)
+            notifyDiscontinuityToParser(p_sys);
+#else
+        if (p_sys->p_mvc_parser != NULL) {
+            blurayCloseMVCClip(p_demux);
+            msg_Dbg(p_demux, "synchronizing both MVC parsers at play-item boundary");
+            blurayRestartParser(p_demux, true, false);
+            es_out_Control(p_sys->p_out,
+                           BLURAY_ES_OUT_CONTROL_FLAG_DISCONTINUITY);
+            es_out_Control(p_demux->out, ES_OUT_RESET_PCR);
+        } else {
+            notifyDiscontinuityToParser(p_sys);
+        }
+#endif
         blurayOnClipUpdate(p_demux, e->param);
+        blurayOpenMVCClip(p_demux, e->param);
         break;
+    }
     case BD_EVENT_CHAPTER:
         if (e->param && e->param < 0xffff)
           p_demux->info.i_seekpoint = e->param - 1;
@@ -3511,6 +5461,7 @@ static void blurayHandleEvent(demux_t *p_demux, const BD_EVENT *e, bool b_delaye
     case BD_EVENT_ANGLE:
         break;
     case BD_EVENT_SEEK:
+    {
         /* Seek will happen with any chapter/title or bd_seek(),
            but also BD-J initiated. We can't make the difference
            between input or vm ones, better double flush/pcr reset
@@ -3518,10 +5469,47 @@ static void blurayHandleEvent(demux_t *p_demux, const BD_EVENT *e, bool b_delaye
         blurayRestartParser(p_demux, true, true);
         notifyDiscontinuityToParser(p_sys);
         es_out_Control(p_sys->p_out, ES_OUT_RESET_PCR);
+        if (p_sys->b_user_seek_preroll) {
+            /* Input controls use the playlist timeline, whereas the blocks
+             * emitted by the TS parser retain the current clip's MPEG-TS
+             * timestamp origin.  They differ substantially on real discs
+             * (about 11.7 seconds on Dragons).  Feeding the playlist value
+             * to es_out therefore ended preroll before the first AC-3 block
+             * and made that block reach CoreAudio roughly 0.5 s late.
+             * Map the requested playlist time into the clip timestamp domain
+             * described by libbluray before setting the display boundary. */
+            vlc_tick_t i_playlist_target = p_sys->i_user_seek_preroll;
+            vlc_tick_t i_stream_target = i_playlist_target;
+            uint64_t i_clip_start = 0;
+            uint64_t i_clip_in = 0;
+
+            vlc_mutex_lock(&p_sys->pl_info_lock);
+            if (p_sys->p_clip_info != NULL) {
+                i_clip_start = p_sys->p_clip_info->start_time;
+                i_clip_in = p_sys->p_clip_info->in_time;
+                const uint64_t i_playlist_target_90k =
+                    TO_SCALE_NZ(i_playlist_target);
+                if (i_playlist_target_90k >= i_clip_start)
+                    i_stream_target = FROM_SCALE_NZ(i_clip_in +
+                                      i_playlist_target_90k - i_clip_start);
+            }
+            vlc_mutex_unlock(&p_sys->pl_info_lock);
+
+            es_out_Control(p_demux->out, ES_OUT_SET_NEXT_DISPLAY_TIME,
+                           i_stream_target);
+            msg_Dbg(p_demux, "user seek preroll playlist=%"PRId64
+                    " stream=%"PRId64" (clip start=%"PRIu64
+                    " in=%"PRIu64")",
+                    i_playlist_target, i_stream_target,
+                    i_clip_start, i_clip_in);
+            p_sys->b_user_seek_preroll = false;
+        }
+        bluraySeekMVC(p_demux);
         break;
+    }
 #if BLURAY_VERSION >= BLURAY_VERSION_CODE(0,8,1)
     case BD_EVENT_UO_MASK_CHANGED:
-        /* This event could be used to grey out unselectable items in title menu */
+        p_sys->i_uo_mask = e->param;
         break;
 #endif
     case BD_EVENT_MENU:
@@ -3529,6 +5517,20 @@ static void blurayHandleEvent(demux_t *p_demux, const BD_EVENT *e, bool b_delaye
         break;
     case BD_EVENT_POPUP:
         p_sys->b_popup_available = e->param;
+        /* A pop-up is composited over continuously playing feature video;
+         * it must not retain the static-frame policy armed when the IG plane
+         * was first created (the POPUP event can arrive after OVERLAY_INIT). */
+        if (p_sys->b_popup_available) {
+            if (p_sys->p_vout != NULL) {
+                vout_ChangeStaticFrameHold(p_sys->p_vout, false);
+            } else {
+                vout_thread_t *vout = input_GetVout(p_demux->p_input);
+                if (vout != NULL) {
+                    vout_ChangeStaticFrameHold(vout, false);
+                    vlc_object_release(vout);
+                }
+            }
+        }
         /* HDMV only -- never raised by BD-J. The interfaces are not driven
          * from here (see INPUT_POPUP_MENU_VAR at open time); the flag serves
          * the navigation and the look-ahead cache below. */
@@ -3571,6 +5573,10 @@ static void blurayHandleEvent(demux_t *p_demux, const BD_EVENT *e, bool b_delaye
              ARRAY_APPEND(p_sys->events_delayed, *e);
         break;
     case BD_EVENT_IG_STREAM:
+        /* Confirms which localized HDMV menu plane libbluray selected. */
+        msg_Dbg(p_demux, "Blu-ray interactive graphics stream selected: %u",
+                e->param);
+        break;
     case BD_EVENT_SECONDARY_AUDIO:
     case BD_EVENT_SECONDARY_AUDIO_STREAM:
     case BD_EVENT_SECONDARY_VIDEO:
@@ -3581,25 +5587,45 @@ static void blurayHandleEvent(demux_t *p_demux, const BD_EVENT *e, bool b_delaye
     /*
      * playback control events
      */
+    case BD_EVENT_PLAYLIST_STOP:
+        /* BD-J can queue the replacement playlist before reporting that the
+         * preceding one was stopped (Angry Birds does this when Top Menu is
+         * requested during its intro).  The event contract says to flush all
+         * buffers.  Ignoring it left base-view packets and MVC references from
+         * both playlists in the recycled decoder, displaying a frozen,
+         * macroblocked frame until the next clean random-access point. */
+        msg_Dbg(p_demux, "Blu-ray playlist stopped; flushing playback state");
+        p_sys->b_draining = false;
+        p_sys->b_pl_playing = false;
+        blurayCloseMVCClip(p_demux);
+        blurayRestartParser(p_demux, true, false);
+        es_out_Control(p_sys->p_out,
+                       BLURAY_ES_OUT_CONTROL_FLAG_DISCONTINUITY);
+        es_out_Control(p_demux->out, ES_OUT_RESET_PCR);
+        break;
     case BD_EVENT_STILL_TIME:
         blurayStillImage(p_demux, e->param);
         break;
     case BD_EVENT_STILL:
-        /* BD-J still mode: hold the last decoded frame while the disc keeps
-         * the screen. Distinct from BD_EVENT_STILL_TIME, which is the HDMV
-         * timed still: this one carries no duration (param is 1 to enter, 0
-         * to leave) and libbluray only sends it on transitions, never as a
-         * repeating tick.
+        msg_Dbg(p_demux, "Blu-ray still state: %u", e->param);
+        /* BD_EVENT_STILL is emitted by both the JVM and the HDMV graphics VM.
+         * Only the BD-J form must flush the last access unit and hold it here:
+         * an HDMV STILL_ON belongs to an interactive menu object whose IG
+         * plane may be flushed immediately afterwards. Flushing the video ES
+         * for that event can retire the only vout before the pending IG plane
+         * is attached, leaving a perfectly live menu with invisible buttons
+         * (seen on Up at the Walt Disney Studios first-play page).
          *
-         * Ignoring it is what made a BD-J menu unreachable: the disc enters
-         * still at the end of its pre-menu sequence and waits for the menu
-         * Xlet, bd_read_ext() then returns no data, and the player -- which
-         * kept asking for some -- ended up replaying the intro in a loop
-         * instead of showing the menu (measured on Rio, org 0x7fff646c). */
-        if (e->param)
-            blurayStillImage(p_demux, 0); /* 0 -> STILL_IMAGE_INFINITE */
-        else
-            blurayResetStillImage(p_demux);
+         * Ignoring the BD-J form, on the other hand, made Rio's pre-menu
+         * sequence loop while its Xlet waited in still mode. Keep that fix,
+         * but scope it to BD-J titles. HDMV play-item stills continue to use
+         * BD_EVENT_STILL_TIME below. */
+        if (blurayIsBdjTitle(p_demux)) {
+            if (e->param)
+                blurayStillImage(p_demux, 0); /* 0 -> STILL_IMAGE_INFINITE */
+            else
+                blurayResetStillImage(p_demux);
+        }
         break;
     case BD_EVENT_DISCONTINUITY:
         /* reset demuxer (partially decoded PES packets must be dropped) */
@@ -3656,14 +5682,48 @@ static void blurayHandleOverlays(demux_t *p_demux, int nread)
         }
         vlc_mutex_lock(&ov->lock);
         bool display = ov->status == ToDisplay;
+        bool refresh_due = ov->status == Outdated &&
+                           ov->i_update_date > VLC_TICK_INVALID &&
+                           mdate() >= ov->i_update_date;
+        int stale_channel = -1;
+        subpicture_updater_sys_t *stale_updater = NULL;
+        if (refresh_due) {
+            ov->i_update_date = VLC_TICK_INVALID;
+            stale_channel = ov->i_channel;
+            stale_updater = ov->p_updater;
+            ov->i_channel = -1;
+            ov->p_updater = NULL;
+            ov->status = ToDisplay;
+        }
         vlc_mutex_unlock(&ov->lock);
+        /* The video decoder can save and reuse its vout between the initial
+         * empty IG flush and this deliberately delayed completed page.  That
+         * resets the SPU heap without changing the vout object, leaving the
+         * overlay's registered channel stale.  Replace that channel at the
+         * deadline instead of trying to refresh a subpicture that the reused
+         * vout no longer owns. */
+        if (refresh_due) {
+            msg_Dbg(p_demux, "replacing scheduled Blu-ray overlay channel "
+                    "for plane %d", i);
+            if (p_sys->p_vout != NULL && stale_channel != -1)
+                vout_FlushSubpictureChannel(p_sys->p_vout, stale_channel);
+            if (stale_updater != NULL)
+                unref_subpicture_updater(stale_updater);
+            if (p_sys->p_vout != NULL) {
+                bluraySendOverlayToVout(p_demux, ov);
+                display = false;
+            } else {
+                display = true;
+            }
+        }
         if (display) {
+            bool b_new_vout = false;
+
+            msg_Dbg(p_demux, "Blu-ray overlay ready, vout=%p, read=%d",
+                    (void *)p_sys->p_vout, nread);
             if (p_sys->p_vout == NULL) {
                 p_sys->p_vout = input_GetVout(p_demux->p_input);
-                if (p_sys->p_vout != NULL) {
-                    var_AddCallback(p_sys->p_vout, "mouse-moved", onMouseEvent, p_demux);
-                    var_AddCallback(p_sys->p_vout, "mouse-clicked", onMouseEvent, p_demux);
-                }
+                b_new_vout = p_sys->p_vout != NULL;
             }
 
             /* NOTE: we might want to enable background video always when there's no video stream playing.
@@ -3672,16 +5732,27 @@ static void blurayHandleOverlays(demux_t *p_demux, int nread)
                (sometimes BD-J runs slowly ...)
             */
             if (!p_sys->p_vout && !p_sys->p_dummy_video && p_sys->b_menu &&
-                !p_sys->p_pl_info && nread == 0 &&
-                blurayIsBdjTitle(p_demux)) {
+                nread == 0 && blurayIsBdjTitle(p_demux)) {
 
-                /* Looks like there's no video stream playing.
-                   Emit blank frame so that BD-J overlay can be drawn. */
-                if(blurayCreateBackgroundUnlocked(p_demux) != NULL)
+                /* A playlist record does not guarantee that its selected
+                 * video stream will ever produce a picture.  Some BD-J first
+                 * play titles (Cars 3) enter an infinite still with such an
+                 * empty stream, then create their ARGB language menu.  Emit a
+                 * blank frame whenever the plane is ready but no vout exists. */
+                if(blurayCreateBackgroundUnlocked(p_demux) != NULL) {
                     p_sys->p_vout = input_GetVout(p_demux->p_input);
+                    b_new_vout = p_sys->p_vout != NULL;
+                }
             }
 
             if (p_sys->p_vout != NULL) {
+                /* This vout can have been obtained either before or after the
+                 * synthetic BD-J background was created.  In both cases its
+                 * first adoption must wire the interactive-menu callbacks. */
+                if (b_new_vout) {
+                    var_AddCallback(p_sys->p_vout, "mouse-moved", onMouseEvent, p_demux);
+                    var_AddCallback(p_sys->p_vout, "mouse-clicked", onMouseEvent, p_demux);
+                }
                 bluraySendOverlayToVout(p_demux, ov);
             }
         }
@@ -3699,13 +5770,71 @@ static int onIntfEvent( vlc_object_t *p_input, char const *psz_var,
 
     if (val.i_int == INPUT_EVENT_VOUT) {
 
+        /* Replacing one MVC disc with another can reuse the existing vout
+         * without reopening its macOS display module.  If the file chooser
+         * left fullscreen, assert only the missing true edge as soon as the
+         * new input publishes its vout.  Never replay false/true: that older
+         * workaround exposed Finder and could leave a later menu windowed. */
+        if (p_sys->b_inherited_stereo_presentation &&
+            !p_sys->b_stereo_presentation_checked) {
+            vout_thread_t *vout = input_GetVout(p_demux->p_input);
+            if (vout != NULL) {
+                p_sys->b_stereo_presentation_checked = true;
+                if (!var_GetBool(vout, "fullscreen")) {
+                    var_SetBool(vout, "fullscreen", true);
+                    msg_Info(p_demux, "restoring retained HDMI 3D fullscreen "
+                             "for replacement Blu-ray");
+                }
+                vlc_object_release(vout);
+            }
+        }
+
+        /* An HDMV first-play title can flush its short background clip before
+         * libbluray creates the interactive plane (Cars 2 does this by about
+         * 30 ms).  Arm the last-frame hold as soon as the vout exists, while
+         * displayed.current still owns that background.  Waiting for
+         * BD_OVERLAY_INIT is too late: the display keeps the pixels on screen,
+         * but VLC has already released the picture needed to blend the menu. */
+        if (p_sys->b_menu && !p_sys->b_popup_available &&
+            !blurayIsBdjTitle(p_demux)) {
+            vout_thread_t *vout = input_GetVout(p_demux->p_input);
+            if (vout != NULL) {
+                vout_ChangeStaticFrameHold(vout, true);
+                vlc_object_release(vout);
+            }
+        }
+
         vlc_mutex_lock(&p_sys->bdj_overlay_lock);
-        if( p_sys->p_vout != NULL ) {
+        bool b_hold_hdmv_menu_vout = false;
+        if (p_sys->p_vout != NULL &&
+            p_sys->b_menu_open &&
+            !p_sys->b_popup_available &&
+            !p_sys->b_bdj_overlay) {
+            for (int i = 0; i < MAX_OVERLAY; ++i) {
+                if (p_sys->p_overlays[i] != NULL) {
+                    b_hold_hdmv_menu_vout = true;
+                    break;
+                }
+            }
+        }
+
+        /* The TS parser is recreated at an HDMV playlist boundary.  VLC then
+         * reports the old decoder's vout as temporarily free before the new
+         * decoder has a complete picture.  The VOUT event can race a few
+         * milliseconds ahead of BD_EVENT_STILL_TIME, so key this on the
+         * already-open full-screen HDMV menu rather than the still deadline.
+         * Such a menu may have no next picture: releasing our reference would
+         * permanently detach its interactive plane.  Popup menus are excluded
+         * because their plane intentionally persists over a feature title. */
+        if (b_hold_hdmv_menu_vout) {
+            msg_Dbg(p_demux, "Holding video output for infinite HDMV menu still");
+        } else if( p_sys->p_vout != NULL ) {
             blurayReleaseVout(p_demux);
         }
         vlc_mutex_unlock(&p_sys->bdj_overlay_lock);
 
-        blurayHandleOverlays(p_demux, 1);
+        if (!b_hold_hdmv_menu_vout)
+            blurayHandleOverlays(p_demux, 1);
     }
 
     return VLC_SUCCESS;
@@ -3738,6 +5867,12 @@ static int blurayDemux(demux_t *p_demux)
 
     int nread;
 
+    /* bd_read[_ext]() may return PLAYITEM directly and leave an identical
+     * copy in libbluray's event queue. Treat those as one transition. The
+     * marker is deliberately reset for every read so a later seek back to
+     * the same clip remains a real play-item change. */
+    p_sys->i_playitem_seen_in_batch = -1;
+
     if (p_sys->b_menu == false) {
         nread = bd_read(p_sys->bluray, p_block->p_buffer, BD_READ_SIZE);
         while (bd_get_event(p_sys->bluray, &e))
@@ -3750,6 +5885,11 @@ static int blurayDemux(demux_t *p_demux)
         }
     }
 
+    /* The duplicate marker is meaningful only inside this libbluray event
+     * batch. A disc which emits PLAYITEM without DISCONTINUITY must not cause
+     * an unrelated discontinuity on the next read to be ignored. */
+    p_sys->b_playitem_reset_pending = false;
+
     /* After the events, so a title/menu/still transition takes effect on the
      * same iteration that reported it. */
     blurayCacheInhibitUpdate(p_demux);
@@ -3759,6 +5899,7 @@ static int blurayDemux(demux_t *p_demux)
         blurayHandleEvent(p_demux, &p_sys->events_delayed.p_elems[i], true);
     p_sys->events_delayed.i_size = 0;
 
+
     blurayHandleOverlays(p_demux, nread);
 
     if (nread <= 0) {
@@ -3766,6 +5907,17 @@ static int blurayDemux(demux_t *p_demux)
         if (p_sys->b_fatal_error || nread < 0) {
             msg_Err(p_demux, "bluray: stopping playback after fatal error\n");
             return VLC_DEMUXER_EGENERIC;
+        }
+        /* The chained primary TS parser can still be consuming blocks after
+         * libbluray has reached a play-item still/end.  Keep servicing the
+         * throttled dependent-view feeder while its file is incomplete;
+         * otherwise a late primary parser can build a many-second base queue
+         * with no remaining demux iteration capable of supplying its pairs. */
+        if (p_sys->p_mvc_file != NULL &&
+            p_sys->i_mvc_clip_read < p_sys->i_mvc_clip_size) {
+            blurayFeedMVC(p_demux, 0);
+            msleep(VLC_TICK_FROM_MS(10));
+            return VLC_DEMUXER_SUCCESS;
         }
         if (!p_sys->b_menu) {
             return VLC_DEMUXER_EOF;
@@ -3784,7 +5936,25 @@ static int blurayDemux(demux_t *p_demux)
 
     stopBackground(p_demux);
 
+    /* The dependent parser is primed when its clip is opened, so the first
+     * base access unit already has a pair available.  From here on publish
+     * the primary block first: it also carries the audio streams, and making
+     * it wait behind dependent-view catch-up stalls HDMI audio for hundreds
+     * of milliseconds whenever that queue is throttled. */
     vlc_demux_chained_Send(p_sys->p_parser, p_block);
+    blurayFeedMVC(p_demux, nread);
+
+#if defined(__APPLE__) && defined(__aarch64__)
+    if (p_sys->p_mvc_parser != NULL)
+    {
+        /* Give both chained TS workers one scheduling quantum to publish
+         * their decoded pairing depth before bd_read_ext() queues the next
+         * 60 KiB from each file.  One millisecond still permits about
+         * 60 MiB/s of compressed input (far beyond Blu-ray's maximum), while
+         * the former NVIDIA 10 ms throttle was slow enough to starve audio. */
+        msleep(1000);
+    }
+#endif
 
     p_sys->b_flushed = false;
 

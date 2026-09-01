@@ -1,0 +1,13 @@
+--- libplist/src/plist.h.orig
++++ libplist/src/plist.h
+@@ -35,7 +35,9 @@
+ #endif
+ 
+ #ifdef WIN32
+-  #define PLIST_API __declspec( dllexport )
++  /* PowerVLC builds libplist as a static contrib.  Export attributes on the
++   * definitions conflict with the unadorned public declarations in Clang. */
++  #define PLIST_API
+ #else
+   #ifdef HAVE_FVISIBILITY
+     #define PLIST_API __attribute__((visibility("default")))

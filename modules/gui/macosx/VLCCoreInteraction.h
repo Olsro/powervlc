@@ -26,6 +26,7 @@
 
 /* Posted whenever the clip creation mode is entered or left */
 extern NSString *VLCClipCreationModeChangedNotification;
+extern NSString *VLCFullscreenFeedbackNotification;
 
 @interface VLCCoreInteraction : NSObject
 
@@ -109,8 +110,15 @@ extern NSString *VLCClipCreationModeChangedNotification;
 
 - (void)volumeUp;
 - (void)volumeDown;
+- (void)setVolumeFromVisibleControl:(int)value;
+- (BOOL)shouldSuppressVolumeOSD;
 - (void)toggleMute;
+- (void)showVolumeOSD;
+- (void)scheduleVolumeOSD;
+- (void)showPlaybackStateOSD:(BOOL)paused;
+- (void)showMuteOSD;
 - (void)showPosition;
+- (void)schedulePositionOSD;
 - (void)startListeningWithAppleRemote;
 - (void)stopListeningWithAppleRemote;
 

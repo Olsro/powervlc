@@ -1,0 +1,46 @@
+--- a/edge264/src/edge264_internal.h
++++ b/edge264/src/edge264_internal.h
+@@ -26,7 +26,24 @@
+ #else
+ 	#include <unistd.h>
+ 	#include <sys/resource.h>
++	/* aligned_alloc() is C11 and absent from the old macOS deployment SDKs
++	 * supported by PowerVLC. This fallback also avoids C11's requirement that
++	 * size be an exact multiple of alignment. */
++	#ifdef __APPLE__
++		static inline void *edge264_aligned_alloc(size_t alignment, size_t size) {
++			void *raw = malloc(size + alignment - 1 + sizeof(void *));
++			if (!raw)
++				return NULL;
++			uintptr_t p = ((uintptr_t)raw + sizeof(void *) + alignment - 1)
++			            & ~(uintptr_t)(alignment - 1);
++			((void **)p)[-1] = raw;
++			return (void *)p;
++		}
++		#define aligned_alloc(a, s) edge264_aligned_alloc((a), (s))
++		#define aligned_free(p) free(((void **)(p))[-1])
++	#else
+ 	#define aligned_free(p) free(p)
++	#endif
+ #endif
+ 
+ #include "../edge264.h"
+@@ -1135,9 +1152,18 @@ static always_inline uint64_t get_relative_time_us() {
+ 		QueryPerformanceFrequency(&frequency);
+ 		QueryPerformanceCounter(&ticks);
+ 		return (uint64_t)ticks.QuadPart * 1000000 / frequency.QuadPart;
++	#elif defined(__APPLE__)
++		/* clock_gettime() only appeared in macOS 10.12.  PowerVLC still
++		 * supports Intel Macs as far back as 10.6, where getrusage() is
++		 * available and preserves Edge264's process-CPU-time semantics. */
++		struct rusage usage;
++		if (getrusage(RUSAGE_SELF, &usage) != 0)
++			return 0;
++		return (uint64_t)(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * 1000000
++		     + usage.ru_utime.tv_usec + usage.ru_stime.tv_usec;
+ 	#else
+ 		struct timespec tp;
+ 		clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &tp);
+ 		return (uint64_t)tp.tv_sec * 1000000 + tp.tv_nsec / 1000;
+ 	#endif
+ }

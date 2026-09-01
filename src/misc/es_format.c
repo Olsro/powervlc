@@ -412,6 +412,9 @@ bool video_format_IsSimilar( const video_format_t *f1,
     if( f1->multiview_mode!= f2->multiview_mode )
        return false;
 
+    if( memcmp( &f1->dovi, &f2->dovi, sizeof(f1->dovi) ) )
+        return false;
+
     if( f1->i_chroma == VLC_CODEC_RGB15 ||
         f1->i_chroma == VLC_CODEC_RGB16 ||
         f1->i_chroma == VLC_CODEC_RGB24 ||
@@ -620,4 +623,3 @@ bool es_format_IsSimilar( const es_format_t *p_fmt1, const es_format_t *p_fmt2 )
         return true;
     }
 }
-

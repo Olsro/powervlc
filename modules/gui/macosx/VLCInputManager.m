@@ -35,9 +35,13 @@
 #import "VLCTrackSynchronizationWindowController.h"
 #import "VLCVoutView.h"
 #import "VLCRemoteControlService.h"
+#import "VLCStringUtility.h"
 
 #import "iTunes.h"
 #import "Spotify.h"
+
+#include <vlc_actions.h>
+#include <vlc_vout_osd.h>
 
 NSString *VLCPlayerRateChanged = @"VLCPlayerRateChanged";
 
@@ -46,6 +50,8 @@ NSString *VLCPlayerRateChanged = @"VLCPlayerRateChanged";
 - (void)updateMainWindow;
 - (void)updateMetaAndInfo;
 - (void)updateDelays;
+- (void)cancelResumeOSD;
+- (void)resumeOSDTick:(NSTimer *)timer;
 @end
 
 #pragma mark Callbacks
@@ -119,6 +125,10 @@ static int InputEvent(vlc_object_t *p_this, const char *psz_var,
                 [inputManager performSelectorOnMainThread:@selector(updateMetaAndInfo) withObject: nil waitUntilDone:NO];
                 break;
             case INPUT_EVENT_BOOKMARK:
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [[NSNotificationCenter defaultCenter]
+                        postNotificationName:VLCBookmarksChangedNotification object:nil];
+                });
                 break;
             case INPUT_EVENT_RECORD:
                 dispatch_async(dispatch_get_main_queue(), ^{
@@ -176,6 +186,27 @@ static int InputEvent(vlc_object_t *p_this, const char *psz_var,
 
     NSTimer *hasEndedTimer;
 
+    /* INPUT_EVENT_POSITION is the one common path for keyboard, OSD and
+     * remote-control seeks.  Keep a short media/wall-clock baseline here so
+     * feedback does not depend on which Cocoa window happened to receive the
+     * key event. */
+    vlc_tick_t feedbackLastMediaTime;
+    NSTimeInterval feedbackLastWallTime;
+    BOOL feedbackPositionPrimed;
+    int feedbackLastPlaybackState;
+
+    /* The resume question lives in the video OSD instead of a native panel:
+     * it consequently follows the vout onto the 3D display and is duplicated
+     * for both eyes by the stereo OSD compositor. The deadline starts only
+     * once a vout exists, not while HDMI frame packing is being engaged. */
+    NSTimer *resumeOSDTimer;
+    vlc_tick_t resumeOSDTarget;
+    NSTimeInterval resumeOSDDeadline;
+    NSTimeInterval resumeOSDLastDraw;
+    int resumeOSDLastCountdown;
+    BOOL resumeOSDContinueSelected;
+    BOOL resumeOSDAutoCloseCancelled;
+
     VLCRemoteControlService *_remoteControlService;
 }
 @end
@@ -232,6 +263,8 @@ static int InputEvent(vlc_object_t *p_this, const char *psz_var,
 
     [[NSNotificationCenter defaultCenter] removeObserver: self];
 
+    [self cancelResumeOSD];
+
     if (p_current_input) {
         /* continue playback where you left off */
         [self storePlaybackPositionForItem:p_current_input];
@@ -254,6 +287,12 @@ static int InputEvent(vlc_object_t *p_this, const char *psz_var,
 
 - (void)inputThreadChanged
 {
+    [self cancelResumeOSD];
+    feedbackPositionPrimed = NO;
+    feedbackLastMediaTime = 0;
+    feedbackLastWallTime = 0.;
+    feedbackLastPlaybackState = -1;
+
     if (p_current_input) {
         var_DelCallback(p_current_input, "intf-event", InputEvent, (__bridge void *)self);
         vlc_object_release(p_current_input);
@@ -264,9 +303,6 @@ static int InputEvent(vlc_object_t *p_this, const char *psz_var,
         [[NSNotificationCenter defaultCenter] postNotificationName:VLCInputChangedNotification
                                                             object:nil];
     }
-
-    // Cancel pending resume dialogs
-    [[[VLCMain sharedInstance] resumeDialog] cancel];
 
     input_thread_t *p_input_changed = NULL;
 
@@ -311,6 +347,66 @@ static int InputEvent(vlc_object_t *p_this, const char *psz_var,
 
 - (void)playbackPositionUpdated
 {
+    if (p_current_input) {
+        const vlc_tick_t mediaTime = var_GetInteger(p_current_input, "time");
+        const NSTimeInterval wallTime =
+            [NSDate timeIntervalSinceReferenceDate];
+
+        /* BD-J regularly switches playlists and resets the title clock when
+         * moving between menu clips and the feature.  Those discontinuities
+         * are not user seeks; the generic heuristic below used to turn them
+         * into a duplicated stereo position OSD.  Real seek actions already
+         * request their feedback explicitly through the hotkeys/UI path. */
+        const BOOL blurayDiscSession =
+            var_GetBool(p_current_input, "bluray-disc-session");
+        if (feedbackPositionPrimed && !blurayDiscSession) {
+            const NSTimeInterval wallDelta =
+                wallTime - feedbackLastWallTime;
+
+            /* A network/MVC seek can take several seconds before the first
+             * new position event arrives.  Still compare those delayed
+             * events, but require actual media movement below so a plain
+             * decoder stall cannot masquerade as a backwards seek. */
+            if (wallDelta >= 0. && wallDelta <= 30.) {
+                double expectedDelta = 0.;
+                if (var_GetInteger(p_current_input, "state") == PLAYING_S) {
+                    float rate = var_GetFloat(p_current_input, "rate");
+                    if (rate <= 0.f)
+                        rate = 1.f;
+                    expectedDelta = wallDelta * (double)CLOCK_FREQ * rate;
+                }
+
+                const double discontinuity =
+                    (double)(mediaTime - feedbackLastMediaTime)
+                    - expectedDelta;
+                const double mediaDelta =
+                    (double)(mediaTime - feedbackLastMediaTime);
+
+                /* Normal demux jitter remains well below this threshold,
+                 * whereas the default short jumps are about ten seconds.
+                 * This callback already runs on the main thread and observes
+                 * the post-seek time, so draw immediately: a delayed,
+                 * coalescing selector could remain postponed by rapid key
+                 * repeats. */
+                if (fabs(discontinuity) >= 2. * (double)CLOCK_FREQ
+                    && (wallDelta <= 1.5
+                        || fabs(mediaDelta) >= 2. * (double)CLOCK_FREQ)) {
+                    msg_Dbg(getIntf(), "seek feedback: media delta %.3f s, "
+                            "wall delta %.3f s, discontinuity %.3f s",
+                            mediaDelta / CLOCK_FREQ, wallDelta,
+                            discontinuity / CLOCK_FREQ);
+                    [[VLCCoreInteraction sharedInstance] showPosition];
+                }
+            }
+        }
+
+        feedbackLastMediaTime = mediaTime;
+        feedbackLastWallTime = wallTime;
+        feedbackPositionPrimed = YES;
+    } else {
+        feedbackPositionPrimed = NO;
+    }
+
     [[[VLCMain sharedInstance] mainWindow] updateTimeSlider];
     [[[VLCMain sharedInstance] statusBarIcon] updateProgress];
     [_remoteControlService playbackPositionUpdated];
@@ -329,6 +425,18 @@ static int InputEvent(vlc_object_t *p_this, const char *psz_var,
     if (p_current_input) {
         state = var_GetInteger(p_current_input, "state");
     }
+
+    /* Confirm the transition before drawing. The immediate hotkey icon can
+     * race the frame-packed vout recreation on Mavericks; this state event
+     * is the stable common path for keyboard, mouse and remote controls. */
+    if ((feedbackLastPlaybackState == PLAYING_S
+         || feedbackLastPlaybackState == PAUSE_S)
+        && (state == PLAYING_S || state == PAUSE_S)
+        && state != feedbackLastPlaybackState) {
+        [[VLCCoreInteraction sharedInstance]
+            showPlaybackStateOSD:(state == PAUSE_S)];
+    }
+    feedbackLastPlaybackState = state;
 
     // cancel itunes timer if next item starts playing
     if (state > -1 && state != END_S) {
@@ -614,6 +722,157 @@ static int InputEvent(vlc_object_t *p_this, const char *psz_var,
 #pragma mark -
 #pragma mark Resume logic
 
+- (void)cancelResumeOSD
+{
+    BOOL hadPrompt = resumeOSDTarget > 0;
+    [resumeOSDTimer invalidate];
+    resumeOSDTimer = nil;
+    resumeOSDTarget = 0;
+    resumeOSDDeadline = 0.;
+    resumeOSDLastDraw = 0.;
+    resumeOSDLastCountdown = -1;
+    resumeOSDAutoCloseCancelled = NO;
+
+    if (hadPrompt && p_current_input) {
+        vout_thread_t *p_vout = input_GetVout(p_current_input);
+        if (p_vout) {
+            vout_FlushSubpictureChannel(p_vout, VOUT_SPU_CHANNEL_OSD);
+            vlc_object_release(p_vout);
+        }
+    }
+}
+
+- (void)finishResumeOSDContinuing:(BOOL)continuePlayback
+{
+    vlc_tick_t target = resumeOSDTarget;
+    [self cancelResumeOSD];
+
+    if (continuePlayback && target > 0 && p_current_input) {
+        msg_Dbg(getIntf(), "continuing playback at %lld", target);
+        var_SetInteger(p_current_input, "time", target);
+    }
+}
+
+- (void)resumeOSDTick:(NSTimer *)timer
+{
+    VLC_UNUSED(timer);
+    if (resumeOSDTarget <= 0 || !p_current_input) {
+        [self cancelResumeOSD];
+        return;
+    }
+
+    vout_thread_t *p_vout = input_GetVout(p_current_input);
+    if (!p_vout)
+        return;
+
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    int countdown = -1;
+    if (!resumeOSDAutoCloseCancelled) {
+        if (resumeOSDDeadline <= 0.)
+            resumeOSDDeadline = now + 10.;
+
+        countdown = (int)(resumeOSDDeadline - now + .999);
+        if (countdown <= 0) {
+            vlc_object_release(p_vout);
+            [self finishResumeOSDContinuing:NO];
+            return;
+        }
+    }
+
+    /* The vout OSD has a finite lifetime. Before interaction the changing
+     * countdown naturally refreshes it once per second. Once automatic close
+     * is cancelled, keep refreshing at the same quiet cadence so the choice
+     * remains on screen indefinitely without redrawing four times per second. */
+    if (countdown != resumeOSDLastCountdown
+        || (resumeOSDAutoCloseCancelled && now - resumeOSDLastDraw >= 1.)) {
+        resumeOSDLastCountdown = countdown;
+        resumeOSDLastDraw = now;
+        NSString *resumeTime = [[VLCStringUtility sharedInstance]
+            stringForTime:resumeOSDTarget / CLOCK_FREQ];
+        NSString *choices = resumeOSDContinueSelected
+            ? [NSString stringWithFormat:@"[ %@ ]     %@",
+                                         _NS("Continue"), _NS("Restart playback")]
+            : [NSString stringWithFormat:@"  %@     [ %@ ]",
+                                         _NS("Continue"), _NS("Restart playback")];
+        NSString *message;
+        if (resumeOSDAutoCloseCancelled)
+            message = [NSString stringWithFormat:
+                _NS("Continue at %@?\n%@\nLeft/Right: select   Enter: confirm   Esc: restart"),
+                resumeTime, choices];
+        else
+            message = [NSString stringWithFormat:
+                _NS("Continue at %@?\n%@\nLeft/Right: select   Enter: confirm   Esc: restart   (%d)"),
+                resumeTime, choices, countdown];
+        vout_OSDText(p_vout, VOUT_SPU_CHANNEL_OSD, 0,
+                     VLC_TICK_FROM_MS(1250), [message UTF8String]);
+    }
+    vlc_object_release(p_vout);
+}
+
+- (void)showResumeOSDAtTime:(vlc_tick_t)target
+{
+    [self cancelResumeOSD];
+    msg_Dbg(getIntf(), "showing resume choice in video OSD at %lld", target);
+    resumeOSDTarget = target;
+    resumeOSDContinueSelected = YES;
+    resumeOSDDeadline = 0.;
+    resumeOSDLastDraw = 0.;
+    resumeOSDLastCountdown = -1;
+    resumeOSDAutoCloseCancelled = NO;
+    resumeOSDTimer = [NSTimer scheduledTimerWithTimeInterval:.25
+                                                      target:self
+                                                    selector:@selector(resumeOSDTick:)
+                                                    userInfo:nil
+                                                     repeats:YES];
+    [self resumeOSDTick:resumeOSDTimer];
+}
+
+- (void)noteResumeOSDUserInteraction
+{
+    if (resumeOSDTarget <= 0 || resumeOSDAutoCloseCancelled)
+        return;
+
+    resumeOSDAutoCloseCancelled = YES;
+    resumeOSDDeadline = 0.;
+    resumeOSDLastCountdown = -1;
+    resumeOSDLastDraw = 0.;
+    msg_Dbg(getIntf(), "resume OSD auto-close cancelled by user interaction");
+    [self resumeOSDTick:resumeOSDTimer];
+}
+
+- (BOOL)handleResumeOSDKey:(unsigned int)key
+{
+    if (resumeOSDTarget <= 0)
+        return NO;
+
+    /* Every key press grants unlimited decision time, including keys which
+     * are not owned by this prompt and continue into the normal hotkey path. */
+    [self noteResumeOSDUserInteraction];
+
+    switch (key) {
+        case KEY_LEFT:
+        case KEY_UP:
+            resumeOSDContinueSelected = YES;
+            resumeOSDLastCountdown = -1;
+            [self resumeOSDTick:resumeOSDTimer];
+            return YES;
+        case KEY_RIGHT:
+        case KEY_DOWN:
+            resumeOSDContinueSelected = NO;
+            resumeOSDLastCountdown = -1;
+            [self resumeOSDTick:resumeOSDTimer];
+            return YES;
+        case KEY_ENTER:
+            [self finishResumeOSDContinuing:resumeOSDContinueSelected];
+            return YES;
+        case KEY_ESC:
+            [self finishResumeOSDContinuing:NO];
+            return YES;
+        default:
+            return NO;
+    }
+}
+
 
 - (BOOL)isValidResumeItem:(input_item_t *)p_item
 {
@@ -650,11 +909,11 @@ static int InputEvent(vlc_object_t *p_this, const char *psz_var,
         return;
 
     /* allow the user to over-write the start/stop/run-time */
-    if (var_GetFloat(p_input_thread, "run-time") > 0 ||
-        var_GetFloat(p_input_thread, "start-time") > 0 ||
-        var_GetFloat(p_input_thread, "stop-time") != 0) {
+    float runTime = var_GetFloat(p_input_thread, "run-time");
+    float startTime = var_GetFloat(p_input_thread, "start-time");
+    float stopTime = var_GetFloat(p_input_thread, "stop-time");
+    if (runTime > 0 || startTime > 0 || stopTime != 0)
         return;
-    }
 
     /* check for file existance before resuming */
     if (![self isValidResumeItem:p_item])
@@ -670,28 +929,20 @@ static int InputEvent(vlc_object_t *p_this, const char *psz_var,
     if (!lastPosition || lastPosition.intValue <= 0)
         return;
 
-    int settingValue = config_GetInt(getIntf(), "macosx-continue-playback");
+    int settingValue = (int)var_InheritInteger(p_input_thread,
+                                                "macosx-continue-playback");
     if (settingValue == 2) // never resume
         return;
 
-    CompletionBlock completionBlock = ^(enum ResumeResult result) {
-
-        if (result == RESUME_RESTART)
-            return;
-
-        vlc_tick_t lastPos = (vlc_tick_t)lastPosition.intValue * 1000000;
-        msg_Dbg(getIntf(), "continuing playback at %lld", lastPos);
-        var_SetInteger(p_input_thread, "time", lastPos);
-    };
+    vlc_tick_t lastPos = (vlc_tick_t)lastPosition.intValue * CLOCK_FREQ;
 
     if (settingValue == 1) { // always
-        completionBlock(RESUME_NOW);
+        msg_Dbg(getIntf(), "continuing playback at %lld", lastPos);
+        var_SetInteger(p_input_thread, "time", lastPos);
         return;
     }
 
-    [[[VLCMain sharedInstance] resumeDialog] showWindowWithItem:p_item
-                                               withLastPosition:lastPosition.intValue
-                                                completionBlock:completionBlock];
+    [self showResumeOSDAtTime:lastPos];
 
 }
 

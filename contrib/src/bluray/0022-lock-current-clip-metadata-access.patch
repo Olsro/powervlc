@@ -1,0 +1,42 @@
+From: PowerVLC
+Subject: [PATCH] Lock current clip metadata access
+
+bd_get_clpi() reads the current NAV_TITLE while BD-J can replace that title
+from another thread.  nav_title_close() clears clip_list.clip before freeing
+the title, but leaves clip_list.count unchanged; the unlocked getter can thus
+observe a positive count with a NULL clip array and dereference address 0x48.
+
+Use the BLURAY API mutex, as the other current-title accessors do, and reject
+all incomplete states before retaining the CLPI object.
+
+--- a/src/libbluray/bluray.c
++++ b/src/libbluray/bluray.c
+@@ -4338,11 +4338,25 @@
+ 
+ struct clpi_cl *bd_get_clpi(BLURAY *bd, unsigned clip_ref)
+ {
+-    if (bd->title && clip_ref < bd->title->clip_list.count) {
++    struct clpi_cl *result = NULL;
++
++    if (bd == NULL) {
++        return NULL;
++    }
++
++    bd_mutex_lock(&bd->mutex);
++
++    if (bd->title != NULL &&
++        bd->title->clip_list.clip != NULL &&
++        clip_ref < bd->title->clip_list.count) {
+         const NAV_CLIP *clip = &bd->title->clip_list.clip[clip_ref];
+-        return clpi_copy(clip->cl);
++        if (clip->cl != NULL) {
++            result = clpi_copy(clip->cl);
++        }
+     }
+-    return NULL;
++
++    bd_mutex_unlock(&bd->mutex);
++    return result;
+ }
+ 
+ struct clpi_cl *bd_read_clpi(const char *path)

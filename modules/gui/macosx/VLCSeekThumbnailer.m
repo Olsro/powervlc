@@ -228,6 +228,29 @@ static NSData *VLCFirstPNGFrame(NSData *data)
     return nil;
 }
 
+/* MVC thumbnails contain the two full-resolution eyes stacked vertically.
+ * The decoder always places the left eye first (including right-base MVC),
+ * so keep the upper half and restore the normal 16:9 preview geometry. The
+ * tight aspect check avoids touching ordinary portrait videos. */
+static NSImage *VLCLeftEyeThumbnail(NSImage *image)
+{
+    NSSize size = image.size;
+    if (size.width <= 0. || size.height <= 0. ||
+        fabs(size.height / size.width - 9. / 8.) > .02)
+        return image;
+
+    NSSize eyeSize = NSMakeSize(size.width, floor(size.height / 2.));
+    NSImage *leftEye = [[NSImage alloc] initWithSize:eyeSize];
+    [leftEye lockFocus];
+    [image drawInRect:NSMakeRect(0., 0., eyeSize.width, eyeSize.height)
+             fromRect:NSMakeRect(0., size.height - eyeSize.height,
+                                 size.width, eyeSize.height)
+            operation:NSCompositingOperationCopy
+             fraction:1.];
+    [leftEye unlockFocus];
+    return leftEye;
+}
+
 - (NSImage *)renderThumbnailForURI:(NSString *)uri atSeconds:(double)seconds
 {
     intf_thread_t *p_intf = getIntf();
@@ -309,8 +332,11 @@ static NSData *VLCFirstPNGFrame(NSData *data)
     input_item_Release(p_item);
 
     NSData *pngData = [NSData dataWithContentsOfFile:pngPath];
-    if ([pngData length] > 0)
-        image = [[NSImage alloc] initWithData:VLCFirstPNGFrame(pngData)];
+    if ([pngData length] > 0) {
+        NSImage *decoded = [[NSImage alloc]
+            initWithData:VLCFirstPNGFrame(pngData)];
+        image = VLCLeftEyeThumbnail(decoded);
+    }
     return image;
 }
 

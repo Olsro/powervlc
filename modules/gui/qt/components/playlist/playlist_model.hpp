@@ -40,6 +40,7 @@
 #include <QMimeData>
 #include <QAbstractItemModel>
 #include <QSet>
+#include <QMap>
 #include <QVariant>
 #include <QModelIndex>
 #include <QAction>
@@ -78,6 +79,7 @@ public:
     bool setData( const QModelIndex &index, const QVariant & value, int role = Qt::EditRole ) Q_DECL_OVERRIDE;
     int rowCount( const QModelIndex &parent = QModelIndex() ) const Q_DECL_OVERRIDE;
     bool hasChildren( const QModelIndex &parent = QModelIndex() ) const Q_DECL_OVERRIDE;
+    bool isRandomAction( const QModelIndex &index ) const;
     Qt::ItemFlags flags( const QModelIndex &index ) const Q_DECL_OVERRIDE;
     QModelIndex index( const int r, const int c, const QModelIndex &parent ) const Q_DECL_OVERRIDE;
     QModelIndex parent( const QModelIndex &index ) const Q_DECL_OVERRIDE;
@@ -104,10 +106,23 @@ public:
     virtual QModelIndex rootIndex() const Q_DECL_OVERRIDE;
     virtual void filter( const QString& search_text, const QModelIndex & root, bool b_recursive ) Q_DECL_OVERRIDE;
     virtual QModelIndex currentIndex() const Q_DECL_OVERRIDE;
+    virtual bool isCurrent( const QModelIndex & ) const Q_DECL_OVERRIDE;
     virtual QModelIndex indexByPLID( const int i_plid, const int c ) const Q_DECL_OVERRIDE;
     virtual QModelIndex indexByInputItem( const input_item_t *, const int c ) const Q_DECL_OVERRIDE;
     virtual bool isTree() const Q_DECL_OVERRIDE;
     virtual bool canEdit() const Q_DECL_OVERRIDE;
+    bool isPowerVLCLibraryRoot() const;
+    bool isUserPlaylistsRoot( const QModelIndex & ) const;
+    bool isUserPlaylistFolder( const QModelIndex & ) const;
+    bool isUserPlaylist( const QModelIndex & ) const;
+    bool isInsideUserPlaylists( const QModelIndex & ) const;
+    bool isPowerVLCDeviceStructure( const QModelIndex & ) const;
+    QStringList ratingPaths( const QModelIndexList &, int *commonRating ) const;
+    void createUserPlaylist( const QModelIndex &, const QString &, bool );
+    void renameUserPlaylist( const QModelIndex &, const QString & );
+    void filterScopes( const QString &, const QSet<int> & );
+    bool areSearchScopesLoaded( const QSet<int> & ) const;
+    QSet<int> protectedSearchItemIds() const;
     virtual bool action( QAction *action, const QModelIndexList &indexes ) Q_DECL_OVERRIDE;
     virtual bool isSupportedAction( actions action, const QModelIndex & ) const Q_DECL_OVERRIDE;
 
@@ -129,6 +144,7 @@ private:
 
     /* Shallow actions (do not affect core playlist) */
     void updateTreeItem( PLItem * );
+    void updateTreeItemsForInput( PLItem *, input_item_t * );
     void removeItem ( PLItem * );
     void recurseDelete( QList<AbstractPLItem*> children, QModelIndexList *fullList );
     void takeItem( PLItem * ); //will not delete item
@@ -149,6 +165,8 @@ private:
     PLItem *findByPLId( PLItem *, int i_plitemid ) const;
     PLItem *findByInput( PLItem *, const input_item_t * ) const;
     PLItem *findByInputLocked( PLItem *, const input_item_t * ) const;
+    PLItem *findVisibleRandomCounterpart( PLItem *, const QString & ) const;
+    void collectRatings( const QModelIndex &, QMap<QString, int> & ) const;
     enum pl_nodetype
     {
         ROOTTYPE_CURRENT_PLAYING,
@@ -159,16 +177,23 @@ private:
 
     /* */
     QString latestSearch;
+    QSet<int> latestSearchScopeIds;
     QFont   customFont;
 
     /* id -> tick (ms) of the last expand-to-browse preparse, so a
      * collapse/expand cycle does not re-request a directory while its
      * fetch may still be running — but can retry a failed one */
     QHash<int, qint64> browseRequestedIds;
+    int pendingRandomPlaybackId;
+    int pendingRandomBranchId;
+    int pendingNodePlaybackId;
+    int pendingNodeBrowseId;
+    unsigned pendingNodePlaybackRetries;
 
 public slots:
     virtual void activateItem( const QModelIndex &index ) Q_DECL_OVERRIDE;
     void ensureBrowsed( const QModelIndex &index ) Q_DECL_OVERRIDE;
+    void releaseBrowsed( const QModelIndex &index ) Q_DECL_OVERRIDE;
 
 private slots:
     void processInputItemUpdate( input_item_t *);
@@ -176,6 +201,8 @@ private slots:
     void processItemRemoval( int i_pl_itemid );
     void processItemAppend( int i_pl_itemid, int i_pl_itemidparent );
     void activateItem( playlist_item_t *p_item );
+    void retryPendingRandomPlayback();
+    void retryPendingNodePlayback();
 };
 
 class PlMimeData : public QMimeData

@@ -76,6 +76,28 @@ static void ThreadUpdateCropAuto(vout_thread_t *, picture_t *);
 /* Better be in advance when awakening than late... */
 #define VOUT_MWAIT_TOLERANCE (INT64_C(4000))
 
+/* Opt-in, allocation-free render phase telemetry.  Keep this state local to
+ * the vout thread so diagnosing an expensive subtitle/menu renderer does not
+ * alter vout_thread_sys_t's layout (plugins include that private header in
+ * this branch). */
+typedef struct
+{
+    unsigned count;
+    vlc_tick_t filter;
+    vlc_tick_t spu;
+    vlc_tick_t core;
+    vlc_tick_t prepare;
+    vlc_tick_t total;
+    vlc_tick_t predicted;
+    vlc_tick_t worst;
+} vout_phase_profile_t;
+
+#ifdef thread_local
+static thread_local vout_phase_profile_t vout_phase_profile;
+#else
+static vout_phase_profile_t vout_phase_profile;
+#endif
+
 /* */
 static int VoutValidateFormat(video_format_t *dst,
                               const video_format_t *src)
@@ -114,6 +136,9 @@ static bool VideoFormatIsCropArEqual(video_format_t *dst,
            dst->i_visible_width  == src->i_visible_width &&
            dst->i_visible_height == src->i_visible_height;
 }
+
+static void ThreadSetCropBorder(vout_thread_t *, unsigned, unsigned,
+                                unsigned, unsigned);
 
 static vout_thread_t *VoutCreate(vlc_object_t *object,
                                  const vout_configuration_t *cfg)
@@ -384,6 +409,18 @@ void vout_ChangeCacheHold(vout_thread_t *vout, bool hold)
     vout_control_PushBool(&vout->p->control, VOUT_CONTROL_CACHE_HOLD, hold);
 }
 
+void vout_ChangeStaticFrameHold(vout_thread_t *vout, bool hold)
+{
+    vout_control_PushBool(&vout->p->control,
+                          VOUT_CONTROL_STATIC_FRAME_HOLD, hold);
+}
+
+void vout_ChangeInteractiveOverlay(vout_thread_t *vout, bool active)
+{
+    vout_control_PushBool(&vout->p->control,
+                          VOUT_CONTROL_INTERACTIVE_OVERLAY, active);
+}
+
 bool vout_IsCacheHeld(vout_thread_t *vout)
 {
     /* Racy by design (see vout_control.h): the flag belongs to the vout
@@ -458,6 +495,11 @@ void vout_PutSubpicture( vout_thread_t *vout, subpicture_t *subpic )
     cmd.u.subpicture = subpic;
 
     vout_control_Push(&vout->p->control, &cmd);
+}
+
+void vout_RefreshSubpicture(vout_thread_t *vout)
+{
+    vout_control_PushVoid(&vout->p->control, VOUT_CONTROL_REFRESH_SUBPICTURE);
 }
 int vout_RegisterSubpictureChannel( vout_thread_t *vout )
 {
@@ -1018,6 +1060,20 @@ static int ThreadDisplayPreparePicture(vout_thread_t *vout, bool reuse, bool fra
                      * a second the deficit is worth paying down. */
                     if (decoded->context != NULL && late_threshold < CLOCK_FREQ / 4)
                         late_threshold = CLOCK_FREQ / 4;
+                    /* Hybrid MVC on the GeForce 320M has a repeatable
+                     * ~240 ms base-view/dependent-view hand-off latency.
+                     * The generic 250 ms hardware ceiling sits directly on
+                     * that operating point: harmless scheduler jitter crosses
+                     * it several times per second and turns a steady 23.976
+                     * decode into an visibly uneven ~20 fps presentation.
+                     * Keep a finite recovery ceiling, but move it clear of the
+                     * normal MVC envelope.  This remains scoped to genuine
+                     * frame-packed pictures carrying a hardware context. */
+                    if (decoded->context != NULL &&
+                        decoded->format.multiview_mode ==
+                            MULTIVIEW_STEREO_FRAMEPACKED &&
+                        late_threshold < 400 * 1000)
+                        late_threshold = 400 * 1000;
                     if (late > late_threshold) {
                         msg_Warn(vout, "picture is too late to be displayed (missing %"PRId64" ms)", late/1000);
                         picture_Release(decoded);
@@ -1150,12 +1206,42 @@ static void SpuDisplayFormat(video_format_t *fmt, vout_display_t *vd)
         fmt->i_height         =
         fmt->i_visible_height = height;
     }
+
+    /* A frame-packed MVC picture is represented internally as two vertically
+     * stacked eyes (1920x2160 with SAR 2:1 for 1080p). Subpictures, menus and
+     * OSDs are authored in one eye's logical 1920x1080 canvas; the display
+     * module duplicates that canvas into the two HDMI views. Rendering the
+     * SPU against the stacked format first scaled every BD-J ARGB canvas to
+     * 1920x2160, only for OpenGL to map it back into each eye. Besides being
+     * geometrically redundant, a Java menu that flushes once per video frame
+     * forced this 16 MiB scale on every frame and exceeded the 23.976 fps
+     * budget. Keep the SPU canvas in per-eye coordinates and remove the SAR
+     * factor introduced solely by vertical stacking. */
+    if (fmt->multiview_mode == MULTIVIEW_STEREO_FRAMEPACKED &&
+        fmt->i_visible_height >= 2)
+    {
+        fmt->i_height /= 2;
+        fmt->i_visible_height /= 2;
+        fmt->i_y_offset /= 2;
+
+        unsigned sar_num, sar_den;
+        vlc_ureduce(&sar_num, &sar_den, fmt->i_sar_num,
+                    (uint64_t)fmt->i_sar_den * 2, 50000);
+        fmt->i_sar_num = sar_num;
+        fmt->i_sar_den = sar_den;
+    }
 }
 
 static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
 {
     vout_thread_sys_t *sys = vout->p;
     vout_display_t *vd = vout->p->display.vd;
+
+    const bool profile_on = getenv("VLC_VOUT_PROF") != NULL;
+    const vlc_tick_t profile_start = profile_on ? mdate() : 0;
+    const vlc_tick_t profile_predicted = profile_on
+                                       ? vout_chrono_GetHigh(&vout->p->render)
+                                       : 0;
 
     picture_t *torender = picture_Hold(vout->p->displayed.current);
 
@@ -1164,6 +1250,8 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
     vlc_mutex_lock(&vout->p->filter.lock);
     picture_t *filtered = filter_chain_VideoFilter(vout->p->filter.chain_interactive, torender);
     vlc_mutex_unlock(&vout->p->filter.lock);
+
+    const vlc_tick_t profile_filter_done = profile_on ? mdate() : 0;
 
     if (!filtered)
         return VLC_EGENERIC;
@@ -1277,6 +1365,7 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
                                &fmt_dr_rot, &vd->source,
                                render_subtitle_date, render_osd_date, false);
     }
+    const vlc_tick_t profile_spu_done = profile_on ? mdate() : 0;
     /*
      * Perform rendering
      *
@@ -1376,6 +1465,8 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
         return VLC_EGENERIC;
     }
 
+    const vlc_tick_t profile_prepare_start = profile_on ? mdate() : 0;
+
     if (sys->display.use_dr) {
         vout_display_Prepare(vd, todisplay, subpic);
     } else {
@@ -1387,6 +1478,35 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
         {
             subpicture_Delete(subpic);
             subpic = NULL;
+        }
+    }
+
+
+    if (profile_on) {
+        const vlc_tick_t profile_done = mdate();
+        const vlc_tick_t total = profile_done - profile_start;
+        vout_phase_profile.count++;
+        vout_phase_profile.filter += profile_filter_done - profile_start;
+        vout_phase_profile.spu += profile_spu_done - profile_filter_done;
+        vout_phase_profile.core += profile_prepare_start - profile_spu_done;
+        vout_phase_profile.prepare += profile_done - profile_prepare_start;
+        vout_phase_profile.total += total;
+        vout_phase_profile.predicted += profile_predicted;
+        if (total > vout_phase_profile.worst)
+            vout_phase_profile.worst = total;
+
+        if (vout_phase_profile.count == 120) {
+            msg_Dbg(vout, "vout render profile (120 frames): filter %d, "
+                    "spu %d, core %d, prepare %d, total %d us/f, "
+                    "worst %d, predicted %d",
+                    (int)(vout_phase_profile.filter / 120),
+                    (int)(vout_phase_profile.spu / 120),
+                    (int)(vout_phase_profile.core / 120),
+                    (int)(vout_phase_profile.prepare / 120),
+                    (int)(vout_phase_profile.total / 120),
+                    (int)vout_phase_profile.worst,
+                    (int)(vout_phase_profile.predicted / 120));
+            memset(&vout_phase_profile, 0, sizeof(vout_phase_profile));
         }
     }
 
@@ -1406,8 +1526,12 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
     if (delay < 1000)
         msg_Warn(vout, "picture is late (%lld ms)", delay / 1000);
 #endif
+    const vlc_tick_t target_date = todisplay->date;
+    const vlc_tick_t presentation_advance =
+        var_Type(vd, "vout-presentation-advance") != 0
+            ? var_GetInteger(vd, "vout-presentation-advance") : 0;
     if (!is_forced)
-        mwait(todisplay->date);
+        mwait(target_date - presentation_advance);
 
     /* Display the direct buffer returned by vout_RenderPicture */
     vout->p->displayed.date = mdate();
@@ -1420,7 +1544,7 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
      * have no meaningful deadline. Reported at debug verbosity every
      * five seconds; the arithmetic itself is a handful of cycles. */
     if (!is_forced) {
-        vlc_tick_t lateness = vout->p->displayed.date - todisplay->date;
+        vlc_tick_t lateness = vout->p->displayed.date - target_date;
         vout->p->punctuality.count++;
         vout->p->punctuality.sum += lateness;
         if (lateness > vout->p->punctuality.worst)
@@ -1484,12 +1608,17 @@ static int ThreadDisplayPicture(vout_thread_t *vout, vlc_tick_t *deadline)
     }
 
     const vlc_tick_t date = mdate();
+    vout_display_t *vd = vout->p->display.vd;
+    const vlc_tick_t presentation_advance =
+        var_Type(vd, "vout-presentation-advance") != 0
+            ? var_GetInteger(vd, "vout-presentation-advance") : 0;
     const vlc_tick_t render_delay = vout_chrono_GetHigh(&vout->p->render) + VOUT_MWAIT_TOLERANCE;
 
     bool drop_next_frame = frame_by_frame || forced_next;
     vlc_tick_t date_next = VLC_TICK_INVALID;
     if (!paused && vout->p->displayed.next) {
-        date_next = vout->p->displayed.next->date - render_delay;
+        date_next = vout->p->displayed.next->date - render_delay
+                  - presentation_advance;
         if (date_next /* + 0 FIXME */ <= date)
             drop_next_frame = true;
         else if (date_next - date > CLOCK_FREQ * 60) {
@@ -1642,6 +1771,35 @@ static void ThreadChangeCacheHold(vout_thread_t *vout, bool hold)
                        : "decode cache fill: hold released");
 }
 
+static void ThreadChangeStaticFrameHold(vout_thread_t *vout, bool hold)
+{
+    if (vout->p->static_frame_hold == hold)
+        return;
+    vout->p->static_frame_hold = hold;
+    msg_Dbg(vout, hold ? "disc menu: preserving the last video frame"
+                       : "disc menu: last-frame hold released");
+}
+
+static void ThreadChangeInteractiveOverlay(vout_thread_t *vout, bool active)
+{
+    if (vout->p->crop.interactive_overlay == active)
+        return;
+
+    vout->p->crop.interactive_overlay = active;
+    if (!vout->p->crop.automatic)
+        return;
+
+    /* The detector's border is expressed in video pixels, whereas an HDMV
+     * or BD-J button keeps the coordinates authored for the complete raster.
+     * Restore that raster immediately and discard menu samples so the feature
+     * is measured independently when the graphics plane closes. */
+    if (vout->p->crop.detector != NULL)
+        vout_autocrop_Reset(vout->p->crop.detector);
+    ThreadSetCropBorder(vout, 0, 0, 0, 0);
+    msg_Dbg(vout, active ? "disc menu: automatic crop suspended"
+                         : "disc menu: automatic crop resumed");
+}
+
 static void ThreadFlush(vout_thread_t *vout, bool below, vlc_tick_t date)
 {
     vout->p->step.timestamp = VLC_TICK_INVALID;
@@ -1651,6 +1809,15 @@ static void ThreadFlush(vout_thread_t *vout, bool below, vlc_tick_t date)
      * pictures are dropped right below, holding further would wedge the
      * next episode's display. */
     ThreadChangeCacheHold(vout, false);
+
+    /* Decoder recycling normally clears displayed.current. An HDMV menu can
+     * enter an infinite still at exactly that boundary: the display retains
+     * its old front buffer, but without our own picture reference the vout
+     * cannot blend a new button highlight into it. Keep one reference across
+     * the filter flush only while the disc demux explicitly requests it. */
+    picture_t *static_frame = NULL;
+    if (vout->p->static_frame_hold && vout->p->displayed.current != NULL)
+        static_frame = picture_Hold(vout->p->displayed.current);
 
     ThreadFilterFlush(vout, false); /* FIXME too much */
 
@@ -1675,6 +1842,13 @@ static void ThreadFlush(vout_thread_t *vout, bool below, vlc_tick_t date)
             vout->p->displayed.date      = VLC_TICK_INVALID;
             vout->p->displayed.timestamp = VLC_TICK_INVALID;
         }
+    }
+
+    if (static_frame != NULL) {
+        vout->p->displayed.current = static_frame;
+        /* Re-arm the periodic static-picture/SPU refresh pump. */
+        vout->p->displayed.date = mdate();
+        vout->p->displayed.timestamp = VLC_TICK_INVALID;
     }
 
     picture_fifo_Flush(vout->p->decoder_fifo, date, below);
@@ -1906,6 +2080,18 @@ static void ThreadExecuteCropRatio(vout_thread_t *vout,
 
 static void ThreadExecuteCropAuto(vout_thread_t *vout)
 {
+    /* MVC is stored as two vertically adjacent eyes. Treating that buffer as
+     * one photograph makes the detector crop the cinema bars once across the
+     * combined 8:9 surface, cutting both eyes at their inner edge and breaking
+     * HDMI frame-packing geometry. A future stereo-aware detector can analyse
+     * one eye and mirror its result; until then preserve the complete views. */
+    if (vout->p->original.multiview_mode == MULTIVIEW_STEREO_FRAMEPACKED ||
+        vout->p->crop.interactive_overlay) {
+        vout->p->crop.automatic = true;
+        ThreadSetCropBorder(vout, 0, 0, 0, 0);
+        return;
+    }
+
     if (vout->p->crop.detector == NULL) {
         vout->p->crop.detector = vout_autocrop_New(VLC_OBJECT(vout));
         if (vout->p->crop.detector == NULL)
@@ -1959,6 +2145,9 @@ static void ThreadForgetCrop(vout_thread_t *vout)
 static void ThreadUpdateCropAuto(vout_thread_t *vout, picture_t *picture)
 {
     if (!vout->p->crop.automatic || vout->p->crop.detector == NULL)
+        return;
+    if (vout->p->original.multiview_mode == MULTIVIEW_STEREO_FRAMEPACKED ||
+        vout->p->crop.interactive_overlay)
         return;
 
     vout_autocrop_border_t border;
@@ -2042,7 +2231,12 @@ static int ThreadStart(vout_thread_t *vout, vout_display_state_t *state)
      * picture -- otherwise every input format change, and therefore every
      * turn of a looping stream, flashes the uncropped frame and moves the
      * window twice. */
-    if (vout->p->crop.automatic && vout->p->crop.detector != NULL) {
+    if (vout->p->crop.automatic &&
+        vout->p->original.multiview_mode == MULTIVIEW_STEREO_FRAMEPACKED) {
+        vout->p->crop.mode = VOUT_CROP_RATIO;
+        vout->p->crop.num = vout->p->crop.den = 0;
+    }
+    else if (vout->p->crop.automatic && vout->p->crop.detector != NULL) {
         vout_autocrop_border_t border;
         if (vout_autocrop_Restore(vout->p->crop.detector,
                                   vout->p->original.i_visible_width,
@@ -2083,6 +2277,9 @@ error:
 
 static void ThreadStop(vout_thread_t *vout, vout_display_state_t *state)
 {
+    /* A real display teardown cannot retain a buffer owned by its pool. */
+    vout->p->static_frame_hold = false;
+
     if (vout->p->spu_blend)
         filter_DeleteBlend(vout->p->spu_blend);
 
@@ -2114,6 +2311,8 @@ static void ThreadInit(vout_thread_t *vout)
     vout->p->pause.is_on     = false;
     vout->p->pause.date      = VLC_TICK_INVALID;
     vout->p->cache_hold      = false;
+    vout->p->static_frame_hold = false;
+    vout->p->crop.interactive_overlay = false;
     vout->p->cache_headroom  = 0;
     vout->p->punctuality.count = 0;
     vout->p->punctuality.late = 0;
@@ -2178,6 +2377,12 @@ static int ThreadReinit(vout_thread_t *vout,
     vout->p->cache_hold  = false;
     vout->p->cache_headroom = 0;
 
+    /* A decoder/format transition reopens the display module while retaining
+     * this vout object. macosx.m uses this narrow window to transfer an
+     * already-active HDMI 3D session to the replacement display instead of
+     * restoring the 4K desktop between an MVC clip and a 2D menu. */
+    var_Create(vout, "stereo3d-vout-reinit", VLC_VAR_BOOL);
+    var_SetBool(vout, "stereo3d-vout-reinit", true);
     ThreadStop(vout, &state);
 
     vout_ReinitInterlacingSupport(vout);
@@ -2206,9 +2411,11 @@ static int ThreadReinit(vout_thread_t *vout,
     vout->p->original = original;
     vout->p->dpb_size = cfg->dpb_size;
     if (ThreadStart(vout, &state)) {
+        var_SetBool(vout, "stereo3d-vout-reinit", false);
         ThreadClean(vout);
         return VLC_EGENERIC;
     }
+    var_SetBool(vout, "stereo3d-vout-reinit", false);
     return VLC_SUCCESS;
 }
 
@@ -2242,6 +2449,18 @@ static int ThreadControl(vout_thread_t *vout, vout_control_cmd_t cmd)
     case VOUT_CONTROL_SUBPICTURE:
         ThreadDisplaySubpicture(vout, cmd.u.subpicture);
         cmd.u.subpicture = NULL;
+        msg_Dbg(vout, "subpicture queued, displayed current=%p",
+                (void *)vout->p->displayed.current);
+        if (vout->p->displayed.current != NULL &&
+            (vout->p->pause.is_on || vout->p->static_frame_hold))
+            ThreadDisplayRenderPicture(vout, true);
+        break;
+    case VOUT_CONTROL_REFRESH_SUBPICTURE:
+        msg_Dbg(vout, "subpicture refresh, displayed current=%p",
+                (void *)vout->p->displayed.current);
+        if (vout->p->displayed.current != NULL &&
+            (vout->p->pause.is_on || vout->p->static_frame_hold))
+            ThreadDisplayRenderPicture(vout, true);
         break;
     case VOUT_CONTROL_FLUSH_SUBPICTURE:
         ThreadFlushSubpicture(vout, cmd.u.integer);
@@ -2273,6 +2492,12 @@ static int ThreadControl(vout_thread_t *vout, vout_control_cmd_t cmd)
         break;
     case VOUT_CONTROL_CACHE_HOLD:
         ThreadChangeCacheHold(vout, cmd.u.boolean);
+        break;
+    case VOUT_CONTROL_STATIC_FRAME_HOLD:
+        ThreadChangeStaticFrameHold(vout, cmd.u.boolean);
+        break;
+    case VOUT_CONTROL_INTERACTIVE_OVERLAY:
+        ThreadChangeInteractiveOverlay(vout, cmd.u.boolean);
         break;
     case VOUT_CONTROL_FLUSH:
         ThreadFlush(vout, false, cmd.u.time);

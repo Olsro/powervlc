@@ -184,6 +184,10 @@ SeekSlider::SeekSlider( intf_thread_t *p_intf, Qt::Orientation q, QWidget *_pare
     startAnimLoadingTimer->setInterval( 500 );
 
     connect( MainInputManager::getInstance(), &MainInputManager::inputChanged, this, &SeekSlider::inputUpdated );
+    connect( MainInputManager::getInstance(), &MainInputManager::inputChanged,
+             this, [this](bool) { updateBookmarks(); } );
+    connect( THEMIM->getIM(), &InputManager::bookmarksChanged,
+             this, &SeekSlider::updateBookmarks );
     connect( this, &SeekSlider::sliderMoved, this, &SeekSlider::startSeekTimer );
     connect( seekLimitTimer, &QTimer::timeout, this, &SeekSlider::updatePos );
     connect( hideHandleTimer, &QTimer::timeout, this, &SeekSlider::hideHandle );
@@ -192,6 +196,7 @@ SeekSlider::SeekSlider( intf_thread_t *p_intf, Qt::Orientation q, QWidget *_pare
     connect( thumbnailer, &SeekThumbnailer::thumbnailReady,
              this, &SeekSlider::hoverThumbnailReady );
     mTimeTooltip->installEventFilter( this );
+    updateBookmarks();
 
     connect(&wheelEventConverter, &WheelToVLCConverter::vlcWheelKey, this, [this](int vlcButton){
         vlc_tick_t i_size = var_InheritInteger( this->p_intf->obj.libvlc, "short-jump-size" );
@@ -326,6 +331,52 @@ void SeekSlider::inputUpdated( bool b_has_input )
     }
     else if ( f_buffering == 0.0 && !isEnabled() )
         startAnimLoadingTimer->start();
+}
+
+void SeekSlider::updateBookmarks()
+{
+    bookmarkTimes.clear();
+    bookmarkNames.clear();
+    input_thread_t *p_input = THEMIM->getInput();
+    if( p_input )
+    {
+        seekpoint_t **pp_bookmarks = NULL;
+        int i_bookmarks = 0;
+        if( input_Control(p_input, INPUT_GET_BOOKMARKS, &pp_bookmarks,
+                          &i_bookmarks) == VLC_SUCCESS )
+        {
+            for( int i = 0; i < i_bookmarks; i++ )
+            {
+                bookmarkTimes << pp_bookmarks[i]->i_time_offset;
+                bookmarkNames << qfu( pp_bookmarks[i]->psz_name );
+                vlc_seekpoint_Delete( pp_bookmarks[i] );
+            }
+            free( pp_bookmarks );
+        }
+    }
+    update();
+}
+
+int SeekSlider::bookmarkAtX( int x, int tolerance ) const
+{
+    if( inputLength <= 0 || bookmarkTimes.isEmpty() ) return -1;
+    int margin = mHandleLength > 0 ? mHandleLength / 2 : 7;
+    int width = size().width() - 2 * margin;
+    if( width <= 0 ) return -1;
+    int selected = -1;
+    int nearest = tolerance + 1;
+    for( int i = 0; i < bookmarkTimes.size(); i++ )
+    {
+        int markerX = margin + qRound((double)bookmarkTimes.at(i)
+                       / ((double)inputLength * CLOCK_FREQ) * width);
+        int distance = qAbs( markerX - x );
+        if( distance <= tolerance && distance < nearest )
+        {
+            selected = i;
+            nearest = distance;
+        }
+    }
+    return selected;
 }
 
 void SeekSlider::processReleasedButton()
@@ -467,6 +518,16 @@ void SeekSlider::mousePressEvent( QMouseEvent* event )
     }
 
     isJumping = false;
+    int i_bookmark = bookmarkAtX( event->x() );
+    if( i_bookmark >= 0 )
+    {
+        input_thread_t *p_input = THEMIM->getInput();
+        if( p_input )
+            input_Control( p_input, INPUT_SET_BOOKMARK, i_bookmark );
+        event->accept();
+        isJumping = true;
+        return;
+    }
     /* handle chapter clicks */
     int i_width = size().width();
     if ( chapters && inputLength && i_width)
@@ -542,7 +603,8 @@ void SeekSlider::mouseMoveEvent( QMouseEvent *event )
 
         if ( orientation() == Qt::Horizontal ) /* TODO: vertical */
         {
-            QList<SeekPoint> points = chapters->getPoints();
+            QList<SeekPoint> points = chapters ? chapters->getPoints()
+                                                : QList<SeekPoint>();
             int i_selected = -1;
             for( int i = 0 ; i < points.count() ; i++ )
             {
@@ -555,6 +617,10 @@ void SeekSlider::mouseMoveEvent( QMouseEvent *event )
                 chapterLabel = points.at( i_selected ).name;
             }
         }
+
+        int i_bookmark = bookmarkAtX( event->x() );
+        if( i_bookmark >= 0 && i_bookmark < bookmarkNames.size() )
+            chapterLabel = bookmarkNames.at( i_bookmark );
 
         /* PowerVLC: hovering anywhere between the two bounds also tells how
          * long the clip currently is -- what the trimming is actually for,
@@ -746,6 +812,26 @@ void SeekSlider::paintEvent( QPaintEvent *ev )
             paintClipExtras( painter );
         }
     }
+    QPainter bookmarkPainter( this );
+    paintBookmarkMarkers( bookmarkPainter );
+}
+
+void SeekSlider::paintBookmarkMarkers( QPainter &painter )
+{
+    if( inputLength <= 0 || bookmarkTimes.isEmpty() ) return;
+    int margin = handleLength() / 2;
+    int width = size().width() - 2 * margin;
+    if( width <= 0 ) return;
+    painter.save();
+    painter.setPen( Qt::NoPen );
+    painter.setBrush( QColor( 238, 91, 63 ) );
+    for( vlc_tick_t time : bookmarkTimes )
+    {
+        int x = margin + qRound((double)time
+                    / ((double)inputLength * CLOCK_FREQ) * width);
+        painter.drawRoundedRect( QRect(x - 2, 1, 4, height() - 2), 1, 1 );
+    }
+    painter.restore();
 }
 
 /* Clip creation mode: highlight the [start..end] range, draw the second

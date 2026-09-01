@@ -433,6 +433,7 @@ static bool parse_track_node COMPLEX_INTERFACE
           {"image",        {.smpl = set_item_info}, false },
           {"album",        {.smpl = set_item_info}, false },
           {"trackNum",     {.smpl = set_item_info}, false },
+          {"rating",       {.smpl = set_item_info}, false },
           {"duration",     {.smpl = set_item_info}, false },
           {"link",         {NULL}, false },
           {"meta",         {NULL}, false },
@@ -524,6 +525,8 @@ static bool set_item_info SIMPLE_INTERFACE
         input_item_SetAlbum(p_input, psz_value);
     else if (!strcmp(psz_name, "trackNum"))
         input_item_SetTrackNum(p_input, psz_value);
+    else if (!strcmp(psz_name, "rating"))
+        input_item_SetRating(p_input, psz_value);
     else if (!strcmp(psz_name, "duration"))
         p_input->i_duration = VLC_TICK_FROM_MS(atol(psz_value));
     else if (!strcmp(psz_name, "annotation"))

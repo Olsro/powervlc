@@ -40,7 +40,7 @@ typedef struct input_clock_t input_clock_t;
  * This function creates a new input_clock_t.
  * You must use input_clock_Delete to delete it once unused.
  */
-input_clock_t *input_clock_New( int i_rate );
+input_clock_t *input_clock_New( vlc_object_t *p_log, int i_rate );
 
 /**
  * This function destroys a input_clock_t created by input_clock_New.
@@ -85,6 +85,7 @@ void    input_clock_ChangePause( input_clock_t *, bool b_paused, vlc_tick_t i_da
  * reference point (a valid reference point must have been set).
  */
 void    input_clock_GetSystemOrigin( input_clock_t *, vlc_tick_t *pi_system, vlc_tick_t *pi_delay );
+vlc_tick_t input_clock_GetCurrentStream( input_clock_t *, vlc_tick_t i_system );
 
 /**
  * This function allows rebasing the original system value date (a valid

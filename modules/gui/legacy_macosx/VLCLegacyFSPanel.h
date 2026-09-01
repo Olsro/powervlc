@@ -36,6 +36,8 @@
     VLCLegacyCoreInteraction *core;
 
     NSPanel *panel;
+    NSPanel *stereoMirrorPanel;
+    NSImageView *stereoMirrorImageView;
     NSButton *playButton;
     NSSlider *seekSlider;
     NSSlider *volumeSlider;
@@ -52,6 +54,7 @@
 
     NSPoint lastMouseLocation;
     double lastActivity;    /* NSTimeInterval since reference date */
+    BOOL windowedVideoWasVisible;
     BOOL fullscreenActive;
     int dormantTicks;       /* slows the poll down outside fullscreen */
     int lastRunningState;   /* -1 initially; avoids re-tinting the play

@@ -326,6 +326,7 @@ subpicture_region_t* subpicture_region_Copy( subpicture_region_t *p_region_src )
     p_region_dst->i_y      = p_region_src->i_y;
     p_region_dst->i_align  = p_region_src->i_align;
     p_region_dst->i_alpha  = p_region_src->i_alpha;
+    p_region_dst->i_stereo_offset = p_region_src->i_stereo_offset;
 
     p_region_dst->p_text = text_segment_Copy( p_region_src->p_text );
 

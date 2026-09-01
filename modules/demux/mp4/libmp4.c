@@ -4044,6 +4044,31 @@ static int MP4_ReadBox_colr( stream_t *p_stream, MP4_Box_t *p_box )
     MP4_READBOX_EXIT( 1 );
 }
 
+static int MP4_ReadBox_dvcC( stream_t *p_stream, MP4_Box_t *p_box )
+{
+    uint16_t flags;
+    MP4_READBOX_ENTER( MP4_Box_data_dvcC_t, NULL );
+    MP4_GET1BYTE( p_box->data.p_dvcC->i_version_major );
+    MP4_GET1BYTE( p_box->data.p_dvcC->i_version_minor );
+    MP4_GET2BYTES( flags );
+    p_box->data.p_dvcC->i_profile = (flags >> 9) & 0x7f;
+    p_box->data.p_dvcC->i_level = (flags >> 3) & 0x3f;
+    p_box->data.p_dvcC->i_rpu_present = (flags >> 2) & 0x01;
+    p_box->data.p_dvcC->i_el_present = (flags >> 1) & 0x01;
+    p_box->data.p_dvcC->i_bl_present = flags & 0x01;
+
+    if( i_read > 0 )
+    {
+        uint8_t compatibility;
+        MP4_GET1BYTE( compatibility );
+        p_box->data.p_dvcC->i_bl_signal_compatibility_id =
+            (compatibility >> 4) & 0x0f;
+        p_box->data.p_dvcC->i_metadata_compression =
+            (compatibility >> 2) & 0x03;
+    }
+    MP4_READBOX_EXIT( 1 );
+}
+
 static int MP4_ReadBox_meta( stream_t *p_stream, MP4_Box_t *p_box )
 {
     const uint8_t *p_peek;
@@ -4598,6 +4623,9 @@ static const struct
     { ATOM_btrt,    MP4_ReadBox_btrt,         0 }, /* codecs bitrate stsd/????/btrt */
     { ATOM_keys,    MP4_ReadBox_keys,         ATOM_meta },
     { ATOM_colr,    MP4_ReadBox_colr,         0 },
+    { ATOM_dvcC,    MP4_ReadBox_dvcC,         0 },
+    { ATOM_dvvC,    MP4_ReadBox_dvcC,         0 },
+    { ATOM_dvwC,    MP4_ReadBox_dvcC,         0 },
 
     /* XiphQT */
     { ATOM_vCtH,    MP4_ReadBox_Binary,       ATOM_wave },

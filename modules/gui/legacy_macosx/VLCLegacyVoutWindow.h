@@ -39,6 +39,10 @@ typedef unsigned int NSUInteger;
     BOOL decorated;           /* barre de titre (option « video-deco ») */
     BOOL fullscreenActive;
     NSRect fullscreenFrame;   /* cadre visé en plein écran, à défendre */
+    BOOL manualMoveActive;    /* borderless: AppKit 10.5 perd parfois son
+                               * déplacement après un setFrame: animé */
+    NSPoint manualMoveStartMouse;
+    NSPoint manualMoveStartOrigin;
 
     /* La vue REMISE AU VOUT. Ce n'est pas le contentView : la fenêtre décorée
      * lui réserve la bande du bas pour sa barre de contrôles allégée, et la

@@ -750,6 +750,23 @@ VLC_API float input_ClipExportProgress( input_clip_export_t * );
 VLC_API char * input_ClipExportFinish( input_clip_export_t * ) VLC_USED;
 
 /**
+ * Export/import PowerVLC bookmarks as human-readable JSON.
+ *
+ * A bookmark set is bound to the current input URI and title number. This
+ * keeps DVD and Blu-ray titles independent even though they share one MRL.
+ * Importing a single set applies it to the current title; importing a
+ * collection restores every set it contains.
+ */
+VLC_API int input_BookmarksExport( input_thread_t *, const char *psz_path );
+VLC_API int input_BookmarksImport( input_thread_t *, const char *psz_path );
+VLC_API int input_BookmarksImportAll( vlc_object_t *, const char *psz_path );
+#define input_BookmarksImportAll(a,b) input_BookmarksImportAll(VLC_OBJECT(a),b)
+VLC_API int input_BookmarksExportAll( vlc_object_t *, const char *psz_path );
+#define input_BookmarksExportAll(a,b) input_BookmarksExportAll(VLC_OBJECT(a),b)
+VLC_API int input_BookmarksClearAll( vlc_object_t * );
+#define input_BookmarksClearAll(a) input_BookmarksClearAll(VLC_OBJECT(a))
+
+/**
  * It creates an empty input resource handler.
  *
  * The given object MUST stay alive as long as the input_resource_t is

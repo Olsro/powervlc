@@ -366,6 +366,17 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
     [VLCLegacyGetCore() clipStepFrames:direction];
 }
 
+- (void)seekSlider:(VLCLegacySeekSlider *)slider
+        bookmarkSelectedAtIndex:(int)index
+{
+    intf_thread_t *p_intf = [VLCLegacyGetCore() intf];
+    input_thread_t *p_input = playlist_CurrentInput(pl_Get(p_intf));
+    if (p_input) {
+        input_Control(p_input, INPUT_SET_BOOKMARK, index);
+        vlc_object_release(p_input);
+    }
+}
+
 /* Séparateurs de chapitres : mêmes règles et même cache que la fenêtre
  * principale (seulement si le dernier point de reprise a un décalage > 0,
  * sinon le média n'a pas de vrais chapitres). */
@@ -695,12 +706,16 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
         [(VLCLegacySeekSlider *)seekSlider
             setMediaDuration:(double)length / CLOCK_FREQ];
         [self updateChaptersForInput:p_input duration:length];
+        VLCLegacyUpdateSliderBookmarks((VLCLegacySeekSlider *)seekSlider,
+                                       p_input, length);
         vlc_object_release(p_input);
     } else {
         if (![[durationField stringValue] isEqualToString:@"00:00"])
             [durationField setStringValue:@"00:00"];
         [(VLCLegacySeekSlider *)seekSlider setMediaDuration:0.0];
         [self updateChaptersForInput:NULL duration:0];
+        VLCLegacyUpdateSliderBookmarks((VLCLegacySeekSlider *)seekSlider,
+                                       NULL, 0);
         /* Stop ne laisse AUCUNE entrée : c'est la seule branche qui range
          * les poignées de clip (même correctif que la barre principale) */
         if ([clipCell clipKnobsActive]) {
@@ -922,7 +937,38 @@ VLCLegacyVoutWindow *VLCLegacyCurrentVoutWindow(void)
         [VLCLegacyGetCore() toggleFullscreen];
         return;
     }
+    /* On Leopard, -setMovableByWindowBackground: stops moving a borderless
+     * window after Video > Half/Normal/Double Size has animated its frame.
+     * Keep an explicit drag path for the undecorated video window. */
+    if (!decorated && !fullscreenActive) {
+        manualMoveActive = YES;
+        manualMoveStartMouse = [NSEvent mouseLocation];
+        manualMoveStartOrigin = [self frame].origin;
+        return;
+    }
     [super mouseDown:event];
+}
+
+- (void)mouseDragged:(NSEvent *)event
+{
+    if (manualMoveActive) {
+        NSPoint mouse = [NSEvent mouseLocation];
+        NSPoint origin = NSMakePoint(
+            manualMoveStartOrigin.x + mouse.x - manualMoveStartMouse.x,
+            manualMoveStartOrigin.y + mouse.y - manualMoveStartMouse.y);
+        [self setFrameOrigin:origin];
+        return;
+    }
+    [super mouseDragged:event];
+}
+
+- (void)mouseUp:(NSEvent *)event
+{
+    if (manualMoveActive) {
+        manualMoveActive = NO;
+        return;
+    }
+    [super mouseUp:event];
 }
 
 - (void)keyDown:(NSEvent *)event

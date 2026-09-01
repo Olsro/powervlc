@@ -59,13 +59,25 @@ esac
 
 SCRIPTDIR=$(cd "$(dirname "$0")" && pwd)
 VLCROOT=$(cd "$SCRIPTDIR/../.." && pwd)
-BUILDDIR="$VLCROOT/build$SHORTARCH"
+BUILDDIR="$VLCROOT/build/windows/$SHORTARCH"
 mkdir -p "$BUILDDIR"
 cd "$BUILDDIR"
 
 # Upstream step 1: configure + compile for the selected arch.
 echo "+ $SCRIPTDIR/build.sh -a $ARCH $*"
 "$SCRIPTDIR/build.sh" -a "$ARCH" "$@"
+
+# Build amuled with the same MinGW target and without aMule's legacy UPnP
+# client. Its third-party inputs come from PowerVLC's cross contrib prefix.
+REPO_ROOT=$(cd "$SCRIPTDIR/../../.." && pwd)
+AMULE_TARGET="windows-$ARCH"
+AMULE_DEPS="$REPO_ROOT/contrib/$ARCH-w64-mingw32"
+AMULE_DEP_PREFIX="$AMULE_DEPS" \
+AMULE_CPPFLAGS="-I$AMULE_DEPS/include" \
+AMULE_LDFLAGS="-L$AMULE_DEPS/lib" \
+AMULE_CMAKE_ARGS="-DZLIB_INCLUDE_DIR=$AMULE_DEPS/include -DZLIB_LIBRARY=$AMULE_DEPS/lib/libz.a" \
+    "$REPO_ROOT/extras/package/build-amule-engine.sh" "$AMULE_TARGET"
+export POWERVLC_AMULED="$REPO_ROOT/build/dependencies/amule/$AMULE_TARGET/prefix/bin/amuled.exe"
 
 # Upstream step 2: build the NSIS .exe installer (no MSI).
 echo "+ make package-win32"

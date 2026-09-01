@@ -107,6 +107,11 @@ size_t input_DecoderGetFifoSize( decoder_t *p_dec );
  */
 void input_DecoderGetObjects( decoder_t *, vout_thread_t **, audio_output_t ** );
 
+/* Returns the current output horizon for an audio decoder. This remains
+ * available across a live encoded-HDMI flush, allowing es_out to schedule a
+ * seek restart no earlier than the next burst can physically reach the wire. */
+bool input_DecoderGetAudioOutputDelay( decoder_t *, vlc_tick_t * );
+
 /* Look-ahead decode cache (video-cache-* options): current fill vs target,
  * in pictures, the memory those pictures actually use (pi_bytes may be
  * NULL), plus whether the decoder is out of input data. Returns false

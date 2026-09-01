@@ -102,7 +102,104 @@ struct input_item_t
 
     bool        b_preparse_interact; /**< Force interaction with the user when
                                           preparsing.*/
+    bool        b_preparse_skip_art; /**< Skip serialized external artwork
+                                          discovery for bulk metadata scans. */
 };
+
+/* PowerVLC media-library nodes carrying this option are playback actions,
+ * despite retaining children internally as their play queue. Interfaces use
+ * it to suppress folder disclosure controls for every "Random" action. */
+#define VLC_INPUT_OPTION_POWERVLC_RANDOM_ACTION "powervlc-random-action"
+#define VLC_INPUT_OPTION_POWERVLC_RANDOM_ALBUM_TRACK \
+    "powervlc-random-album-track"
+#define VLC_INPUT_OPTION_POWERVLC_ALBUM_SCOPE "powervlc-album-scope"
+#define VLC_INPUT_OPTION_POWERVLC_USER_PLAYLISTS_ROOT \
+    "powervlc-user-playlists-root"
+#define VLC_INPUT_OPTION_POWERVLC_PLAYLIST_FOLDER \
+    "powervlc-playlist-folder"
+#define VLC_INPUT_OPTION_POWERVLC_USER_PLAYLIST \
+    "powervlc-user-playlist"
+#define VLC_INPUT_OPTION_POWERVLC_LIBRARY_VIEW_PREFIX \
+    "powervlc-library-view="
+#define VLC_INPUT_OPTION_POWERVLC_LIBRARY_BUCKET_PREFIX \
+    "powervlc-library-bucket="
+#define VLC_INPUT_OPTION_POWERVLC_LAZY_INDEX \
+    "powervlc-lazy-index"
+#define VLC_INPUT_OPTION_POWERVLC_INDEX_OFFSET_PREFIX \
+    "powervlc-index-offset="
+#define VLC_INPUT_OPTION_POWERVLC_INDEX_STREAM_FILTER \
+    "stream-filter=powervlc-index"
+#define VLC_INPUT_OPTION_POWERVLC_DEVICE_STRUCTURE \
+    "powervlc-device-structure"
+
+static inline bool input_item_HasPowerVLCOption( input_item_t *item,
+                                                  const char *option )
+{
+    if( item == NULL || option == NULL ) return false;
+    bool found = false;
+    vlc_mutex_lock( &item->lock );
+    for( int i = 0; i < item->i_options && !found; ++i )
+        found = !strcmp( item->ppsz_options[i], option );
+    vlc_mutex_unlock( &item->lock );
+    return found;
+}
+
+static inline bool input_item_IsPowerVLCRandomAction( input_item_t *item )
+{
+    return input_item_HasPowerVLCOption(
+        item, VLC_INPUT_OPTION_POWERVLC_RANDOM_ACTION );
+}
+
+static inline bool input_item_IsPowerVLCRandomAlbumTrackAction(
+    input_item_t *item )
+{
+    return input_item_HasPowerVLCOption(
+        item, VLC_INPUT_OPTION_POWERVLC_RANDOM_ALBUM_TRACK );
+}
+
+/* Marks a media-library playback node whose queue is exactly one album.
+ * The playlist core uses it to preserve disc/track order and to stop at the
+ * album boundary, independently of the global shuffle/repeat-all settings. */
+static inline bool input_item_IsPowerVLCAlbumScope( input_item_t *item )
+{
+    return input_item_HasPowerVLCOption(
+        item, VLC_INPUT_OPTION_POWERVLC_ALBUM_SCOPE );
+}
+
+static inline bool input_item_IsPowerVLCUserPlaylistsRoot(
+    input_item_t *item )
+{
+    return input_item_HasPowerVLCOption(
+        item, VLC_INPUT_OPTION_POWERVLC_USER_PLAYLISTS_ROOT );
+}
+
+static inline bool input_item_IsPowerVLCDeviceStructure( input_item_t *item )
+{
+    return input_item_HasPowerVLCOption(
+        item, VLC_INPUT_OPTION_POWERVLC_DEVICE_STRUCTURE );
+}
+
+static inline bool input_item_IsPowerVLCPlaylistFolder( input_item_t *item )
+{
+    return input_item_HasPowerVLCOption(
+        item, VLC_INPUT_OPTION_POWERVLC_PLAYLIST_FOLDER );
+}
+
+static inline bool input_item_IsPowerVLCUserPlaylist( input_item_t *item )
+{
+    return input_item_HasPowerVLCOption(
+        item, VLC_INPUT_OPTION_POWERVLC_USER_PLAYLIST );
+}
+
+/* Directory nodes backed by PowerVLC's compact random-access indexes must
+ * only be parsed after an explicit UI expansion.  This is deliberately an
+ * input option rather than the generic "preparsed" bit: explicit metadata
+ * requests must remain able to populate the node. */
+static inline bool input_item_IsPowerVLCLazyIndex( input_item_t *item )
+{
+    return input_item_HasPowerVLCOption(
+        item, VLC_INPUT_OPTION_POWERVLC_LAZY_INDEX );
+}
 
 enum input_item_type_e
 {
@@ -267,6 +364,7 @@ VLC_API char * input_item_GetNowPlayingFb( input_item_t *p_item ) VLC_USED;
 VLC_API void input_item_SetURI( input_item_t * p_i, const char *psz_uri );
 VLC_API vlc_tick_t input_item_GetDuration( input_item_t * p_i );
 VLC_API void input_item_SetDuration( input_item_t * p_i, vlc_tick_t i_duration );
+VLC_API void input_item_SetPreparsed( input_item_t *p_i, bool b_preparsed );
 VLC_API bool input_item_IsPreparsed( input_item_t *p_i );
 VLC_API bool input_item_IsArtFetched( input_item_t *p_i );
 
@@ -365,7 +463,8 @@ typedef enum input_item_meta_request_option_t
     META_REQUEST_OPTION_SCOPE_LOCAL   = 0x01,
     META_REQUEST_OPTION_SCOPE_NETWORK = 0x02,
     META_REQUEST_OPTION_SCOPE_ANY     = 0x03,
-    META_REQUEST_OPTION_DO_INTERACT   = 0x04
+    META_REQUEST_OPTION_DO_INTERACT   = 0x04,
+    META_REQUEST_OPTION_NO_ART        = 0x08
 } input_item_meta_request_option_t;
 
 /* status of the vlc_InputItemPreparseEnded event */

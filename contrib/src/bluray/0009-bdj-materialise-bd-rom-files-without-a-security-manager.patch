@@ -38,6 +38,12 @@ directory (cacheAll false), so this costs nothing where things already worked
 and does not change behaviour when a security manager *is* active -- the file
 is simply already cached by the time checkRead() would have asked for it.
 
+Java 24/25 can initialize the host FileInputStream before the patched class is
+available, so also trigger materialisation from File.isInvalid() through the
+BDFileSystem wrapper. FileInputStream and RandomAccessFile both validate there
+before opening a path. This keeps the fallback independent of both the removed
+security manager and JVM bootstrap class-loading order.
+
 --- a/src/libbluray/bdj/java/org/videolan/BDJLoader.java	2026-07-30 13:04:41
 +++ b/src/libbluray/bdj/java/org/videolan/BDJLoader.java	2026-07-30 13:04:41
 @@ -116,7 +116,7 @@
@@ -67,3 +73,20 @@ is simply already cached by the time checkRead() would have asked for it.
              String cachedName = BDJLoader.getCachedFile(name);
              if (!cachedName.equals(name)) {
                  getLogger().info("Using cached " + cachedName + " for " + name);
+--- a/src/libbluray/bdj/java/java/io/BDFileSystem.java	2026-08-27 00:00:00
++++ b/src/libbluray/bdj/java/java/io/BDFileSystem.java	2026-08-27 00:00:00
+@@ -245,5 +245,14 @@ public abstract class BDFileSystem extends FileSystem {
+     public boolean isInvalid(File f) {
+         boolean res = false;
++        /* Java 24 removed SecurityManager support. VFSCache traditionally
++         * materialised BD-ROM files from BDJSecurityManager.checkRead(), so
++         * without a security manager an absolute FileInputStream path could
++         * reach the host filesystem before the file had been cached. File
++         * and RandomAccessFile both validate through this method before open;
++         * keep the on-demand cache working independently of SecurityManager. */
++        if (booted) {
++            BDJLoader.accessFile(f.getPath());
++        }
+         try {
+             Method m = fs.getClass().getDeclaredMethod("isInvalid", new Class[] { File.class });
+             Object[] args = new Object[] {(Object)f};
