@@ -56,6 +56,16 @@ int vout_OpenWrapper(vout_thread_t *vout,
     vout_thread_sys_t *sys = vout->p;
     msg_Dbg(vout, "Opening vout display wrapper");
 
+    /* The Linux KMS 3D launcher changes display backends without replacing
+     * the input (and therefore without resetting a BD-J virtual machine).
+     * Use its process-wide live selection when present. The private variable
+     * is never created during ordinary playback, so all other platforms and
+     * launch paths retain the normal $vout inheritance rules. */
+    char *live_module = var_GetString(vout->obj.libvlc,
+                                      "powervlc-live-vout");
+    const char *display_module = live_module != NULL && *live_module != '\0'
+                               ? live_module : "$vout";
+
     /* */
     sys->display.title = var_InheritString(vout, "video-title");
 
@@ -64,12 +74,15 @@ int vout_OpenWrapper(vout_thread_t *vout,
     const vlc_tick_t hide_timeout = var_CreateGetInteger(vout, "mouse-hide-timeout") * 1000;
 
     if (splitter_name) {
-        sys->display.vd = vout_NewSplitter(vout, &vout->p->original, state, "$vout", splitter_name,
+        sys->display.vd = vout_NewSplitter(vout, &vout->p->original, state,
+                                           display_module, splitter_name,
                                            double_click_timeout, hide_timeout);
     } else {
-        sys->display.vd = vout_NewDisplay(vout, &vout->p->original, state, "$vout",
+        sys->display.vd = vout_NewDisplay(vout, &vout->p->original, state,
+                                          display_module,
                                           double_click_timeout, hide_timeout);
     }
+    free(live_module);
     if (!sys->display.vd) {
         free(sys->display.title);
         return VLC_EGENERIC;
@@ -340,4 +353,3 @@ static int Forward(vlc_object_t *object, char const *var,
     return var_Set(vout->p->display.vd, var, newval);
 }
 #endif
-

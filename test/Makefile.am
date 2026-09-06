@@ -46,6 +46,7 @@ endif
 check_SCRIPTS = \
 	modules/lua/telnet.sh \
 	check_twitch_extension.sh \
+	check_opensubtitles.sh \
 	check_POTFILES.sh
 
 # Disabled test:
@@ -58,7 +59,9 @@ EXTRA_PROGRAMS = \
 
 #check_DATA = samples/test.sample samples/meta.sample
 EXTRA_DIST = \
+	check_dvd_menu_language.c \
 	check_twitch_extension.lua \
+	check_opensubtitles.lua \
 	samples/certs/certkey.pem \
 	samples/empty.voc \
 	samples/image.jpg \
@@ -68,7 +71,7 @@ EXTRA_DIST = \
 
 check_HEADERS = libvlc/test.h libvlc/libvlc_additions.h
 
-TESTS = $(check_PROGRAMS) check_POTFILES.sh check_twitch_extension.sh
+TESTS = $(check_PROGRAMS) check_POTFILES.sh check_twitch_extension.sh check_opensubtitles.sh
 
 DISTCLEANFILES = samples/test.sample samples/meta.sample
 

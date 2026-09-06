@@ -741,6 +741,7 @@ vout_OSDEpg
 vout_OSDSlider
 vout_OSDText
 vout_Request
+vout_RestartDisplay
 vout_window_New
 vout_window_Delete
 vout_display_CacheExtraPictures

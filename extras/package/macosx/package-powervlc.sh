@@ -22,6 +22,13 @@ VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
     "$APP/Contents/Info.plist" 2>/dev/null)
 [ -n "$VERSION" ] || { echo "cannot read bundle version" >&2; exit 1; }
 
+# The universal merge is the only package that combines module slices made by
+# several toolchains. Refuse to archive it if a mixed Mach-O type, a stale
+# nested seal or any later mutation has invalidated its code signature.
+if [ "$TARGET" = universal ]; then
+    codesign --verify --deep --strict --verbose=2 "$APP"
+fi
+
 ZIP="$BUILDDIR/powervlc-$VERSION-mac-$TARGET.zip"
 rm -f "$ZIP"
 (cd "$BUILDDIR" && zip -qry "$(basename "$ZIP")" PowerVLC.app)

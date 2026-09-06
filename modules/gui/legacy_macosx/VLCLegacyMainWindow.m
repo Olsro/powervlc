@@ -51,6 +51,9 @@
 
 #include <ctype.h>
 #include <fcntl.h>      /* open() — journal de bascule synchrone */
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>     /* write(), fsync(), close() */
 
 #include <vlc_playlist.h>
@@ -238,6 +241,315 @@ static void VLCLegacySetWindowVisibleInAllSpaces(NSWindow *window,
         behavior &= ~VLC_WINDOW_CAN_JOIN_ALL_SPACES;
     setBehavior(window, @selector(setCollectionBehavior:), behavior);
 }
+
+/*****************************************************************************
+ * VLCLegacyBackgroundView: Qt-style idle cone / audio artwork
+ *****************************************************************************/
+
+@interface VLCLegacyMainWindow (BackgroundViewActions)
+- (void)toggleView:(id)sender;
+@end
+
+@interface VLCLegacyBackgroundView : NSView
+{
+@public
+    VLCLegacyMainWindow *controller; /* weak */
+    VLCLegacyCoreInteraction *core;  /* weak */
+@private
+    NSImage *defaultImage;
+    NSImage *displayedImage;
+    NSImage *colouredCone;
+    NSArray *colouredCones;
+    NSString *conePalettePrefix;
+    NSTimer *motionTimer;
+    NSRect imageRect;
+    NSPoint conePosition;
+    NSPoint coneVelocity;
+    double lastMotionTime;
+    unsigned coneColourIndex;
+    BOOL showingCone;
+    BOOL coneBouncing;
+    BOOL trackingIdleClick;
+    BOOL idleSurfaceDragged;
+    BOOL idlePressWasOnCone;
+    BOOL idlePressActivatesWindow;
+    NSPoint idlePressLocation;
+}
+- (void)setArtwork:(NSImage *)artwork;
+- (void)setBackgroundActive:(BOOL)active;
+@end
+
+@implementation VLCLegacyBackgroundView
+
+- (id)initWithFrame:(NSRect)frame
+{
+    if ((self = [super initWithFrame:frame])) {
+        /* Never use -applicationIconImage here: on Tahoe it is the framed
+         * rounded-square application icon, not the classic bare cone shown
+         * by Qt and by the modern macOS playback surface. */
+        NSString *coneName = [[NSCalendarDate calendarDate] dayOfYear] >= 354
+            ? @"VLC-Xmas" : @"VLC";
+        conePalettePrefix = [coneName retain];
+        defaultImage = [[NSImage imageNamed:coneName] retain];
+        displayedImage = [defaultImage retain];
+        showingCone = YES;
+        coneVelocity = NSMakePoint(140.0f, 105.0f);
+        [self registerForDraggedTypes:
+            [NSArray arrayWithObject:NSFilenamesPboardType]];
+    }
+    return self;
+}
+
+- (void)dealloc
+{
+    [motionTimer invalidate];
+    [motionTimer release];
+    [displayedImage release];
+    [defaultImage release];
+    [colouredCone release];
+    [colouredCones release];
+    [conePalettePrefix release];
+    [super dealloc];
+}
+
+- (BOOL)isOpaque { return YES; }
+- (BOOL)acceptsFirstResponder { return YES; }
+- (BOOL)acceptsFirstMouse:(NSEvent *)event
+{
+    /* Keep accepting the first mouse so an inactive window can still be
+     * dragged immediately, but remember that a click without movement must
+     * only activate it. This matches AppKit controls instead of treating the
+     * activation press as a cone/playlist action. */
+    /* AppKit only asks this question for the first click in a non-key
+     * window. Do not re-read the window state here: recent AppKit versions
+     * can already report the window as key by the time this method runs. */
+    idlePressActivatesWindow = YES;
+    return YES;
+}
+
+- (void)prepareConeColours
+{
+    if (colouredCones != nil)
+        return;
+
+    /* Jaguar deadlocks when an off-screen NSGraphicsContext is created from
+     * a mouse event. Load the pre-rendered 128 px normal/Xmas variants: the
+     * G3 does no conversion at start or at an edge. */
+    NSMutableArray *cones = [NSMutableArray arrayWithCapacity:6];
+    unsigned i;
+    for (i = 0; i < 6; ++i) {
+        NSString *name = [NSString stringWithFormat:@"%@-colour-%u",
+                          conePalettePrefix, i];
+        NSImage *image = [NSImage imageNamed:name];
+        [cones addObject:image != nil ? image : defaultImage];
+    }
+    colouredCones = [cones copy];
+}
+
+- (void)startCone
+{
+    [self prepareConeColours];
+    coneBouncing = YES;
+    [colouredCone release];
+    colouredCone = nil;
+    coneColourIndex = (unsigned)(random() % [colouredCones count]);
+    conePosition = imageRect.origin;
+    coneVelocity = NSMakePoint(140.0f, 105.0f);
+    lastMotionTime = [NSDate timeIntervalSinceReferenceDate];
+#if (defined(__ppc__) || defined(__ppc64__) || defined(__POWERPC__)) \
+ && !defined(HAVE_ALTIVEC_H)
+    NSTimeInterval interval = 1.0 / 30.0;
+#else
+    NSTimeInterval interval = 1.0 / 60.0;
+#endif
+    motionTimer = [[NSTimer scheduledTimerWithTimeInterval:interval
+        target:self selector:@selector(advanceCone:) userInfo:nil
+        repeats:YES] retain];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)stopCone
+{
+    trackingIdleClick = NO;
+    [motionTimer invalidate];
+    [motionTimer release];
+    motionTimer = nil;
+    coneBouncing = NO;
+    [colouredCone release];
+    colouredCone = nil;
+    [self setNeedsDisplay:YES];
+}
+
+- (void)setArtwork:(NSImage *)artwork
+{
+    NSImage *next = artwork ? artwork : defaultImage;
+    [next retain];
+    [displayedImage release];
+    displayedImage = next;
+    showingCone = artwork == nil;
+    [self stopCone];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)setBackgroundActive:(BOOL)active
+{
+    if (!active)
+        [self stopCone];
+}
+
+- (void)mouseDown:(NSEvent *)event
+{
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+    /* Do not turn a press into an action until mouse-up. The full playback
+     * surface remains a window handle for both the cone and audio artwork. */
+    trackingIdleClick = YES;
+    idleSurfaceDragged = NO;
+    idlePressWasOnCone = showingCone && NSPointInRect(point, imageRect);
+    idlePressLocation = [NSEvent mouseLocation];
+}
+
+- (void)mouseDragged:(NSEvent *)event
+{
+    if (trackingIdleClick) {
+        if (!idleSurfaceDragged) {
+            NSPoint current = [NSEvent mouseLocation];
+            if (fabs(current.x - idlePressLocation.x) +
+                fabs(current.y - idlePressLocation.y) < 4.0f)
+                return;
+            idleSurfaceDragged = YES;
+        }
+        NSWindow *window = [self window];
+        NSPoint origin = [window frame].origin;
+        origin.x += [event deltaX];
+        origin.y -= [event deltaY];
+        [window setFrameOrigin:origin];
+        return;
+    }
+    [super mouseDragged:event];
+}
+
+- (void)mouseUp:(NSEvent *)event
+{
+    if (!trackingIdleClick) {
+        [super mouseUp:event];
+        return;
+    }
+
+    trackingIdleClick = NO;
+    BOOL activatesWindow = idlePressActivatesWindow;
+    idlePressActivatesWindow = NO;
+    if (idleSurfaceDragged)
+        return;
+    if (activatesWindow)
+        return;
+    /* Neither the artwork nor its black margins should toggle the playlist. */
+    if (!showingCone)
+        return;
+    if (coneBouncing) {
+        [self stopCone];
+        return;
+    }
+    if (idlePressWasOnCone) {
+        [self startCone];
+        return;
+    }
+    [controller toggleView:nil];
+}
+
+- (void)advanceCone:(NSTimer *)timer
+{
+    if (!coneBouncing || [self window] == nil) {
+        [self stopCone];
+        return;
+    }
+    double now = [NSDate timeIntervalSinceReferenceDate];
+    double elapsed = now - lastMotionTime;
+    if (elapsed > 0.1)
+        elapsed = 0.1;
+    lastMotionTime = now;
+    NSRect bounds = NSInsetRect([self bounds], 12.0f, 12.0f);
+    CGFloat maxX = MAX(NSMinX(bounds), NSMaxX(bounds) - imageRect.size.width);
+    CGFloat maxY = MAX(NSMinY(bounds), NSMaxY(bounds) - imageRect.size.height);
+    NSPoint next = NSMakePoint(conePosition.x + coneVelocity.x * elapsed,
+                               conePosition.y + coneVelocity.y * elapsed);
+    BOOL bounced = NO;
+    if (next.x <= NSMinX(bounds) || next.x >= maxX) {
+        next.x = MIN(MAX(next.x, NSMinX(bounds)), maxX);
+        coneVelocity.x = -coneVelocity.x;
+        bounced = YES;
+    }
+    if (next.y <= NSMinY(bounds) || next.y >= maxY) {
+        next.y = MIN(MAX(next.y, NSMinY(bounds)), maxY);
+        coneVelocity.y = -coneVelocity.y;
+        bounced = YES;
+    }
+    conePosition = next;
+    if (bounced) {
+        unsigned count = (unsigned)[colouredCones count];
+        unsigned offset = count > 1 ? 1 + (unsigned)(random() % (count - 1)) : 0;
+        coneColourIndex = (coneColourIndex + offset) % count;
+        [colouredCone release];
+        colouredCone = [[colouredCones objectAtIndex:coneColourIndex] retain];
+    }
+    [self setNeedsDisplay:YES];
+}
+
+- (void)drawRect:(NSRect)dirtyRect
+{
+    [[NSColor blackColor] set];
+    NSRectFill(dirtyRect);
+    NSImage *image = coneBouncing && colouredCone
+        ? colouredCone : displayedImage;
+    NSSize source = [image size];
+    if (source.width <= 0.0f || source.height <= 0.0f)
+        return;
+    NSRect available = NSInsetRect([self bounds], 12.0f, 12.0f);
+    CGFloat scale;
+    if (showingCone)
+        scale = MIN(1.0f, MIN(128.0f / source.width,
+                    MIN(128.0f / source.height,
+                    MIN(available.size.width / source.width,
+                        available.size.height / source.height))));
+    else
+        scale = MIN(available.size.width / source.width,
+                    available.size.height / source.height);
+    NSSize size = NSMakeSize(source.width * scale, source.height * scale);
+    NSPoint origin = coneBouncing ? conePosition : NSMakePoint(
+        NSMidX(available) - size.width / 2.0f,
+        NSMidY(available) - size.height / 2.0f);
+    imageRect = NSMakeRect(origin.x, origin.y, size.width, size.height);
+    if ([[NSGraphicsContext currentContext]
+            respondsToSelector:@selector(setImageInterpolation:)])
+        [[NSGraphicsContext currentContext]
+            setImageInterpolation:NSImageInterpolationHigh];
+    [image drawInRect:imageRect fromRect:NSZeroRect
+            operation:NSCompositeSourceOver fraction:1.0];
+}
+
+- (void)keyDown:(NSEvent *)event
+{
+    if (!VLCLegacyHandleKeyEvent([core intf], event))
+        [super keyDown:event];
+}
+
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender
+{
+    return NSDragOperationCopy;
+}
+
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender { return YES; }
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender
+{
+    NSArray *files = [[sender draggingPasteboard]
+        propertyListForType:NSFilenamesPboardType];
+    if (![files count])
+        return NO;
+    [controller addPaths:files playFirst:YES];
+    return YES;
+}
+
+@end
 
 /*****************************************************************************
  * VLCLegacyVideoView: VLC 3.0 in-window video behaviors
@@ -1431,25 +1743,131 @@ static NSString *const VLCLegacyArtHeightKey = @"VLCLegacySidebarArtHeight";
 @interface VLCLegacyArtImageView : VLCLegacySidebarView
 {
     NSImage *artImage;
+    NSString *artPath;
+    VLCLegacyCoreInteraction *core; /* weak */
+    NSPoint dragStartPoint;
+    BOOL dragCandidate;
 }
 - (void)setImage:(NSImage *)image;
+- (void)setImage:(NSImage *)image path:(NSString *)path;
+- (void)setCore:(VLCLegacyCoreInteraction *)interaction;
 @end
 
 @implementation VLCLegacyArtImageView
+- (void)setCore:(VLCLegacyCoreInteraction *)interaction
+{
+    core = interaction;
+}
 - (void)setImage:(NSImage *)image
 {
-    if (image == artImage)
+    [self setImage:image path:nil];
+}
+- (void)setImage:(NSImage *)image path:(NSString *)path
+{
+    if (image == artImage &&
+        (path == artPath || [path isEqualToString:artPath]))
         return;
     [image retain];
+    [path retain];
     [artImage release];
+    [artPath release];
     artImage = image;
+    artPath = path;
     [self setNeedsDisplay:YES];
 }
 - (void)dealloc
 {
     [artImage release];
+    [artPath release];
     [super dealloc];
 }
+
+- (NSMenu *)menuForEvent:(NSEvent *)event
+{
+    (void)event;
+    NSMenu *menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
+    NSMenuItem *download = [menu addItemWithTitle:_NS("Download cover art")
+        action:@selector(downloadCoverArt:) keyEquivalent:@""];
+    [download setTarget:self];
+    NSMenuItem *copy = [menu addItemWithTitle:_NS("Copy")
+        action:@selector(copyCoverArt:) keyEquivalent:@""];
+    [copy setTarget:self];
+    [copy setEnabled:artPath != nil && artImage != nil];
+    return menu;
+}
+
+- (void)downloadCoverArt:(id)sender
+{
+    (void)sender;
+    input_thread_t *input = playlist_CurrentInput(pl_Get([core intf]));
+    if (!input)
+        return;
+    input_item_t *item = input_GetItem(input);
+    if (item)
+        libvlc_ArtRequest([core intf]->obj.libvlc, item,
+                         META_REQUEST_OPTION_SCOPE_ANY);
+    vlc_object_release(input);
+}
+
+- (void)copyCoverArt:(id)sender
+{
+    (void)sender;
+    NSData *data = [artImage TIFFRepresentation];
+    if (!data || !artPath)
+        return;
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    [pasteboard declareTypes:
+        [NSArray arrayWithObject:NSTIFFPboardType] owner:nil];
+    [pasteboard setData:data forType:NSTIFFPboardType];
+}
+
+- (void)mouseDown:(NSEvent *)event
+{
+    dragStartPoint = [self convertPoint:[event locationInWindow] fromView:nil];
+    dragCandidate = artPath != nil;
+    [super mouseDown:event];
+}
+
+- (void)mouseDragged:(NSEvent *)event
+{
+    if (!dragCandidate || !artPath ||
+        ![[NSFileManager defaultManager] fileExistsAtPath:artPath]) {
+        [super mouseDragged:event];
+        return;
+    }
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+    if (hypot(point.x - dragStartPoint.x,
+              point.y - dragStartPoint.y) < 3.0)
+        return;
+    dragCandidate = NO;
+
+    NSPasteboard *pasteboard = [NSPasteboard pasteboardWithName:NSDragPboard];
+    [pasteboard declareTypes:
+        [NSArray arrayWithObject:NSFilenamesPboardType] owner:nil];
+    [pasteboard setPropertyList:[NSArray arrayWithObject:artPath]
+                        forType:NSFilenamesPboardType];
+
+    NSSize sourceSize = [artImage size];
+    CGFloat scale = MIN(1.0f, MIN(96.0f / sourceSize.width,
+                                  96.0f / sourceSize.height));
+    NSSize size = NSMakeSize(sourceSize.width * scale,
+                             sourceSize.height * scale);
+    NSImage *preview = [[[NSImage alloc] initWithSize:size] autorelease];
+    [preview lockFocus];
+    [artImage drawInRect:NSMakeRect(0.0f, 0.0f, size.width, size.height)
+                fromRect:NSZeroRect operation:NSCompositeSourceOver
+                fraction:1.0f];
+    [preview unlockFocus];
+    [self dragImage:preview at:dragStartPoint offset:NSZeroSize event:event
+          pasteboard:pasteboard source:self slideBack:YES];
+}
+
+- (NSDragOperation)draggingSourceOperationMaskForLocal:(BOOL)local
+{
+    (void)local;
+    return NSDragOperationCopy;
+}
+
 - (void)drawRect:(NSRect)dirtyRect
 {
     /* the cover is aspect-fitted and centred, so it never covers the whole
@@ -1869,6 +2287,7 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
     [sidebarScroll setAutoresizingMask:NSViewWidthSizable];
     sidebarArtView = [[[VLCLegacyArtImageView alloc]
         initWithFrame:NSMakeRect(0, 0, SIDEBAR_WIDTH, 10)] autorelease];
+    [sidebarArtView setCore:core];
     [sidebarArtView setAutoresizingMask:NSViewWidthSizable];
     [sidebarArtView setImage:VLCLegacyImage(@"noart")];
     sidebarArtDivider = [[[VLCLegacyArtDivider alloc]
@@ -2202,6 +2621,17 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
         NSMakeSize(SIDEBAR_WIDTH, upperRect.size.height)];
     [splitView adjustSubviews];
 
+    /* Default surface, matching Qt: black cone while idle and large artwork
+     * for audio. The programmatic legacy UI cannot use a modern nib, so keep
+     * it as a sibling of the split/video views with the same autoresizing. */
+    backgroundView = [[[VLCLegacyBackgroundView alloc]
+        initWithFrame:upperRect] autorelease];
+    backgroundView->controller = self;
+    backgroundView->core = core;
+    [backgroundView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+    [content addSubview:backgroundView];
+    VLCLegacySetViewHidden(splitView, YES);
+
     /* --- embedded video view, hidden until a vout asks for it --- */
     videoView = [[[VLCLegacyVideoView alloc] initWithFrame:upperRect]
         autorelease];
@@ -2528,12 +2958,14 @@ static NSString *themedImage(NSString *lightName, NSString *darkName)
 - (void)showPlaylistView
 {
     [window makeKeyAndOrderFront:nil];
-    if (videoViewUsers != 0 && !VLCLegacyViewIsHidden(videoView)) {
-        playlistViewWanted = YES;
-        VLCLegacySetViewHidden(videoView, YES);
-        VLCLegacySetViewHidden(splitView, NO);
+    playlistViewWanted = YES;
+    [backgroundView setBackgroundActive:NO];
+    VLCLegacySetViewHidden(backgroundView, YES);
+    VLCLegacySetViewHidden(videoView, YES);
+    VLCLegacySetViewHidden(splitView, NO);
+    if (videoHostWindow)
         [self detachVideoHostWindow];   /* cf. -toggleView: */
-    }
+    [window makeFirstResponder:playlistTable];
 }
 
 /* -[VLCMainWindow highlightSearchField:] simply selects the text; here the
@@ -2994,10 +3426,19 @@ static const struct {
         if (p_playlist != NULL && playlist_Status(p_playlist) == PLAYLIST_STOPPED)
             playlistViewWanted = NO;
     }
-    /* La lecture s'est vraiment arrêtée : la liste de lecture reprend sa place
-     * (c'est ici, et non dans -releaseVideoView, puisque ce dernier peut n'être
-     * qu'une transition entre deux vouts du même DVD). */
-    VLCLegacySetViewHidden(splitView, NO);
+    /* La lecture s'est vraiment arrêtée : revenir à la surface que
+     * l'utilisateur avait choisie, la liste ou le cône/pochette par défaut. */
+    if (playlistViewWanted) {
+        [backgroundView setBackgroundActive:NO];
+        VLCLegacySetViewHidden(backgroundView, YES);
+        VLCLegacySetViewHidden(splitView, NO);
+        [window makeFirstResponder:playlistTable];
+    } else {
+        VLCLegacySetViewHidden(splitView, YES);
+        VLCLegacySetViewHidden(backgroundView, NO);
+        [backgroundView setBackgroundActive:YES];
+        [window makeFirstResponder:backgroundView];
+    }
     [window setHasShadow:YES];
 }
 
@@ -3084,6 +3525,8 @@ static const struct {
      && VLCLegacyOSVersionAtLeast(10, 3, 0))
         [window setHasShadow:NO];
     [videoView setFrame:[splitView frame]];
+    [backgroundView setBackgroundActive:NO];
+    VLCLegacySetViewHidden(backgroundView, YES);
     /* ⚠ Ne PAS reprendre le dessus si l'utilisateur regarde la liste de
      * lecture : un DVD recrée son vout à chaque transition (menu → titre,
      * engagement du décodage matériel), et la vidéo revenait alors d'elle-même
@@ -3091,6 +3534,9 @@ static const struct {
     if (!playlistViewWanted) {
         VLCLegacySetViewHidden(videoView, NO);
         VLCLegacySetViewHidden(splitView, YES);
+    } else {
+        VLCLegacySetViewHidden(videoView, YES);
+        VLCLegacySetViewHidden(splitView, NO);
     }
     [window makeKeyAndOrderFront:nil];
     if (videoHostWindow) {
@@ -3144,7 +3590,17 @@ static const struct {
                    afterDelay:VLC_LEGACY_VIDEOHOST_HIDE_DELAY];
         return;                 /* splitView/ombre rétablis au vrai arrêt */
     }
-    VLCLegacySetViewHidden(splitView, NO);
+    if (playlistViewWanted) {
+        [backgroundView setBackgroundActive:NO];
+        VLCLegacySetViewHidden(backgroundView, YES);
+        VLCLegacySetViewHidden(splitView, NO);
+        [window makeFirstResponder:playlistTable];
+    } else {
+        VLCLegacySetViewHidden(splitView, YES);
+        VLCLegacySetViewHidden(backgroundView, NO);
+        [backgroundView setBackgroundActive:YES];
+        [window makeFirstResponder:backgroundView];
+    }
     [window setHasShadow:YES];
 }
 
@@ -4700,14 +5156,30 @@ static void VLCLegacyCollectSearchProtectedIds(playlist_item_t *node,
         [self searchChanged:searchField];
 }
 
-/* View toggle button: switch between video and playlist, like the 3.0
- * playlist button */
+/* View toggle button: video/list during video playback, and the same
+ * cone-or-art/list alternation as Qt when no vout exists. */
 - (void)toggleView:(id)sender
 {
-    if (videoViewUsers == 0)
+    if (videoViewUsers == 0) {
+        BOOL showPlaylist = !VLCLegacyViewIsHidden(backgroundView);
+        playlistViewWanted = showPlaylist;
+        if (showPlaylist) {
+            [backgroundView setBackgroundActive:NO];
+            VLCLegacySetViewHidden(backgroundView, YES);
+            VLCLegacySetViewHidden(splitView, NO);
+            [window makeFirstResponder:playlistTable];
+        } else {
+            VLCLegacySetViewHidden(splitView, YES);
+            VLCLegacySetViewHidden(backgroundView, NO);
+            [backgroundView setBackgroundActive:YES];
+            [window makeFirstResponder:backgroundView];
+        }
         return;
+    }
     BOOL showPlaylist = VLCLegacyViewIsHidden(videoView) == NO;
     playlistViewWanted = showPlaylist;
+    [backgroundView setBackgroundActive:NO];
+    VLCLegacySetViewHidden(backgroundView, YES);
     VLCLegacySetViewHidden(videoView, showPlaylist);
     VLCLegacySetViewHidden(splitView, !showPlaylist);
     /* ⚠ Pendant la lecture, la vue vidéo n'est PAS dans la fenêtre principale :
@@ -7831,15 +8303,18 @@ static void VLCLegacyPrepareAlternatingCell(id cell, NSTableView *table,
     sidebarArtUrl = [artUrl retain];
 
     NSImage *art = nil;
+    NSString *artPath = nil;
     if ([artUrl length]) {
+        char *psz_path = vlc_uri2path([artUrl UTF8String]);
+        if (psz_path) {
+            artPath = [NSString stringWithUTF8String:psz_path];
+            free(psz_path);
+        }
         art = [artworkCache objectForKey:artUrl];
         if (!art) {
-            char *psz_path = vlc_uri2path([artUrl UTF8String]);
-            if (psz_path) {
-                art = [[[NSImage alloc] initWithContentsOfFile:
-                    [NSString stringWithUTF8String:psz_path]] autorelease];
-                free(psz_path);
-            }
+            if (artPath)
+                art = [[[NSImage alloc]
+                    initWithContentsOfFile:artPath] autorelease];
             if (!art)
                 art = (NSImage *)[NSNull null];
             [artworkCache setObject:art forKey:artUrl];
@@ -7847,7 +8322,9 @@ static void VLCLegacyPrepareAlternatingCell(id cell, NSTableView *table,
         if (art == (NSImage *)[NSNull null])
             art = nil;
     }
-    [sidebarArtView setImage:art ? art : VLCLegacyImage(@"noart")];
+    [sidebarArtView setImage:art ? art : VLCLegacyImage(@"noart")
+                        path:art ? artPath : nil];
+    [backgroundView setArtwork:art];
 }
 
 - (void)refresh:(NSTimer *)timer

@@ -893,6 +893,8 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     NSMenu *subtitlesMenu = [self addMenuTo:menubar title:_NS("Subtitles")];
     [self addItemTo:subtitlesMenu title:_NS("Add Subtitle File...")
              action:@selector(addSubtitleFile:) key:@""];
+    [self addItemTo:subtitlesMenu title:_NS("Find Subtitles Online...")
+             action:@selector(searchSubtitles:) key:@""];
     subtitleTrackMenu = [self addDynamicMenuTo:subtitlesMenu
                                          title:_NS("Subtitles Track")];
     [subtitlesMenu addItem:[NSMenuItem separatorItem]];
@@ -1117,6 +1119,8 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
                                           title:_NS("Video Track")];
     voutSubtitleTrackMenu = [self addDynamicMenuTo:voutMenu
                                              title:_NS("Subtitles Track")];
+    [self addItemTo:voutMenu title:_NS("Find Subtitles Online...")
+             action:@selector(searchSubtitles:) key:@""];
     /* the only way to reach the Blu-ray pop-up menu in fullscreen, where the
      * menu bar is out of reach (besides the key-disc-popup-menu hotkey); set
      * apart by a separator, it acts on the disc and not on our playback */
@@ -1688,6 +1692,14 @@ void VLCLegacyNoteRecentItem(NSString *mrl)
     } else
         extension_TriggerMenu(p_extensions_manager, p_ext,
                               (uint16_t)i_action);
+}
+
+- (void)searchSubtitles:(id)sender
+{
+    if (![self loadExtensions] ||
+        extension_Open(p_extensions_manager, "PowerVLSub", 1) != VLC_SUCCESS)
+        NSRunAlertPanel(_NS("Online Subtitles"), @"%@", _NS("OK"), nil, nil,
+            _NS("The OpenSubtitles extension could not be loaded. Please reinstall PowerVLC."));
 }
 
 - (void)selectDynamicItem:(id)sender

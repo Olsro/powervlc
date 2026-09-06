@@ -1,0 +1,30 @@
+diff --git a/edge264/src/edge264_internal.h b/edge264/src/edge264_internal.h
+index 04fa176..06e6247 100644
+--- a/edge264/src/edge264_internal.h
++++ b/edge264/src/edge264_internal.h
+@@ -952,7 +952,7 @@ static always_inline unsigned movemask(i8x16 a) {u8x16 b = vshrq_n_u8(a, 7), c
+ 		// FIXME try again to macro it?
+ 		static always_inline i8x16 shuffle(i8x16 a, i8x16 m) {return vqtbl1q_s8(a, m);}
+ 		static always_inline i8x16 shufflen(i8x16 a, i8x16 m) {return vqtbx1q_s8(m, a, m);}
+-		static always_inline i8x16 shuffle2(i8x16 a, i8x16 b, i8x16 m) {return vqtbl2q_s8((int8x16x2_t){a, b}, m);}
++		static always_inline i8x16 shuffle2(i8x16 a, i8x16 b, i8x16 m) {int8x16x2_t x; x.val[0] = a; x.val[1] = b; return vqtbl2q_s8(x, m);}
+ 		static always_inline i8x16 shuffle3(const i8x16 *p, i8x16 m) {return vqtbl3q_s8(*(int8x16x3_t *)p, m);}
+ 		static always_inline u16x8 sum8(u8x16 a) {u16x8 b; asm("uaddlv %h0, %1.16b" : "=w" (b) : "w" (a)); return b;}
+ 		static always_inline i32x4 trnlo32(i32x4 a, i32x4 b) {return vtrn1q_s32(a, b);}
+diff --git a/edge264/src/edge264_inter.c b/edge264/src/edge264_inter.c
+index df16790..459fa10 100644
+--- a/edge264/src/edge264_inter.c
++++ b/edge264/src/edge264_inter.c
+@@ -78,9 +78,10 @@ static always_inline i16x8 sixtapH8(i8x16 ab, i8x16 cd)
+ 		static const i8x16 shuf_zipmd64 = {4, 5, 6, 7, 8, 9, 10, 11, 20, 21, 22, 23, 24, 25, 26, 27};
+ 		#define cvthi8s16(a) (u16x8)vmovl_high_s8(a)
+ 		#define shrrpus16(a, b, i) (u8x16)vqrshrun_high_n_s16(vqrshrun_n_s16(a, i), b, i)
+-		#define zipmd64(a, b) (i64x2)vqtbl2q_s8((int8x16x2_t){a, b}, shuf_zipmd64)
++		static always_inline i64x2 zipmd64_(i8x16 a, i8x16 b) {int8x16x2_t x; x.val[0] = a; x.val[1] = b; return (i64x2)vqtbl2q_s8(x, shuf_zipmd64);}
++		#define zipmd64(a, b) zipmd64_((i8x16)(a), (i8x16)(b))
+ 		static always_inline i16x8 sixtapH4(i8x16 l0, i8x16 l1) {
+-			int8x16x2_t x = {l0, l1};
++			int8x16x2_t x; x.val[0] = l0; x.val[1] = l1;
+ 			i8x16 af = vqtbl2q_s8(x, (i8x16){0, 5, 1, 6, 2, 7, 3, 8, 16, 21, 17, 22, 18, 23, 19, 24});
+ 			i8x16 be = vqtbl2q_s8(x, (i8x16){1, 4, 2, 5, 3, 6, 4, 7, 17, 20, 18, 21, 19, 22, 20, 23});
+ 			i8x16 cd = vqtbl2q_s8(x, (i8x16){2, 3, 3, 4, 4, 5, 5, 6, 18, 19, 19, 20, 20, 21, 21, 22});

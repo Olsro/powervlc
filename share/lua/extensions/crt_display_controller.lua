@@ -15,7 +15,7 @@ function descriptor()
         version = "2.0",
         author = "Jules Lazaro and PowerVLC contributors",
         description = "Live scanline, phosphor, halation, and diffusion controls.",
-        capabilities = {}
+        capabilities = { "input-listener" }
     }
 end
 
@@ -47,6 +47,10 @@ local retroarch_raster_dropdown = nil
 local retroarch_presets = {}
 local retroarch_selection = 1
 local retroarch_raster_selection = 1
+local refresh_generation = 0
+local last_available = nil
+local last_effect_backend = "cpu"
+local lang = {}
 local retroarch_rasters = {
     { label = "Auto (source SD)", value = "auto" },
     { label = "Native", value = "native" },
@@ -129,9 +133,21 @@ end
 local function load_compatible_retroarch_presets()
     retroarch_presets = {}
     local available = runtime_get("crt-retroarch-available")
-    if type(available) ~= "string" then return end
+    if type(available) ~= "string" or available == "" then return available end
     for name in string.gmatch(available, "[^;]+") do
         table.insert(retroarch_presets, name)
+    end
+    return available
+end
+
+local function restore_retroarch_selection()
+    local saved_preset = vlc.config.get("crt-retroarch-preset") or "crt-easymode"
+    retroarch_selection = 1
+    for index, name in ipairs(retroarch_presets) do
+        if name == saved_preset then
+            retroarch_selection = index
+            break
+        end
     end
 end
 
@@ -153,7 +169,11 @@ end
 local function apply(name)
     local key = string.gsub(name, "-", "_")
     set_config(name, values[key])
+    last_effect_backend = "cpu"
     set_gpu_enabled(false)
+    -- Force recreation if a GPU-only passthrough instance was left in the
+    -- chain by a persisted configuration from an earlier session.
+    set_filter_enabled(false)
     set_filter_enabled(true)
     refresh_labels()
 end
@@ -166,7 +186,9 @@ local function apply_all()
     set_config("mask-strength", values.mask_strength)
     set_config("halation", values.halation)
     set_config("diffusion", values.diffusion)
+    last_effect_backend = "cpu"
     set_gpu_enabled(false)
+    set_filter_enabled(false)
     set_filter_enabled(true)
     refresh_labels()
 end
@@ -202,12 +224,16 @@ local function apply_retroarch_preset()
     runtime_set("crt-retroarch-preset", name)
     vlc.config.set("crt-retroarch-raster", raster.value)
     runtime_set("crt-retroarch-raster", raster.value)
-    set_filter_enabled(false)
+    last_effect_backend = "gpu"
     set_gpu_enabled(true)
+    -- CPU and GPU effects are mutually exclusive. Leaving crtscanline in the
+    -- saved chain makes VLC repeatedly negotiate a needless hardware-to-I420
+    -- converter at the next startup, before this extension is even opened.
+    set_filter_enabled(false)
 end
 
 local function enable_effect()
-    if #retroarch_presets > 0 and vlc.config.get("crt-retroarch-enabled") then
+    if #retroarch_presets > 0 and last_effect_backend == "gpu" then
         set_gpu_enabled(true)
     else
         set_filter_enabled(true)
@@ -217,6 +243,24 @@ end
 local function disable_effect()
     set_filter_enabled(false)
     set_gpu_enabled(false)
+end
+
+local function switch_to_opengl()
+    -- This remains useful for legacy Windows outputs (Direct3D 9,
+    -- DirectDraw, GDI) which cannot host the multipass GPU pipeline.
+    vlc.config.set("vout", "glwin32")
+    local current = vlc.playlist.current()
+    if current then
+        vlc.playlist.stop()
+        -- `goto` became a reserved word in Lua 5.2. Bracket notation keeps
+        -- the extension source compilable with every Lua version VLC uses.
+        vlc.playlist["goto"](current)
+    end
+    if dialog then
+        dialog:delete()
+        dialog = nil
+    end
+    vlc.deactivate()
 end
 
 local function cycle_phosphor()
@@ -278,7 +322,8 @@ local function create_dialog()
         dialog:add_label("<b>Presets RetroArch exacts</b>", 1, 10, 1, 1)
         retroarch_dropdown = dialog:add_dropdown(2, 10, 2, 1)
         for index, name in ipairs(retroarch_presets) do
-            retroarch_dropdown:add_value(name, index)
+            local label = string.match(name, "^slang/(.+)$")
+            retroarch_dropdown:add_value(label and ("Slang · " .. label) or ("GLSL · " .. name), index)
         end
         retroarch_dropdown:set_value(retroarch_selection)
         dialog:add_button("Apply", apply_retroarch_preset, 4, 10, 1, 1)
@@ -288,11 +333,28 @@ local function create_dialog()
             retroarch_raster_dropdown:add_value(raster.label, index)
         end
         retroarch_raster_dropdown:set_value(retroarch_raster_selection)
-        dialog:add_label("<i>Original GLSL; unsupported presets are hidden for this GPU.</i>",
-                         1, 12, 4, 1)
+        local backend = runtime_get("crt-retroarch-backend")
+        local backend_label
+        if backend == "direct3d11-retroarch-slang-hlsl" then
+            backend_label = "Direct3D 11 · Slang compiled to HLSL 5.0."
+        elseif backend == "opengl-retroarch-glsl-slang" then
+            backend_label = "OpenGL · GLSL + compiled Slang."
+        else
+            backend_label = "GPU presets depend on video-output capabilities."
+        end
+        dialog:add_label("<i>" .. backend_label .. "</i>", 1, 12, 4, 1)
     else
-        dialog:add_label("<i>RetroArch shaders unavailable on this video output.</i>",
-                         1, 10, 4, 1)
+        local message
+        if not vlc.input.item() then
+            message = lang.msg_start_video
+        else
+            message = lang.msg_detecting
+        end
+        dialog:add_label("<i>" .. message .. "</i>", 1, 10, 4, 1)
+        if package and package.config and package.config:sub(1, 1) == "\\" then
+            dialog:add_button("Restart video with OpenGL", switch_to_opengl,
+                              1, 11, 4, 1)
+        end
     end
     dialog:add_label("<i>Subtitles stay sharp. CPU mode remains available for legacy hardware.</i>",
                      1, 13, 4, 1)
@@ -301,6 +363,10 @@ local function create_dialog()
 end
 
 function activate()
+    lang = require("pvlc_i18n").load("crt_display_controller")
+    last_effect_backend = vlc.config.get("crt-retroarch-enabled")
+                       and "gpu" or "cpu"
+    if last_effect_backend == "gpu" then set_filter_enabled(false) end
     values.darkness = get_config("darkness", defaults.darkness)
     values.spacing = get_config("spacing", defaults.spacing)
     values.blend = get_config("blend", defaults.blend)
@@ -308,14 +374,8 @@ function activate()
     values.mask_strength = get_config("mask-strength", defaults.mask_strength)
     values.halation = get_config("halation", defaults.halation)
     values.diffusion = get_config("diffusion", defaults.diffusion)
-    load_compatible_retroarch_presets()
-    local saved_preset = vlc.config.get("crt-retroarch-preset") or "crt-easymode"
-    for index, name in ipairs(retroarch_presets) do
-        if name == saved_preset then
-            retroarch_selection = index
-            break
-        end
-    end
+    last_available = load_compatible_retroarch_presets()
+    restore_retroarch_selection()
     local saved_raster = vlc.config.get("crt-retroarch-raster") or "auto"
     for index, raster in ipairs(retroarch_rasters) do
         if raster.value == saved_raster then
@@ -326,7 +386,34 @@ function activate()
     create_dialog()
 end
 
+-- The GPU backend publishes its preset list only after a video output exists,
+-- which is later than input_changed() on a fresh playback. Poll briefly and
+-- rebuild only when the published capability actually changes. This keeps an
+-- already-open controller accurate without continuously redrawing it.
+function refresh_retroarch_capabilities()
+    local generation = refresh_generation
+    local available = runtime_get("crt-retroarch-available")
+    if available ~= last_available then
+        last_available = load_compatible_retroarch_presets()
+        restore_retroarch_selection()
+        create_dialog()
+    end
+    if generation > 0 and generation < 40 then
+        refresh_generation = generation + 1
+        vlc.timer(100, "refresh_retroarch_capabilities")
+    else
+        refresh_generation = 0
+    end
+end
+
+function input_changed()
+    refresh_generation = 1
+    vlc.timer(50, "refresh_retroarch_capabilities")
+end
+
 function deactivate()
+    refresh_generation = 0
+    if vlc.timer then vlc.timer(0) end
     if dialog then
         dialog:delete()
         dialog = nil
@@ -344,5 +431,7 @@ function close()
     labels = {}
     retroarch_dropdown = nil
     retroarch_raster_dropdown = nil
+    refresh_generation = 0
+    if vlc.timer then vlc.timer(0) end
     vlc.deactivate()
 end

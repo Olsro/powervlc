@@ -1,0 +1,561 @@
+/*
+    Yah! - Yet Another Hyllian
+    Based on CRT shader by Hyllian
+    Modified by Jezze
+
+    Copyright (C) 2011-2025 Hyllian - sergiogdb@gmail.com
+    Copyright (C) 2023-2025 Jezze - jezze@gmx.net
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+*/
+
+#include "common/constants.h"
+#include "common/color-helper.h"
+#include "common/interpolation-helper.h"
+#include "common/math-helper.h"
+#include "common/subpixel-color.h"
+
+float get_brightness_compensation(float color_luma)
+{
+    if (PARAM_COLOR_COMPENSATION == 0)
+    {
+        return 0.0;
+    }
+
+    // consider color luminance for additive mask blend [1.0]
+    float mask_blend = 1.0 - ((1.0 - PARAM_MASK_BLEND) * (1.0 - PARAM_MASK_BLEND));
+
+    return mix(
+        INPUT_BRIGHTNESS_COMPENSATION,
+        INPUT_BRIGHTNESS_COMPENSATION * (1.0 - color_luma),
+        mask_blend);
+}
+
+vec3 RAWINPUT(vec3 color)
+{
+    color = decode_gamma(color);
+
+    return color;
+}
+
+vec3 INPUT(vec3 color)
+{
+    float color_floor = INPUT_FLOOR_PROFILE.x;
+
+    color = decode_gamma(color);
+    color = apply_floor(color, color_floor);
+
+    return color;
+}
+
+vec3 OUTPUT(vec3 color, float color_luma)
+{
+    float brightness_compensation = get_brightness_compensation(color_luma);
+
+    color = apply_brightness(color, brightness_compensation);
+    color = apply_brightness(color, PARAM_COLOR_BRIGHTNESS);
+    color = apply_contrast(color, PARAM_COLOR_CONTRAST);
+    color = apply_temperature(color, PARAM_COLOR_TEMPERATUE);
+    color = apply_saturation(color, PARAM_COLOR_SATURATION);
+    color = encode_gamma(color);
+
+    return color;
+}
+
+// orientation-aware vec2 constructors
+vec2 vec2o(vec2 v)
+{
+    return mix(
+        v.xy,
+        v.yx,
+        INPUT_SCREEN_ORIENTATION);
+}
+
+vec2 vec2o(float x, float y)
+{
+    return mix(
+        vec2(x, y),
+        vec2(y, x),
+        INPUT_SCREEN_ORIENTATION);
+}
+
+vec2 vec2ox(vec2 v, float f)
+{
+    return mix(
+        vec2(v.x, f),
+        vec2(f, v.y),
+        INPUT_SCREEN_ORIENTATION);
+}
+
+vec2 vec2oy(vec2 v, float f)
+{
+    return mix(
+        vec2(f, v.y),
+        vec2(v.x, f),
+        INPUT_SCREEN_ORIENTATION);
+}
+
+vec2 apply_sharp_bilinear_filtering(vec2 tex_coord, vec2 tex_size)
+{
+    return sharp_bilinear(tex_coord, tex_size, global.OutputSize.xy);
+}
+
+vec2 apply_cubic_lens_distortion(vec2 tex_coord)
+{
+    if (PARAM_CRT_CURVATURE_AMOUNT == 0.0)
+    {
+        return tex_coord;
+    }
+
+    float amount = PARAM_CRT_CURVATURE_AMOUNT;
+
+    // center coordinates
+    tex_coord -= 0.5;
+
+    // compute cubic distortion factor
+    float c = tex_coord.x * tex_coord.x + tex_coord.y * tex_coord.y;
+    float f = 1.0 + c * (amount * sqrt(c));
+
+    // fit screen bounds
+    f /= 1.0 + amount * 0.125;
+
+    // apply cubic distortion factor
+    tex_coord *= f;
+
+    // un-center coordinates
+    tex_coord += 0.5;
+
+    return tex_coord;
+}
+
+float get_vignette_factor(vec2 tex_coord)
+{
+    if (PARAM_CRT_VIGNETTE_AMOUNT == 0.0)
+    {
+        return 1.0;
+    }
+
+    float amount = normalized_sigmoid(PARAM_CRT_VIGNETTE_AMOUNT, -0.5);
+
+    // center coordinates
+    tex_coord -= 0.5;
+
+    float radius = 1.0 - (amount * 0.25);
+    float softness = (amount * 0.125) + 0.375;
+    float distance = length(tex_coord);
+
+    return smoothstep(
+        radius,
+        radius - softness,
+        distance);
+}
+
+float get_round_corner_factor(vec2 tex_coord)
+{
+    if (PARAM_CRT_CORNER_RAIDUS == 0.0)
+    {
+        return 1.0;
+    }
+
+    return smooth_round_box(
+        tex_coord,
+        global.OutputSize.xy,
+        vec2(1.0),
+        PARAM_CRT_CORNER_RAIDUS,
+        PARAM_CRT_CORNER_SMOOTHNESS);
+}
+
+vec3 get_half_scanlines_factor(vec3 color, float position)
+{
+    float min_width = INPUT_BEAM_PROFILE.x;
+    float max_width = INPUT_BEAM_PROFILE.y;
+    float slope = INPUT_BEAM_PROFILE.z;
+    float strength = INPUT_BEAM_PROFILE.w;
+
+    // limit color burn
+    vec3 width_limit = mix(
+        // max. color value for all channel
+        vec3(max_color(color)),
+        // no limit
+        color,
+        PARAM_SCANLINES_COLOR_BURN);
+
+    // apply min./max. width
+    vec3 width = mix(
+        vec3(min_width),
+        vec3(max_width),
+        width_limit);
+
+    // apply strength and slope
+    vec3 factor = position / (width + EPSILON);
+    factor = exp(-10.0 * strength * pow(factor, vec3(slope)));
+
+    return factor;
+}
+
+vec3 get_half_beam_color(sampler2D source, vec2 tex_coord, vec2 delta_x, vec2 delta_y, vec4 beam_filter)
+{
+    // get spline bases
+    vec3 x = INPUT(texture(source, tex_coord -       delta_x - delta_y).rgb);
+    vec3 y = INPUT(texture(source, tex_coord                 - delta_y).rgb);
+    vec3 z = INPUT(texture(source, tex_coord +       delta_x - delta_y).rgb);
+    vec3 w = INPUT(texture(source, tex_coord + 2.0 * delta_x - delta_y).rgb);
+
+    // get color from spline
+    vec3 color = mat4x3(x, y, z, w) * beam_filter;
+
+    // apply anti-ringing
+    vec3 color_step = step(0.0, abs(x - y) * abs(z - w));
+    vec3 color_clamp = clamp(color, min(y, z), max(y, z));
+    color = mix(
+        color,
+        color_clamp,
+        color_step * INPUT_ANTI_RINGING);
+
+    return color;
+}
+
+vec2 get_scanlines_pixel_coordinate(vec2 tex_coord, vec2 tex_size)
+{
+    // texture to pixel coordinates
+    vec2 pix_coord = tex_coord * tex_size;
+
+    // apply half pixel offset (align to pixel corner)
+    pix_coord += vec2(0.5, 0.5);
+
+    return pix_coord;
+}
+
+vec2 get_scanlines_texel_coordinate(vec2 pix_coord, vec2 tex_size)
+{
+    vec2 multiple = vec2(1.0, INPUT_SCREEN_MULTIPLE);
+
+    vec2 tex_offset = vec2(0.0);
+
+    // when manual down-scaled
+    if (INPUT_SCREEN_MULTIPLE > 1.0)
+    {
+        // apply half texel offset
+        //   scaled by absolute amount of multiple
+        tex_offset += vec2(-0.5, 0.5) / multiple;
+    }
+    // when manual up-scaled
+    else
+    {
+        // apply half texel offset
+        tex_offset += vec2(-0.5, 0.5);
+    }
+
+    // when automatic down-scaled
+    if (INPUT_SCREEN_MULTIPLE_AUTO > 1.0
+        || INPUT_SCREEN_MULTIPLE_NATIVE > 1.0)
+    {
+        // apply half texel x-offset (to sample between two pixel along scanlines)
+        //   see vertex stage
+        tex_offset += vec2(-0.5, 0.0);
+    }
+
+    // when manual or automatic down-scaled
+    if (INPUT_SCREEN_MULTIPLE > 1.0)
+    {
+        // apply half texel y-offset (to sample between two pixel between scanlines)
+        //   scaled by relative amount of multiple
+        tex_offset += vec2(0.0, 0.5) / multiple * (INPUT_SCREEN_MULTIPLE - 1.0);
+    }
+
+    // orientation-aware offset
+    pix_coord = floor(pix_coord) + vec2o(tex_offset);
+
+    // pixel to texture coordinates
+    return pix_coord / tex_size;
+}
+
+vec3 apply_interlace(vec2 pix_coord, vec3 even_color, vec3 uneven_color)
+{
+    if (PARAM_SCREEN_INTERLACED == 0.0)
+    {
+        return even_color + uneven_color;
+    }
+
+    float interlace_frame = INPUT_FRAME_COUNTS.x;
+
+    // determine even or uneven row, orientation-aware
+    bool even = (int(floor(vec2o(pix_coord).y)) % 2) != 0;
+
+    vec3 progressive = even_color + uneven_color;
+    vec3 interlace = mix(
+        mix(even_color, uneven_color, float(even)),
+        mix(even_color, uneven_color, float(!even)),
+        interlace_frame);
+
+    return mix(
+        progressive,
+        interlace,
+        PARAM_SCREEN_INTERLACED);
+}
+
+vec3 get_raw_color(sampler2D source, vec2 tex_coord, vec2 tex_size)
+{
+    // texture to pixel coordinates
+    vec2 pix_coord = tex_coord * tex_size;
+
+    vec3 color0 = vec3(0.0);
+    vec3 color1 = INPUT(texture(source, tex_coord).rgb);
+
+    return apply_interlace(pix_coord, color0, color1);
+}
+
+vec3 get_scanlines_color(sampler2D source, vec2 tex_coord, vec2 tex_size, out vec3 scanlines_factor)
+{
+    // avoid scanlines artefact
+    //   can happen when output resolution smaller than screen resolution
+    tex_coord += EPSILON;
+
+    vec2 pix_coord = vec2(0.0);
+    pix_coord = get_scanlines_pixel_coordinate(tex_coord, tex_size);
+    tex_coord = get_scanlines_texel_coordinate(pix_coord, tex_size);
+
+    vec2 tex_offset = vec2(1.0) / tex_size;
+    vec2 tex_offset_x = vec2ox(tex_offset, 0.0);
+    vec2 tex_offset_y = vec2oy(tex_offset, 0.0);
+
+    // orientation-aware pixel fraction
+    vec2 pix_fract = fract(vec2o(pix_coord));
+
+    // apply filtering
+    vec4 beam_filter = vec4(
+        pix_fract.x * pix_fract.x * pix_fract.x,
+        pix_fract.x * pix_fract.x,
+        pix_fract.x,
+        1.0) * INPUT_BEAM_FILTER;
+
+    vec3 color0 = get_half_beam_color(source, tex_coord, tex_offset_x, tex_offset_y, beam_filter);
+    vec3 color1 = get_half_beam_color(source, tex_coord, tex_offset_x, vec2(0.0), beam_filter);
+
+    // apply scanlines
+    vec3 factor0 = get_half_scanlines_factor(color0, pix_fract.y);
+    vec3 factor1 = get_half_scanlines_factor(color1, 1.0 - pix_fract.y);
+
+    scanlines_factor = apply_interlace(pix_coord, factor0, factor1);
+
+    return apply_interlace(pix_coord, color0 * factor0, color1 * factor1);
+}
+
+vec3 apply_details(vec3 scanlines_color, sampler2D base_samler, vec2 base_coord, sampler2D blur_sampler, vec2 blur_coord)
+{
+    if (PARAM_SHARP_AMOUNT == 0.0)
+    {
+        return scanlines_color;
+    }
+
+    vec3 base_color = texture(base_samler, base_coord).rgb;
+    vec3 blur_color = texture(blur_sampler, blur_coord).rgb;
+
+    // when automatic down-scaled
+    if (INPUT_SCREEN_MULTIPLE_AUTO > 1.0
+        || INPUT_SCREEN_MULTIPLE_NATIVE > 1.0)
+    {
+        // apply full texel x-offset (to sample a neighbor pixel)
+        //   orientation-aware
+        base_coord += vec2o(-1.0, 0.0) / global.OriginalSize.xy;
+
+        base_color += texture(base_samler, base_coord).rgb;
+        base_color *= 0.5;
+    }
+
+    base_color = INPUT(base_color);
+    blur_color = INPUT(blur_color);
+
+    vec3 difference_color = base_color - blur_color;
+    vec3 normalized_color = base_color / max(blur_color, EPSILON);
+
+    vec3 brighten = clamp(PARAM_SHARP_AMOUNT * difference_color, 0.0, 1.0);
+    vec3 darken = clamp(PARAM_SHARP_AMOUNT * (normalized_color - 1.0) + 1.0, 0.0, 1.0);
+
+    return mix(
+        scanlines_color + brighten,
+        scanlines_color * darken,
+        0.5);
+}
+
+vec3 blend_colors(vec3 raw_color, vec3 scanlines_color)
+{
+    if (PARAM_SCANLINES_STRENGTH == 0.0)
+    {
+        return raw_color;
+    }
+
+    // merged raw color with scanlines for strength < 0.125
+    float merge_limit = min(1.0, PARAM_SCANLINES_STRENGTH * 8);
+
+    return mix(
+        raw_color,
+        scanlines_color,
+        merge_limit);
+}
+
+vec3 get_mask(vec2 tex_coord)
+{
+    vec2 pix_coord = vec2o(tex_coord * global.OutputSize.xy);
+
+    int subpixel_mask = PARAM_MASK_TYPE;
+    int subpixel_type = int(INPUT_MASK_PROFILE.x);
+    int subpixel_size = int(INPUT_MASK_PROFILE.y);
+    float subpixel_smoothness = INPUT_MASK_PROFILE.z;
+    int subpixel_color_order = int(INPUT_MASK_PROFILE.w);
+
+    vec3 mask = get_subpixel_color(
+        pix_coord,
+        subpixel_size,
+        subpixel_mask,
+        subpixel_type,
+        subpixel_color_order,
+        1.0,
+        subpixel_smoothness);
+
+    return mask;
+}
+
+vec3 apply_mask(vec3 color, float color_luma, vec2 tex_coord, out vec3 mask_factor)
+{
+    if (PARAM_MASK_TYPE == 0)
+    {
+        return color;
+    }
+
+    vec3 mask = get_mask(tex_coord);
+    float mask_luma = get_luminance(mask);
+
+    // apply color bleed to neighbor sub-pixel
+    mask += max(
+        vec3(0.0),
+        vec3(mask_luma) - mask) * PARAM_MASK_COLOR_BLEED * PARAM_MASK_COLOR_BLEED;
+
+    // apply half color luma for additive mask
+    mask = mix(
+        mask,
+        mask + color_luma * 0.5,
+        PARAM_MASK_BLEND);
+
+    // increase mask brightness based on half intensity
+    vec3 mask_add = mask;
+    mask_add += (1.0 - PARAM_MASK_INTENSITY) * 0.5;
+    mask_add = clamp(mask_add, 0.0, 1.0);
+    mask_add += PARAM_MASK_INTENSITY * 0.5;
+
+    // blend multiplicative and additive mask
+    mask_factor = mix(
+        mask,
+        mask_add,
+        PARAM_MASK_BLEND);
+
+    // apply mask based on intensity
+    color = mix(
+        color,
+        color * mask_factor,
+        PARAM_MASK_INTENSITY);
+
+    return color;
+}
+
+vec3 apply_color_overflow(vec3 color)
+{
+    return apply_color_overflow(color, PARAM_COLOR_OVERFLOW);
+}
+
+vec3 adjust_halation(vec3 color, vec3 halation, vec3 scanlines_factor, vec3 mask_factor)
+{
+    // halation "between" scanlines
+    vec3 scanlines_halation = halation - color;
+
+    // halation "above" mask
+    vec3 mask_halation = halation
+        * scanlines_factor
+        * mask_factor
+        * PARAM_MASK_INTENSITY;
+
+    scanlines_halation = max(vec3(0.0), scanlines_halation);
+    mask_halation = max(vec3(0.0), mask_halation);
+
+    vec3 affective_halation = PARAM_HALATION_INFLUENCE < 0.0
+        ? mask_halation * 4.0
+        : scanlines_halation;
+
+    return mix(
+        // both scanlines and mask
+        scanlines_halation + mask_halation,
+        // either scanlines or mask
+        affective_halation,
+        abs(PARAM_HALATION_INFLUENCE));
+}
+
+vec3 apply_halation(vec3 color, sampler2D halation_source, vec2 tex_coord, vec3 scanlines_factor, vec3 mask_factor)
+{
+    if (PARAM_HALATION_INTENSITY == 0.0)
+    {
+        return color;
+    }
+
+    // use raw input without applying back lighting
+    vec3 halation = RAWINPUT(texture(halation_source, tex_coord).rgb);
+
+    float halation_luma = get_luminance(halation);
+
+    // adjust based on scanlines and mask
+    halation = adjust_halation(color, halation, scanlines_factor, mask_factor);
+
+    vec3 halation_ambience = halation
+        // increased intensity at start of range
+        * normalized_sigmoid(PARAM_HALATION_INTENSITY, 2.0, -0.5)
+        // weighted from none to luma
+        * mix(1.0, halation_luma, PARAM_HALATION_WEIGHT);
+    vec3 halation_essence = halation
+        // increased intensity at end of range
+        * normalized_sigmoid(PARAM_HALATION_INTENSITY, 2.0, 0.5)
+        // weighted from luma to luma squared
+        * mix(halation_luma, halation_luma * halation_luma, PARAM_HALATION_WEIGHT);
+
+    return color
+        + halation_ambience * 0.125
+        + halation_essence * 0.375;
+}
+
+vec3 apply_noise(vec3 color, float color_luma, vec2 tex_coord)
+{
+    if (PARAM_CRT_NOISE_AMOUNT == 0.0)
+    {
+        return color;
+    }
+
+    int subpixel_size = int(INPUT_MASK_PROFILE.y);
+    float noise_floor = INPUT_FLOOR_PROFILE.y;
+    float noise_frame = INPUT_FRAME_COUNTS.y;
+
+    // texture to screen coordinates, orientation-aware
+    vec2 screen_coord = vec2o(tex_coord.xy * global.OutputSize.xy);
+
+    // scale noise based on mask's sub-pixel size
+    screen_coord = floor(screen_coord / subpixel_size) * subpixel_size;
+
+    float noise = random(screen_coord * (noise_frame + 1.0));
+    float mul_noise = noise * 2.0;
+    float add_noise = noise * (1.0 - color_luma) * noise_floor;
+
+    return mix(
+        color,
+        color * mul_noise + add_noise,
+        (1.0 - color_luma) * PARAM_CRT_NOISE_AMOUNT * 0.25);
+}

@@ -75,6 +75,7 @@ enum {
     VOUT_CONTROL_REFRESH_SUBPICTURE,
     VOUT_CONTROL_STATIC_FRAME_HOLD,      /* boolean */
     VOUT_CONTROL_INTERACTIVE_OVERLAY,    /* boolean */
+    VOUT_CONTROL_RESTART_DISPLAY,        /* -- */
 };
 
 typedef struct {

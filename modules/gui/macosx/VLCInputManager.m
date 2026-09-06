@@ -352,14 +352,15 @@ static int InputEvent(vlc_object_t *p_this, const char *psz_var,
         const NSTimeInterval wallTime =
             [NSDate timeIntervalSinceReferenceDate];
 
-        /* BD-J regularly switches playlists and resets the title clock when
-         * moving between menu clips and the feature.  Those discontinuities
+        /* Disc navigation resets the clock when changing titles, menu cells
+         * or looping an animated menu. Those discontinuities
          * are not user seeks; the generic heuristic below used to turn them
          * into a duplicated stereo position OSD.  Real seek actions already
          * request their feedback explicitly through the hotkeys/UI path. */
-        const BOOL blurayDiscSession =
-            var_GetBool(p_current_input, "bluray-disc-session");
-        if (feedbackPositionPrimed && !blurayDiscSession) {
+        const BOOL discSession =
+            var_GetBool(p_current_input, "bluray-disc-session")
+            || var_GetBool(p_current_input, "dvd-menu-session");
+        if (feedbackPositionPrimed && !discSession) {
             const NSTimeInterval wallDelta =
                 wallTime - feedbackLastWallTime;
 

@@ -6,7 +6,7 @@
  
 -#if defined(HAS_STD_TO_CHARS_FP) && HAS_STD_TO_CHARS_FP == 0
 +#if (defined(HAS_STD_TO_CHARS_FP) && HAS_STD_TO_CHARS_FP == 0) || \
-+    defined(_WIN32)
++    defined(_WIN32) || defined(__linux__)
  template <>
  constexpr bool has_std_to_chars<float>  = false;
  template <>
@@ -14,9 +14,9 @@
  template <typename T>
  constexpr bool has_std_from_chars = has_std_from_chars_impl<T>::value;
  
-+/* llvm-mingw exposes the floating-point overloads in the libc++ headers, but
-+ * not every target runtime provides their out-of-line implementations. */
-+#if defined(_WIN32)
++/* llvm-mingw and some old Linux sysroots expose floating-point overloads in
++ * their headers without providing matching out-of-line implementations. */
++#if defined(_WIN32) || defined(__linux__)
 +template <> constexpr bool has_std_from_chars<float>  = false;
 +template <> constexpr bool has_std_from_chars<double> = false;
 +#endif

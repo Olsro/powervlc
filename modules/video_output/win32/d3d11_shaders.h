@@ -65,6 +65,18 @@ typedef struct {
     FLOAT Primaries[4*4];
 } PS_COLOR_TRANSFORM;
 
+/* Dynamic Dolby Vision reshaping metadata for the D3D11 pixel shader.
+ * Arrays use float4 packing to match HLSL constant-buffer layout exactly. */
+typedef struct {
+    FLOAT Info[4];                 /* enabled, pivot counts for components 0..2 */
+    FLOAT NonlinearOffset[4];
+    FLOAT Nonlinear[3][4];
+    FLOAT Linear[3][4];
+    FLOAT Pivots[9][4];            /* three float4 blocks per component */
+    FLOAT Coefficients[24][4];     /* eight segments per component */
+    FLOAT MMR[144][4];             /* six float4 blocks per segment */
+} PS_DOVI_METADATA;
+
 typedef struct {
     FLOAT RotX[4*4];
     FLOAT RotY[4*4];
@@ -85,10 +97,10 @@ bool IsRGBShader(const d3d_format_t *);
 HRESULT D3D11_CompilePixelShader(vlc_object_t *, d3d11_handle_t *, bool legacy_shader,
                                  d3d11_device_t *, const d3d_format_t *, const display_info_t *,
                                  video_transfer_func_t, video_color_primaries_t,
-                                 bool src_full_range,
+                                 bool src_full_range, bool dolby_vision,
                                  ID3D11PixelShader **output);
-#define D3D11_CompilePixelShader(a,b,c,d,e,f,g,h,i,j) \
-    D3D11_CompilePixelShader(VLC_OBJECT(a),b,c,d,e,f,g,h,i,j)
+#define D3D11_CompilePixelShader(a,b,c,d,e,f,g,h,i,j,k) \
+    D3D11_CompilePixelShader(VLC_OBJECT(a),b,c,d,e,f,g,h,i,j,k)
 
 float GetFormatLuminance(vlc_object_t *, const video_format_t *);
 #define GetFormatLuminance(a,b)  GetFormatLuminance(VLC_OBJECT(a),b)

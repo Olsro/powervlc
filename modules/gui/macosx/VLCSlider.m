@@ -230,6 +230,14 @@
 
 - (void)orderOut:(id)sender
 {
+    /* On older AppKit releases, ordering out a child window can order the
+     * whole parent group out as well.  The seek tooltip is attached to its
+     * host so it follows the controls window and stays above it; detach it
+     * before hiding so dismissing the tooltip cannot hide that host.  The
+     * slider attaches it again on the next hover. */
+    NSWindow *parent = [self parentWindow];
+    if (parent)
+        [parent removeChildWindow:self];
     [_stereoMirrorWindow orderOut:sender];
     [super orderOut:sender];
 }

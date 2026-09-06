@@ -107,6 +107,14 @@ typedef void (APIENTRY *PFNGLDELETEFRAMEBUFFERSPROC) (GLsizei n, const GLuint *f
 typedef void (APIENTRY *PFNGLFRAMEBUFFERTEXTURE2DPROC) (GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
 typedef void (APIENTRY *PFNGLGENFRAMEBUFFERSPROC) (GLsizei n, GLuint *framebuffers);
 typedef void (APIENTRY *PFNGLGENERATEMIPMAPPROC) (GLenum target);
+typedef void (APIENTRY *VLC_PFNGLCOLORMASKPROC) (
+    GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
+/* glBlitFramebuffer is core only from OpenGL 3.0. Keep a private type so the
+ * vtable can expose it opportunistically on older desktop/GLES headers too. */
+typedef void (APIENTRY *VLC_PFNGLBLITFRAMEBUFFERPROC) (
+    GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
+    GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
+    GLbitfield mask, GLenum filter);
 
 /* The following are defined in glext.h but not for GLES2 or on Apple systems */
 #if defined(USE_OPENGL_ES2) || defined(__APPLE__)
@@ -198,6 +206,7 @@ typedef struct {
     PFNGLBLENDFUNCPROC      BlendFunc;
     PFNGLCLEARCOLORPROC     ClearColor;
     PFNGLCLEARPROC          Clear;
+    VLC_PFNGLCOLORMASKPROC  ColorMask;
     PFNGLDELETETEXTURESPROC DeleteTextures;
     PFNGLDEPTHMASKPROC      DepthMask;
     PFNGLDISABLEPROC        Disable;
@@ -286,6 +295,7 @@ typedef struct {
     PFNGLFRAMEBUFFERTEXTURE2DPROC FramebufferTexture2D; /* can be NULL */
     PFNGLGENFRAMEBUFFERSPROC GenFramebuffers; /* can be NULL */
     PFNGLGENERATEMIPMAPPROC GenerateMipmap; /* can be NULL */
+    VLC_PFNGLBLITFRAMEBUFFERPROC BlitFramebuffer; /* can be NULL */
     PFNGLGETFRAMEBUFFERATTACHMENTPARAMETERIVPROC GetFramebufferAttachmentParameteriv;
 
     /* Commands used for PBO and/or Persistent mapping */

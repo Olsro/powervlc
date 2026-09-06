@@ -143,6 +143,7 @@ struct filter_sys_t
 {
     crt_parameters_t params;
     unsigned refresh_countdown;
+    bool gpu_passthrough_only;
 
     uint16_t *scanline_scale;
     int scanline_height;
@@ -407,11 +408,22 @@ static int Create(vlc_object_t *object)
 {
     filter_t *filter = (filter_t *)object;
 
-    /* The exact GPU renderer and this compatibility filter are mutually
-     * exclusive.  Rejecting the CPU stage here also avoids an unnecessary
-     * hardware-to-I420-to-hardware conversion for command-line selections. */
-    if (var_InheritBool(filter, "crt-retroarch-enabled"))
-        return VLC_EGENERIC;
+    /* Old configurations may still name this CPU filter while the exact GPU
+     * renderer is enabled. Rejecting it makes the filter chain recursively
+     * search for a hardware-to-I420 converter before the controller gets a
+     * chance to clean the saved chain. Accept a format-neutral passthrough for
+     * that one migration case; choosing a CPU preset removes and recreates the
+     * filter with its normal planar-YUV requirements. */
+    if (var_InheritBool(filter, "crt-retroarch-enabled")) {
+        filter_sys_t *sys = calloc(1, sizeof(*sys));
+        if (sys == NULL)
+            return VLC_ENOMEM;
+        sys->gpu_passthrough_only = true;
+        filter->p_sys = sys;
+        filter->pf_video_filter = Filter;
+        msg_Dbg(filter, "CRT CPU filter bypassed while RetroArch GPU is active");
+        return VLC_SUCCESS;
+    }
 
     if (filter->fmt_in.video.i_chroma != filter->fmt_out.video.i_chroma)
     {
@@ -459,7 +471,8 @@ static picture_t *Filter(filter_t *filter, picture_t *picture)
     if (picture == NULL)
         return NULL;
 
-    if (var_InheritBool(filter, "crt-retroarch-enabled"))
+    if (sys->gpu_passthrough_only ||
+        var_InheritBool(filter, "crt-retroarch-enabled"))
         return picture;
 
     RefreshParameters(filter, false);

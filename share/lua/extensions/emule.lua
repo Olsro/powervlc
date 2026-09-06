@@ -238,6 +238,17 @@ local function ini_escape(value)
   return string.gsub(value, "[\r\n]", "")
 end
 
+local function amule_ini_escape(value)
+  value = ini_escape(value)
+  if package and package.config and package.config:sub(1, 1) == "\\" then
+    -- wxFileConfig treats backslashes as escapes even on Windows. A literal
+    -- C:\Users\... written once consequently became C:sers... in aMule and
+    -- made the configured Temp/Incoming directories unusable.
+    value = string.gsub(value, "\\", "\\\\")
+  end
+  return value
+end
+
 local function read_settings(path)
   local values = {}
   local file = io.open(path, "rb")
@@ -459,7 +470,7 @@ local function update_ini(path, changes)
     end
     local bucket = sections[section]
     for key, value in pairs(values) do
-      local line = key .. "=" .. ini_escape(value)
+      local line = key .. "=" .. amule_ini_escape(value)
       local index = bucket.keys[key]
       if index then bucket.lines[index] = line
       else bucket.lines[#bucket.lines + 1] = line; bucket.keys[key] = #bucket.lines end
@@ -1128,8 +1139,8 @@ start_stream = function(item, result, enqueue_only)
     offset = 0, buffer = "", created = os.time(),
   }
   app.streams[item.hash] = stream
-  add_stream_to_playlist(stream, item, enqueue_only)
   set_message(lang.stream_buffering)
+  add_stream_to_playlist(stream, item, enqueue_only)
   return true
 end
 

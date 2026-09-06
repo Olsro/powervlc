@@ -1,0 +1,87 @@
+From: PowerVLC <powervlc@localhost>
+Subject: [PATCH] dvdnav: finish short zero-filled title cells through the VM
+
+The French Totoro and Howl's Moving Castle DVD images both enter two
+13-sector dummy cells before the feature. Their sectors are all zero,
+but the IFO still describes them and supplies a cell command. Failing
+on the missing NAV pack stops playback; jumping to another chapter or
+scanning for a later NAV would lose the cell commands and film opening.
+
+On a missing NAV at the start of a normal title cell, accept only cells
+of at most one second and 64 sectors whose entire contents can be read
+and are zero. Confirm this with direct single-sector reads because the
+read-ahead cache does not reliably propagate short reads. Then use the
+normal end-of-cell path, preserving VM commands and navigation events.
+Menus, stills, angles, mid-cell corruption, nonzero data and read errors
+retain the existing failure behavior. No image is modified.
+
+--- a/src/dvdnav.c
++++ b/src/dvdnav.c
+@@ -399,6 +399,47 @@
+     return 1;
+   }
+   return 0;
++}
++
++/* Some DVD images contain zero-filled dummy cells before the feature. Their
++ * cell commands still have to run, but there is no NAV pack to reach them.
++ * Only recover at the start of a short, entirely blank title cell: a missing
++ * NAV in real content or an I/O failure must remain an error. */
++static int dvdnav_is_blank_cell(dvdnav_t *this, const uint8_t *first_block) {
++  const dvd_state_t *state = &this->vm->state;
++  const cell_playback_t *cell;
++  uint32_t sector;
++  size_t i;
++
++  if (state->domain != DVD_DOMAIN_VTSTitle || !state->pgc ||
++      !state->pgc->cell_playback || state->cellN < 1 ||
++      state->cellN > state->pgc->nr_of_cells)
++    return 0;
++
++  cell = &state->pgc->cell_playback[state->cellN - 1];
++  if (cell->block_type != BLOCK_TYPE_NONE || cell->block_mode != 0 ||
++      cell->still_time ||
++      cell->last_sector < cell->first_sector ||
++      cell->last_sector - cell->first_sector >= 64 ||
++      dvdnav_convert_time(&cell->playback_time) > 90000 ||
++      (int64_t)this->vobu.vobu_start + this->vobu.vobu_next != cell->first_sector)
++    return 0;
++
++  for (i = 0; i < DVD_VIDEO_LB_LEN; i++)
++    if (first_block[i] != 0)
++      return 0;
++
++  /* Re-read every sector directly: the read-ahead cache does not propagate
++   * short reads and cannot establish that a cell is really zero-filled. */
++  for (sector = 0; sector <= cell->last_sector - cell->first_sector; sector++) {
++    uint8_t block[DVD_VIDEO_LB_LEN];
++    if (DVDReadBlocks(this->file, cell->first_sector + sector, 1, block) != 1)
++      return 0;
++    for (i = 0; i < DVD_VIDEO_LB_LEN; i++)
++      if (block[i] != 0)
++        return 0;
++  }
++  return 1;
+ }
+ 
+ /* DSI is used for most angle stuff.
+@@ -894,6 +935,19 @@
+     }
+     /* Decode nav into pci and dsi. Then get next VOBU info. */
+     if(!dvdnav_decode_packet(this, *buf, &this->dsi, &this->pci)) {
++      if (dvdnav_is_blank_cell(this, *buf)) {
++        Log1(this, "Skipping blank title cell %d (sectors %u-%u), preserving cell commands",
++             this->vm->state.cellN,
++             this->vm->state.pgc->cell_playback[this->vm->state.cellN - 1].first_sector,
++             this->vm->state.pgc->cell_playback[this->vm->state.cellN - 1].last_sector);
++        /* Use normal end-of-cell handling on the next call. In particular,
++         * vm_get_next_cell() must execute the cell's post-command. */
++        this->vobu.vobu_next = SRI_END_OF_CELL;
++        (*event) = DVDNAV_NOP;
++        (*len) = 0;
++        pthread_mutex_unlock(&this->vm_lock);
++        return DVDNAV_STATUS_OK;
++      }
+       printerr("Expected NAV packet but none found.");
+       pthread_mutex_unlock(&this->vm_lock);
+       return DVDNAV_STATUS_ERR;

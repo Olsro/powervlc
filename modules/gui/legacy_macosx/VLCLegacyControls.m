@@ -1096,6 +1096,13 @@ static void drawVerticalGradient(NSBezierPath *path, NSRect rect,
 
 - (void)orderOut:(id)sender
 {
+    /* Tiger and Leopard can order the entire parent window group out when a
+     * child is hidden directly.  The seek tooltip is attached to its host for
+     * positioning and stacking, so detach it first; updateHoverTooltipForPoint:
+     * attaches it again on the next hover. */
+    NSWindow *parent = [self parentWindow];
+    if (parent)
+        [parent removeChildWindow:self];
     [stereoMirrorWindow orderOut:sender];
     [super orderOut:sender];
 }

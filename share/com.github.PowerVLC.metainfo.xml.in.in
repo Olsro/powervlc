@@ -19,7 +19,7 @@
     <url type="bugtracker">https://trac.videolan.org/vlc/</url>
     <url type="donation">https://www.videolan.org/contribute.html</url>
     <releases>
-        <release version="@VERSION@" date="@VERSION_DATE@" />
+        <release version="@POWERVLC_VERSION@" date="@VERSION_DATE@" />
     </releases>
     <provides>
         <library>libpowervlc.so.5</library>

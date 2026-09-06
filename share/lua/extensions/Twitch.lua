@@ -455,6 +455,7 @@ local function play_channel(login, known_name)
   end
 
   local stream = data.user.stream
+  set_message(lang.msg_playing)
   vlc.playlist.add({{
     path = usher_url("channel", login, data.streamPlaybackAccessToken),
     name = display_name,
@@ -481,6 +482,7 @@ local function play_video(id)
 
   local owner = data.video.owner or {}
   local display_name = owner.displayName or owner.login
+  set_message(lang.msg_playing)
   vlc.playlist.add({{
     path = usher_url("video", id, data.videoPlaybackAccessToken),
     name = data.video.title or ("Twitch " .. id),
@@ -498,9 +500,7 @@ local function play_target(target, known_name)
   else
     ok, err = play_channel(target.login, known_name)
   end
-  if ok then
-    set_message(lang.msg_playing)
-  else
+  if not ok then
     set_message(lang.msg_play_failed .. tostring(err or lang.msg_bad_answer))
   end
   return ok

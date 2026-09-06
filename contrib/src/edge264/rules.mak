@@ -33,9 +33,14 @@ edge264: edge264-$(EDGE264_HASH).tar.xz .sum-edge264 \
 	$(APPLY) $(SRC)/edge264/0006-darwin-legacy-cpu-count.patch
 	$(APPLY) $(SRC)/edge264/0007-i386-runtime-sse41.patch
 	$(APPLY) $(SRC)/edge264/0008-inject-external-mvc-base-view.patch
+	$(APPLY) $(SRC)/edge264/0009-aarch64-gcc7-neon-tuples.patch
 	$(MOVE)
 
-EDGE264_CFLAGS = $(CFLAGS) -std=gnu17 -O3 -fno-strict-aliasing -flax-vector-conversions
+# Ubuntu 18.04's GCC (used by the legacy-compatible Linux AppImage images)
+# implements the C features Edge264 needs but spells the newest accepted mode
+# gnu11. Prefer gnu17 elsewhere and fall back after a compiler feature probe.
+EDGE264_CSTD = $(shell $(CC) -std=gnu17 -E - </dev/null >/dev/null 2>&1 && echo -std=gnu17 || echo -std=gnu11)
+EDGE264_CFLAGS = $(CFLAGS) $(PIC) $(EDGE264_CSTD) -O3 -fno-strict-aliasing -flax-vector-conversions
 
 DEPS_edge264 =
 ifdef HAVE_WIN32

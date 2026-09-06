@@ -64,8 +64,12 @@
 #include "../../video_chroma/d3d11_fmt.h"
 #include "d3d11_quad.h"
 #include "d3d11_shaders.h"
+#include "d3d11_ra_shaders.h"
 #include "d3d11_scaler.h"
 #include "d3d11_tonemap.h"
+#if !VLC_WINSTORE_APP
+# include "dovi_display.h"
+#endif
 
 #include "common.h"
 
@@ -91,6 +95,12 @@ static const char *const ppsz_upscale_mode_text[] = {
 #define HDR_MODE_TEXT N_("HDR Output Mode")
 #define HDR_MODE_LONGTEXT N_("Use HDR output even if the source is SDR.")
 
+#define DOVI_HDMI_TEXT N_("Use the native Dolby Vision HDMI signal")
+#define DOVI_HDMI_LONGTEXT N_( \
+    "Switch a compatible Windows display to its native Dolby Vision mode " \
+    "while Dolby Vision video is playing, then restore its previous HDR " \
+    "state. This does not require the Dolby Vision Store extension.")
+
 static const char *const ppsz_hdr_mode[] = {
     "auto", "never", "always", "generate" };
 static const char *const ppsz_hdr_mode_text[] = {
@@ -115,6 +125,11 @@ vlc_module_begin ()
 
     add_string("d3d11-hdr-mode", "auto", HDR_MODE_TEXT, HDR_MODE_LONGTEXT, false)
         change_string_list(ppsz_hdr_mode, ppsz_hdr_mode_text)
+
+#if !VLC_WINSTORE_APP
+    add_bool("d3d11-dovi-hdmi", true, DOVI_HDMI_TEXT,
+             DOVI_HDMI_LONGTEXT, true)
+#endif
 
     set_capability("vout display", 300)
     add_shortcut("direct3d11")
@@ -170,6 +185,7 @@ struct vout_display_sys_t
     ID3D11RenderTargetView   *d3drenderTargetView;
     ID3D11RenderTargetView   *d3drenderTargetViewRight;
     ID3D11DepthStencilView   *d3ddepthStencilView;
+    struct d3d11_ra_shader_engine *crtShaders;
 
     bool                     stereo_requested;
     bool                     stereo_active;
@@ -213,6 +229,15 @@ struct vout_display_sys_t
     /* copy from the decoder pool into picSquad before display
      * Uses a Texture2D with slices rather than a Texture2DArray for the decoder */
     bool                     legacy_shader;
+    bool                     dovi_metadata_reported;
+    bool                     dovi_missing_reported;
+    bool                     dovi_fel_reported;
+    bool                     dovi_sdr_reported;
+    bool                     dovi_hdr10_reported;
+#if !VLC_WINSTORE_APP
+    win32_dovi_display_t     *dovi_display;
+    bool                     dovi_display_attempted;
+#endif
 
     // SPU
     vlc_fourcc_t             pSubpictureChromas[2];
@@ -1323,6 +1348,16 @@ static int Open(vlc_object_t *object)
         goto error;
 
 #if !VLC_WINSTORE_APP
+    if (!external_device && vd->source.dovi.rpu_present &&
+        var_InheritBool(vd, "d3d11-dovi-hdmi"))
+    {
+        sys->dovi_display_attempted = true;
+        sys->dovi_display = Win32DoviDisplay_Enable(
+            VLC_OBJECT(vd), sys->sys.hvideownd);
+    }
+#endif
+
+#if !VLC_WINSTORE_APP
     bool adopted_stereo = !external_device &&
                           AdoptStereoOutputHandoff(vd);
     if (!external_device && !adopted_stereo)
@@ -1383,6 +1418,10 @@ static void Close(vlc_object_t *object)
 
     UnregisterStereoMouseControls(vd);
     Direct3D11Close(vd);
+#if !VLC_WINSTORE_APP
+    Win32DoviDisplay_Restore(VLC_OBJECT(vd), vd->sys->dovi_display);
+    vd->sys->dovi_display = NULL;
+#endif
 #if !VLC_WINSTORE_APP
     if (!ParkStereoOutputHandoff(vd))
 #endif
@@ -2531,6 +2570,56 @@ static int CreateStaging(vout_display_t *vd, ID3D11DeviceContext *shared_context
     return VLC_SUCCESS;
 }
 
+static double DoviPqCodeToNits(uint16_t code)
+{
+    const double m1 = 2610.0 / (4096.0 * 4.0);
+    const double m2 = (2523.0 / 4096.0) * 128.0;
+    const double c1 = 3424.0 / 4096.0;
+    const double c2 = (2413.0 / 4096.0) * 32.0;
+    const double c3 = (2392.0 / 4096.0) * 32.0;
+    const double pq = fmin(code, 4095.0) / 4095.0;
+    const double e = pow(pq, 1.0 / m2);
+    return 10000.0 * pow(fmax(e - c1, 0.0) / (c2 - c3 * e),
+                           1.0 / m1);
+}
+
+static float DoviSourcePeakNits(const vlc_video_dovi_metadata_t *dovi)
+{
+    const uint16_t peak_pq = dovi->has_level1 && dovi->level1_max_pq
+                           ? dovi->level1_max_pq : dovi->source_max_pq;
+    return fmax(DoviPqCodeToNits(peak_pq), (double)DEFAULT_BRIGHTNESS);
+}
+
+static void DoviFillHdr10Metadata(DXGI_HDR_METADATA_HDR10 *hdr10,
+                                  const vlc_video_dovi_metadata_t *dovi,
+                                  float source_peak)
+{
+    memset(hdr10, 0, sizeof(*hdr10));
+    /* Rec. ITU-R BT.2020 and D65, in CTA/DXGI units of 0.00002. */
+    hdr10->RedPrimary[0] = 35400; hdr10->RedPrimary[1] = 14600;
+    hdr10->GreenPrimary[0] = 8500; hdr10->GreenPrimary[1] = 39850;
+    hdr10->BluePrimary[0] = 6550; hdr10->BluePrimary[1] = 2300;
+    hdr10->WhitePoint[0] = 15635; hdr10->WhitePoint[1] = 16450;
+    const double mastering_peak = fmax(
+        DoviPqCodeToNits(dovi->source_max_pq), DEFAULT_BRIGHTNESS);
+    const double mastering_luminance =
+        fmin(mastering_peak, (double)UINT32_MAX);
+    const double minimum_luminance =
+        fmin(10000.0 * DoviPqCodeToNits(dovi->source_min_pq),
+             (double)UINT32_MAX);
+    const double content_light_level =
+        fmin(source_peak, (double)UINT16_MAX);
+    hdr10->MaxMasteringLuminance = (UINT32)mastering_luminance;
+    hdr10->MinMasteringLuminance = (UINT32)minimum_luminance;
+    hdr10->MaxContentLightLevel = (UINT16)content_light_level;
+    if (dovi->has_level1 && dovi->level1_avg_pq)
+    {
+        const double average_light_level = fmin(
+            DoviPqCodeToNits(dovi->level1_avg_pq), (double)UINT16_MAX);
+        hdr10->MaxFrameAverageLightLevel = (UINT16)average_light_level;
+    }
+}
+
 static void Prepare(vout_display_t *vd, picture_t *picture, subpicture_t *subpicture)
 {
     vout_display_sys_t *sys = vd->sys;
@@ -2740,7 +2829,89 @@ static void Prepare(vout_display_t *vd, picture_t *picture, subpicture_t *subpic
         }
     }
 
-    if (picture->format.mastering.max_luminance)
+    if (sys->quad_fmt.dovi.rpu_present)
+    {
+#if !VLC_WINSTORE_APP
+        /* Some demuxer/decoder combinations expose the RPU flag only after
+         * the vout has opened. Switch the HDMI transport at the first Dolby
+         * Vision frame in that case, before rendering it. */
+        if (!sys->dovi_display_attempted &&
+            var_InheritBool(vd, "d3d11-dovi-hdmi"))
+        {
+            sys->dovi_display_attempted = true;
+            sys->dovi_display = Win32DoviDisplay_Enable(
+                VLC_OBJECT(vd), sys->sys.hvideownd);
+        }
+#endif
+        if (!D3D11_UpdateQuadDolbyVision(vd, &sys->d3d_dev, &sys->picQuad,
+                                         picture->p_dovi) &&
+            !sys->dovi_missing_reported)
+        {
+            msg_Err(vd, "could not update Dolby Vision D3D11 metadata");
+            sys->dovi_missing_reported = true;
+        }
+        if (picture->p_dovi != NULL && !sys->dovi_metadata_reported)
+        {
+            msg_Info(vd, "Dolby Vision dynamic metadata active in D3D11 "
+                         "(%u-bit BL, residual %s)",
+                     picture->p_dovi->bl_bit_depth,
+                     picture->p_dovi->residual_disabled ? "disabled" : "available");
+            sys->dovi_metadata_reported = true;
+        }
+        if (picture->p_enhancement_layer != NULL && !sys->dovi_fel_reported)
+        {
+            msg_Warn(vd, "Dolby Vision Profile 7 enhancement residual is not "
+                         "composed by D3D11; rendering the compatible base layer");
+            sys->dovi_fel_reported = true;
+        }
+    }
+
+    if (picture->p_dovi != NULL)
+    {
+        /* RPU reshaping yields BT.2020/PQ even when the compatible base layer
+         * is HLG. Preserve its scene peak for diagnostics and provide an
+         * HDR10-only sink with metadata derived from the RPU. */
+        const float source_peak = DoviSourcePeakNits(picture->p_dovi);
+        /* VLC's Hable shader operates on absolute PQ luminance and expects
+         * the nominal 10,000-nit PQ range here. Scaling by the scene peak
+         * instead would amplify a 699-nit title about fourteen times and
+         * clip most of an SDR frame to white. */
+        D3D11_UpdateQuadLuminanceScale(vd, &sys->d3d_dev, &sys->picQuad,
+            (float)sys->display.luminance_peak / MAX_PQ_BRIGHTNESS);
+
+        bool native_dovi_transport = false;
+#if !VLC_WINSTORE_APP
+        native_dovi_transport = sys->dovi_display != NULL;
+#endif
+        if (sys->dxgiswapChain4 && !native_dovi_transport &&
+            sys->display.colorspace->transfer == TRANSFER_FUNC_SMPTE_ST2084)
+        {
+            DXGI_HDR_METADATA_HDR10 hdr10;
+            DoviFillHdr10Metadata(&hdr10, picture->p_dovi, source_peak);
+            if (memcmp(&sys->hdr10, &hdr10, sizeof(hdr10)))
+            {
+                memcpy(&sys->hdr10, &hdr10, sizeof(hdr10));
+                IDXGISwapChain4_SetHDRMetaData(sys->dxgiswapChain4,
+                    DXGI_HDR_METADATA_TYPE_HDR10, sizeof(hdr10), &hdr10);
+            }
+            if (!sys->dovi_hdr10_reported)
+            {
+                msg_Info(vd, "Dolby Vision HDR10 fallback active "
+                             "(BT.2020/PQ, RPU scene peak %.0f nits)",
+                         source_peak);
+                sys->dovi_hdr10_reported = true;
+            }
+        }
+        else if (sys->display.colorspace->transfer == TRANSFER_FUNC_SRGB &&
+                 !sys->dovi_sdr_reported)
+        {
+            msg_Info(vd, "Dolby Vision SDR tone mapping active "
+                         "(BT.2020/PQ to Rec.709, RPU scene peak %.0f nits)",
+                     source_peak);
+            sys->dovi_sdr_reported = true;
+        }
+    }
+    else if (picture->format.mastering.max_luminance)
     {
         D3D11_UpdateQuadLuminanceScale(vd, &sys->d3d_dev, &sys->picQuad, (float)sys->display.luminance_peak / GetFormatLuminance(VLC_OBJECT(vd), &picture->format));
 
@@ -2789,6 +2960,34 @@ static void Prepare(vout_display_t *vd, picture_t *picture, subpicture_t *subpic
         memcpy(SRV, p_sys->resourceView, sizeof(SRV));
     }
 
+    /* Convert the decoder's native YUV/RGB texture through VLC's regular
+     * colour-managed picture shader first. The RetroArch graph therefore
+     * always receives a conventional RGB source and remains independent of
+     * NV12/P010/opaque decoder layouts. Subtitles are drawn afterwards and
+     * deliberately stay sharp. */
+    bool use_crt = false;
+    ID3D11RenderTargetView *crt_input = NULL;
+    unsigned crt_width = 0, crt_height = 0;
+    unsigned crt_view_width = RECTWidth(sys->sys.rect_dest_clipped);
+    unsigned crt_view_height = RECTHeight(sys->sys.rect_dest_clipped);
+    if (sys->crtShaders && !sys->stereo_requested &&
+        vd->fmt.projection_mode == PROJECTION_MODE_RECTANGULAR &&
+        D3D11_RA_Begin(sys->crtShaders,
+                       sys->quad_fmt.i_visible_width,
+                       sys->quad_fmt.i_visible_height,
+                       crt_view_width, crt_view_height, picture->date,
+                       &crt_input, &crt_width, &crt_height))
+    {
+        D3D11_VIEWPORT saved = sys->picQuad.cropViewport;
+        sys->picQuad.cropViewport.TopLeftX = 0;
+        sys->picQuad.cropViewport.TopLeftY = 0;
+        sys->picQuad.cropViewport.Width = crt_width;
+        sys->picQuad.cropViewport.Height = crt_height;
+        D3D11_RenderQuad(&sys->d3d_dev, &sys->picQuad, SRV, crt_input);
+        sys->picQuad.cropViewport = saved;
+        use_crt = true;
+    }
+
     /* A DXGI stereo swapchain exposes the back buffer as a two-slice texture
      * array. Render each packed source eye into its corresponding slice. The
      * SPU pass is deliberately repeated for both eyes so menus, subtitles and
@@ -2834,7 +3033,16 @@ static void Prepare(vout_display_t *vd, picture_t *picture, subpicture_t *subpic
         ID3D11DeviceContext_ClearDepthStencilView(
             sys->d3d_dev.d3dcontext, sys->d3ddepthStencilView,
             D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
-        D3D11_RenderQuad(&sys->d3d_dev, &sys->picQuad, SRV, target);
+        bool crt_rendered = false;
+        if (use_crt)
+        {
+            D3D11_VIEWPORT viewport = sys->picQuad.cropViewport;
+            crt_rendered = D3D11_RA_Render(sys->crtShaders, target, &viewport);
+            if (!crt_rendered)
+                msg_Warn(vd, "Direct3D11 RetroArch rendering failed; using the normal picture shader");
+        }
+        if (!crt_rendered)
+            D3D11_RenderQuad(&sys->d3d_dev, &sys->picQuad, SRV, target);
 
         if (subpicture)
         {
@@ -3634,6 +3842,13 @@ static int Direct3D11Open(vout_display_t *vd, bool external_device)
         return VLC_EGENERIC;
     }
 
+    /* The CRT runner consumes the RGB result of VLC's normal D3D11 colour
+     * conversion, then executes the build-time compiled Slang/HLSL graph.
+     * Failure leaves the regular Direct3D output fully operational. */
+    sys->crtShaders = D3D11_RA_Create(vd, &sys->hd3d, &sys->d3d_dev);
+    if (!sys->crtShaders)
+        msg_Warn(vd, "Direct3D11 RetroArch shader pipeline unavailable");
+
     video_format_Clean(&vd->fmt);
     video_format_Copy(&vd->fmt, &sys->pool_fmt);
 
@@ -3833,9 +4048,16 @@ static int Direct3D11CreateFormatResources(vout_display_t *vd, const video_forma
     vout_display_sys_t *sys = vd->sys;
     HRESULT hr;
 
+    const video_transfer_func_t source_transfer = fmt->dovi.rpu_present
+                                                ? TRANSFER_FUNC_SMPTE_ST2084
+                                                : fmt->transfer;
+    const video_color_primaries_t source_primaries = fmt->dovi.rpu_present
+                                                   ? COLOR_PRIMARIES_BT2020
+                                                   : fmt->primaries;
     hr = D3D11_CompilePixelShader(vd, &sys->hd3d, sys->legacy_shader, &sys->d3d_dev,
-                                  sys->picQuad.formatInfo, &sys->display, fmt->transfer, fmt->primaries,
-                                  fmt->b_color_range_full,
+                                  sys->picQuad.formatInfo, &sys->display,
+                                  source_transfer, source_primaries,
+                                  fmt->b_color_range_full, fmt->dovi.rpu_present,
                                   &sys->picQuad.d3dpixelShader);
     if (FAILED(hr))
     {
@@ -3967,7 +4189,7 @@ static int Direct3D11CreateGenericResources(vout_display_t *vd)
     if (sys->d3dregion_format != NULL)
     {
         hr = D3D11_CompilePixelShader(vd, &sys->hd3d, sys->legacy_shader, &sys->d3d_dev,
-                                      sys->d3dregion_format, &sys->display, TRANSFER_FUNC_SRGB, COLOR_PRIMARIES_SRGB, true, &sys->pSPUPixelShader);
+                                      sys->d3dregion_format, &sys->display, TRANSFER_FUNC_SRGB, COLOR_PRIMARIES_SRGB, true, false, &sys->pSPUPixelShader);
         if (FAILED(hr))
         {
             if (sys->picQuad.d3dpixelShader)
@@ -4045,6 +4267,12 @@ static void Direct3D11DestroyResources(vout_display_t *vd)
     vout_display_sys_t *sys = vd->sys;
 
     Direct3D11DestroyPool(vd);
+
+    if (sys->crtShaders)
+    {
+        D3D11_RA_Destroy(sys->crtShaders);
+        sys->crtShaders = NULL;
+    }
 
     D3D11_ReleaseQuad(&sys->picQuad);
     Direct3D11DeleteRegions(sys->d3dregion_count, sys->d3dregions);

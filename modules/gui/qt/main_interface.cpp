@@ -720,6 +720,9 @@ inline void MainInterface::showTab( QWidget *widget, bool video_closing )
         widget = bgWidget;
 
     stackCentralOldWidget = stackCentralW->currentWidget();
+    const bool preserveBackgroundPlaylistGeometry =
+        ( stackCentralOldWidget == bgWidget && widget == playlistWidget ) ||
+        ( stackCentralOldWidget == playlistWidget && widget == bgWidget );
     if( !isFullScreen() )
         stackWidgetsSizes[stackCentralOldWidget] = stackCentralW->size();
 
@@ -754,7 +757,9 @@ inline void MainInterface::showTab( QWidget *widget, bool video_closing )
     }
 
     stackCentralW->setCurrentWidget( widget );
-    if( b_autoresize )
+    if( preserveBackgroundPlaylistGeometry )
+        stackWidgetsSizes[widget] = stackCentralW->size();
+    else if( b_autoresize )
         resizeStack( stackWidgetsSizes[widget].width(), stackWidgetsSizes[widget].height() );
 
 #ifdef DEBUG_INTF

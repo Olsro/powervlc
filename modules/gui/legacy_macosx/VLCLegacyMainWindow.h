@@ -38,6 +38,7 @@ typedef float CGFloat;
 
 @class VLCLegacyCoreInteraction;
 @class VLCLegacyArtImageView;
+@class VLCLegacyBackgroundView;
 
 /* Black view hosting the video output inside the main window. Replicates
  * the VLC 3.0 window behaviors: double-click toggles fullscreen, Space
@@ -107,6 +108,7 @@ typedef float CGFloat;
     NSOutlineView *playlistTable;
     NSScrollView *playlistScroll;
     NSView *dropzoneView;
+    VLCLegacyBackgroundView *backgroundView; /* idle cone / audio artwork */
     NSTextField *viewTitleLabel;
     NSTextField *searchField;   /* an NSSearchField except on 10.2 */
     /* Subscribe / Unsubscribe strip, shown at the bottom of the playlist

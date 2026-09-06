@@ -68,7 +68,13 @@ void system_Init(void)
     if (GetProcAddress(GetModuleHandle(TEXT("kernel32.dll")),
                                        "SetDefaultDllDirectories") != NULL)
 # endif /* FIXME: not reentrant */
-        LoadLibraryFlags = LOAD_LIBRARY_SEARCH_SYSTEM32;
+        /* Plug-ins can legitimately depend on support runtimes shipped beside
+         * powervlc.exe (for example libgcc_s_*-1.dll). Keep the hardened
+         * System32-only search for operating-system DLLs, but also admit the
+         * application directory. Do not restore the current directory or
+         * PATH search that SetDefaultDllDirectories intentionally removed. */
+        LoadLibraryFlags = LOAD_LIBRARY_SEARCH_APPLICATION_DIR |
+                           LOAD_LIBRARY_SEARCH_SYSTEM32;
 #endif
 }
 

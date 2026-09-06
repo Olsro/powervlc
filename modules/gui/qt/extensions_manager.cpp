@@ -35,6 +35,7 @@
 #include <QIcon>
 #include <QString>
 #include <QVector>
+#include <QMessageBox>
 
 #define MENU_MAP(a,e) ((uint32_t)( (((uint16_t)a) << 16) | ((uint16_t)e) ))
 #define MENU_GET_ACTION(a) ( (uint16_t)( ((uint32_t)a) >> 16 ) )
@@ -134,6 +135,14 @@ void ExtensionsManager::reloadExtensions()
     unloadExtensions();
     loadExtensions();
     emit extensionsUpdated();
+}
+
+void ExtensionsManager::searchSubtitles()
+{
+    if( !loadExtensions() ||
+        extension_Open( p_extensions_manager, "PowerVLSub", 1 ) != VLC_SUCCESS )
+        QMessageBox::warning( NULL, qtr("Online Subtitles"),
+            qtr("The OpenSubtitles extension could not be loaded. Please reinstall PowerVLC.") );
 }
 
 void ExtensionsManager::menu( QMenu *current )

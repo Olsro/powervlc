@@ -1,0 +1,144 @@
+#ifndef COLOR_HELPER_DEFINED
+
+#define COLOR_HELPER_DEFINED
+
+#include "constants.h"
+#include "colorspace-srgb.h"
+
+// Returns the maximum value of the given color.
+// @color - the color.
+float max_color(vec3 color)
+{
+    return max(max(color.r, color.g), color.b);
+}
+
+// Applies the contrast to the given color.
+// @color - the color.
+// @contrast - the contrast to apply.
+//   <0.0 - decreasing
+//    0.0 - unchanged
+//   >0.0 - increasing
+vec3 apply_contrast(vec3 color, float contrast)
+{
+    if (contrast == 0.0)
+    {
+        return color;
+    }
+
+    float linear = clamp(max_color(color), 0.0, 1.0);
+
+    float nonlinear = linear;
+
+    // move range [0, 1] to [-1, 1]
+    nonlinear = (nonlinear * 2.0) - 1.0;
+
+    // apply non-linear mapping
+    nonlinear = sin(nonlinear * PI * 0.5);
+
+    // move range [-1, 1] to [0, 1]
+    nonlinear = (nonlinear + 1.0) * 0.5;
+
+    float scale = mix(linear, nonlinear, contrast);
+
+    float factor = scale / (linear + EPSILON);
+
+    return color * factor;
+}
+
+// Applies the brightness to the given color.
+// @color - the color.
+// @brightness - the brightness to apply.
+vec3 apply_brightness(vec3 color, float brightness)
+{
+    return color * (1.0 + brightness);
+}
+
+// Applies the color overflow to the given color.
+// @color - the color.
+// @overflow - the amount of overflow to apply.
+vec3 apply_color_overflow(vec3 color, float overflow)
+{
+    if (overflow == 0.0)
+    {
+        return color;
+    }
+
+    vec3 color_overflow = color * color * (overflow * 0.5);
+
+    float lumaRG = (LumaR + LumaG) * 0.5;
+    float lumaRB = (LumaR + LumaB) * 0.5;
+    float lumaGB = (LumaG + LumaB) * 0.5;
+    lumaRG *= lumaRG;
+    lumaRB *= lumaRB;
+    lumaGB *= lumaGB;
+
+    color.r += lumaRG * color_overflow.g;
+    color.r += lumaRB * color_overflow.b;
+    color.g += lumaRG * color_overflow.r;
+    color.g += lumaGB * color_overflow.b;
+    color.b += lumaRB * color_overflow.r;
+    color.b += lumaGB * color_overflow.g;
+
+    return color;
+}
+
+// Applies a minimum value to the given color.
+// @color - the color.
+// @floor - the minimum value.
+vec3 apply_floor(vec3 color, float floor)
+{
+    if (floor == 0.0)
+    {
+        return color;
+    }
+
+    float luminance = get_luminance(color);
+    floor *= 1.0 - luminance;
+
+    return (color + floor) / (1.0 + floor);
+}
+
+// Applies the saturation to the given color.
+// @color - the color.
+// @saturation - the saturation to apply.
+//   <1.0 - decreasing
+//    1.0 - unchanged
+//   >1.0 - increasing
+vec3 apply_saturation(vec3 color, float saturation)
+{
+    if (saturation == 1.0)
+    {
+        return color;
+    }
+
+    float luminance = get_luminance(color);
+
+    return mix(vec3(luminance), color, saturation);
+}
+
+// Applies the temperature to the given color based on the given white point.
+// @color - the color.
+// @white_point_relative - the relative white point to apply.
+//   -1.0 - D55
+//    0.0 - D65
+//    1.0 - D75
+vec3 apply_temperature(vec3 color, float white_point_relative)
+{
+    if (white_point_relative == 0.0)
+    {
+        return color;
+    }
+
+    mat3 white_point = white_point_relative < 0.0
+        // warmer
+        ? RGB_D65toD55
+        // cooler
+        : RGB_D65toD75;
+
+    return mix(
+        color,
+        color * white_point,
+        abs(white_point_relative));
+}
+
+#endif // COLOR_HELPER_DEFINED

@@ -1260,11 +1260,11 @@ local function play_entries(entries, queue)
     return
   end
   if queue then
-    vlc.playlist.enqueue(items)
     set_message(lang.msg_queued)
+    vlc.playlist.enqueue(items)
   else
-    vlc.playlist.add(items)
     set_message(lang.msg_playing)
+    vlc.playlist.add(items)
   end
 end
 

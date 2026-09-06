@@ -27,6 +27,8 @@
 #include <stdio.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <vlc_common.h>
 #include <vlc_fs.h>
@@ -166,12 +168,14 @@ static int vlclua_io_file_flush( lua_State *L )
 static int vlclua_io_file_close( lua_State *L )
 {
     FILE **pp_file = (FILE**)luaL_checkudata( L, 1, "io_file" );
+    bool success = true;
     if ( *pp_file )
     {
-        fclose( *pp_file );
+        success = fclose( *pp_file ) == 0;
         *pp_file = NULL;
     }
-    return 0;
+    lua_pushboolean( L, success );
+    return 1;
 }
 
 static const luaL_Reg vlclua_io_file_reg[] = {
@@ -183,13 +187,36 @@ static const luaL_Reg vlclua_io_file_reg[] = {
     { NULL, NULL }
 };
 
-static int vlclua_io_open( lua_State *L )
+static int vlclua_io_open_inner( lua_State *L, bool exclusive )
 {
     if( lua_gettop( L ) < 1 )
         return luaL_error( L, "Usage: vlc.io.open(file_path [, mode])" );
     const char* psz_path = luaL_checkstring( L, 1 );
     const char* psz_mode = luaL_optstring( L, 2, "r" );
-    FILE *p_f =  vlc_fopen( psz_path, psz_mode );
+    FILE *p_f;
+    if( exclusive )
+    {
+        /* Atomic no-clobber creation, including UTF-8 paths on Windows. */
+        int flags = O_WRONLY | O_CREAT | O_EXCL;
+#ifdef _WIN32
+        flags |= O_BINARY;
+#endif
+        int fd = vlc_open( psz_path, flags, 0600 );
+        if( fd == -1 )
+        {
+            lua_pushnil( L );
+            lua_pushinteger( L, errno );
+            return 2;
+        }
+        p_f = fdopen( fd, "wb" );
+        if( p_f == NULL )
+        {
+            close( fd );
+            vlc_unlink( psz_path );
+        }
+    }
+    else
+        p_f = vlc_fopen( psz_path, psz_mode );
     if ( p_f == NULL )
         return 0;
 
@@ -206,6 +233,16 @@ static int vlclua_io_open( lua_State *L )
     }
     lua_setmetatable( L, -2 );
     return 1;
+}
+
+static int vlclua_io_open( lua_State *L )
+{
+    return vlclua_io_open_inner( L, false );
+}
+
+static int vlclua_io_open_exclusive( lua_State *L )
+{
+    return vlclua_io_open_inner( L, true );
 }
 
 static int vlclua_io_readdir( lua_State *L )
@@ -260,6 +297,7 @@ static int vlclua_mkdir( lua_State *L )
 static const luaL_Reg vlclua_io_reg[] = {
     { "mkdir", vlclua_mkdir },
     { "open", vlclua_io_open },
+    { "open_exclusive", vlclua_io_open_exclusive },
     { "readdir", vlclua_io_readdir },
     { "unlink", vlclua_io_unlink },
 

@@ -77,6 +77,7 @@ case "${1:-}" in
       mkdir -p qtbench-data/lua
       rsync -a --include="*/" --include="*.luac" --exclude="*" \
           share/lua/ qtbench-data/lua/
+      rsync -a share/lua/i18n/ qtbench-data/lua/i18n/
       rsync -a share/retroarch-shaders/ qtbench-data/retroarch-shaders/
       chmod -R a+rX qtbench-data
       echo "bench build done: $(ls -la bin/.libs/powervlc | head -1)"'

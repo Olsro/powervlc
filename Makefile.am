@@ -11,6 +11,10 @@ DIST_SUBDIRS = m4 $(SUBDIRS)
 
 EXTRA_DIST = \
 	CRT-FILTER.md \
+	extras/tools/import-slang-shaders.py \
+	extras/tools/pack-retroarch-shaders.py \
+	test/check_slang_import.py \
+	test/check_slang_gpu.c \
 	extras/package/macosx/package.mak \
 	extras/package/win32/package.mak \
 	extras/package/npapi.am
@@ -224,4 +228,3 @@ dist-hook:
 		"$(distdir)/configure" "$(distdir)/configure.ac"
 	touch -r "$mtime_ref" "$(distdir)/configure.ac"
 	rm "$mtime_ref"
-

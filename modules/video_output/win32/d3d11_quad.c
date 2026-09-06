@@ -30,6 +30,7 @@
 #endif
 
 #include <assert.h>
+#include <math.h>
 #include <vlc_common.h>
 
 #define COBJMACROS
@@ -146,6 +147,11 @@ void D3D11_ReleaseQuad(d3d_quad_t *quad)
     {
         ID3D11Buffer_Release(quad->pPixelShaderConstants[1]);
         quad->pPixelShaderConstants[1] = NULL;
+    }
+    if (quad->pPixelShaderConstants[2])
+    {
+        ID3D11Buffer_Release(quad->pPixelShaderConstants[2]);
+        quad->pPixelShaderConstants[2] = NULL;
     }
     if (quad->pVertexBuffer)
     {
@@ -655,6 +661,96 @@ void D3D11_UpdateQuadLuminanceScale(vlc_object_t *o, d3d11_device_t *d3d_dev, d3
         quad->shaderConstants.LuminanceScale = old;
 }
 
+static void SetPackedFloat(FLOAT packed[][4], unsigned index, FLOAT value)
+{
+    packed[index / 4][index % 4] = value;
+}
+
+bool D3D11_UpdateQuadDolbyVision_(vlc_object_t *o, d3d11_device_t *d3d_dev,
+                                  d3d_quad_t *quad,
+                                  const vlc_video_dovi_metadata_t *metadata)
+{
+    if (quad->pPixelShaderConstants[2] == NULL)
+        return metadata == NULL;
+
+    PS_DOVI_METADATA constants = {0};
+    if (metadata != NULL)
+    {
+        constants.Info[0] = 1.f;
+        const double coefficient_scale = ldexp(1.0, -metadata->coef_log2_denom);
+        const double max_code = ldexp(1.0, metadata->bl_bit_depth) - 1.0;
+
+        for (unsigned row = 0; row < 3; ++row)
+        {
+            constants.Info[row + 1] = metadata->curves[row].num_pivots;
+            constants.NonlinearOffset[row] = metadata->nonlinear_offset[row];
+            for (unsigned column = 0; column < 3; ++column)
+            {
+                constants.Nonlinear[row][column] =
+                    metadata->nonlinear_matrix[row * 3 + column];
+                constants.Linear[row][column] =
+                    metadata->linear_matrix[row * 3 + column];
+            }
+
+            const struct vlc_dovi_reshape_t *curve = &metadata->curves[row];
+            for (unsigned i = 0; i < curve->num_pivots; ++i)
+                SetPackedFloat(&constants.Pivots[row * 3], i,
+                               curve->pivots[i] / max_code);
+
+            for (unsigned segment = 0;
+                 segment + 1 < curve->num_pivots && segment < 8; ++segment)
+            {
+                FLOAT *coefficients = constants.Coefficients[row * 8 + segment];
+                if (curve->mapping[segment] == VLC_DOVI_RESHAPE_POLYNOMIAL)
+                {
+                    for (unsigned order = 0; order < 3; ++order)
+                        coefficients[order] =
+                            order <= curve->polynomial_order[segment]
+                            ? curve->polynomial_coefficients[segment][order] *
+                                  coefficient_scale : 0.f;
+                }
+                else if (curve->mapping[segment] == VLC_DOVI_RESHAPE_MMR)
+                {
+                    coefficients[0] = curve->mmr_constant[segment] *
+                                      coefficient_scale;
+                    coefficients[3] = curve->mmr_order[segment];
+                    const unsigned base = (row * 8 + segment) * 6;
+                    for (unsigned order = 0;
+                         order < curve->mmr_order[segment] && order < 3; ++order)
+                    {
+                        for (unsigned k = 0; k < 3; ++k)
+                            constants.MMR[base + order * 2][k] =
+                                curve->mmr_coefficients[segment][order][k] *
+                                coefficient_scale;
+                        for (unsigned k = 0; k < 4; ++k)
+                            constants.MMR[base + order * 2 + 1][k] =
+                                curve->mmr_coefficients[segment][order][k + 3] *
+                                coefficient_scale;
+                    }
+                }
+            }
+        }
+    }
+
+    if (memcmp(&constants, &quad->doviConstants, sizeof(constants)) == 0)
+        return true;
+
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    HRESULT hr = ID3D11DeviceContext_Map(d3d_dev->d3dcontext,
+        (ID3D11Resource *)quad->pPixelShaderConstants[2], 0,
+        D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+    if (FAILED(hr))
+    {
+        msg_Err(o, "Failed to lock Dolby Vision shader constants (hr=0x%lX)", hr);
+        return false;
+    }
+    memcpy(mapped.pData, &constants, sizeof(constants));
+    ID3D11DeviceContext_Unmap(d3d_dev->d3dcontext,
+        (ID3D11Resource *)quad->pPixelShaderConstants[2], 0);
+    quad->doviConstants = constants;
+    return true;
+}
+
 struct xy_primary {
     double x, y;
 };
@@ -869,7 +965,18 @@ int D3D11_SetupQuad(vlc_object_t *o, d3d11_device_t *d3d_dev, const video_format
     HRESULT hr;
     const bool RGB_shader = IsRGBShader(quad->formatInfo);
 
-    quad->shaderConstants.LuminanceScale = (float)displayFormat->luminance_peak / GetFormatLuminance(o, fmt);
+    /* Dolby Vision reshaping always produces BT.2020/PQ, independently of
+     * the transfer used by a profile's compatible base layer (notably HLG
+     * for profile 8.4). Prepare() replaces this conservative peak with the
+     * per-frame RPU peak before drawing. */
+    const video_color_primaries_t source_primaries = fmt->dovi.rpu_present
+                                                   ? COLOR_PRIMARIES_BT2020
+                                                   : fmt->primaries;
+    const float source_luminance = fmt->dovi.rpu_present
+                                 ? MAX_PQ_BRIGHTNESS
+                                 : GetFormatLuminance(o, fmt);
+    quad->shaderConstants.LuminanceScale =
+        (float)displayFormat->luminance_peak / source_luminance;
 
     /* pixel shader constant buffer */
     quad->shaderConstants.Opacity = 1.0;
@@ -989,9 +1096,9 @@ int D3D11_SetupQuad(vlc_object_t *o, d3d11_device_t *d3d_dev, const video_format
 
     memcpy(colorspace.Colorspace, ppColorspace, sizeof(colorspace.Colorspace));
 
-    if (fmt->primaries != displayFormat->colorspace->primaries)
+    if (source_primaries != displayFormat->colorspace->primaries)
     {
-        GetPrimariesTransform(colorspace.Primaries, fmt->primaries,
+        GetPrimariesTransform(colorspace.Primaries, source_primaries,
                               displayFormat->colorspace->primaries);
     }
 
@@ -1005,6 +1112,22 @@ int D3D11_SetupQuad(vlc_object_t *o, d3d11_device_t *d3d_dev, const video_format
         goto error;
     }
     quad->PSConstantsCount = 2;
+    if (fmt->dovi.rpu_present)
+    {
+        static_assert((sizeof(PS_DOVI_METADATA) % 16) == 0,
+                      "Dolby Vision constants require 16-byte alignment");
+        memset(&quad->doviConstants, 0, sizeof(quad->doviConstants));
+        constantDesc.ByteWidth = sizeof(PS_DOVI_METADATA);
+        constantInit.pSysMem = &quad->doviConstants;
+        hr = ID3D11Device_CreateBuffer(d3d_dev->d3ddevice, &constantDesc,
+                &constantInit, &quad->pPixelShaderConstants[2]);
+        if (FAILED(hr))
+        {
+            msg_Err(o, "Could not create Dolby Vision shader constants (hr=0x%lX)", hr);
+            goto error;
+        }
+        quad->PSConstantsCount = 3;
+    }
     quad->projection = projection;
 
     /* vertex shader constant buffer */

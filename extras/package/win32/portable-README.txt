@@ -10,10 +10,10 @@ Delete this "portable" folder and PowerVLC behaves like a normally installed
 copy again: it will go back to %APPDATA%\powervlc.
 
 Nothing else is different. This is the very same build as the installer
-version; only where it stores your data changes. Two details worth knowing:
-the first launch is slow, because PowerVLC has to scan its plugins once and
-build the cache the installer would otherwise have built at install time; and
-file associations are not registered, since no installer ran.
+version; only where it stores your data changes. File associations are not
+registered, since no installer ran. Official archives already contain the
+plugin index; a raw development archive can take longer on its first launch
+while PowerVLC builds that index once.
 
 [FR] Tant que ce dossier « portable » se trouve à côté de powervlc.exe,
 PowerVLC conserve ICI ses réglages, ses listes de lecture, sa médiathèque et
@@ -25,11 +25,11 @@ Supprimez ce dossier « portable » et PowerVLC se comporte de nouveau comme
 une installation classique : il repassera par %APPDATA%\powervlc.
 
 Rien d'autre ne change. C'est exactement la même version que celle de
-l'installeur ; seul l'emplacement de vos données diffère. Deux détails à
-connaître : le premier lancement est lent, car PowerVLC doit analyser ses
-greffons une fois et construire le cache que l'installeur aurait construit à
-l'installation ; et les associations de fichiers ne sont pas enregistrées,
-puisqu'aucun installeur n'est passé.
+l'installeur ; seul l'emplacement de vos données diffère. Les associations de
+fichiers ne sont pas enregistrées, puisqu'aucun installeur n'est passé. Les
+versions officielles contiennent déjà l'index des greffons ; une archive de
+développement brute peut prendre plus de temps au premier lancement pendant
+que PowerVLC construit cet index une seule fois.
 
 PowerVLC is an unofficial fork of VLC, not affiliated with VideoLAN.
 PowerVLC est un fork non officiel de VLC, sans lien avec VideoLAN.

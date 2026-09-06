@@ -40,10 +40,16 @@
 #include <QLabel>
 #include <QPalette>
 #include <QAction>
+#include <QApplication>
+#include <QClipboard>
+#include <QDrag>
+#include <QMimeData>
 #include <QWidgetAction>
 #include <QPainter>
 #include <QTimer>
 #include <QUrl>
+#include <QImage>
+#include <QResizeEvent>
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QRandomGenerator>
 
@@ -435,7 +441,11 @@ void VideoWidget::release( bool forced )
  **********************************************************************/
 
 BackgroundWidget::BackgroundWidget( intf_thread_t *_p_i )
-    :QWidget( NULL ), p_intf( _p_i ), b_expandPixmap( false ), b_withart( true )
+    :QWidget( NULL ), p_intf( _p_i ), b_expandPixmap( false ), b_withart( true ),
+     fadeAnimation( NULL ), coneMotionTimer( new QTimer( this ) ),
+     coneVelocity( 140.0, 105.0 ), coneHue( -1 ), b_coneBouncing( false ),
+     b_idlePressActive( false ), b_idleSurfaceDragged( false ),
+     b_idlePressOnCone( false )
 {
     /* A dark background */
     setAutoFillBackground( true );
@@ -458,6 +468,15 @@ BackgroundWidget::BackgroundWidget( intf_thread_t *_p_i )
     connect( fadeAnimation, &QPropertyAnimation::valueChanged,
              this, QOverload<>::of(&BackgroundWidget::update) );
 
+    /* 16 ms produces a visible beat against a 60 Hz compositor (16.67 ms)
+     * and cannot feed 120/144 Hz displays.  A 4 ms precise timer lets the
+     * window system coalesce updates at its own refresh rate while elapsed
+     * time, rather than tick count, continues to determine the position. */
+    coneMotionTimer->setInterval( 4 );
+    coneMotionTimer->setTimerType( Qt::PreciseTimer );
+    connect( coneMotionTimer, &QTimer::timeout,
+             this, &BackgroundWidget::advanceCone );
+
     connect( THEMIM->getIM(), QOverload<QString>::of(&InputManager::artChanged),
              this, &BackgroundWidget::updateArt );
     connect( THEMIM->getIM(), &InputManager::nameChanged,
@@ -467,7 +486,10 @@ BackgroundWidget::BackgroundWidget( intf_thread_t *_p_i )
 void BackgroundWidget::updateArt( const QString& url )
 {
     if ( !url.isEmpty() )
+    {
         pixmapUrl = url;
+        resetConeAnimation();
+    }
     else
         pixmapUrl = defaultArt;
     update();
@@ -476,7 +498,14 @@ void BackgroundWidget::updateArt( const QString& url )
 void BackgroundWidget::updateDefaultArt( const QString& url )
 {
     if ( !url.isEmpty() )
+    {
+        const bool wasShowingDefault = pixmapUrl == defaultArt;
         defaultArt = url;
+        if ( wasShowingDefault )
+            pixmapUrl = defaultArt;
+        if ( wasShowingDefault && b_coneBouncing )
+            colouredCone = colourisedCone( QPixmap( defaultArt ) );
+    }
     update();
 }
 
@@ -503,6 +532,193 @@ void BackgroundWidget::showEvent( QShowEvent * e )
     if ( b_withart ) fadeAnimation->start();
 }
 
+void BackgroundWidget::hideEvent( QHideEvent *e )
+{
+    resetConeAnimation();
+    QWidget::hideEvent( e );
+}
+
+void BackgroundWidget::resizeEvent( QResizeEvent *e )
+{
+    if ( b_coneBouncing && conePaintRect.isValid() )
+    {
+        const qreal maxX = qMax<qreal>( MARGIN,
+                                       e->size().width() - MARGIN - conePaintRect.width() );
+        const qreal maxY = qMax<qreal>( MARGIN,
+                                       e->size().height() - MARGIN - conePaintRect.height() );
+        conePosition.setX( qBound<qreal>( MARGIN, conePosition.x(), maxX ) );
+        conePosition.setY( qBound<qreal>( MARGIN, conePosition.y(), maxY ) );
+    }
+    QWidget::resizeEvent( e );
+}
+
+void BackgroundWidget::mousePressEvent( QMouseEvent *e )
+{
+    if ( e->button() == Qt::LeftButton && b_withart &&
+         pixmapUrl == defaultArt )
+    {
+        /* Delay the click action until release. The idle picture is also a
+         * grab area, and a drag beginning on the cone must only move the
+         * window -- never start the Easter egg on its way. */
+        b_idlePressActive = true;
+        b_idleSurfaceDragged = false;
+        b_idlePressOnCone = conePaintRect.contains( e->pos() );
+        idlePressPosition = e->pos();
+        if ( p_intf->p_sys->p_mi )
+            p_intf->p_sys->p_mi->beginHiddenControlsDrag( e->globalPos() );
+        e->accept();
+        return;
+    }
+    QWidget::mousePressEvent( e );
+}
+
+void BackgroundWidget::mouseMoveEvent( QMouseEvent *e )
+{
+    if ( b_idlePressActive && ( e->buttons() & Qt::LeftButton ) )
+    {
+        if ( !b_idleSurfaceDragged &&
+             ( e->pos() - idlePressPosition ).manhattanLength() <
+                 QApplication::startDragDistance() )
+        {
+            e->accept();
+            return;
+        }
+        b_idleSurfaceDragged = true;
+        if ( p_intf->p_sys->p_mi )
+            p_intf->p_sys->p_mi->dragHiddenControlsTo( e->globalPos() );
+        e->accept();
+        return;
+    }
+    QWidget::mouseMoveEvent( e );
+}
+
+void BackgroundWidget::mouseReleaseEvent( QMouseEvent *e )
+{
+    if ( e->button() != Qt::LeftButton || !b_idlePressActive )
+    {
+        QWidget::mouseReleaseEvent( e );
+        return;
+    }
+
+    b_idlePressActive = false;
+    if ( p_intf->p_sys->p_mi )
+        p_intf->p_sys->p_mi->endHiddenControlsDrag();
+    if ( b_idleSurfaceDragged )
+    {
+        e->accept();
+        return;
+    }
+    if ( b_coneBouncing )
+    {
+        /* A plain click anywhere on the surface stops and recentres it. */
+        resetConeAnimation();
+    }
+    else if ( b_idlePressOnCone )
+    {
+        b_coneBouncing = true;
+        coneHue = -1;
+        colouredCone = QPixmap();
+        conePosition = conePaintRect.topLeft();
+        coneVelocity = QPointF( 140.0, 105.0 );
+        coneMotionClock.restart();
+        coneMotionTimer->start();
+        update();
+    }
+    else if ( p_intf->p_sys->p_mi )
+        p_intf->p_sys->p_mi->togglePlaylist();
+    e->accept();
+}
+
+void BackgroundWidget::resetConeAnimation()
+{
+    if ( b_idlePressActive && p_intf->p_sys->p_mi )
+        p_intf->p_sys->p_mi->endHiddenControlsDrag();
+    b_idlePressActive = false;
+    coneMotionTimer->stop();
+    b_coneBouncing = false;
+    coneHue = -1;
+    colouredCone = QPixmap();
+    conePaintRect = QRectF();
+    update();
+}
+
+QPixmap BackgroundWidget::colourisedCone( const QPixmap& source ) const
+{
+    if ( coneHue < 0 )
+        return source;
+
+    QImage image = source.toImage().convertToFormat( QImage::Format_ARGB32 );
+    for ( int y = 0; y < image.height(); ++y )
+    {
+        QRgb *line = reinterpret_cast<QRgb *>( image.scanLine( y ) );
+        for ( int x = 0; x < image.width(); ++x )
+        {
+            QColor pixel = QColor::fromRgba( line[x] );
+            if ( pixel.alpha() == 0 || pixel.saturation() == 0 )
+                continue;
+            pixel.setHsv( coneHue, pixel.saturation(), pixel.value(), pixel.alpha() );
+            line[x] = pixel.rgba();
+        }
+    }
+    return QPixmap::fromImage( image );
+}
+
+void BackgroundWidget::changeConeColour()
+{
+    static const int coneHues[] = { 0, 30, 105, 165, 210, 285 };
+    const unsigned int hueCount = sizeof( coneHues ) / sizeof( coneHues[0] );
+    int nextHue;
+    do
+        nextHue = coneHues[static_cast<unsigned int>( qrand() ) % hueCount];
+    while ( coneHue >= 0 && nextHue == coneHue );
+    coneHue = nextHue;
+    colouredCone = colourisedCone( QPixmap( defaultArt ) );
+}
+
+void BackgroundWidget::advanceCone()
+{
+    if ( !b_coneBouncing || !isVisible() || !conePaintRect.isValid() )
+        return;
+
+    const QRectF previousRect( conePosition, conePaintRect.size() );
+    qint64 elapsed = coneMotionClock.restart();
+    elapsed = qMin<qint64>( elapsed, 100 );
+    QPointF next = conePosition + coneVelocity * ( elapsed / 1000.0 );
+    const qreal minX = MARGIN;
+    const qreal minY = MARGIN;
+    const qreal maxX = qMax<qreal>( minX, width() - MARGIN - conePaintRect.width() );
+    const qreal maxY = qMax<qreal>( minY, height() - MARGIN - conePaintRect.height() );
+    bool bounced = false;
+
+    if ( maxX > minX && ( next.x() <= minX || next.x() >= maxX ) )
+    {
+        next.setX( qBound<qreal>( minX, next.x(), maxX ) );
+        coneVelocity.setX( -coneVelocity.x() );
+        bounced = true;
+    }
+    else if ( maxX <= minX )
+        next.setX( minX );
+
+    if ( maxY > minY && ( next.y() <= minY || next.y() >= maxY ) )
+    {
+        next.setY( qBound<qreal>( minY, next.y(), maxY ) );
+        coneVelocity.setY( -coneVelocity.y() );
+        bounced = true;
+    }
+    else if ( maxY <= minY )
+        next.setY( minY );
+
+    conePosition = next;
+    if ( bounced )
+        changeConeColour();
+
+    /* Repainting the complete video-sized background on every animation
+     * frame is needlessly expensive, especially on HiDPI screens. */
+    const QRectF nextRect( conePosition, conePaintRect.size() );
+    update( previousRect.united( nextRect ).adjusted( -1, -1, 1, 1 )
+                                      .toAlignedRect() );
+}
+
 void BackgroundWidget::paintEvent( QPaintEvent *e )
 {
     if ( !b_withart )
@@ -513,7 +729,15 @@ void BackgroundWidget::paintEvent( QPaintEvent *e )
     }
 
     int i_maxwidth, i_maxheight;
-    QPixmap pixmap = QPixmap( pixmapUrl );
+    QPixmap pixmap;
+    if ( b_coneBouncing && pixmapUrl == defaultArt )
+    {
+        if ( colouredCone.isNull() )
+            colouredCone = QPixmap( pixmapUrl );
+        pixmap = colouredCone;
+    }
+    else
+        pixmap = QPixmap( pixmapUrl );
     QPainter painter(this);
 
 #if HAS_QT56
@@ -551,10 +775,14 @@ void BackgroundWidget::paintEvent( QPaintEvent *e )
                                     Qt::KeepAspectRatio, Qt::SmoothTransformation );
         }
 
-        painter.drawPixmap(
-                MARGIN + ( i_maxwidth - ( pixmap.width() / dpr ) ) / 2,
-                MARGIN + ( i_maxheight - ( pixmap.height() / dpr ) ) / 2,
-                pixmap);
+        const QSizeF logicalSize( pixmap.width() / dpr, pixmap.height() / dpr );
+        QPointF position(
+                MARGIN + ( i_maxwidth - logicalSize.width() ) / 2,
+                MARGIN + ( i_maxheight - logicalSize.height() ) / 2 );
+        if ( b_coneBouncing )
+            position = conePosition;
+        conePaintRect = QRectF( position, logicalSize );
+        painter.drawPixmap( position, pixmap );
     }
     QWidget::paintEvent( e );
 }
@@ -842,7 +1070,8 @@ void SpeedControlWidget::resetRate()
 }
 
 CoverArtLabel::CoverArtLabel( QWidget *parent, intf_thread_t *_p_i )
-    : QLabel( parent ), p_intf( _p_i ), p_item( NULL )
+    : QLabel( parent ), p_intf( _p_i ), p_item( NULL ), copyAction( NULL ),
+      dragCandidate( false )
 {
     setContextMenuPolicy( Qt::ActionsContextMenu );
     connect( THEMIM->getIM(), QOverload<QString>::of(&InputManager::artChanged),
@@ -860,6 +1089,10 @@ CoverArtLabel::CoverArtLabel( QWidget *parent, intf_thread_t *_p_i )
     action = new QAction( qtr( "Add cover art from file" ), this );
     connect( action, &QAction::triggered, this, &CoverArtLabel::setArtFromFile );
     addAction( action );
+
+    copyAction = new QAction( qtr( "Copy" ), this );
+    connect( copyAction, &QAction::triggered, this, &CoverArtLabel::copyArt );
+    addAction( copyAction );
 
     p_item = THEMIM->currentInputItem();
     if( p_item )
@@ -891,14 +1124,17 @@ void CoverArtLabel::showArtUpdate( const QString& url )
     QPixmap pix;
     if( !url.isEmpty() && pix.load( url ) )
     {
+        artPath = url;
         pix = pix.scaled( minimumWidth(), minimumHeight(),
                           Qt::KeepAspectRatioByExpanding,
                           Qt::SmoothTransformation );
     }
     else
     {
+        artPath.clear();
         pix = QPixmap( ":/noart.png" );
     }
+    copyAction->setEnabled( !artPath.isEmpty() );
     setPixmap( pix );
 }
 
@@ -930,6 +1166,47 @@ void CoverArtLabel::setArtFromFile()
         return;
 
     THEMIM->getIM()->setArt( p_item, fileUrl.toString() );
+}
+
+void CoverArtLabel::copyArt()
+{
+    if( artPath.isEmpty() )
+        return;
+
+    QImage image( artPath );
+    if( !image.isNull() )
+        QApplication::clipboard()->setImage( image );
+}
+
+void CoverArtLabel::mousePressEvent( QMouseEvent *event )
+{
+    dragCandidate = event->button() == Qt::LeftButton && !artPath.isEmpty();
+    if( dragCandidate )
+        dragStartPosition = event->pos();
+    QLabel::mousePressEvent( event );
+}
+
+void CoverArtLabel::mouseMoveEvent( QMouseEvent *event )
+{
+    if( !dragCandidate || !(event->buttons() & Qt::LeftButton) ||
+        (event->pos() - dragStartPosition).manhattanLength() <
+            QApplication::startDragDistance() )
+    {
+        QLabel::mouseMoveEvent( event );
+        return;
+    }
+
+    dragCandidate = false;
+    QMimeData *mime = new QMimeData;
+    mime->setUrls( QList<QUrl>() << QUrl::fromLocalFile( artPath ) );
+
+    QDrag *drag = new QDrag( this );
+    drag->setMimeData( mime );
+    QPixmap preview( artPath );
+    if( !preview.isNull() )
+        drag->setPixmap( preview.scaled( 96, 96, Qt::KeepAspectRatio,
+                                        Qt::SmoothTransformation ) );
+    drag->exec( Qt::CopyAction );
 }
 
 void CoverArtLabel::clear()
@@ -1090,4 +1367,3 @@ void TimeLabel::toggleTimeDisplay()
     getSettings()->setValue( "MainWindow/ShowRemainingTime", b_remainingTime );
     emit broadcastRemainingTime( b_remainingTime );
 }
-

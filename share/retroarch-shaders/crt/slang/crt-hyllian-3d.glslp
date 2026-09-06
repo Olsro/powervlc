@@ -1,0 +1,13 @@
+# Generated from Slang; do not edit.
+shaders = "1"
+shader0 = "slang/programs/d49b78e44c564ebaaa4344aac907894a1512a92283604c3c80311b7399318e95.glsl"
+filter_linear0 = "true"
+scale_type0 = "viewport"
+hlsl_vertex0 = "slang/hlsl/0fc7750dae7f4aa33775e186a6930bbce397e6e3a1a7adea24c712ea3be1abb6.hlsl"
+hlsl_fragment0 = "slang/hlsl/1807c37217d001ce03eee911694e53b1d3604712736a4a946ac4aece094c4872.hlsl"
+hlsl_buffer0_size0 = "64"
+hlsl_buffer0_members0 = "MVP:0:mat4"
+hlsl_buffer1_size0 = "112"
+hlsl_buffer1_members0 = "BEAM_MAX_WIDTH:100:float;BEAM_MIN_WIDTH:96:float;BLUE_BOOST:88:float;COLOR_BOOST:76:float;CRT_ANTI_RINGING:104:float;CRT_MULRES_X:52:float;CRT_MULRES_Y:56:float;GREEN_BOOST:84:float;InputGamma:64:float;OutputGamma:68:float;OutputSize:32:vec4;PHOSPHOR:60:float;RED_BOOST:80:float;SCANLINES_STRENGTH:92:float;SHARPNESS:72:float;SourceSize:0:vec4"
+hlsl_textures0 = "Texture:2"
+hlsl_parameters0 = "BEAM_MAX_WIDTH:1;BEAM_MIN_WIDTH:0.86;BLUE_BOOST:1;COLOR_BOOST:1.5;CRT_ANTI_RINGING:0.8;CRT_MULRES_X:2;CRT_MULRES_Y:2;GREEN_BOOST:1;InputGamma:2.4;OutputGamma:2.2;PHOSPHOR:1;RED_BOOST:1;SCANLINES_STRENGTH:0.72;SHARPNESS:1"

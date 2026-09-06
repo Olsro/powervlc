@@ -1,5 +1,5 @@
 /*****************************************************************************
- * retroarch_shaders.c: native RetroArch GLSL preset execution
+ * retroarch_shaders.c: RetroArch GLSL and build-time compiled Slang execution
  *****************************************************************************
  * This is an independent implementation of the public .glsl/.glslp format.
  * It deliberately does not reuse RetroArch's GPL parser. Shader files retain
@@ -10,12 +10,14 @@
 #endif
 
 #include <vlc_common.h>
+#include <vlc_block.h>
 #include <vlc_configuration.h>
 #include <vlc_fs.h>
 #include <vlc_image.h>
 #include <vlc_opengl.h>
-#include <vlc_url.h>
 #include <vlc_variables.h>
+
+#include <limits.h>
 
 #include "retroarch_shaders.h"
 
@@ -30,6 +32,12 @@
 #endif
 #ifndef GL_FRAMEBUFFER_BINDING
 # define GL_FRAMEBUFFER_BINDING 0x8CA6
+#endif
+#ifndef GL_READ_FRAMEBUFFER
+# define GL_READ_FRAMEBUFFER 0x8CA8
+#endif
+#ifndef GL_DRAW_FRAMEBUFFER
+# define GL_DRAW_FRAMEBUFFER 0x8CA9
 #endif
 #ifndef GL_BACK_LEFT
 # define GL_BACK_LEFT 0x0402
@@ -55,12 +63,24 @@
 #ifndef GL_LINEAR_MIPMAP_LINEAR
 # define GL_LINEAR_MIPMAP_LINEAR 0x2703
 #endif
+#ifndef GL_SYNC_GPU_COMMANDS_COMPLETE
+/* OpenGL 3.2 / ARB_sync enums are absent from the legacy macOS SDK headers.
+ * The entry points are resolved dynamically and remain NULL when unsupported,
+ * so defining the wire values here only keeps old-SDK cross-builds portable. */
+# define GL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
+# define GL_SYNC_FLUSH_COMMANDS_BIT 0x00000001
+#endif
 
 #define RA_MAX_PARAMETERS 64
 #define RA_MAX_PASSES 16
 #define RA_MAX_TEXTURES 12
 #define RA_MAX_HISTORY 8
 #define RA_MAX_SHARED_LUTS 64
+#define RA_PACK_MAX_ENTRIES 4096
+
+static const uint8_t ra_pack_magic[8] = {
+    'P', 'V', 'L', 'C', 'R', 'A', '1', '\0'
+};
 
 struct ra_parameter {
     char name[64];
@@ -74,6 +94,7 @@ enum ra_wrap_mode { RA_WRAP_BORDER, RA_WRAP_EDGE, RA_WRAP_REPEAT,
 
 struct ra_program {
     char source[PATH_MAX];
+    bool slang;
     bool linear;
     bool srgb;
     bool floating;
@@ -95,59 +116,67 @@ struct ra_program {
     GLint output_size;
     GLint frame_count;
     GLint frame_direction;
+    GLint final_viewport_size;
     struct ra_parameter parameters[RA_MAX_PARAMETERS];
     unsigned parameter_count;
 };
 
-struct ra_preset_template { const char *name; bool lightweight; };
+struct ra_preset_template {
+    const char *name;
+    bool lightweight;
+    /* Zero retains the original GLSL compatibility/backport policy. Slang
+     * compiler output must never be run below its declared language level. */
+    unsigned minimum_glsl;
+};
 
 /* Every top-level CRT preset is considered.  Packaged presets eligible for the
  * current driver are published without eagerly compiling the entire catalog.
  * Exact pass/resource validation happens on first use; rejected presets are
  * withdrawn immediately. */
 static const struct ra_preset_template preset_templates[] = {
-    { "CRT-beam", true }, { "GritsScanlines", false },
-    { "crt-1tap", true }, { "crt-Cyclon", false },
-    { "crt-aperture", false }, { "crt-blurPi", false },
-    { "crt-blurPi-soft", false }, { "crt-caligari", false },
-    { "crt-cgwg-fast", true }, { "crt-consumer", false },
-    { "crt-consumer-1w-ntsc", false }, { "crt-consumer-arcade", false },
-    { "crt-consumer-classic", false }, { "crt-easymode", false },
-    { "crt-easymode-halation", false }, { "crt-gdv-mini", true },
-    { "crt-geom", false }, { "crt-geom-mini", true },
-    { "crt-guest-dr-venom", false }, { "crt-guest-dr-venom-fast", false },
-    { "crt-guest-sm", false }, { "crt-hyllian", false },
-    { "crt-hyllian-3d", false }, { "crt-hyllian-fast", true },
-    { "crt-hyllian-glow", false }, { "crt-hyllian-multipass", false },
-    { "crt-interlaced-halation", false }, { "crt-lottes", false },
-    { "crt-lottes-fast", true }, { "crt-lottes-mini", true },
-    { "crt-lottes-multipass", false }, { "crt-mattias", true },
-    { "crt-nes-mini", true }, { "crt-nobody", true },
-    { "crt-pi", true }, { "crt-pi-vertical", true },
-    { "crt-potato-BVM", true }, { "crt-potato-cool", true },
-    { "crt-potato-warm", true }, { "crt-royale", false },
-    { "crt-royale-fake-bloom", false },
-    { "crt-royale-fake-bloom-intel", false },
-    { "crt-royale-ntsc-256px-composite", false },
-    { "crt-royale-ntsc-256px-svideo", false },
-    { "crt-royale-ntsc-320px-composite", false },
-    { "crt-royale-ntsc-320px-svideo", false },
-    { "crt-royale-pal-r57shell", false }, { "crt-sines", false },
-    { "crt-torridgristle", false }, { "crt-yo6-KV-M1420B", false },
-    { "crt-yo6-KV-M1420B-fast", false },
-    { "crt-yo6-KV-M1420B-sharp", false },
-    { "crtglow_gauss", false }, { "crtglow_gauss_ntsc_3phase", false },
-    { "crtglow_lanczos", false }, { "crtsim", false },
-    { "fake-CRT-Geom", false }, { "fake-CRT-Geom-potato", true },
-    { "fakelottes", true }, { "fakelottes-geom", false },
-    { "fakelottes-geom-mini", true }, { "gizmo-crt", false },
-    { "gizmo-slotmask-crt", false }, { "gtuv50", true },
-    { "mame_hlsl", false }, { "metacrt", false },
-    { "phosphorlut", false }, { "smuberstep-glow", false },
-    { "tvout-tweaks-linearized-multipass", false }, { "yee64", true },
-    { "yeetron", true }, { "zfast-composite", true }, { "zfast-crt", true },
-    { "zfast_crt_geo", true }, { "zfast_crt_geo_svideo", true },
-    { "zfast_crt_nogeo", true }, { "zfast_crt_nogeo_svideo", true },
+    { "CRT-beam", true, 0 }, { "GritsScanlines", false, 0 },
+    { "crt-1tap", true, 0 }, { "crt-Cyclon", false, 0 },
+    { "crt-aperture", false, 0 }, { "crt-blurPi", false, 0 },
+    { "crt-blurPi-soft", false, 0 }, { "crt-caligari", false, 0 },
+    { "crt-cgwg-fast", true, 0 }, { "crt-consumer", false, 0 },
+    { "crt-consumer-1w-ntsc", false, 0 }, { "crt-consumer-arcade", false, 0 },
+    { "crt-consumer-classic", false, 0 }, { "crt-easymode", false, 0 },
+    { "crt-easymode-halation", false, 0 }, { "crt-gdv-mini", true, 0 },
+    { "crt-geom", false, 0 }, { "crt-geom-mini", true, 0 },
+    { "crt-guest-dr-venom", false, 0 }, { "crt-guest-dr-venom-fast", false, 0 },
+    { "crt-guest-sm", false, 0 }, { "crt-hyllian", false, 0 },
+    { "crt-hyllian-3d", false, 0 }, { "crt-hyllian-fast", true, 0 },
+    { "crt-hyllian-glow", false, 0 }, { "crt-hyllian-multipass", false, 0 },
+    { "crt-interlaced-halation", false, 0 }, { "crt-lottes", false, 0 },
+    { "crt-lottes-fast", true, 0 }, { "crt-lottes-mini", true, 0 },
+    { "crt-lottes-multipass", false, 0 }, { "crt-mattias", true, 0 },
+    { "crt-nes-mini", true, 0 }, { "crt-nobody", true, 0 },
+    { "crt-pi", true, 0 }, { "crt-pi-vertical", true, 0 },
+    { "crt-potato-BVM", true, 0 }, { "crt-potato-cool", true, 0 },
+    { "crt-potato-warm", true, 0 }, { "crt-royale", false, 0 },
+    { "crt-royale-fake-bloom", false, 0 },
+    { "crt-royale-fake-bloom-intel", false, 0 },
+    { "crt-royale-ntsc-256px-composite", false, 0 },
+    { "crt-royale-ntsc-256px-svideo", false, 0 },
+    { "crt-royale-ntsc-320px-composite", false, 0 },
+    { "crt-royale-ntsc-320px-svideo", false, 0 },
+    { "crt-royale-pal-r57shell", false, 0 }, { "crt-sines", false, 0 },
+    { "crt-torridgristle", false, 0 }, { "crt-yo6-KV-M1420B", false, 0 },
+    { "crt-yo6-KV-M1420B-fast", false, 0 },
+    { "crt-yo6-KV-M1420B-sharp", false, 0 },
+    { "crtglow_gauss", false, 0 }, { "crtglow_gauss_ntsc_3phase", false, 0 },
+    { "crtglow_lanczos", false, 0 }, { "crtsim", false, 0 },
+    { "fake-CRT-Geom", false, 0 }, { "fake-CRT-Geom-potato", true, 0 },
+    { "fakelottes", true, 0 }, { "fakelottes-geom", false, 0 },
+    { "fakelottes-geom-mini", true, 0 }, { "gizmo-crt", false, 0 },
+    { "gizmo-slotmask-crt", false, 0 }, { "gtuv50", true, 0 },
+    { "mame_hlsl", false, 0 }, { "metacrt", false, 0 },
+    { "phosphorlut", false, 0 }, { "smuberstep-glow", false, 0 },
+    { "tvout-tweaks-linearized-multipass", false, 0 }, { "yee64", true, 0 },
+    { "yeetron", true, 0 }, { "zfast-composite", true, 0 }, { "zfast-crt", true, 0 },
+    { "zfast_crt_geo", true, 0 }, { "zfast_crt_geo_svideo", true, 0 },
+    { "zfast_crt_nogeo", true, 0 }, { "zfast_crt_nogeo_svideo", true, 0 },
+#include "../../../share/retroarch-shaders/crt/slang/catalog.h"
 };
 
 struct ra_target {
@@ -182,6 +211,18 @@ struct ra_preset {
     struct ra_target targets[RA_MAX_PASSES];
 };
 
+struct ra_pack_entry {
+    char *path;
+    uint64_t offset;
+    uint64_t size;
+};
+
+struct ra_pack {
+    FILE *file;
+    struct ra_pack_entry *entries;
+    uint32_t count;
+};
+
 struct vlc_ra_shader_engine {
     vlc_gl_t *gl;
     const opengl_vtable_t *vt;
@@ -190,6 +231,7 @@ struct vlc_ra_shader_engine {
     struct ra_target history[RA_MAX_HISTORY];
     unsigned history_count;
     GLuint vertex_buffer;
+    GLuint slang_vertex_buffer;
     GLuint texcoord_buffer;
     GLuint color_buffer;
     struct ra_program resampler;
@@ -207,13 +249,34 @@ struct vlc_ra_shader_engine {
     unsigned glsl_version;
     bool allow_long_shaders;
     bool default_srgb;
+    bool intel_gpu;
+    /* Intel's Windows OpenGL drivers are known to mishandle sRGB FBO chains.
+     * Keep the exact same linear-light values in FP16 targets instead: unlike
+     * an 8-bit UNORM fallback this needs neither hardware sRGB conversion nor
+     * shader-side gamma approximations, and it avoids darkening multipass CRT
+     * presets such as CRT-Royale. */
+    bool linear_float_srgb;
     GLuint output_framebuffer;
+    bool framebuffer_blit_failed;
+    unsigned pending_presentation_syncs;
+    bool was_enabled;
     unsigned lut_count;
     struct ra_lut luts[RA_MAX_SHARED_LUTS];
-    struct ra_preset presets[ARRAY_SIZE(preset_templates)];
+    struct ra_pack pack;
+    /* The catalogue must not allocate every preset's pass/parameter arrays,
+     * especially on legacy machines that expose only a handful of entries. */
+    struct ra_preset *presets[ARRAY_SIZE(preset_templates)];
 };
 
-static char *ReadTextFile(const char *path)
+static GLenum ProgramTargetFormat(const vlc_ra_shader_engine_t *engine,
+                                  const struct ra_program *program)
+{
+    if (program->floating || (program->srgb && engine->linear_float_srgb))
+        return GL_RGBA16F;
+    return program->srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+}
+
+static void *ReadLooseResourceFile(const char *path, size_t *size)
 {
     FILE *file = vlc_fopen(path, "rb");
     if (!file)
@@ -224,12 +287,18 @@ static char *ReadTextFile(const char *path)
     }
     long length = ftell(file);
     rewind(file);
-    char *data = malloc((size_t)length + 1);
+    if ((uintmax_t)length > SIZE_MAX - 1) {
+        fclose(file);
+        return NULL;
+    }
+    uint8_t *data = malloc((size_t)length + 1);
     if (data && fread(data, 1, (size_t)length, file) == (size_t)length)
         data[length] = '\0';
     else
         FREENULL(data);
     fclose(file);
+    if (data && size)
+        *size = (size_t)length;
     return data;
 }
 
@@ -243,6 +312,221 @@ static char *ShaderPath(const char *relative)
         path = NULL;
     free(data);
     return path;
+}
+
+static uint16_t ReadLE16(const uint8_t *value)
+{
+    return (uint16_t)value[0] | (uint16_t)value[1] << 8;
+}
+
+static uint32_t ReadLE32(const uint8_t *value)
+{
+    return (uint32_t)value[0] | (uint32_t)value[1] << 8 |
+           (uint32_t)value[2] << 16 | (uint32_t)value[3] << 24;
+}
+
+static uint64_t ReadLE64(const uint8_t *value)
+{
+    return (uint64_t)ReadLE32(value) | (uint64_t)ReadLE32(value + 4) << 32;
+}
+
+static void CloseResourcePack(struct ra_pack *pack)
+{
+    if (pack->file)
+        fclose(pack->file);
+    for (uint32_t i = 0; i < pack->count; ++i)
+        free(pack->entries[i].path);
+    free(pack->entries);
+    memset(pack, 0, sizeof(*pack));
+}
+
+static bool OpenResourcePack(vlc_ra_shader_engine_t *engine)
+{
+    char *data = config_GetDataDir();
+    char *path = NULL;
+    if (data && asprintf(&path, "%s/retroarch-shaders.pak", data) < 0)
+        path = NULL;
+    free(data);
+    if (!path)
+        return false;
+
+    FILE *file = vlc_fopen(path, "rb");
+    free(path);
+    if (!file)
+        return false;
+    if (fseek(file, 0, SEEK_END)) {
+        fclose(file);
+        return false;
+    }
+    long file_length = ftell(file);
+    if (file_length < 12 || fseek(file, 0, SEEK_SET)) {
+        fclose(file);
+        return false;
+    }
+
+    uint8_t header[12];
+    if (fread(header, 1, sizeof(header), file) != sizeof(header) ||
+        memcmp(header, ra_pack_magic, sizeof(ra_pack_magic))) {
+        fclose(file);
+        return false;
+    }
+    uint32_t count = ReadLE32(header + 8);
+    if (!count || count > RA_PACK_MAX_ENTRIES) {
+        fclose(file);
+        return false;
+    }
+    struct ra_pack_entry *entries = calloc(count, sizeof(*entries));
+    if (!entries) {
+        fclose(file);
+        return false;
+    }
+
+    engine->pack.file = file;
+    engine->pack.entries = entries;
+    engine->pack.count = count;
+    for (uint32_t i = 0; i < count; ++i) {
+        uint8_t raw[20];
+        if (fread(raw, 1, sizeof(raw), file) != sizeof(raw))
+            goto error;
+        uint16_t path_length = ReadLE16(raw);
+        uint16_t flags = ReadLE16(raw + 2);
+        uint64_t offset = ReadLE64(raw + 4);
+        uint64_t size = ReadLE64(raw + 12);
+        if (!path_length || flags || offset > (uint64_t)file_length ||
+            size > (uint64_t)file_length - offset)
+            goto error;
+        char *entry_path = malloc((size_t)path_length + 1);
+        if (!entry_path ||
+            fread(entry_path, 1, path_length, file) != path_length) {
+            free(entry_path);
+            goto error;
+        }
+        entry_path[path_length] = '\0';
+        if (memchr(entry_path, '\0', path_length) || entry_path[0] == '/' ||
+            strchr(entry_path, '\\') || strstr(entry_path, "../") ||
+            (i && strcmp(entries[i - 1].path, entry_path) >= 0)) {
+            free(entry_path);
+            goto error;
+        }
+        entries[i].path = entry_path;
+        entries[i].offset = offset;
+        entries[i].size = size;
+    }
+    long index_end = ftell(file);
+    if (index_end < 0)
+        goto error;
+    for (uint32_t i = 0; i < count; ++i)
+        if (entries[i].offset < (uint64_t)index_end)
+            goto error;
+    msg_Info(engine->gl, "using packed RetroArch shader catalogue (%u resources)",
+             count);
+    return true;
+
+error:
+    CloseResourcePack(&engine->pack);
+    return false;
+}
+
+static const struct ra_pack_entry *FindPackedResource(
+    const struct ra_pack *pack, const char *relative)
+{
+    uint32_t first = 0, count = pack->count;
+    while (count) {
+        uint32_t step = count / 2;
+        uint32_t index = first + step;
+        int order = strcmp(pack->entries[index].path, relative);
+        if (order < 0) {
+            first = index + 1;
+            count -= step + 1;
+        } else if (order > 0)
+            count = step;
+        else
+            return &pack->entries[index];
+    }
+    return NULL;
+}
+
+/* Presets are resolved relative to their own directory and legitimately use
+ * paths such as crt/../blurs/... . A filesystem collapses those components for
+ * loose resources, while the packed catalogue index contains canonical names.
+ * Canonicalize both access paths so packaging does not change preset
+ * semantics, and reject attempts to escape above the catalogue root. */
+static char *NormalizeResourcePath(const char *relative)
+{
+    if (!relative || !*relative || relative[0] == '/' ||
+        strchr(relative, '\\'))
+        return NULL;
+
+    size_t length = strlen(relative);
+    char *normalized = malloc(length + 1);
+    if (!normalized)
+        return NULL;
+
+    size_t used = 0;
+    const char *cursor = relative;
+    while (*cursor) {
+        while (*cursor == '/')
+            ++cursor;
+        if (!*cursor)
+            break;
+        const char *end = strchr(cursor, '/');
+        size_t segment = end ? (size_t)(end - cursor) : strlen(cursor);
+        if (segment == 1 && cursor[0] == '.') {
+            /* Nothing to append. */
+        } else if (segment == 2 && cursor[0] == '.' && cursor[1] == '.') {
+            if (!used) {
+                free(normalized);
+                return NULL;
+            }
+            while (used && normalized[used - 1] != '/')
+                --used;
+            if (used)
+                --used;
+        } else {
+            if (used)
+                normalized[used++] = '/';
+            memcpy(normalized + used, cursor, segment);
+            used += segment;
+        }
+        cursor = end ? end + 1 : cursor + segment;
+    }
+    if (!used) {
+        free(normalized);
+        return NULL;
+    }
+    normalized[used] = '\0';
+    return normalized;
+}
+
+static void *ReadResource(vlc_ra_shader_engine_t *engine,
+                          const char *relative, size_t *size)
+{
+    char *normalized = NormalizeResourcePath(relative);
+    if (!normalized)
+        return NULL;
+    const struct ra_pack_entry *entry = engine->pack.file
+        ? FindPackedResource(&engine->pack, normalized) : NULL;
+    if (entry && entry->size <= SIZE_MAX - 1 && entry->offset <= LONG_MAX &&
+        fseek(engine->pack.file, (long)entry->offset, SEEK_SET) == 0) {
+        uint8_t *data = malloc((size_t)entry->size + 1);
+        if (data && fread(data, 1, (size_t)entry->size,
+                          engine->pack.file) == (size_t)entry->size) {
+            data[(size_t)entry->size] = '\0';
+            if (size)
+                *size = (size_t)entry->size;
+            free(normalized);
+            return data;
+        }
+        free(data);
+    }
+
+    /* Loose resources remain supported for Unix packages, developer trees
+     * and user-edited shader collections. */
+    char *path = ShaderPath(normalized);
+    void *data = path ? ReadLooseResourceFile(path, size) : NULL;
+    free(path);
+    free(normalized);
+    return data;
 }
 
 /* RetroArch accepts a #version directive embedded after a licence comment.
@@ -383,11 +667,13 @@ static GLuint Compile(vlc_ra_shader_engine_t *engine, GLenum type,
 static bool BuildProgram(vlc_ra_shader_engine_t *engine,
                          struct ra_program *program, const char *preset_name)
 {
-    char *path = ShaderPath(program->source);
-    char *source = path ? ReadTextFile(path) : NULL;
-    free(path);
-    if (!source)
+    program->slang = !strncmp(program->source, "crt/slang/", 10);
+    char *source = ReadResource(engine, program->source, NULL);
+    if (!source) {
+        msg_Warn(engine->gl, "RetroArch preset %s resource unavailable: %s",
+                 preset_name, program->source);
         return false;
+    }
 
     unsigned version = ExtractAndRemoveVersion(source);
     if (version == 130 && engine->glsl_version < 130 &&
@@ -444,11 +730,13 @@ static bool BuildProgram(vlc_ra_shader_engine_t *engine,
     program->output_size = engine->vt->GetUniformLocation(program->id, "OutputSize");
     program->frame_count = engine->vt->GetUniformLocation(program->id, "FrameCount");
     program->frame_direction = engine->vt->GetUniformLocation(program->id, "FrameDirection");
+    program->final_viewport_size = engine->vt->GetUniformLocation(program->id, "RAViewportSize");
     for (unsigned i = 0; i < program->parameter_count; ++i)
         program->parameters[i].location =
             engine->vt->GetUniformLocation(program->id,
                                            program->parameters[i].name);
-    return program->vertex_coord >= 0 && program->tex_coord >= 0;
+    /* Slang can derive texture coordinates entirely from Position. */
+    return program->vertex_coord >= 0;
 }
 
 static char *PresetValue(const char *preset, const char *key)
@@ -521,17 +809,27 @@ static struct ra_lut *LoadLut(vlc_ra_shader_engine_t *engine,
         return NULL;
 
     struct ra_lut *lut = &engine->luts[engine->lut_count];
-    char *path = path_ok ? ShaderPath(shader_relative) : NULL;
-    char *uri = path ? vlc_path2uri(path, NULL) : NULL;
-    free(path);
-    if (!uri) return NULL;
+    size_t encoded_size = 0;
+    void *encoded = ReadResource(engine, shader_relative, &encoded_size);
+    if (!encoded || encoded_size > SSIZE_MAX) {
+        free(encoded);
+        return NULL;
+    }
+    block_t *block = block_Alloc(encoded_size);
+    if (!block) {
+        free(encoded);
+        return NULL;
+    }
+    memcpy(block->p_buffer, encoded, encoded_size);
+    free(encoded);
 
     video_format_t input, output;
-    video_format_Init(&input, 0);
+    video_format_Init(&input, image_Ext2Fourcc(shader_relative));
     video_format_Init(&output, VLC_CODEC_RGBA);
     image_handler_t *handler = image_HandlerCreate(engine->gl);
-    picture_t *picture = handler ? image_ReadUrl(handler, uri, &input, &output) : NULL;
-    free(uri);
+    picture_t *picture = handler ? image_Read(handler, block, &input, &output) : NULL;
+    if (!handler)
+        block_Release(block);
     if (handler) image_HandlerDelete(handler);
     video_format_Clean(&input);
     video_format_Clean(&output);
@@ -704,10 +1002,12 @@ static void DeletePreset(vlc_ra_shader_engine_t *engine, struct ra_preset *prese
     for (unsigned i = 0; i < preset->pass_count; ++i) {
         if (preset->passes[i].id)
             engine->vt->DeleteProgram(preset->passes[i].id);
+        preset->passes[i].id = 0;
         DeleteTarget(engine, &preset->targets[i]);
     }
     DeleteTarget(engine, &preset->feedback);
     preset->lut_count = 0;
+    preset->pass_count = 0;
     preset->valid = false;
 }
 
@@ -773,7 +1073,7 @@ static bool PresetFitsTextureUnits(vlc_ra_shader_engine_t *engine,
                     "RetroArch preset %s rejected: pass %u needs %u texture "
                     "units, GPU exposes %d",
                     preset->name, pass_index, units,
-                    engine->max_texture_units);
+                    (int)engine->max_texture_units);
             return false;
         }
     }
@@ -844,9 +1144,7 @@ static bool BuildPreset(vlc_ra_shader_engine_t *engine,
     if (snprintf(relative, sizeof(relative), "crt/%s.glslp", info->name) >=
         (int)sizeof(relative))
         return false;
-    char *path = ShaderPath(relative);
-    char *preset = path ? ReadTextFile(path) : NULL;
-    free(path);
+    char *preset = ReadResource(engine, relative, NULL);
     if (!preset) return false;
 
     /* External textures are loaded only when every declared resource can be
@@ -943,8 +1241,7 @@ static bool BuildPreset(vlc_ra_shader_engine_t *engine,
             if (pass_count == RA_MAX_PASSES) {
                 free(preset); DeletePreset(engine, out); return false;
             }
-            GLenum format = program->floating ? GL_RGBA16F :
-                            program->srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+            GLenum format = ProgramTargetFormat(engine, program);
             if (!AllocateTarget(engine, &out->targets[i], 16, 16, format)) {
                 free(preset); DeletePreset(engine, out); return false;
             }
@@ -958,8 +1255,7 @@ static bool BuildPreset(vlc_ra_shader_engine_t *engine,
             }
             out->pass_count++;
         } else if (i + 1 < pass_count) {
-            GLenum format = program->floating ? GL_RGBA16F :
-                            program->srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+            GLenum format = ProgramTargetFormat(engine, program);
             if (!AllocateTarget(engine, &out->targets[i], 16, 16, format)) {
                 free(preset); DeletePreset(engine, out); return false;
             }
@@ -986,9 +1282,10 @@ static void PublishCapabilities(vlc_ra_shader_engine_t *engine,
     if (!available)
         return;
     for (size_t i = 0; i < ARRAY_SIZE(engine->presets); ++i) {
-        struct ra_preset *preset = &engine->presets[i];
-        if ((!allow_long_shaders && !preset_templates[i].lightweight) ||
-            (preset->attempted && !preset->valid))
+        struct ra_preset *preset = engine->presets[i];
+        if (engine->glsl_version < preset_templates[i].minimum_glsl ||
+            (!allow_long_shaders && !preset_templates[i].lightweight) ||
+            (preset && preset->attempted && !preset->valid))
             continue;
         /* Do not compile the complete catalogue while opening a video.  Some
          * virtual and older drivers take tens of seconds to compile all CRT
@@ -999,17 +1296,13 @@ static void PublishCapabilities(vlc_ra_shader_engine_t *engine,
         if (snprintf(relative, sizeof(relative), "crt/%s.glslp",
                      preset_templates[i].name) >= (int)sizeof(relative))
             continue;
-        char *path = ShaderPath(relative);
-        char *source = path ? ReadTextFile(path) : NULL;
-        free(path);
+        char *source = ReadResource(engine, relative, NULL);
         if (!source)
             continue;
         free(source);
-        preset->name = preset_templates[i].name;
-        preset->lightweight = preset_templates[i].lightweight;
         char *next;
         if (asprintf(&next, "%s%s%s", available, *available ? ";" : "",
-                     preset->name) < 0)
+                     preset_templates[i].name) < 0)
             continue;
         free(available);
         available = next;
@@ -1019,7 +1312,7 @@ static void PublishCapabilities(vlc_ra_shader_engine_t *engine,
     var_SetString(root, "crt-retroarch-available", available);
     var_Create(root, "crt-retroarch-backend", VLC_VAR_STRING);
     var_SetString(root, "crt-retroarch-backend",
-                  *available ? "opengl-retroarch-glsl" : "cpu-legacy");
+                  *available ? "opengl-retroarch-glsl-slang" : "cpu-legacy");
     var_Create(root, "crt-retroarch-owner", VLC_VAR_ADDRESS);
     var_SetAddress(root, "crt-retroarch-owner", engine);
     char *preset = var_InheritString(engine->gl, "crt-retroarch-preset");
@@ -1061,6 +1354,18 @@ vlc_ra_shader_engine_t *vlc_ra_shader_engine_Create(vlc_gl_t *gl,
         engine->glsl_version = 120;
     vt->GetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &engine->max_texture_units);
     if (engine->max_texture_units < 2) { free(engine); return NULL; }
+    const char *vendor = (const char *)vt->GetString(GL_VENDOR);
+    const char *renderer = (const char *)vt->GetString(GL_RENDERER);
+    engine->intel_gpu =
+        (vendor && strstr(vendor, "Intel")) ||
+        (renderer && strstr(renderer, "Intel"));
+#ifdef _WIN32
+    engine->linear_float_srgb = engine->intel_gpu;
+    if (engine->linear_float_srgb)
+        msg_Info(gl, "using linear FP16 RetroArch targets instead of Intel "
+                     "Windows sRGB framebuffers");
+#endif
+    OpenResourcePack(engine);
     if (vt->GetFramebufferAttachmentParameteriv) {
         GLint framebuffer = 0;
         GLint encoding = 0;
@@ -1077,6 +1382,11 @@ vlc_ra_shader_engine_t *vlc_ra_shader_engine_Create(vlc_gl_t *gl,
     vt->GenBuffers(1, &engine->vertex_buffer);
     vt->BindBuffer(GL_ARRAY_BUFFER, engine->vertex_buffer);
     vt->BufferData(GL_ARRAY_BUFFER, sizeof(positions), positions, GL_STATIC_DRAW);
+    /* Slang uses the normalized quad and matching orthographic MVP. Keeping
+     * them separate also handles programs that use Position outside MVP. */
+    vt->GenBuffers(1, &engine->slang_vertex_buffer);
+    vt->BindBuffer(GL_ARRAY_BUFFER, engine->slang_vertex_buffer);
+    vt->BufferData(GL_ARRAY_BUFFER, sizeof(texcoords), texcoords, GL_STATIC_DRAW);
     vt->GenBuffers(1, &engine->texcoord_buffer);
     vt->BindBuffer(GL_ARRAY_BUFFER, engine->texcoord_buffer);
     vt->BufferData(GL_ARRAY_BUFFER, sizeof(texcoords), texcoords, GL_STATIC_DRAW);
@@ -1107,8 +1417,11 @@ void vlc_ra_shader_engine_Delete(vlc_ra_shader_engine_t *engine)
          * state across that hand-off; clearing it here silently disabled the
          * shader on the final Windows output. */
     }
-    for (size_t i = 0; i < ARRAY_SIZE(engine->presets); ++i)
-        DeletePreset(engine, &engine->presets[i]);
+    for (size_t i = 0; i < ARRAY_SIZE(engine->presets); ++i) {
+        if (engine->presets[i])
+            DeletePreset(engine, engine->presets[i]);
+        free(engine->presets[i]);
+    }
     DeleteTarget(engine, &engine->input);
     DeleteTarget(engine, &engine->normalized);
     for (unsigned i = 0; i < RA_MAX_HISTORY; ++i)
@@ -1118,12 +1431,15 @@ void vlc_ra_shader_engine_Delete(vlc_ra_shader_engine_t *engine)
             engine->vt->DeleteTextures(1, &engine->luts[i].texture);
     if (engine->vertex_buffer)
         engine->vt->DeleteBuffers(1, &engine->vertex_buffer);
+    if (engine->slang_vertex_buffer)
+        engine->vt->DeleteBuffers(1, &engine->slang_vertex_buffer);
     if (engine->texcoord_buffer)
         engine->vt->DeleteBuffers(1, &engine->texcoord_buffer);
     if (engine->color_buffer)
         engine->vt->DeleteBuffers(1, &engine->color_buffer);
     if (engine->resampler.id)
         engine->vt->DeleteProgram(engine->resampler.id);
+    CloseResourcePack(&engine->pack);
     free(engine);
 }
 
@@ -1163,11 +1479,18 @@ static struct ra_preset *FindPreset(vlc_ra_shader_engine_t *engine,
 {
     for (size_t i = 0; i < ARRAY_SIZE(engine->presets); ++i)
         if (!strcmp(preset_templates[i].name, name)) {
-            struct ra_preset *preset = &engine->presets[i];
-            if ((!engine->allow_long_shaders &&
+            struct ra_preset *preset = engine->presets[i];
+            if (engine->glsl_version < preset_templates[i].minimum_glsl ||
+                (!engine->allow_long_shaders &&
                  !preset_templates[i].lightweight) ||
-                (preset->attempted && !preset->valid))
+                (preset && preset->attempted && !preset->valid))
                 return NULL;
+            if (!preset) {
+                preset = calloc(1, sizeof(*preset));
+                if (!preset)
+                    return NULL;
+                engine->presets[i] = preset;
+            }
             if (!preset->valid &&
                 !BuildPreset(engine, preset, &preset_templates[i])) {
                 PublishCapabilities(engine, engine->allow_long_shaders);
@@ -1203,22 +1526,33 @@ static bool ResetHistory(vlc_ra_shader_engine_t *engine, unsigned count,
 bool vlc_ra_shader_engine_Begin(vlc_ra_shader_engine_t *engine,
                                unsigned input_width, unsigned input_height)
 {
-    if (!engine || !var_InheritBool(engine->gl, "crt-retroarch-enabled"))
+    if (!engine)
         return false;
+    if (!var_InheritBool(engine->gl, "crt-retroarch-enabled")) {
+        engine->was_enabled = false;
+        return false;
+    }
+    const bool newly_enabled = !engine->was_enabled;
+    engine->was_enabled = true;
     GLint output_framebuffer = 0;
     engine->vt->GetIntegerv(GL_FRAMEBUFFER_BINDING, &output_framebuffer);
     engine->output_framebuffer = (GLuint)output_framebuffer;
     bool input_changed = engine->input.width != input_width ||
                          engine->input.height != input_height;
     char *name = var_InheritString(engine->gl, "crt-retroarch-preset");
-    struct ra_preset *preset = name ? FindPreset(engine, name) : NULL;
+    const bool substitute_intel_royale = engine->intel_gpu && name &&
+                                        !strcmp(name, "crt-royale");
+    const char *effective_name = substitute_intel_royale
+                               ? "crt-royale-fake-bloom-intel" : name;
+    struct ra_preset *preset = effective_name
+                             ? FindPreset(engine, effective_name) : NULL;
     if (!preset || !engine->viewport_width || !engine->viewport_height ||
         !AllocateTarget(engine, &engine->input, input_width, input_height,
                         GL_RGBA8)) {
         free(name);
         return false;
     }
-    bool selection_changed = strcmp(engine->selected, name) != 0;
+    bool selection_changed = strcmp(engine->selected, effective_name) != 0;
     bool history_changed = engine->history_count != preset->history_count ||
         (preset->history_count &&
          (engine->history[0].width != input_width ||
@@ -1232,12 +1566,19 @@ bool vlc_ra_shader_engine_Begin(vlc_ra_shader_engine_t *engine,
         if (selection_changed) {
             DeleteTarget(engine, &preset->feedback);
             engine->frame_count = 0;
-            strlcpy(engine->selected, name, sizeof(engine->selected));
-            msg_Info(engine->gl, "using exact RetroArch CRT preset %s", name);
+            strlcpy(engine->selected, effective_name,
+                    sizeof(engine->selected));
+            if (substitute_intel_royale)
+                msg_Info(engine->gl, "substituting Intel-safe RetroArch preset "
+                         "crt-royale-fake-bloom-intel for crt-royale");
+            msg_Info(engine->gl, "using exact RetroArch CRT preset %s",
+                     effective_name);
         }
     }
     if (input_changed && !selection_changed)
         DeleteTarget(engine, &preset->feedback);
+    if (newly_enabled || selection_changed || input_changed)
+        engine->pending_presentation_syncs = 3;
     free(name);
     engine->active = preset;
     engine->vt->BindFramebuffer(GL_FRAMEBUFFER, engine->input.framebuffer);
@@ -1332,6 +1673,126 @@ static bool NormalizeRetroArchRaster(vlc_ra_shader_engine_t *engine,
     return true;
 }
 
+/* Never let an arbitrary RetroArch program render straight into the window
+ * surface.  In particular, live preset changes on composited Linux desktops
+ * can leave the drawable black even though reading the back buffer shows the
+ * shader's RGB result.  Finish the preset in an ordinary texture, then use the
+ * small stock program for the sole presentation draw.  Besides isolating GL
+ * state, the stock fragment shader guarantees an opaque video surface. */
+static bool PresentRetroArchTarget(vlc_ra_shader_engine_t *engine,
+                                   const struct ra_target *target,
+                                   bool srgb)
+{
+    if (!target->texture)
+        return false;
+
+    const opengl_vtable_t *vt = engine->vt;
+    /* Mesa's EGL/X11 path can successfully execute the shader into an FBO yet
+     * discard a second shader draw aimed at the window drawable. Since the
+     * final target already has the exact viewport dimensions, use the native
+     * framebuffer copy when it is available. This bypasses all vertex-array,
+     * sampler and raster state and copies the shader result straight into the
+     * swapchain back buffer. */
+    if (vt->BlitFramebuffer && !engine->framebuffer_blit_failed) {
+        while (vt->GetError() != GL_NO_ERROR) {}
+        vt->Disable(GL_FRAMEBUFFER_SRGB);
+        vt->BindFramebuffer(GL_READ_FRAMEBUFFER, target->framebuffer);
+        vt->BindFramebuffer(GL_DRAW_FRAMEBUFFER, engine->output_framebuffer);
+        vt->BlitFramebuffer(0, 0, target->width, target->height,
+                            engine->viewport_x, engine->viewport_y,
+                            engine->viewport_x + engine->viewport_width,
+                            engine->viewport_y + engine->viewport_height,
+                            GL_COLOR_BUFFER_BIT, GL_LINEAR);
+        GLenum error = vt->GetError();
+        vt->BindFramebuffer(GL_FRAMEBUFFER, engine->output_framebuffer);
+        if (error == GL_NO_ERROR) {
+            /* Mesa's EGL/X11 path can defer the FBO blit past the buffer swap
+             * when a preset is already active on the first video frame. Merely
+             * submitting it with glFlush() is not sufficient: the swap may
+             * still win the race and leave the drawable black. A fence keeps
+             * the ordering explicit, but its wait must remain bounded because
+             * an unbounded glFinish() can starve Qt's X11 event connection and
+             * make Mutter report a responsive PowerVLC as hung. At worst this
+             * spends one 60-Hz frame on each of three transition pictures. */
+            if (engine->pending_presentation_syncs) {
+                if (vt->FenceSync && vt->ClientWaitSync && vt->DeleteSync) {
+                    GLsync fence = vt->FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,
+                                                 0);
+                    if (fence) {
+                        (void)vt->ClientWaitSync(fence,
+                                                GL_SYNC_FLUSH_COMMANDS_BIT,
+                                                16000000);
+                        vt->DeleteSync(fence);
+                    } else {
+                        vt->Flush();
+                    }
+                } else {
+                    vt->Flush();
+                }
+                engine->pending_presentation_syncs--;
+            }
+            return true;
+        }
+        engine->framebuffer_blit_failed = true;
+        msg_Warn(engine->gl, "RetroArch framebuffer presentation failed "
+                 "(OpenGL error 0x%x); using shader fallback",
+                 (unsigned int)error);
+    }
+
+    struct ra_program *program = &engine->resampler;
+    if (!program->id)
+        return false;
+    vt->BindFramebuffer(GL_FRAMEBUFFER, engine->output_framebuffer);
+    vt->Viewport(engine->viewport_x, engine->viewport_y,
+                 engine->viewport_width, engine->viewport_height);
+    if (srgb)
+        vt->Enable(GL_FRAMEBUFFER_SRGB);
+    else
+        vt->Disable(GL_FRAMEBUFFER_SRGB);
+    vt->Disable(GL_BLEND);
+    vt->Disable(GL_DEPTH_TEST);
+    vt->Disable(GL_CULL_FACE);
+    vt->UseProgram(program->id);
+    vt->ActiveTexture(GL_TEXTURE0);
+    vt->BindTexture(GL_TEXTURE_2D, target->texture);
+    vt->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    vt->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    vt->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    vt->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    if (program->texture >= 0)
+        vt->Uniform1i(program->texture, 0);
+    if (program->input_size >= 0)
+        vt->Uniform2f(program->input_size, target->width, target->height);
+    if (program->texture_size >= 0)
+        vt->Uniform2f(program->texture_size, target->width, target->height);
+    if (program->output_size >= 0)
+        vt->Uniform2f(program->output_size, engine->viewport_width,
+                      engine->viewport_height);
+    if (program->mvp >= 0) {
+        static const GLfloat identity[] = { 1,0,0,0, 0,1,0,0,
+                                            0,0,1,0, 0,0,0,1 };
+        vt->UniformMatrix4fv(program->mvp, 1, GL_FALSE, identity);
+    }
+    vt->BindBuffer(GL_ARRAY_BUFFER, engine->vertex_buffer);
+    vt->EnableVertexAttribArray(program->vertex_coord);
+    vt->VertexAttribPointer(program->vertex_coord, 2, GL_FLOAT, GL_FALSE,
+                            0, 0);
+    if (program->tex_coord >= 0) {
+        vt->BindBuffer(GL_ARRAY_BUFFER, engine->texcoord_buffer);
+        vt->EnableVertexAttribArray(program->tex_coord);
+        vt->VertexAttribPointer(program->tex_coord, 2, GL_FLOAT, GL_FALSE,
+                                0, 0);
+    }
+    if (program->color >= 0) {
+        vt->BindBuffer(GL_ARRAY_BUFFER, engine->color_buffer);
+        vt->EnableVertexAttribArray(program->color);
+        vt->VertexAttribPointer(program->color, 4, GL_FLOAT, GL_FALSE, 0, 0);
+    }
+    vt->DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    vt->Enable(GL_CULL_FACE);
+    return true;
+}
+
 void vlc_ra_shader_engine_End(vlc_ra_shader_engine_t *engine)
 {
     struct ra_preset *preset = engine ? engine->active : NULL;
@@ -1377,8 +1838,7 @@ void vlc_ra_shader_engine_End(vlc_ra_shader_engine_t *engine)
         }
         struct ra_program *feedback =
             &preset->passes[preset->feedback_pass];
-        GLenum format = feedback->floating ? GL_RGBA16F :
-                        feedback->srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+        GLenum format = ProgramTargetFormat(engine, feedback);
         if (!AllocateTarget(engine, &preset->feedback, width, height, format))
             return;
         vt->BindFramebuffer(GL_FRAMEBUFFER, preset->feedback.framebuffer);
@@ -1408,24 +1868,34 @@ void vlc_ra_shader_engine_End(vlc_ra_shader_engine_t *engine)
         if (final) {
             output_width = engine->viewport_width;
             output_height = engine->viewport_height;
-            vt->BindFramebuffer(GL_FRAMEBUFFER, engine->output_framebuffer);
-            vt->Viewport(engine->viewport_x, engine->viewport_y,
-                         output_width, output_height);
-        } else {
-            GLenum format = program->floating ? GL_RGBA16F :
-                            program->srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8;
-            if (!AllocateTarget(engine, &preset->targets[pass_index],
-                                output_width, output_height, format)) {
-                msg_Err(engine->gl, "RetroArch preset %s pass %u target allocation failed",
-                        preset->name, pass_index);
-                return;
-            }
-            vt->BindFramebuffer(GL_FRAMEBUFFER,
-                                preset->targets[pass_index].framebuffer);
-            vt->Viewport(0, 0, output_width, output_height);
         }
-        if (program->srgb) vt->Enable(GL_FRAMEBUFFER_SRGB);
+        GLenum format = ProgramTargetFormat(engine, program);
+        if (!AllocateTarget(engine, &preset->targets[pass_index],
+                            output_width, output_height, format)) {
+            msg_Err(engine->gl,
+                    "RetroArch preset %s pass %u target allocation failed",
+                    preset->name, pass_index);
+            return;
+        }
+        vt->BindFramebuffer(GL_FRAMEBUFFER,
+                            preset->targets[pass_index].framebuffer);
+        vt->Viewport(0, 0, output_width, output_height);
+        /* FP16 fallback targets already store the shader's linear output. */
+        if (program->srgb && !engine->linear_float_srgb)
+            vt->Enable(GL_FRAMEBUFFER_SRGB);
         else vt->Disable(GL_FRAMEBUFFER_SRGB);
+        /* Several valid RetroArch CRT shaders (notably crt-sines) assign only
+         * FragColor.rgb. Their alpha is undefined and may become zero. The
+         * Linux compositor then presents the otherwise valid RGB framebuffer
+         * as a black transparent video surface when the result is blitted.
+         * Video is opaque here: initialize alpha to one and prevent the final
+         * shader from replacing it, without changing any RGB calculation. */
+        if (final) {
+            vt->ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            vt->ClearColor(0.f, 0.f, 0.f, 1.f);
+            vt->Clear(GL_COLOR_BUFFER_BIT);
+            vt->ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+        }
         vt->UseProgram(program->id);
 
         struct ra_target *source = pass_index ?
@@ -1623,7 +2093,10 @@ void vlc_ra_shader_engine_End(vlc_ra_shader_engine_t *engine)
         if (program->mvp >= 0) {
             static const GLfloat identity[] = { 1,0,0,0, 0,1,0,0,
                                                 0,0,1,0, 0,0,0,1 };
-            vt->UniformMatrix4fv(program->mvp, 1, GL_FALSE, identity);
+            static const GLfloat normalized_quad[] = { 2,0,0,0, 0,2,0,0,
+                                                       0,0,1,0, -1,-1,0,1 };
+            vt->UniformMatrix4fv(program->mvp, 1, GL_FALSE,
+                                 program->slang ? normalized_quad : identity);
         }
         if (program->input_size >= 0)
             vt->Uniform2f(program->input_size, input_width, input_height);
@@ -1631,6 +2104,9 @@ void vlc_ra_shader_engine_End(vlc_ra_shader_engine_t *engine)
             vt->Uniform2f(program->texture_size, source->width, source->height);
         if (program->output_size >= 0)
             vt->Uniform2f(program->output_size, output_width, output_height);
+        if (program->final_viewport_size >= 0)
+            vt->Uniform2f(program->final_viewport_size, engine->viewport_width,
+                          engine->viewport_height);
         if (program->frame_count >= 0)
             vt->Uniform1i(program->frame_count, (int)(frame & 0x7fffffff));
         if (program->frame_direction >= 0) vt->Uniform1i(program->frame_direction, 1);
@@ -1638,21 +2114,35 @@ void vlc_ra_shader_engine_End(vlc_ra_shader_engine_t *engine)
             if (program->parameters[i].location >= 0)
                 vt->Uniform1f(program->parameters[i].location,
                               program->parameters[i].value);
-        vt->BindBuffer(GL_ARRAY_BUFFER, engine->vertex_buffer);
+        vt->BindBuffer(GL_ARRAY_BUFFER, program->slang ? engine->slang_vertex_buffer
+                                                      : engine->vertex_buffer);
         vt->EnableVertexAttribArray(program->vertex_coord);
         vt->VertexAttribPointer(program->vertex_coord, 2, GL_FLOAT, GL_FALSE, 0, 0);
-        vt->BindBuffer(GL_ARRAY_BUFFER, engine->texcoord_buffer);
-        vt->EnableVertexAttribArray(program->tex_coord);
-        vt->VertexAttribPointer(program->tex_coord, 2, GL_FLOAT, GL_FALSE, 0, 0);
+        if (program->tex_coord >= 0) {
+            vt->BindBuffer(GL_ARRAY_BUFFER, engine->texcoord_buffer);
+            vt->EnableVertexAttribArray(program->tex_coord);
+            vt->VertexAttribPointer(program->tex_coord, 2, GL_FLOAT, GL_FALSE, 0, 0);
+        }
         if (program->color >= 0) {
             vt->BindBuffer(GL_ARRAY_BUFFER, engine->color_buffer);
             vt->EnableVertexAttribArray(program->color);
             vt->VertexAttribPointer(program->color, 4, GL_FLOAT, GL_FALSE, 0, 0);
         }
         vt->DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-
+        if (final)
+            vt->ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         input_width = output_width;
         input_height = output_height;
+    }
+    struct ra_program *final_program =
+        &preset->passes[preset->pass_count - 1];
+    if (!PresentRetroArchTarget(engine,
+                                &preset->targets[preset->pass_count - 1],
+                                final_program->srgb)) {
+        msg_Err(engine->gl, "RetroArch preset %s presentation failed",
+                preset->name);
+        vt->BindFramebuffer(GL_FRAMEBUFFER, engine->output_framebuffer);
+        return;
     }
     if (advance)
         engine->frame_count++;

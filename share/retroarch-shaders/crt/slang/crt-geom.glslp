@@ -1,0 +1,13 @@
+# Generated from Slang; do not edit.
+shaders = "1"
+shader0 = "slang/programs/70d7e9738cba5403462c3c17dafabc3de66bb4446184709bd5bcb97d3285bcea.glsl"
+filter_linear0 = "false"
+scale_type0 = "viewport"
+hlsl_vertex0 = "slang/hlsl/ef1d9d4234360c98d138c33a8013e96add0f10cd509ec735020b25d315cbeb53.hlsl"
+hlsl_fragment0 = "slang/hlsl/65a16978fc9f645ab5280881ac311fff846b82755e39023928a397c79cebcf61.hlsl"
+hlsl_buffer0_size0 = "96"
+hlsl_buffer0_members0 = "MVP:0:mat4;OutputSize:64:vec4;SourceSize:80:vec4"
+hlsl_buffer1_size0 = "96"
+hlsl_buffer1_members0 = "CRTgamma:4:float;CURVATURE:64:float;DOTMASK:48:float;DOTMASK_brightboost:52:float;FrameCount:0:uint;R:16:float;SHARPER:56:float;cornersize:20:float;cornersmooth:24:float;d:12:float;interlace_detect:68:float;invert_aspect:76:float;lum:72:float;mask_type:44:float;monitorgamma:8:float;overscan_x:36:float;overscan_y:40:float;scanline_weight:60:float;vertical_scanlines:80:float;x_tilt:28:float;xsize:84:float;y_tilt:32:float;ysize:88:float"
+hlsl_textures0 = "Texture:2"
+hlsl_parameters0 = "CRTgamma:2.4;CURVATURE:1;DOTMASK:0.3;DOTMASK_brightboost:0;R:2;SHARPER:1;cornersize:0.03;cornersmooth:1000;d:1.5;interlace_detect:1;invert_aspect:0;lum:0;mask_type:1;monitorgamma:2.2;overscan_x:100;overscan_y:100;scanline_weight:0.3;vertical_scanlines:0;x_tilt:0;xsize:0;y_tilt:0;ysize:0"

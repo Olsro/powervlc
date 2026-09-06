@@ -54,7 +54,7 @@ typedef struct
     ID3D11Buffer              *pIndexBuffer;
     UINT                      indexCount;
     ID3D11Buffer              *pVertexShaderConstants;
-    ID3D11Buffer              *pPixelShaderConstants[2];
+    ID3D11Buffer              *pPixelShaderConstants[3];
     UINT                       PSConstantsCount;
     ID3D11PixelShader         *d3dpixelShader;
     ID3D11InputLayout         *pVertexLayout;
@@ -64,6 +64,7 @@ typedef struct
     video_projection_mode_t   projection;
 
     PS_CONSTANT_BUFFER        shaderConstants;
+    PS_DOVI_METADATA          doviConstants;
     d3d_vertex_t              flatVertices[4];
     int                       stereoOffset;
 } d3d_quad_t;
@@ -97,5 +98,10 @@ void D3D11_UpdateQuadOpacity(vlc_object_t *, d3d11_device_t *, d3d_quad_t *, flo
 
 void D3D11_UpdateQuadLuminanceScale(vlc_object_t *, d3d11_device_t *, d3d_quad_t *, float luminanceScale);
 #define D3D11_UpdateQuadLuminanceScale(a,b,c,d)  D3D11_UpdateQuadLuminanceScale(VLC_OBJECT(a),b,c,d)
+
+bool D3D11_UpdateQuadDolbyVision_(vlc_object_t *, d3d11_device_t *, d3d_quad_t *,
+                                  const vlc_video_dovi_metadata_t *);
+#define D3D11_UpdateQuadDolbyVision(a,b,c,d) \
+    D3D11_UpdateQuadDolbyVision_(VLC_OBJECT(a),b,c,d)
 
 #endif /* VLC_D3D11_QUAD_H */

@@ -44,10 +44,16 @@ Building it yourself is documented in [BUILD-POWERVLC.md](BUILD-POWERVLC.md).
 - Look-ahead cache & general optimisations to improve smoothness & compatibility on older hardware
 - SSL/TLS using gnuTLS with bundled certs on all platforms. Benefits particularily on outdated OS that has antique TLS and root certs.
 - Gapless playback
+- Find subtitles online from the Subtitles menu: automatic file-hash/title search on OpenSubtitles.com, preferred languages, and download-and-activate in one click. An optional OpenSubtitles account can be configured in the search window; service download quotas apply.
 - h.264 3D MVC (Blu-rays 3D), with menus. Frame packed 3D supported, can switch your screen automatically in 3D mode.
 - mp3/rockbox players & iPods syncing
 - Persistent bookmarks
-- Dolby Vision (HEVC Profiles 7 + 8.1), including FEL. When playing Dolby Vision content, PowerVLC will automatically use MacOS private system APIs to proceed the display mode switch.
+- Dolby Vision (HEVC Profiles 5, 7 and 8.x), including FEL on the libplacebo
+  renderer. On compatible modern macOS and Windows systems, PowerVLC switches
+  the HDMI display mode automatically and restores it after playback; HDR10
+  and SDR displays use colour-managed fallback output. Linux can use a guarded
+  Intel i915 HDMI helper from Xorg or Wayland; AMD and NVIDIA retain the safe
+  HDR10/SDR fallback.
 - CJK & special characters support on Windows (including XP)
 - CRT TV filters, with all the RetroArch CRT filters (including the very famous CRT-Royale which looks gorgeous)
 - Superfast organized multimedia library

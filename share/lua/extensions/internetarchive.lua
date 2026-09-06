@@ -306,13 +306,13 @@ local function play_current()
   local file = chosen_file()
   if not file then return end
   local metadata = app.item.metadata or {}
+  set_message(lang.msg_playing)
   vlc.playlist.add({{
     path=file.url, name=first(metadata.title) or file.title,
     title=first(metadata.title) or file.title,
     artist=first(metadata.creator) or "Internet Archive",
     arturl="https://archive.org/services/img/" .. encode(metadata.identifier),
   }})
-  set_message(lang.msg_playing)
 end
 
 function internetarchive_open(autoplay)

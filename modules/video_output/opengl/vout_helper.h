@@ -31,6 +31,24 @@
 
 #include "converter.h"
 
+/* Modern macOS builds use the renderer API for both Dolby Vision and HDR.
+ * The legacy shader adapter is built without libplacebo on these targets. */
+static inline bool vout_display_opengl_RequiresHDRRenderer(const video_format_t *fmt)
+{
+#ifdef HAVE_LIBPLACEBO_NEXT
+    return fmt->dovi.rpu_present
+#ifdef MACOS_OPENGL
+        || fmt->transfer == TRANSFER_FUNC_SMPTE_ST2084
+        || fmt->transfer == TRANSFER_FUNC_HLG
+        || fmt->primaries == COLOR_PRIMARIES_BT2020
+#endif
+        ;
+#else
+    VLC_UNUSED(fmt);
+    return false;
+#endif
+}
+
 #ifdef HAVE_LIBPLACEBO
 #include <libplacebo/shaders/colorspace.h>
 
@@ -281,6 +299,9 @@ void vout_display_opengl_SetDrawableSize(vout_display_opengl_t *vgl,
 /* EDR brightness available above normalized SDR white (1.0). */
 void vout_display_opengl_SetDisplayHeadroom(vout_display_opengl_t *vgl,
                                             float headroom);
+
+/* Core Animation supplies its own framebuffer, which can change on resize. */
+void vout_display_opengl_SetFramebuffer(vout_display_opengl_t *, unsigned);
 
 int vout_display_opengl_Prepare(vout_display_opengl_t *vgl,
                                 picture_t *picture, subpicture_t *subpicture);

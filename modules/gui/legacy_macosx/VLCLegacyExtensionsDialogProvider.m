@@ -1109,7 +1109,7 @@ static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
         int rowSpan = [[cell objectForKey:@"rowSpan"] intValue];
         int colSpan = [[cell objectForKey:@"colSpan"] intValue];
 
-        if (row >= 64 || col >= 64 || rowSpan != 1)
+        if (row >= 64 || col >= 64 || rowSpan < 1)
             continue;
         if (![view isKindOfClass:[NSTextField class]]
          || [(NSTextField *)view isEditable]
@@ -1129,6 +1129,23 @@ static NSSize VLCLegacyPreferredSize(NSView *view, extension_widget_t *widget)
         NSCell *labelCell = [(NSTextField *)view cell];
         NSSize wrapped = [labelCell cellSizeForBounds:
             NSMakeRect(0.f, 0.f, available, 100000.f)];
+
+        /* A label spanning several rows still needs its measured text
+         * height. Previously growRows ignored it while the generic span
+         * pass ignored every wrapping label; a one-line label spanning two
+         * empty tracks therefore received only the inter-row spacing (8 px)
+         * and its lower half was drawn under the following buttons. */
+        if (rowSpan > 1) {
+            float have = 0.f;
+            int r, last = -1;
+            for (r = row; r < row + rowSpan && r < 64; r++) {
+                have += heights[r] + (r > row ? GRID_SPACING : 0.f);
+                last = r;
+            }
+            if (last >= 0 && have < wrapped.height)
+                heights[last] += wrapped.height - have;
+            continue;
+        }
 
         /* SET the row, do not merely raise it. This runs once on the
          * natural widths and again on the final ones, and the two are not

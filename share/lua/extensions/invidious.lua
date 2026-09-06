@@ -3307,12 +3307,12 @@ function click_play()
   if session and session.user_agent and session.user_agent ~= "" then
     table.insert(options, ":http-user-agent=" .. session.user_agent)
   end
+  set_message(lang.msg_playing)
   vlc.playlist.add({{
     path = f.url,
     title = app.video.title .. " — " .. app.video.author,
     options = options,     -- carries the separate audio stream, if any
   }})
-  set_message(lang.msg_playing)
 end
 
 function click_copy()

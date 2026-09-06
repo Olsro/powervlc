@@ -1090,17 +1090,38 @@ static int ffmpeg_OpenVa(decoder_t *p_dec, AVCodecContext *p_context,
     }
     const AVPixFmtDescriptor *dsc = av_pix_fmt_desc_get(hwfmt);
     msg_Dbg(p_dec, "trying format %s", dsc ? dsc->name : "unknown");
+
+    /* VDPAU owns its surfaces and does not need a picture supplied by the
+     * video output. Probe it before publishing VDV0 as the decoder format.
+     * Otherwise a missing/incompatible VDPAU backend makes the core create a
+     * complete provisional vout, wait for its pool, tear it down, and then
+     * repeat the whole operation in software. That is especially visible as
+     * a several-second frozen first frame when a GPU post-process is enabled.
+     * VA-API's display-backed path still needs the test picture below. */
+    vlc_va_t *va = NULL;
+    if (hwfmt == AV_PIX_FMT_VDPAU) {
+        va = vlc_va_New(VLC_OBJECT(p_dec), p_context, src_desc, hwfmt,
+                        &p_dec->fmt_in, NULL);
+        if (va == NULL)
+            return VLC_EGENERIC;
+    }
+
     if (lavc_UpdateVideoFormat(p_dec, p_context, hwfmt, swfmt))
+    {
+        if (va != NULL)
+            vlc_va_Delete(va, &p_context->hwaccel_context);
         return VLC_EGENERIC; /* Unsupported brand of hardware acceleration */
+    }
 
     if (open_lock)
         vlc_sem_post(open_lock);
 
     picture_t *test_pic = decoder_NewPicture(p_dec);
     assert(!test_pic || test_pic->format.i_chroma == p_dec->fmt_out.video.i_chroma);
-    vlc_va_t *va = vlc_va_New(VLC_OBJECT(p_dec), p_context, src_desc, hwfmt,
-                                &p_dec->fmt_in,
-                                test_pic ? test_pic->p_sys : NULL);
+    if (va == NULL)
+        va = vlc_va_New(VLC_OBJECT(p_dec), p_context, src_desc, hwfmt,
+                        &p_dec->fmt_in,
+                        test_pic ? test_pic->p_sys : NULL);
 
     if (open_lock)
         vlc_sem_wait(open_lock);

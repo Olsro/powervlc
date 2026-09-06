@@ -54,6 +54,9 @@ include/vlc/libvlc_version.h
 /build/
 contrib-*
 install-*
+!extras/package/appimage/install-powervlc.sh
+!extras/package/appimage/install-powervlc-i18n.sh
+!extras/package/appimage/install-powervlc.desktop
 !extras/package/apple/build.sh
 
 # Ignore AI Stuff

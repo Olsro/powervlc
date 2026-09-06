@@ -1,0 +1,12 @@
+# Generated from Slang; do not edit.
+shaders = "1"
+shader0 = "slang/programs/1b857de2781270df0c7e253c4a4d02e7c1019a52d46ae75809c3cda2c360e033.glsl"
+scale_type0 = "viewport"
+hlsl_vertex0 = "slang/hlsl/69cd8c808cab56fec251d64ec38cbfad7b51d762fc84af4bc24141b5eb39a231.hlsl"
+hlsl_fragment0 = "slang/hlsl/03afe32d11db38e98f9a8be12a279347b464e7cf71e5ade67e334cb300f0695e.hlsl"
+hlsl_buffer0_size0 = "64"
+hlsl_buffer0_members0 = "MVP:0:mat4"
+hlsl_buffer1_size0 = "128"
+hlsl_buffer1_members0 = "CGWG:92:float;OriginalSize:16:vec4;OutputSize:32:vec4;SourceSize:0:vec4;beam_max:64:float;beam_min:60:float;brightboost:48:float;gamma_out:108:float;h_sharp:68:float;maskDark:84:float;maskLight:88:float;masksize:76:float;mcut:80:float;sat:52:float;scanline:56:float;shadowMask:72:float;vignette:112:float;warpX:100:float;warpY:104:float"
+hlsl_textures0 = "Texture:1"
+hlsl_parameters0 = "CGWG:0.3;beam_max:1.05;beam_min:1.35;brightboost:1;gamma_out:0.5;gdv_mini_title:0;h_sharp:2;maskDark:0.5;maskLight:1.5;masksize:1;mcut:0.2;sat:1;scanline:8;shadowMask:0;vignette:0;warpX:0;warpY:0"

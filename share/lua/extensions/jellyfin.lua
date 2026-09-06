@@ -2175,6 +2175,7 @@ function click_bitrate_typed()
 end
 
 local function play(url)
+  set_message(lang.msg_playing)
   vlc.playlist.add({{ path = url, title = playback_title() }})
 end
 
@@ -2194,7 +2195,6 @@ function click_play_hls()
   local url = hls_url()   -- reads and, if need be, corrects the bitrate
   update_estimate()
   play(url)
-  set_message(lang.msg_playing)
 end
 
 function click_copy_hls()
@@ -2205,7 +2205,6 @@ end
 
 function click_play_direct()
   play(direct_play_url())
-  set_message(lang.msg_playing)
 end
 
 function click_copy_direct()

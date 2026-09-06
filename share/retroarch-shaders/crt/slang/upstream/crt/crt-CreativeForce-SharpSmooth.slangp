@@ -1,0 +1,16 @@
+shaders = 2
+
+shader0 = "../interpolation/shaders/EWA-Cubics.slang"
+filter_linear0 = false
+scale_type0    = viewport
+scale0         = 1.0
+wrap_mode0     = clamp_to_border
+
+shader1 = "shaders/CreativeForce/crt-CreativeForce-SharpSmooth.slang"
+filter_linear1 = false
+scale_type1    = viewport
+scale1         = 1.0
+wrap_mode1     = clamp_to_border
+
+parameters = CubicMode
+CubicMode = 2.00

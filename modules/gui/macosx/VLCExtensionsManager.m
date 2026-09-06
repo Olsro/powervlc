@@ -210,6 +210,12 @@ static int compareExtensionMenuEntries(const void *leftValue, const void *rightV
     return true;
 }
 
+- (BOOL)searchSubtitles
+{
+    return [self loadExtensions] &&
+        extension_Open(p_extensions_manager, "PowerVLSub", 1) == VLC_SUCCESS;
+}
+
 - (void)unloadExtensions
 {
     if (!p_extensions_manager)

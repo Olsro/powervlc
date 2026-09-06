@@ -1,0 +1,334 @@
+#!/bin/sh
+# Run PowerVLC on a dedicated virtual terminal so it can own DRM/KMS and
+# select the standardized HDMI frame-packing modes hidden by most desktops.
+set -eu
+
+self=$(readlink -f "$0" 2>/dev/null || printf '%s\n' "$0")
+input_helper="$(dirname "$self")/powervlc-kms3d-input.py"
+
+user_details()
+{
+    account=$(getent passwd "$1")
+    [ -n "$account" ] || { echo "Unknown user id: $1" >&2; exit 1; }
+    user=$(printf '%s\n' "$account" | cut -d: -f1)
+    gid=$(printf '%s\n' "$account" | cut -d: -f4)
+    home=$(printf '%s\n' "$account" | cut -d: -f6)
+    groups=$(id -G "$user" | tr ' ' ',')
+}
+
+if [ "${1:-}" = --child ]; then
+    shift
+    uid=$1
+    runtime_dir=$2
+    app=$3
+    shift 3
+
+    user_details "$uid"
+    video_gid=$(getent group video | cut -d: -f3)
+    [ -n "$video_gid" ] || { echo "The system has no video group" >&2; exit 1; }
+    case ",$groups," in
+        *,$video_gid,*) ;;
+        *) groups="$groups,$video_gid" ;;
+    esac
+
+    exec setpriv --reuid="$uid" --regid="$gid" --groups="$groups" \
+        env HOME="$home" USER="$user" LOGNAME="$user" \
+            DISPLAY="${DISPLAY:-}" WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" \
+            XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-}" \
+            XDG_RUNTIME_DIR="/run/user/$uid" \
+            DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$uid/bus}" \
+            XAUTHORITY="${XAUTHORITY:-}" \
+            POWERVLC_KMS3D_FULLSCREEN_REQUEST="$runtime_dir/fullscreen.request" \
+            POWERVLC_KMS3D_WINDOWED_FLAG="$runtime_dir/windowed.active" \
+            POWERVLC_KMS3D_RELEASED="$runtime_dir/display.released" \
+            POWERVLC_KMS3D_ACTIVE="$runtime_dir/display.active" \
+        "$app" --no-one-instance --fullscreen \
+            --extraintf=oldrc --rc-unix="$runtime_dir/control.sock" \
+            --vout=kms3d "$@" >>"$runtime_dir/player.log" 2>&1
+fi
+
+if [ "$(id -u)" -ne 0 ]; then
+    command -v pkexec >/dev/null 2>&1 || {
+        echo "Run this command with sudo (pkexec is not installed)." >&2
+        exit 1
+    }
+    exec pkexec "$self" --uid "$(id -u)" \
+        --display "${DISPLAY:-}" --wayland-display "${WAYLAND_DISPLAY:-}" \
+        --session-type "${XDG_SESSION_TYPE:-}" \
+        --session-bus "${DBUS_SESSION_BUS_ADDRESS:-}" \
+        --xauthority "${XAUTHORITY:-}" -- "$@"
+fi
+
+if [ "${1:-}" != --uid ] && [ -n "${SUDO_UID:-}" ]; then
+    set -- --uid "$SUDO_UID" \
+        --display "${DISPLAY:-}" --wayland-display "${WAYLAND_DISPLAY:-}" \
+        --session-type "${XDG_SESSION_TYPE:-}" \
+        --session-bus "${DBUS_SESSION_BUS_ADDRESS:-}" \
+        --xauthority "${XAUTHORITY:-}" -- "$@"
+fi
+[ "${1:-}" = --uid ] || {
+    echo "Usage: $0 POWER_VLC_APPIMAGE [VLC options and media]" >&2
+    exit 2
+}
+uid=$2
+shift 2
+
+session_display=
+session_wayland=
+session_type=
+session_bus=
+session_xauthority=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --display) session_display=$2; shift 2 ;;
+        --wayland-display) session_wayland=$2; shift 2 ;;
+        --session-type) session_type=$2; shift 2 ;;
+        --session-bus) session_bus=$2; shift 2 ;;
+        --xauthority) session_xauthority=$2; shift 2 ;;
+        --) shift; break ;;
+        *) echo "Unknown launcher option: $1" >&2; exit 2 ;;
+    esac
+done
+[ "$#" -ge 1 ] || { echo "A PowerVLC executable is required." >&2; exit 2; }
+app=$(readlink -f "$1" 2>/dev/null || printf '%s\n' "$1")
+shift
+[ -x "$app" ] || { echo "Cannot execute $app" >&2; exit 1; }
+[ -r "$input_helper" ] || { echo "Cannot read $input_helper" >&2; exit 1; }
+
+user_details "$uid"
+old_vt=
+if command -v loginctl >/dev/null 2>&1; then
+    desktop_session=$(loginctl show-user "$user" -p Display --value 2>/dev/null || true)
+    if [ -n "$desktop_session" ]; then
+        old_vt=$(loginctl show-session "$desktop_session" -p VTNr --value \
+                 2>/dev/null || true)
+    fi
+fi
+case "$old_vt" in
+    ''|*[!0-9]*|0) old_vt=$(fgconsole) ;;
+esac
+test_vt=${POWERVLC_KMS3D_VT:-8}
+[ "$test_vt" != "$old_vt" ] || test_vt=12
+runtime_dir=$(mktemp -d /tmp/powervlc-kms3d.XXXXXX)
+chown "$uid:$gid" "$runtime_dir"
+chmod 0700 "$runtime_dir"
+helper_pid=
+desktop_inhibit_pid=
+player_wait_pid=
+launcher_log="$runtime_dir/launcher.log"
+printf 'desktop VT=%s, KMS VT=%s\n' "$old_vt" "$test_vt" >"$launcher_log"
+
+set_tty_mode()
+{
+    python3 - "$test_vt" "$1" <<'PY'
+import fcntl
+import os
+import sys
+
+KDSETMODE = 0x4B3A
+KD_TEXT, KD_GRAPHICS = 0x00, 0x01
+fd = os.open(f"/dev/tty{sys.argv[1]}", os.O_RDWR | os.O_CLOEXEC)
+try:
+    fcntl.ioctl(fd, KDSETMODE,
+                KD_GRAPHICS if sys.argv[2] == "graphics" else KD_TEXT)
+finally:
+    os.close(fd)
+PY
+}
+
+send_control()
+{
+    python3 - "$runtime_dir/control.sock" "$1" <<'PY'
+import socket
+import sys
+import time
+
+client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+for _ in range(100):
+    try:
+        client.connect(sys.argv[1])
+        break
+    except OSError:
+        time.sleep(0.05)
+else:
+    raise SystemExit("PowerVLC control socket is unavailable")
+client.sendall((sys.argv[2] + "\n").encode())
+client.close()
+PY
+}
+
+wait_marker()
+{
+    marker=$1
+    limit=${2:-40}
+    count=0
+    while [ ! -f "$marker" ] && [ "$count" -lt "$limit" ]; do
+        kill -0 "$player_wait_pid" 2>/dev/null || return 1
+        sleep 0.05
+        count=$((count + 1))
+    done
+    [ -f "$marker" ]
+}
+
+stop_helper()
+{
+    if [ -n "$helper_pid" ]; then
+        kill "$helper_pid" 2>/dev/null || true
+        wait "$helper_pid" 2>/dev/null || true
+        helper_pid=
+    fi
+}
+
+start_helper()
+{
+    python3 "$input_helper" "$runtime_dir/control.sock" \
+        "$runtime_dir/windowed.request" >"$runtime_dir/input.log" 2>&1 &
+    helper_pid=$!
+}
+
+restore_vt()
+{
+    if python3 - "$test_vt" "$old_vt" >>"$launcher_log" 2>&1 <<'PY'
+import fcntl
+import os
+import sys
+
+KDSETMODE, KD_TEXT = 0x4B3A, 0x00
+VT_ACTIVATE, VT_WAITACTIVE = 0x5606, 0x5607
+source = os.open(f"/dev/tty{sys.argv[1]}", os.O_RDWR | os.O_CLOEXEC)
+console = os.open("/dev/console", os.O_RDWR | os.O_CLOEXEC)
+try:
+    os.write(source, b"\033[2J\033[H")
+    fcntl.ioctl(source, KDSETMODE, KD_TEXT)
+    fcntl.ioctl(console, VT_ACTIVATE, int(sys.argv[2]))
+    fcntl.ioctl(console, VT_WAITACTIVE, int(sys.argv[2]))
+finally:
+    os.close(console)
+    os.close(source)
+PY
+    then
+        printf 'restored VT %s\n' "$old_vt" >>"$launcher_log"
+    else
+        printf 'failed to restore VT %s\n' "$old_vt" >>"$launcher_log"
+    fi
+}
+
+activate_vt()
+{
+    python3 - "$1" <<'PY'
+import fcntl
+import os
+import sys
+
+VT_ACTIVATE, VT_WAITACTIVE = 0x5606, 0x5607
+console = os.open("/dev/console", os.O_RDWR | os.O_CLOEXEC)
+try:
+    fcntl.ioctl(console, VT_ACTIVATE, int(sys.argv[1]))
+    fcntl.ioctl(console, VT_WAITACTIVE, int(sys.argv[1]))
+finally:
+    os.close(console)
+PY
+}
+
+cleanup()
+{
+    stop_helper
+    if [ -n "$desktop_inhibit_pid" ]; then
+        kill "$desktop_inhibit_pid" 2>/dev/null || true
+        wait "$desktop_inhibit_pid" 2>/dev/null || true
+    fi
+    restore_vt
+    set_tty_mode text >/dev/null 2>&1 || true
+    rm -rf "$runtime_dir"
+}
+trap cleanup EXIT HUP INT TERM
+
+# A direct DRM output has no compositor window, so VLC's normal window-bound
+# screensaver inhibitor cannot exist. Hold both the systemd idle inhibitor and,
+# on GNOME, the desktop session inhibitor for the lifetime of KMS playback.
+if command -v gnome-session-inhibit >/dev/null 2>&1 &&
+   [ -n "$session_bus" ]; then
+    setpriv --reuid="$uid" --regid="$gid" --groups="$groups" \
+        env HOME="$home" USER="$user" LOGNAME="$user" \
+            DISPLAY="$session_display" WAYLAND_DISPLAY="$session_wayland" \
+            XDG_SESSION_TYPE="$session_type" XDG_RUNTIME_DIR="/run/user/$uid" \
+            DBUS_SESSION_BUS_ADDRESS="$session_bus" \
+            XAUTHORITY="$session_xauthority" \
+        gnome-session-inhibit --inhibit idle --reason "PowerVLC playback" \
+            sh -c 'while :; do sleep 60; done' &
+    desktop_inhibit_pid=$!
+fi
+
+rm -f "$runtime_dir"/*.request "$runtime_dir"/*.active \
+      "$runtime_dir"/display.* "$runtime_dir/control.sock"
+
+# Keep a single PowerVLC process alive through every transition. Only its
+# display module is restarted, which preserves Blu-ray menus, BD-J state,
+# decoder position and audio. Prepare the VT while it is still hidden so text
+# from the framebuffer console is never scanned out during the hand-off.
+set_tty_mode graphics
+export DISPLAY="$session_display"
+export WAYLAND_DISPLAY="$session_wayland"
+export XDG_SESSION_TYPE="$session_type"
+export DBUS_SESSION_BUS_ADDRESS="${session_bus:-unix:path=/run/user/$uid/bus}"
+export XAUTHORITY="$session_xauthority"
+
+if command -v systemd-inhibit >/dev/null 2>&1; then
+    systemd-inhibit --what=idle:sleep --mode=block --who=PowerVLC \
+        --why="Direct HDMI 3D playback" \
+        openvt -c "$test_vt" -f -s -w -- "$self" --child "$uid" \
+            "$runtime_dir" "$app" "$@" &
+else
+    openvt -c "$test_vt" -f -s -w -- "$self" --child "$uid" \
+        "$runtime_dir" "$app" "$@" &
+fi
+player_wait_pid=$!
+mode=direct
+start_helper
+
+while kill -0 "$player_wait_pid" 2>/dev/null; do
+    if [ "$mode" = direct ] && [ -f "$runtime_dir/windowed.request" ]; then
+        stop_helper
+        rm -f "$runtime_dir/display.released"
+        send_control "vout-mode auto"
+        if ! wait_marker "$runtime_dir/display.released"; then
+            send_control "vout-restart-display"
+        fi
+        if wait_marker "$runtime_dir/display.released" 160; then
+            restore_vt
+            : >"$runtime_dir/windowed.active"
+            chown "$uid:$gid" "$runtime_dir/windowed.active"
+            mode=windowed
+            printf 'display switched to desktop OpenGL\n' >>"$launcher_log"
+        else
+            rm -f "$runtime_dir/windowed.request"
+            start_helper
+        fi
+    elif [ "$mode" = windowed ] &&
+         [ -f "$runtime_dir/fullscreen.request" ]; then
+        rm -f "$runtime_dir/windowed.active" \
+              "$runtime_dir/fullscreen.request" \
+              "$runtime_dir/display.active" \
+              "$runtime_dir/display.released"
+        set_tty_mode graphics
+        activate_vt "$test_vt"
+        send_control "vout-mode kms3d"
+        if ! wait_marker "$runtime_dir/display.active"; then
+            send_control "vout-restart-display"
+        fi
+        if wait_marker "$runtime_dir/display.active" 160; then
+            rm -f "$runtime_dir/windowed.request"
+            start_helper
+            mode=direct
+            printf 'display switched to KMS 3D\n' >>"$launcher_log"
+        else
+            restore_vt
+            : >"$runtime_dir/windowed.active"
+            chown "$uid:$gid" "$runtime_dir/windowed.active"
+        fi
+    fi
+    sleep 0.05
+done
+
+wait "$player_wait_pid" || player_status=$?
+exit "${player_status:-0}"

@@ -1108,6 +1108,16 @@ static int OpenDecoder( vlc_object_t *p_this )
     if( !var_InheritBool( p_dec, "crystalhd" ) )
         return VLC_EGENERIC;
 
+#if !defined(__APPLE__) && !defined(_WIN32)
+    /* Linux packages can contain the decoder and its userspace library on
+     * machines that have no Broadcom card at all. In that common case, avoid
+     * opening the driver and, especially, avoid presenting the "installed but
+     * unavailable" recovery dialog that is meaningful only after hardware
+     * was actually detected. */
+    if( access( "/dev/crystalhd", R_OK | W_OK ) != 0 )
+        return VLC_EGENERIC;
+#endif
+
     /* Codec specifics */
     uint32_t i_bcm_codec_subtype = 0;
     switch ( p_dec->fmt_in.i_codec )
@@ -3427,4 +3437,3 @@ static block_t *crystal_maybe_prepend_spspps( decoder_t *p_dec,
     }
     return p_new;
 }
-

@@ -25,6 +25,11 @@ dvdnav: libdvdnav-$(LIBDVDNAV_VERSION).tar.xz .sum-dvdnav
 	# PowerVLC: "no subpicture selected" was indistinguishable from "stream 0,
 	# forced only", so the first subtitle track got picked on some DVDs
 	$(APPLY) $(SRC)/dvdnav/0004-fill-the-logical-SPU-stream-number-in-the-stream-chan.patch
+	# Preserve cell commands when a DVD image has short zero-filled dummy cells
+	# before the feature (Totoro / Howl's Moving Castle).
+	$(APPLY) $(SRC)/dvdnav/0005-skip-short-zero-filled-title-cells.patch
+	# Follow first-play to menus and initialize proven language selectors.
+	$(APPLY) $(SRC)/dvdnav/0006-preserve-language-on-menu-start.patch
 	$(MOVE)
 
 DEPS_dvdnav = dvdread $(DEPS_dvdread)

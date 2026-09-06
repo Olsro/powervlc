@@ -286,6 +286,8 @@ struct  demux_sys_t
     BD_FILE_H           *p_mvc_file;
     int                 i_mvc_sub_path;
     int                 i_mvc_clip;
+    int                 i_current_playitem;
+    bool                b_stereoscopic_output; /* PSR22 / disc-selected mode */
     uint64_t            i_mvc_main_size;
     uint64_t            i_mvc_clip_size;
     uint64_t            i_mvc_main_read;
@@ -1322,6 +1324,12 @@ static int blurayOpen(vlc_object_t *object)
     p_sys->i_last_ig_activation = VLC_TICK_INVALID;
     p_sys->i_mvc_sub_path = -1;
     p_sys->i_mvc_clip = -1;
+    p_sys->i_current_playitem = -1;
+    /* Profile-5 discs start in their authored 3D preference. An explicit
+     * BD_EVENT_STEREOSCOPIC_STATUS overrides this before/while the selected
+     * playlist is opened. Non-menu title playback keeps its former MVC
+     * behavior. */
+    p_sys->b_stereoscopic_output = true;
     p_sys->b_inherited_stereo_presentation =
         var_InheritInteger(p_demux, "stereo3d-fullscreen-display") > 0;
     /* init demux info fields */
@@ -3032,6 +3040,13 @@ static int onMouseEvent(vlc_object_t *p_vout, const char *psz_var, vlc_value_t o
     if (psz_var[6] == 'm')   //Mouse moved
         bd_mouse_select(p_sys->bluray, -1, x, y);
     else if (psz_var[6] == 'c') {
+        /* The direct KMS fullscreen controller shares the vout mouse
+         * variables with Blu-ray menus. Its callback runs first and marks a
+         * hit here so a click on Pause/Seek is not also activated in BD-J. */
+        if (var_Type(p_vout, "kms3d-control-click-until") != 0 &&
+            mdate() < var_GetInteger(p_vout,
+                                     "kms3d-control-click-until"))
+            return VLC_SUCCESS;
         bd_mouse_select(p_sys->bluray, -1, x, y);
         p_sys->i_last_ig_activation = mdate();
         bd_user_input(p_sys->bluray, -1, BD_VK_MOUSE_ACTIVATE);
@@ -3984,10 +3999,117 @@ static bool blurayReadMVC(demux_t *p_demux, size_t bytes)
     return true;
 }
 
+static bool blurayProbeMVCPts(BD_FILE_H *file, uint64_t size,
+                              uint64_t offset, uint64_t *pts,
+                              uint64_t *packet_offset)
+{
+    if (file == NULL || pts == NULL || packet_offset == NULL || offset >= size)
+        return false;
+
+    offset -= offset % 192;
+    if (file->seek(file, offset, SEEK_SET) < 0)
+        return false;
+
+    /* A high-bitrate MVC access unit can span well over one normal demux
+     * block, so use a wide enough window to reach the next PES header from an
+     * arbitrary packet boundary. */
+    const size_t probe_size = 16 * BD_READ_SIZE;
+    block_t *probe = block_Alloc(probe_size);
+    if (unlikely(probe == NULL))
+        return false;
+    int64_t read = file->read(file, probe->p_buffer, probe->i_buffer);
+    if (read <= 0) {
+        block_Release(probe);
+        return false;
+    }
+
+    for (size_t pos = 0; pos + 192 <= (size_t)read; pos += 192) {
+        const uint8_t *ts = &probe->p_buffer[pos + 4];
+        if (ts[0] != 0x47 || !(ts[1] & 0x40))
+            continue;
+        const unsigned pid = ((ts[1] & 0x1f) << 8) | ts[2];
+        if (pid != 0x1012)
+            continue;
+
+        const unsigned adaptation = (ts[3] >> 4) & 3;
+        if (!(adaptation & 1))
+            continue;
+        size_t payload = 4;
+        if (adaptation & 2) {
+            payload += 1 + ts[4];
+            if (payload >= 188)
+                continue;
+        }
+        if (payload + 14 > 188 || ts[payload] != 0 ||
+            ts[payload + 1] != 0 || ts[payload + 2] != 1 ||
+            !(ts[payload + 7] & 0x80))
+            continue;
+
+        const uint8_t *encoded = &ts[payload + 9];
+        *pts = ((uint64_t)(encoded[0] & 0x0e) << 29) |
+               ((uint64_t)encoded[1] << 22) |
+               ((uint64_t)(encoded[2] & 0xfe) << 14) |
+               ((uint64_t)encoded[3] << 7) |
+               ((uint64_t)encoded[4] >> 1);
+        *packet_offset = offset + pos;
+        block_Release(probe);
+        return true;
+    }
+
+    block_Release(probe);
+    return false;
+}
+
+/* Locate the dependent stream by its own PES clock when the disc omitted the
+ * optional CPI-SS index. A fixed byte ratio is not a time map for VBR video:
+ * on Rio it lands the dependent view 26 seconds ahead of the base view.
+ * Rewind from the binary-search result so the base view's preceding random
+ * access point is always covered too. */
+static bool blurayFindMVCOffsetByPts(BD_FILE_H *file, uint64_t size,
+                                     uint64_t target_pts, uint64_t *offset)
+{
+    uint64_t low = 0;
+    uint64_t high = size;
+    uint64_t best = 0;
+    bool found = false;
+
+    /* Sixteen probes resolve even a 50 GiB extension to well below one MiB,
+     * without making an optical drive perform dozens of random seeks. */
+    for (unsigned attempt = 0; attempt < 16 &&
+         high > low + BD_CLUSTER_SIZE; ++attempt) {
+        uint64_t middle = low + (high - low) / 2;
+        middle -= middle % BD_CLUSTER_SIZE;
+        uint64_t pts, packet;
+        if (!blurayProbeMVCPts(file, size, middle, &pts, &packet)) {
+            high = middle;
+            continue;
+        }
+        if (pts <= target_pts) {
+            found = true;
+            best = packet;
+            low = packet + BD_CLUSTER_SIZE;
+        } else {
+            high = middle;
+        }
+    }
+
+    if (!found)
+        return false;
+    const uint64_t preroll = UINT64_C(4) * 1024 * 1024;
+    *offset = best > preroll ? best - preroll : 0;
+    *offset -= *offset % BD_CLUSTER_SIZE;
+    return true;
+}
+
 static void blurayOpenMVCClip(demux_t *p_demux, uint32_t clip)
 {
     demux_sys_t *p_sys = p_demux->p_sys;
     blurayCloseMVCClip(p_demux);
+
+    if (!p_sys->b_stereoscopic_output) {
+        msg_Dbg(p_demux, "keeping Blu-ray MVC extension disabled: disc output mode is 2D");
+        return;
+    }
 
     /* A one-picture HDMV menu is safer and visually equivalent as mono. Its
      * dependent stream can terminate in the same access unit as its base;
@@ -4272,6 +4394,40 @@ static void bluraySeekMVC(demux_t *p_demux)
     if (position > 1.0)
         position = 1.0;
     uint64_t offset = (uint64_t)(position * p_sys->i_mvc_clip_size);
+
+    /* A proportional byte offset can be tens of seconds away on a VBR
+     * extension stream (Rio starts with a much higher dependent-view
+     * bitrate). Find the authored timestamp directly in the dependent
+     * transport stream; retain the ratio as a fallback for malformed clips.
+     * BLURAY_CLIP_INFO times are 90 kHz while MPLS timestamps are 45 kHz. */
+    MPLS_PL *pl = bd_get_title_mpls(p_sys->bluray);
+    if (pl != NULL && p_sys->i_mvc_sub_path >= 0 &&
+        (unsigned)p_sys->i_mvc_sub_path < pl->ext_sub_count &&
+        (unsigned)clip < pl->list_count) {
+        MPLS_SUB *path = &pl->ext_sub_path[p_sys->i_mvc_sub_path];
+        if ((unsigned)clip < path->sub_playitem_count) {
+            MPLS_SUB_PI *sub = &path->sub_play_item[clip];
+            if (sub->clip_count != 0 && sub->clip != NULL) {
+                uint64_t main_timestamp = pl->play_item[clip].in_time +
+                                          (title_time - start) / 2;
+                uint64_t dependent_timestamp = sub->in_time;
+                if (main_timestamp > sub->sync_pts)
+                    dependent_timestamp += main_timestamp - sub->sync_pts;
+                if (sub->out_time > sub->in_time &&
+                    dependent_timestamp >= sub->out_time)
+                    dependent_timestamp = sub->out_time - 1;
+
+                if (dependent_timestamp <= UINT64_MAX / 2 &&
+                    blurayFindMVCOffsetByPts(
+                        p_sys->p_mvc_file, p_sys->i_mvc_clip_size,
+                        dependent_timestamp * 2, &offset)) {
+                    msg_Dbg(p_demux, "MVC PES seek timestamp %"PRIu64
+                            " to byte %"PRIu64,
+                            dependent_timestamp * 2, offset);
+                }
+            }
+        }
+    }
     offset -= offset % BD_CLUSTER_SIZE;
     if (offset > p_sys->i_mvc_clip_read &&
         p_sys->p_mvc_file->seek(p_sys->p_mvc_file, offset, SEEK_SET) >= 0)
@@ -4297,7 +4453,13 @@ static void bluraySeekMVC(demux_t *p_demux)
         es_out_Control(p_sys->p_out,
                        BLURAY_ES_OUT_CONTROL_FLAG_DISCONTINUITY);
         p_sys->i_mvc_clip_read = offset;
-        p_sys->i_mvc_main_read = (uint64_t)(position * p_sys->i_mvc_main_size);
+        /* Resume the byte-ratio feeder from the dependent offset we actually
+         * selected. Keeping the old time-ratio main counter can make its
+         * proportional target precede the new file position; no more MVC data
+         * is then submitted until the base parser has run many seconds ahead. */
+        p_sys->i_mvc_main_read =
+            (uint64_t)((double)offset * (double)p_sys->i_mvc_main_size /
+                       (double)p_sys->i_mvc_clip_size);
         const uint64_t remaining = p_sys->i_mvc_clip_size - offset;
         if (remaining != 0)
             blurayReadMVC(p_demux, __MIN((uint64_t)BD_READ_SIZE, remaining));
@@ -5027,6 +5189,7 @@ static void blurayUpdatePlaylist(demux_t *p_demux, unsigned i_playlist)
 
     blurayCloseMVCClip(p_demux);
     p_sys->i_mvc_sub_path = -1;
+    p_sys->i_current_playitem = -1;
     blurayRestartParser(p_demux, true, false);
 
     /* read title info and init some values */
@@ -5315,6 +5478,7 @@ static void blurayHandleEvent(demux_t *p_demux, const BD_EVENT *e, bool b_delaye
             break;
         }
         p_sys->i_playitem_seen_in_batch = e->param;
+        p_sys->i_current_playitem = e->param;
         const bool b_continuing_playlist = p_sys->b_have_playitem;
         const bool b_user_activated_playitem =
             p_sys->i_last_ig_activation != VLC_TICK_INVALID &&
@@ -5507,6 +5671,30 @@ static void blurayHandleEvent(demux_t *p_demux, const BD_EVENT *e, bool b_delaye
         bluraySeekMVC(p_demux);
         break;
     }
+    case BD_EVENT_STEREOSCOPIC_STATUS:
+    {
+        const bool stereoscopic = e->param != 0;
+        msg_Dbg(p_demux, "Blu-ray disc selected %s output",
+                stereoscopic ? "3D" : "2D");
+        /* A BD-J application can advertise its default 2D output and then
+         * select a 3D configuration immediately before the accompanying
+         * PLAYLIST/PLAYITEM events. Rebuilding the two parsers for both
+         * transient states detaches the still-open ARGB menu plane and makes
+         * its buttons disappear. Record the final requested state here; the
+         * playlist transition already closes the old MVC parser once, and
+         * PLAYITEM opens the dependent view only when this value is true.
+         * Disc-authored 2D/3D choices therefore keep the same BD-J plane while
+         * still applying before the first picture of the selected playlist.
+         * Flush queued paired pictures before that normal transition: a
+         * short MVC intro can otherwise leave the chained parser waiting for
+         * its mate when the following playlist closes it. This does not
+         * remove either ES or recreate the vout. */
+        if (stereoscopic != p_sys->b_stereoscopic_output)
+            es_out_Control(p_sys->p_out,
+                           BLURAY_ES_OUT_CONTROL_FLAG_DISCONTINUITY);
+        p_sys->b_stereoscopic_output = stereoscopic;
+        break;
+    }
 #if BLURAY_VERSION >= BLURAY_VERSION_CODE(0,8,1)
     case BD_EVENT_UO_MASK_CHANGED:
         p_sys->i_uo_mask = e->param;
@@ -5669,6 +5857,19 @@ static bool blurayIsBdjTitle(demux_t *p_demux)
     return false;
 }
 
+static bool blurayUsesLinuxKms3d(demux_t *p_demux)
+{
+#ifdef __linux__
+    char *vout = var_InheritString(p_demux, "vout");
+    bool uses_kms3d = vout != NULL && strcmp(vout, "kms3d") == 0;
+    free(vout);
+    return uses_kms3d;
+#else
+    VLC_UNUSED(p_demux);
+    return false;
+#endif
+}
+
 static void blurayHandleOverlays(demux_t *p_demux, int nread)
 {
     demux_sys_t *p_sys = p_demux->p_sys;
@@ -5732,13 +5933,16 @@ static void blurayHandleOverlays(demux_t *p_demux, int nread)
                (sometimes BD-J runs slowly ...)
             */
             if (!p_sys->p_vout && !p_sys->p_dummy_video && p_sys->b_menu &&
-                nread == 0 && blurayIsBdjTitle(p_demux)) {
+                nread == 0 &&
+                (blurayIsBdjTitle(p_demux) ||
+                 blurayUsesLinuxKms3d(p_demux))) {
 
                 /* A playlist record does not guarantee that its selected
-                 * video stream will ever produce a picture.  Some BD-J first
-                 * play titles (Cars 3) enter an infinite still with such an
-                 * empty stream, then create their ARGB language menu.  Emit a
-                 * blank frame whenever the plane is ready but no vout exists. */
+                 * video stream will ever produce a picture. Some BD-J first
+                 * play titles enter an infinite still with such an empty
+                 * stream; others hand off from a BD-J first-play title to an
+                 * HDMV background before creating their ARGB menu. In both
+                 * cases the ready graphics plane needs a video output. */
                 if(blurayCreateBackgroundUnlocked(p_demux) != NULL) {
                     p_sys->p_vout = input_GetVout(p_demux->p_input);
                     b_new_vout = p_sys->p_vout != NULL;
@@ -5769,6 +5973,28 @@ static int onIntfEvent( vlc_object_t *p_input, char const *psz_var,
     demux_sys_t *p_sys = p_demux->p_sys;
 
     if (val.i_int == INPUT_EVENT_VOUT) {
+
+        const bool uses_linux_kms3d = blurayUsesLinuxKms3d(p_demux);
+
+        /* input_GetVout() can publish a replacement vout while the Blu-ray
+         * menu still owns a reference to the retired one.  This happens on
+         * Linux when a short MVC menu clip is replaced by its still/background
+         * decoder: the old vout object remains perfectly callable, so merely
+         * testing p_vout for NULL sends the IG plane to a dead control queue.
+         * Compare identities on every VOUT event and let the normal overlay
+         * hand-off recreate the channel for the replacement. */
+        if (uses_linux_kms3d) {
+            vout_thread_t *current_vout = input_GetVout(p_demux->p_input);
+            if (current_vout != NULL) {
+                if (p_sys->p_vout != NULL && p_sys->p_vout != current_vout) {
+                    msg_Dbg(p_demux, "Blu-ray video output changed (%p -> %p), "
+                            "reattaching menu overlay",
+                            (void *)p_sys->p_vout, (void *)current_vout);
+                    blurayReleaseVout(p_demux);
+                }
+                vlc_object_release(current_vout);
+            }
+        }
 
         /* Replacing one MVC disc with another can reuse the existing vout
          * without reopening its macOS display module.  If the file chooser
@@ -5833,7 +6059,12 @@ static int onIntfEvent( vlc_object_t *p_input, char const *psz_var,
         }
         vlc_mutex_unlock(&p_sys->bdj_overlay_lock);
 
-        if (!b_hold_hdmv_menu_vout)
+        /* A display-module restart can destroy the SPU heap without changing
+         * the vout object itself.  In that case subpictureUpdaterDestroy()
+         * puts the plane back in ToDisplay.  Always service that state after
+         * a VOUT event, including while retaining an HDMV still; the handler
+         * is a no-op when the existing channel is still attached. */
+        if (!b_hold_hdmv_menu_vout || uses_linux_kms3d)
             blurayHandleOverlays(p_demux, 1);
     }
 

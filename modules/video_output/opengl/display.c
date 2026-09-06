@@ -49,6 +49,20 @@ static void Close (vlc_object_t *);
     "hardware (XVideo) can convert and scale the picture instead, which " \
     "costs far less processor time. Enable this to use OpenGL regardless.")
 
+#if defined(__linux__) && defined(HAVE_LIBPLACEBO_NEXT) && !defined(USE_OPENGL_ES2)
+# define DOVI_HDMI_TEXT N_("Use an externally activated Dolby Vision HDMI signal")
+# define DOVI_HDMI_LONGTEXT N_( \
+    "Render Dolby Vision as a 10-bit BT.2020/PQ signal after a platform " \
+    "transport helper has switched the HDMI display to Dolby Vision. " \
+    "Leave this disabled when no helper is active so PowerVLC keeps its " \
+    "safe HDR-to-SDR conversion.")
+# define DOVI_PEAK_TEXT N_("Dolby Vision display peak luminance")
+# define DOVI_PEAK_LONGTEXT N_( \
+    "Peak luminance, in nits, used for source-led Dolby Vision mapping. " \
+    "Zero reads the value automatically from the display's Dolby Vision " \
+    "EDID block on Linux.")
+#endif
+
 vlc_module_begin ()
 #if defined (USE_OPENGL_ES2)
 # define API VLC_OPENGL_ES2
@@ -80,6 +94,12 @@ vlc_module_begin ()
      * share one config item name. */
     add_bool (MODULE_VARNAME "-software", false,
               SOFTWARE_TEXT, SOFTWARE_LONGTEXT, true)
+#if defined(__linux__) && defined(HAVE_LIBPLACEBO_NEXT) && !defined(USE_OPENGL_ES2)
+    add_bool ("gl-dovi-hdmi", false, DOVI_HDMI_TEXT,
+              DOVI_HDMI_LONGTEXT, true)
+    add_integer_with_range ("gl-dovi-peak", 0, 0, 10000,
+                            DOVI_PEAK_TEXT, DOVI_PEAK_LONGTEXT, true)
+#endif
     add_glopts ()
 vlc_module_end ()
 
@@ -89,6 +109,40 @@ struct vout_display_sys_t
     vlc_gl_t *gl;
     picture_pool_t *pool;
 };
+
+#ifdef __linux__
+static void SetPlacement(vout_display_sys_t *sys,
+                         const vout_display_cfg_t *cfg,
+                         const vout_display_place_t *place)
+{
+    unsigned drawable_width = cfg->display.width;
+    unsigned drawable_height = cfg->display.height;
+    int viewport_x = place->x;
+    int viewport_y = place->y;
+
+    /* An X11 EGL surface keeps the size of its native window: Resize() is a
+     * no-op there, so the framebuffer spans the complete display and the
+     * picture offset belongs in the viewport. A native Wayland EGL window is
+     * actually resized to the placed picture and the wl_egl_window offset
+     * performs the centring, leaving a local 0,0 viewport. Telling libplacebo
+     * that the X11 framebuffer has only the picture width made portrait video
+     * disappear whenever its centred x offset lay beyond that false width. */
+    if (sys->gl->surface->type == VOUT_WINDOW_TYPE_WAYLAND)
+    {
+        drawable_width = place->width;
+        drawable_height = place->height;
+        viewport_x = 0;
+        viewport_y = 0;
+    }
+
+    vout_display_opengl_SetDrawableSize(sys->vgl, drawable_width,
+                                        drawable_height);
+    vout_display_opengl_SetWindowAspectRatio(sys->vgl,
+                                              (float)place->width / place->height);
+    vout_display_opengl_Viewport(sys->vgl, viewport_x, viewport_y,
+                                 place->width, place->height);
+}
+#endif
 
 /**
  * Is this picture format a hardware surface?
@@ -356,10 +410,16 @@ static int Control (vout_display_t *vd, int query, va_list ap)
         vlc_gl_Resize (sys->gl, place.width, place.height);
         if (vlc_gl_MakeCurrent (sys->gl) != VLC_SUCCESS)
             return VLC_EGENERIC;
+#ifdef __linux__
+        SetPlacement(sys, &c, &place);
+#else
         vout_display_opengl_SetDrawableSize(sys->vgl, place.width,
                                             place.height);
-        vout_display_opengl_SetWindowAspectRatio(sys->vgl, (float)place.width / place.height);
-        vout_display_opengl_Viewport(sys->vgl, place.x, place.y, place.width, place.height);
+        vout_display_opengl_SetWindowAspectRatio(sys->vgl,
+                                                  (float)place.width / place.height);
+        vout_display_opengl_Viewport(sys->vgl, place.x, place.y,
+                                     place.width, place.height);
+#endif
         vlc_gl_ReleaseCurrent (sys->gl);
         return VLC_SUCCESS;
       }
@@ -371,12 +431,21 @@ static int Control (vout_display_t *vd, int query, va_list ap)
         vout_display_place_t place;
 
         vout_display_PlacePicture (&place, &vd->source, cfg, false);
+#ifdef __linux__
+        vlc_gl_Resize (sys->gl, place.width, place.height);
+        if (vlc_gl_MakeCurrent (sys->gl) != VLC_SUCCESS)
+            return VLC_EGENERIC;
+        SetPlacement(sys, cfg, &place);
+#else
         if (vlc_gl_MakeCurrent (sys->gl) != VLC_SUCCESS)
             return VLC_EGENERIC;
         vout_display_opengl_SetDrawableSize(sys->vgl, cfg->display.width,
                                             cfg->display.height);
-        vout_display_opengl_SetWindowAspectRatio(sys->vgl, (float)place.width / place.height);
-        vout_display_opengl_Viewport(sys->vgl, place.x, place.y, place.width, place.height);
+        vout_display_opengl_SetWindowAspectRatio(sys->vgl,
+                                                  (float)place.width / place.height);
+        vout_display_opengl_Viewport(sys->vgl, place.x, place.y,
+                                     place.width, place.height);
+#endif
         vlc_gl_ReleaseCurrent (sys->gl);
         return VLC_SUCCESS;
       }

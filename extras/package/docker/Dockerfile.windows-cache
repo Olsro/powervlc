@@ -1,0 +1,27 @@
+# PowerVLC — architecture-matched Wine environment used only to finalize the
+# Windows portable archive.  The main Windows image stays linux/arm64 so its
+# cross-compilers remain fast on Apple Silicon; this small image executes the
+# already-built cache generator for the target PE architecture.
+
+ARG BASE=debian:trixie-slim
+FROM ${BASE}
+
+ARG TARGETARCH
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN set -eux; \
+    case "$TARGETARCH" in \
+        386)   wine_loader=wine32 ;; \
+        amd64) wine_loader=wine64 ;; \
+        arm64) wine_loader=wine64 ;; \
+        *) echo "Unsupported Wine finalizer architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates file unzip wine "$wine_loader" xauth xvfb zip; \
+    rm -rf /var/lib/apt/lists/*
+
+COPY finalize-windows-portable.sh /usr/local/bin/finalize-windows-portable
+RUN chmod 0755 /usr/local/bin/finalize-windows-portable
+
+ENTRYPOINT ["/usr/local/bin/finalize-windows-portable"]

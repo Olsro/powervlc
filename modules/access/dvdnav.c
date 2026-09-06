@@ -87,8 +87,8 @@ dvdnav_status_t dvdnav_jump_to_sector_by_time(dvdnav_t *, uint64_t, int32_t);
 
 #define MENU_TEXT N_("Start directly in menu")
 #define MENU_LONGTEXT N_( \
-    "Start the DVD directly in the main menu. This "\
-    "will try to skip all the useless warning introductions." )
+    "Try to skip DVD introductions while preserving language selection. "\
+    "Unrecognized language selectors remain interactive." )
 
 #define LANGUAGE_DEFAULT ("en")
 
@@ -111,6 +111,8 @@ vlc_module_begin ()
     set_subcategory( SUBCAT_INPUT_ACCESS )
     add_integer( "dvdnav-angle", 1, ANGLE_TEXT,
         ANGLE_LONGTEXT, false )
+    /* Safe startup follows authored initialization; uncertain selectors are
+     * left interactive instead of bypassing their button commands. */
     add_bool( "dvdnav-menu", true,
         MENU_TEXT, MENU_LONGTEXT, false )
     set_capability( "access_demux", 5 )
@@ -428,24 +430,18 @@ static int CommonOpen( vlc_object_t *p_this,
     {
         msg_Dbg( p_demux, "trying to go to dvd menu" );
 
-        if( dvdnav_title_play( p_sys->dvdnav, 1 ) != DVDNAV_STATUS_OK )
-        {
-            msg_Err( p_demux, "cannot set title (can't decrypt DVD?)" );
-            vlc_dialog_display_error( p_demux, _("Playback failure"), "%s",
-                _("VLC cannot set the DVD's title. It possibly "
-                  "cannot decrypt the entire disc.") );
-            free( p_sys );
-            return VLC_EGENERIC;
-        }
-
-        if( dvdnav_menu_call( p_sys->dvdnav, DVD_MENU_Title ) !=
-            DVDNAV_STATUS_OK )
-        {
-            /* Try going to menu root */
-            if( dvdnav_menu_call( p_sys->dvdnav, DVD_MENU_Root ) !=
-                DVDNAV_STATUS_OK )
-                    msg_Warn( p_demux, "cannot go to dvd menu" );
-        }
+#ifdef DVDNAV_HAS_START_MENU
+        /* Follow the disc's startup commands through its first menus.
+         * A selector must supply a demonstrable language-dependent highlight;
+         * ambiguous menus stay interactive and failed probes leave first-play
+         * untouched. This avoids assuming that title 1 initializes the disc. */
+        if( !dvdnav_start_menu( p_sys->dvdnav ) )
+            msg_Dbg( p_demux, "retaining DVD first-play initialization" );
+#else
+        /* System libdvdnav lacks the transactional startup helper. Keeping
+         * first-play is safer than silently bypassing language initialization. */
+        msg_Dbg( p_demux, "safe menu startup unavailable; retaining first-play" );
+#endif
     }
 
     i_angle = var_CreateGetInteger( p_demux, "dvdnav-angle" );
@@ -453,6 +449,8 @@ static int CommonOpen( vlc_object_t *p_this,
 
     /* FIXME hack hack hack hack FIXME */
     /* Get p_input and create variable */
+    var_Create( p_demux->p_input, "dvd-menu-session", VLC_VAR_BOOL );
+    var_SetBool( p_demux->p_input, "dvd-menu-session", true );
     var_Create( p_demux->p_input, "x-start", VLC_VAR_INTEGER );
     var_Create( p_demux->p_input, "y-start", VLC_VAR_INTEGER );
     var_Create( p_demux->p_input, "x-end", VLC_VAR_INTEGER );
@@ -707,6 +705,8 @@ static void Close( vlc_object_t *p_this )
     demux_sys_t *p_sys = p_demux->p_sys;
 
     /* Stop vout event handler */
+    var_SetBool( p_demux->p_input, "dvd-menu-session", false );
+    var_Destroy( p_demux->p_input, "dvd-menu-session" );
     var_DelCallback( p_demux->p_input, "intf-event", EventIntf, p_demux );
     if( p_sys->p_vout != NULL )
     {   /* Should not happen, but better be safe than sorry. */
@@ -1970,9 +1970,6 @@ static void DemuxTitles( demux_t *p_demux )
 static void ButtonUpdate( demux_t *p_demux, bool b_mode )
 {
     demux_sys_t *p_sys = p_demux->p_sys;
-    int32_t i_title, i_part;
-
-    dvdnav_current_title_info( p_sys->dvdnav, &i_title, &i_part );
 
     dvdnav_highlight_area_t hl;
     int32_t i_button;
@@ -1986,10 +1983,14 @@ static void ButtonUpdate( demux_t *p_demux, bool b_mode )
     }
 
     b_button_ok = false;
-    if( i_button > 0 && i_title ==  0 )
+    if( i_button > 0 )
     {
         pci_t *pci = dvdnav_get_current_nav_pci( p_sys->dvdnav );
 
+        /* First-play selectors can have buttons without a current title.
+         * dvdnav_current_title_info() fails there and leaves its outputs
+         * unset. Let the NAV validate the active highlight and button instead;
+         * disabling the crop would expose every button in the subpicture. */
         b_button_ok = DVDNAV_STATUS_OK ==
                   dvdnav_get_highlight_area( pci, i_button, b_mode, &hl );
     }
@@ -2020,8 +2021,7 @@ static void ButtonUpdate( demux_t *p_demux, bool b_mode )
     }
     else
     {
-        msg_Dbg( p_demux, "buttonUpdate not done b=%d t=%d",
-                 i_button, i_title );
+        msg_Dbg( p_demux, "buttonUpdate not done b=%d", i_button );
 
         /* Show all */
         vlc_global_lock( VLC_HIGHLIGHT_MUTEX );

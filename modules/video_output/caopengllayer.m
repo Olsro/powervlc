@@ -46,6 +46,10 @@
 
 #include "opengl/vout_helper.h"
 
+#define VLCDolbyDisplayController VLCCADolbyDisplayController
+#define VLCDolbyTerminationRestorer VLCCADolbyTerminationRestorer
+#include "macosx_dovi_display.h"
+
 /*****************************************************************************
  * Vout interface
  *****************************************************************************/
@@ -120,7 +124,92 @@ struct vout_display_sys_t {
     vout_display_cfg_t cfg;
 
     atomic_bool is_ready;
+    bool hdr_renderer;
+    bool edr_surface;
+#if defined(__arm64__)
+    VLCDolbyDisplayRequest dovi;
+    bool dovi_fullscreen_overridden;
+    int64_t saved_fullscreen_display;
+#endif
 };
+
+static void SetDolbyFullscreenDisplay(vout_display_t *vd, bool enable)
+{
+#if defined(__arm64__)
+    vout_display_sys_t *sys = vd->sys;
+    vlc_object_t *root = VLC_OBJECT(vd);
+    while (root->obj.parent != NULL)
+        root = root->obj.parent;
+    if (enable && !sys->dovi_fullscreen_overridden) {
+        if (var_Create(root, "dovi-fullscreen-display", VLC_VAR_INTEGER) != VLC_SUCCESS)
+            return;
+        sys->saved_fullscreen_display = var_GetInteger(root, "dovi-fullscreen-display");
+        sys->dovi_fullscreen_overridden = true;
+        var_SetInteger(root, "dovi-fullscreen-display", sys->dovi.selected_display);
+    } else if (!enable && sys->dovi_fullscreen_overridden) {
+        var_SetInteger(root, "dovi-fullscreen-display", sys->saved_fullscreen_display);
+        sys->dovi_fullscreen_overridden = false;
+    }
+#else
+    VLC_UNUSED(vd); VLC_UNUSED(enable);
+#endif
+}
+
+static void SelectDolbyDisplayMode(vout_display_t *vd)
+{
+#if defined(__arm64__)
+    vout_display_sys_t *sys = vd->sys;
+    if (!vd->fmt.dovi.rpu_present ||
+        !var_InheritBool(vd, "macosx-dovi-hdmi") ||
+        !var_InheritBool(vd, "macosx-hdr-output"))
+        return;
+    int configured = var_InheritInteger(vd, "macosx-vdev");
+    sys->dovi.requested_display = configured > 0 ? configured : kCGNullDirectDisplay;
+    [VLCDolbyDisplayController
+        performSelectorOnMainThread:@selector(selectDolbyDisplayMode:)
+        withObject:[NSValue valueWithPointer:&sys->dovi] waitUntilDone:YES];
+    if (sys->dovi.ready) {
+        SetDolbyFullscreenDisplay(vd, true);
+        msg_Info(vd, "Dolby Vision HDMI transport active on display %u "
+                 "at %zux%zu %.3f Hz (mode %llu)", sys->dovi.selected_display,
+                 sys->dovi.scanout_width, sys->dovi.scanout_height,
+                 sys->dovi.scanout_refresh, sys->dovi.active_mode_id);
+    } else {
+        msg_Info(vd, "No matching Dolby HDMI mode; using color-managed HDR/SDR output");
+    }
+#else
+    VLC_UNUSED(vd);
+#endif
+}
+
+static void RestoreDolbyDisplayMode(vout_display_t *vd)
+{
+#if defined(__arm64__)
+    vout_display_sys_t *sys = vd->sys;
+    SetDolbyFullscreenDisplay(vd, false);
+    if (!sys->dovi.changed)
+        return;
+    VLCDolbyTerminationRestorer *restorer = sys->dovi.termination_restorer;
+    /* Termination has already restored the display while the main run loop
+     * was alive. Normal playback teardown must still dispatch to it. */
+    if (![restorer terminationSeen])
+        [restorer performSelectorOnMainThread:@selector(restore)
+                                  withObject:nil waitUntilDone:YES];
+    if ([restorer restored])
+        msg_Info(vd, "restored display %u after Dolby Vision playback (mode %llu)",
+                 sys->dovi.selected_display, sys->dovi.saved_mode_id);
+    else
+        msg_Warn(vd, "could not verify restoration of display %u", sys->dovi.selected_display);
+    [restorer invalidate];
+    [restorer release];
+    [sys->dovi.saved_mode release];
+    if (sys->dovi.saved_cg_mode != NULL)
+        CGDisplayModeRelease(sys->dovi.saved_cg_mode);
+    memset(&sys->dovi, 0, sizeof(sys->dovi));
+#else
+    VLC_UNUSED(vd);
+#endif
+}
 
 #pragma mark -
 #pragma mark OpenGL context helpers
@@ -131,12 +220,62 @@ struct vout_display_sys_t {
  * one that works on the given hardware.
  * \return CGLContextObj or NULL in case of error
  */
-CGLContextObj vlc_CreateCGLContext()
+CGLContextObj vlc_CreateCGLContext(bool hdr, bool allow_edr, bool *edr)
 {
     CGLError err;
     GLint npix = 0;
     CGLPixelFormatObj pix;
     CGLContextObj ctx;
+
+    *edr = false;
+#ifdef HAVE_LIBPLACEBO_NEXT
+    if (hdr) {
+        if (@available(macOS 10.14, *)) {
+            /* libplacebo requires OpenGL >= 3. Keep the SDR fallback in a core
+             * profile too; falling back to Apple's 2.1 profile cannot render HDR. */
+            CGLPixelFormatAttribute hdrAttribs[] = {
+                kCGLPFAAllowOfflineRenderers,
+                kCGLPFAAccelerated,
+                kCGLPFANoRecovery,
+                kCGLPFAOpenGLProfile, (CGLPixelFormatAttribute)kCGLOGLPVersion_GL4_Core,
+                kCGLPFAColorSize, (CGLPixelFormatAttribute)64,
+                kCGLPFAColorFloat,
+                0
+            };
+            pix = NULL;
+            err = allow_edr ? CGLChoosePixelFormat(hdrAttribs, &pix, &npix)
+                            : kCGLBadPixelFormat;
+            if (err == kCGLNoError && pix != NULL) {
+                err = CGLCreateContext(pix, NULL, &ctx);
+                CGLDestroyPixelFormat(pix);
+                if (err == kCGLNoError && ctx != NULL) {
+                    *edr = true;
+                    return ctx;
+                }
+            }
+
+            CGLPixelFormatAttribute sdrAttribs[] = {
+                kCGLPFAAllowOfflineRenderers,
+                kCGLPFAAccelerated,
+                kCGLPFANoRecovery,
+                kCGLPFAOpenGLProfile, (CGLPixelFormatAttribute)kCGLOGLPVersion_GL4_Core,
+                kCGLPFAColorSize, (CGLPixelFormatAttribute)24,
+                kCGLPFAAlphaSize, (CGLPixelFormatAttribute)8,
+                0
+            };
+            err = CGLChoosePixelFormat(sdrAttribs, &pix, &npix);
+            if (err != kCGLNoError || pix == NULL)
+                return NULL;
+            err = CGLCreateContext(pix, NULL, &ctx);
+            CGLDestroyPixelFormat(pix);
+            return err == kCGLNoError ? ctx : NULL;
+        }
+        return NULL;
+    }
+#else
+    VLC_UNUSED(hdr);
+    VLC_UNUSED(allow_edr);
+#endif
 
     CGLPixelFormatAttribute attribs[12] = {
         kCGLPFAAllowOfflineRenderers,
@@ -163,11 +302,11 @@ CGLContextObj vlc_CreateCGLContext()
     }
 
     err = CGLCreateContext(pix, NULL, &ctx);
+    CGLDestroyPixelFormat(pix);
     if (err != kCGLNoError || ctx == NULL) {
         return NULL;
     }
 
-    CGLDestroyPixelFormat(pix);
     return ctx;
 }
 
@@ -292,6 +431,8 @@ static int Open(vlc_object_t *this)
         vd->sys = sys = vlc_obj_calloc(this, 1, sizeof(*sys));
         if (sys == NULL)
             return VLC_ENOMEM;
+        atomic_init(&sys->is_ready, false);
+        sys->hdr_renderer = vout_display_opengl_RequiresHDRRenderer(&vd->fmt);
 
         // Only use this video output on macOS 10.14 or higher
         // currently, as it has some issues on at least macOS 10.7
@@ -322,9 +463,14 @@ static int Open(vlc_object_t *this)
 
         // Retain container, released in Close
         sys->container = [container retain];
+
+        // Switch before constructing the drawable; preserve the user's HDR mode.
+        SelectDolbyDisplayMode(vd);
     
         // Create the CGL context
-        CGLContextObj cgl_ctx = vlc_CreateCGLContext();
+        CGLContextObj cgl_ctx = vlc_CreateCGLContext(sys->hdr_renderer,
+                                                   var_InheritBool(vd, "macosx-hdr-output"),
+                                                   &sys->edr_surface);
         if (cgl_ctx == NULL) {
             msg_Err(vd, "Failure to create CGL context!");
             goto error;
@@ -334,13 +480,17 @@ static int Open(vlc_object_t *this)
         // for VLC to deal with the CGL context. Usually this should be done
         // by a proper opengl provider module, but we do not have that currently.
         sys->gl = vlc_object_create(vd, sizeof(*sys->gl));
-        if (unlikely(!sys->gl))
+        if (unlikely(!sys->gl)) {
+            CGLReleaseContext(cgl_ctx);
             goto error;
+        }
         
         struct vlc_gl_sys *glsys = sys->gl->sys = malloc(sizeof(*glsys));
         if (unlikely(!glsys)) {
-            Close(this);
-            return VLC_ENOMEM;
+            CGLReleaseContext(cgl_ctx);
+            vlc_object_release(sys->gl);
+            sys->gl = NULL;
+            goto error;
         }
         glsys->cgl = cgl_ctx;
         glsys->cgl_prev = NULL;
@@ -391,6 +541,14 @@ static int Open(vlc_object_t *this)
             goto error;
         }
 
+#if defined(__arm64__)
+        if (sys->dovi.ready && vd->obj.parent != NULL &&
+            var_GetBool(vd->obj.parent, "fullscreen")) {
+            var_SetBool(vd->obj.parent, "fullscreen", false);
+            var_SetBool(vd->obj.parent, "fullscreen", true);
+        }
+#endif
+
         // Initialize OpenGL video display
         const vlc_fourcc_t *spu_chromas;
 
@@ -414,7 +572,6 @@ static int Open(vlc_object_t *this)
         vd->display = PictureDisplay;
         vd->control = Control;
 
-        atomic_init(&sys->is_ready, false);
         return VLC_SUCCESS;
 
     error:
@@ -431,6 +588,8 @@ static void Close(vlc_object_t *p_this)
     atomic_store(&sys->is_ready, false);
     [sys->videoLayer vlcClose];
     [sys->videoView vlcClose];
+
+    RestoreDolbyDisplayMode(vd);
 
     if (sys->vgl && !vlc_gl_MakeCurrent(sys->gl)) {
         vout_display_opengl_Delete(sys->vgl);
@@ -843,6 +1002,26 @@ shouldInheritContentsScale:(CGFloat)newScale
         self.asynchronous = NO;
         self.opaque = 1.0;
         self.hidden = NO;
+#ifdef HAVE_LIBPLACEBO_NEXT
+        if (vd->sys->hdr_renderer) {
+            if (@available(macOS 10.14, *)) {
+                /* The renderer emits linear BT.709 into a floating surface.
+                 * Unlike NSOpenGLView, this layer explicitly color-matches it
+                 * to the display profile (including wide-gamut Apple panels). */
+                CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(
+                    vd->sys->edr_surface ? kCGColorSpaceExtendedLinearSRGB
+                                         : kCGColorSpaceSRGB);
+                self.colorspace = colorSpace;
+                CGColorSpaceRelease(colorSpace);
+                if (vd->sys->edr_surface)
+                    self.contentsFormat = kCAContentsFormatRGBA16Float;
+                self.wantsExtendedDynamicRangeContent = vd->sys->edr_surface;
+                msg_Info(vd, "color-managed HDR output: %s",
+                         vd->sys->edr_surface ? "extended linear sRGB (EDR)"
+                                              : "sRGB (SDR tone mapping)");
+            }
+        }
+#endif
         [CATransaction unlock];
     }
 
@@ -972,6 +1151,18 @@ shouldInheritContentsScale:(CGFloat)newScale
 
         GLint dims[4] = { 0, 0, 0, 0 };
         glGetIntegerv(GL_VIEWPORT, dims);
+        if (sys->hdr_renderer) {
+            GLint fbo = 0;
+            glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
+            vout_display_opengl_SetFramebuffer(sys->vgl, fbo);
+            NSScreen *screen = [sys->videoView.window screen];
+            float headroom = 1.f;
+            if (@available(macOS 10.14, *)) {
+                if (screen && sys->edr_surface)
+                    headroom = screen.maximumExtendedDynamicRangeColorComponentValue;
+            }
+            vout_display_opengl_SetDisplayHeadroom(sys->vgl, headroom);
+        }
         NSSize newSize = NSMakeSize(dims[2], dims[3]);
 
         if (NSEqualSizes(newSize, NSZeroSize)) {
@@ -1002,6 +1193,9 @@ shouldInheritContentsScale:(CGFloat)newScale
         vout_display_opengl_SetWindowAspectRatio(sys->vgl, (float)sys->place.width / sys->place.height);
 
         vout_display_opengl_Display(sys->vgl, &_voutDisplay->source);
+        if (sys->hdr_renderer)
+            [super drawInCGLContext:glContext pixelFormat:pixelFormat
+                      forLayerTime:timeInterval displayTime:timeStamp];
         vlc_gl_ReleaseCurrent(sys->gl);
     }
 }
@@ -1029,5 +1223,8 @@ vlc_module_begin()
     set_capability("vout display", 300)
     set_category(CAT_VIDEO)
     set_subcategory(SUBCAT_VIDEO_VOUT)
+    add_bool("macosx-hdr-output", true, N_("Use HDR output when available"),
+             N_("Use the display's extended dynamic range for HDR and Dolby Vision. "
+                "Disable to tone-map these videos to SDR instead."), true)
     set_callbacks(Open, Close)
 vlc_module_end()

@@ -1,0 +1,12 @@
+# Generated from Slang; do not edit.
+shaders = "1"
+shader0 = "slang/programs/00a7f2b66b9f501efa1c335208d4cf2f4d271f21accb24435095b517ce993835.glsl"
+filter_linear1 = "true"
+hlsl_vertex0 = "slang/hlsl/c5aa0b9801428cf2324c69e1fb99c6674deccf88a8507044e08f9f2d4d8b90c7.hlsl"
+hlsl_fragment0 = "slang/hlsl/eaf011273c0462e2d8236ec7f5c448507b8ec61963f82c6ea69e5ed7e237dfe4.hlsl"
+hlsl_buffer0_size0 = "64"
+hlsl_buffer0_members0 = "MVP:0:mat4"
+hlsl_buffer1_size0 = "48"
+hlsl_buffer1_members0 = "OutputSize:16:vec4;curvature:32:float;vignette:36:float"
+hlsl_textures0 = "Texture:3"
+hlsl_parameters0 = "curvature:2;vignette:1"

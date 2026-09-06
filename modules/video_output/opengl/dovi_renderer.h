@@ -21,6 +21,7 @@ int vlc_dovi_renderer_Display(vlc_dovi_renderer_t *);
 void vlc_dovi_renderer_SetDrawableSize(vlc_dovi_renderer_t *, unsigned,
                                        unsigned);
 void vlc_dovi_renderer_SetDisplayHeadroom(vlc_dovi_renderer_t *, float);
+void vlc_dovi_renderer_SetFramebuffer(vlc_dovi_renderer_t *, unsigned);
 void vlc_dovi_renderer_SetViewport(vlc_dovi_renderer_t *, int, int,
                                    unsigned, unsigned);
 

@@ -216,6 +216,7 @@ bluray: libbluray-$(BLURAY_VERSION).tar.xz .sum-bluray \
 	$(APPLY) $(SRC)/bluray/0022-lock-current-clip-metadata-access.patch
 	$(APPLY) $(SRC)/bluray/0023-expose-named-clip-metadata.patch
 	$(APPLY) $(SRC)/bluray/0024-expose-s3d-graphics-offset-sequence-control.patch
+	$(APPLY) $(SRC)/bluray/0025-propagate-bdj-stereoscopic-output.patch
 ifdef HAVE_WIN32
 ifeq ($(ARCH),i386)
 	# The bundled libudfread maps strtok_r() onto strtok_s(), a "secure CRT"

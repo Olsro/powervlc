@@ -32,7 +32,7 @@ AC_SUBST(PKGDIR)
 CONFIGURE_LINE="`echo "$0 $ac_configure_args" | sed -e 's/\\\/\\\\\\\/g'`"
 CODENAME="Vetinari"
 dnl PowerVLC product version, distinct from the VLC core version above
-POWERVLC_VERSION="2.0.0"
+POWERVLC_VERSION="2.1.0"
 AC_SUBST(POWERVLC_VERSION)
 dnl Split for the Win32 VERSIONINFO resources, which want a numeric 4-tuple.
 dnl Without these the file properties, the Add/Remove Programs entry and the
@@ -3924,6 +3924,14 @@ dnl  Linux framebuffer module
 dnl
 AC_CHECK_HEADER([linux/fb.h], [
   VLC_ADD_PLUGIN([fb])
+])
+
+AS_IF([test "${SYS}" = "linux"], [
+  PKG_CHECK_MODULES([KMS3D], [libdrm >= 2.4.46], [
+    VLC_ADD_PLUGIN([kms3d])
+  ], [
+    AC_MSG_WARN([libdrm not found: Linux HDMI frame-packing output disabled])
+  ])
 ])
 
 

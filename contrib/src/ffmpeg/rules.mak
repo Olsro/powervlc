@@ -231,6 +231,17 @@ endif
 ifdef HAVE_LINUX
 FFMPEGCONF += --target-os=linux --enable-pic
 
+# VLC 3's VDPAU decoder adapter depends on av_vdpau_get_surface_parameters()
+# and av_vdpau_bind_context(), both removed by modern FFmpeg. The portable
+# Linux packages can still build the legacy adapter against the old sysroot,
+# but it cannot safely share a process with the FFmpeg 9 decoder. Leaving
+# VDPAU enabled makes libavcodec advertise AV_PIX_FMT_VDPAU, fail its first
+# threaded buffers, and visibly stutter until the next H.264 keyframe. Do not
+# advertise a hardware path that this ABI combination cannot execute.
+ifndef USE_LIBAV
+FFMPEGCONF += --disable-vdpau
+endif
+
 endif
 
 ifdef HAVE_ANDROID

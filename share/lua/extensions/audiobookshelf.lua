@@ -1639,9 +1639,9 @@ local function start_session(item, episode_id, selected_index)
   end
   playback.track = tracks[first]
   playback.last_elapsed = nil
+  set_message(string.format(lang.msg_playing, #values))
   play_playlist_items(values)
   arm_sync()
-  set_message(string.format(lang.msg_playing, #values))
   return true
 end
 
@@ -1712,8 +1712,8 @@ function play_rows(rows, queue)
       set_message(lang.msg_no_audio)
       return
     end
-    vlc.playlist.enqueue(values)
     set_message(string.format(lang.msg_queued, #values))
+    vlc.playlist.enqueue(values)
     return
   end
 

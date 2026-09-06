@@ -76,6 +76,7 @@ public slots:
     bool loadExtensions();
     void unloadExtensions();
     void reloadExtensions();
+    void searchSubtitles();
 
 private slots:
     void triggerMenu( int id );

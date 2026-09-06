@@ -114,6 +114,13 @@ VLC_API vout_thread_t * vout_Request( vlc_object_t *object, const vout_configura
 VLC_API void vout_Close( vout_thread_t *p_vout );
 
 /**
+ * Restarts only the display wrapper while retaining this vout and input.
+ * Intended for a stopped/static video source whose display backend must
+ * change without restarting an interactive disc session.
+ */
+VLC_API int vout_RestartDisplay( vout_thread_t *p_vout );
+
+/**
  * This function will close a vout created by vout_Create
  * and then release it.
  *

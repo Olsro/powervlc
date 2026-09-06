@@ -267,6 +267,7 @@ void VLCNoteRecentStream(NSString *mrl);
 - (IBAction)createVideoSnapshot:(id)sender;
 
 - (IBAction)addSubtitleFile:(id)sender;
+- (IBAction)searchSubtitles:(id)sender;
 - (IBAction)switchSubtitleBackgroundOpacity:(id)sender;
 - (IBAction)telxTransparent:(id)sender;
 - (IBAction)telxNavLink:(id)sender;

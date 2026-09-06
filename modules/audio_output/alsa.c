@@ -29,6 +29,7 @@
 #endif
 
 #include <assert.h>
+#include <time.h>
 
 #include <vlc_common.h>
 #include <vlc_plugin.h>
@@ -51,6 +52,14 @@ struct aout_sys_t
     bool soft_mute;
     float soft_gain;
     char *device;
+
+    /* A raw ALSA HDMI PCM does not update the IEC60958 channel status like
+     * the optional "hdmi:" PCM plugin does. Keep enough information to put
+     * the control back in PCM mode when the encoded stream stops. */
+    int iec958_card;
+    int iec958_index;
+    bool iec958_non_audio;
+    bool iec958_rearm_pending;
 };
 
 #include "audio_output/volume.h"
@@ -60,6 +69,169 @@ struct aout_sys_t
 static int Open (vlc_object_t *);
 static void Close (vlc_object_t *);
 static int EnumDevices (vlc_object_t *, char const *, char ***, char ***);
+
+static unsigned Iec958Rate(unsigned rate)
+{
+    switch (rate)
+    {
+#define FS(freq) case freq: return IEC958_AES3_CON_FS_ ## freq;
+        FS( 44100) FS( 48000) FS( 32000) FS( 22050) FS( 24000)
+        FS( 88200) FS(768000) FS( 96000) FS(176400) FS(192000)
+#undef FS
+        default: return IEC958_AES3_CON_FS_NOTID;
+    }
+}
+
+/* Maps an HDMI PCM device to the matching IEC958 control index. HDA cards
+ * commonly expose PCM devices 3/7/8, while SOF cards use 3/4/5. Enumerating
+ * the ELD controls avoids encoding either convention in PowerVLC. */
+static int FindIec958Index(snd_ctl_t *ctl, unsigned pcm_device)
+{
+    snd_ctl_elem_list_t *list;
+    snd_ctl_elem_list_alloca(&list);
+    if (snd_ctl_elem_list(ctl, list) < 0)
+        return -1;
+
+    unsigned count = snd_ctl_elem_list_get_count(list);
+    if (snd_ctl_elem_list_alloc_space(list, count) < 0)
+        return -1;
+    if (snd_ctl_elem_list(ctl, list) < 0) {
+        snd_ctl_elem_list_free_space(list);
+        return -1;
+    }
+
+    unsigned lower_devices[64];
+    unsigned lower_count = 0;
+    unsigned iec958_controls = 0;
+    bool found_device = false;
+    for (unsigned i = 0; i < count; ++i) {
+        const char *name = snd_ctl_elem_list_get_name(list, i);
+        snd_ctl_elem_iface_t iface = snd_ctl_elem_list_get_interface(list, i);
+        if (iface == SND_CTL_ELEM_IFACE_MIXER &&
+            !strcmp(name, SND_CTL_NAME_IEC958("", PLAYBACK, DEFAULT)))
+            ++iec958_controls;
+        if (iface != SND_CTL_ELEM_IFACE_PCM || strcmp(name, "ELD"))
+            continue;
+
+        unsigned device = snd_ctl_elem_list_get_device(list, i);
+        if (device == pcm_device)
+            found_device = true;
+        if (device >= pcm_device)
+            continue;
+        bool duplicate = false;
+        for (unsigned d = 0; d < lower_count; ++d)
+            duplicate |= lower_devices[d] == device;
+        if (!duplicate && lower_count < ARRAY_SIZE(lower_devices))
+            lower_devices[lower_count++] = device;
+    }
+    snd_ctl_elem_list_free_space(list);
+
+    if (found_device && lower_count < iec958_controls)
+        return (int)lower_count;
+    return iec958_controls == 1 ? 0 : -1;
+}
+
+static int SetRawHdmiChannelStatus(audio_output_t *aout, snd_pcm_t *pcm,
+                                   bool non_audio, unsigned rate)
+{
+    aout_sys_t *sys = aout->sys;
+    snd_pcm_info_t *info;
+    snd_pcm_info_alloca(&info);
+    if (snd_pcm_info(pcm, info) < 0)
+        return -1;
+
+    int card = snd_pcm_info_get_card(info);
+    unsigned device = snd_pcm_info_get_device(info);
+    if (card < 0)
+        return -1;
+
+    char card_name[32];
+    snprintf(card_name, sizeof(card_name), "hw:%d", card);
+    snd_ctl_t *ctl;
+    if (snd_ctl_open(&ctl, card_name, 0) < 0)
+        return -1;
+
+    int index = FindIec958Index(ctl, device);
+    if (index < 0) {
+        snd_ctl_close(ctl);
+        return -1;
+    }
+
+    snd_ctl_elem_value_t *value;
+    snd_ctl_elem_value_alloca(&value);
+    snd_ctl_elem_value_set_interface(value, SND_CTL_ELEM_IFACE_MIXER);
+    snd_ctl_elem_value_set_name(value,
+        SND_CTL_NAME_IEC958("", PLAYBACK, DEFAULT));
+    snd_ctl_elem_value_set_index(value, (unsigned)index);
+    int result = snd_ctl_elem_read(ctl, value);
+    if (result >= 0) {
+        snd_aes_iec958_t status;
+        snd_ctl_elem_value_get_iec958(value, &status);
+        if (non_audio)
+            status.status[0] |= IEC958_AES0_NONAUDIO;
+        else
+            status.status[0] &= ~IEC958_AES0_NONAUDIO;
+        status.status[3] = (status.status[3] & 0xf0) | Iec958Rate(rate);
+        snd_ctl_elem_value_set_iec958(value, &status);
+        result = snd_ctl_elem_write(ctl, value);
+    }
+    snd_ctl_close(ctl);
+
+    if (result >= 0) {
+        sys->iec958_card = card;
+        sys->iec958_index = index;
+        sys->iec958_non_audio = non_audio;
+        msg_Dbg(aout, "set IEC60958 control %d:%d to %s at %u Hz",
+                card, index, non_audio ? "non-audio" : "PCM", rate);
+        return 0;
+    }
+    return -1;
+}
+
+/* Raw hw: HDMI PCMs also bypass the ALSA hdmi plugin's playback switch.
+ * Toggling that switch between encoded streams is significant on receivers
+ * that keep their IEC61937 decoder locked to the previous burst layout (for
+ * example AC-3 5.1 followed immediately by AC-3 stereo in a Blu-ray menu). */
+static int SetRawHdmiPlaybackSwitch(audio_output_t *aout, snd_pcm_t *pcm,
+                                    bool enabled)
+{
+    snd_pcm_info_t *info;
+    snd_pcm_info_alloca(&info);
+    if (snd_pcm_info(pcm, info) < 0)
+        return -1;
+
+    int card = snd_pcm_info_get_card(info);
+    unsigned device = snd_pcm_info_get_device(info);
+    if (card < 0)
+        return -1;
+
+    char card_name[32];
+    snprintf(card_name, sizeof(card_name), "hw:%d", card);
+    snd_ctl_t *ctl;
+    if (snd_ctl_open(&ctl, card_name, 0) < 0)
+        return -1;
+
+    int index = FindIec958Index(ctl, device);
+    if (index < 0) {
+        snd_ctl_close(ctl);
+        return -1;
+    }
+
+    snd_ctl_elem_value_t *value;
+    snd_ctl_elem_value_alloca(&value);
+    snd_ctl_elem_value_set_interface(value, SND_CTL_ELEM_IFACE_MIXER);
+    snd_ctl_elem_value_set_name(value,
+        SND_CTL_NAME_IEC958("", PLAYBACK, SWITCH));
+    snd_ctl_elem_value_set_index(value, (unsigned)index);
+    snd_ctl_elem_value_set_boolean(value, 0, enabled);
+    int result = snd_ctl_elem_write(ctl, value);
+    snd_ctl_close(ctl);
+
+    if (result >= 0)
+        msg_Dbg(aout, "%s IEC60958 playback switch %d:%d",
+                enabled ? "enabled" : "disabled", card, index);
+    return result;
+}
 
 #define AUDIO_DEV_TEXT N_("Audio output device")
 #define AUDIO_DEV_LONGTEXT N_("Audio output device (using ALSA syntax).")
@@ -280,12 +452,60 @@ static void Pause (audio_output_t *, bool, mtime_t);
 static void PauseDummy (audio_output_t *, bool, mtime_t);
 static void Flush (audio_output_t *, bool);
 
+static int PrimeRawHdmiCarrier(audio_output_t *aout, unsigned milliseconds)
+{
+    aout_sys_t *sys = aout->sys;
+    snd_pcm_t *pcm = sys->pcm;
+    const snd_pcm_uframes_t burst_frames = A52_FRAME_NB;
+    ssize_t burst_bytes = snd_pcm_frames_to_bytes(pcm, burst_frames);
+    if (burst_bytes < 8)
+        return -1;
+
+    uint8_t *burst = calloc(1, (size_t)burst_bytes);
+    if (!burst)
+        return -1;
+
+    /* IEC61937 null burst: a valid, silent non-audio carrier that lets an
+     * HDMI sink establish its audio clock without selecting a codec or
+     * consuming programme samples. */
+    SetWLE(&burst[0], 0xf872);
+    SetWLE(&burst[2], 0x4e1f);
+    SetWLE(&burst[4], 0x0000);
+    SetWLE(&burst[6], 0x0000);
+
+    uint64_t remaining = (uint64_t)sys->rate * milliseconds / 1000;
+    int result = 0;
+    while (remaining > 0) {
+        snd_pcm_uframes_t frames = __MIN(remaining, burst_frames);
+        snd_pcm_uframes_t offset = 0;
+        while (offset < frames) {
+            snd_pcm_sframes_t written = snd_pcm_writei(
+                pcm, burst + snd_pcm_frames_to_bytes(pcm, offset),
+                frames - offset);
+            if (written < 0) {
+                result = snd_pcm_recover(pcm, (int)written, 1);
+                if (result < 0)
+                    goto out;
+                continue;
+            }
+            offset += (snd_pcm_uframes_t)written;
+        }
+        remaining -= frames;
+    }
+    result = snd_pcm_drain(pcm);
+
+out:
+    free(burst);
+    return result;
+}
+
 /** Initializes an ALSA playback stream */
 static int Start (audio_output_t *aout, audio_sample_format_t *restrict fmt)
 {
     aout_sys_t *sys = aout->sys;
     snd_pcm_format_t pcm_format; /* ALSA sample format */
     bool spdif = false;
+    sys->iec958_rearm_pending = false;
 
     if (aout_FormatNbChannels(fmt) == 0)
         return VLC_EGENERIC;
@@ -402,6 +622,17 @@ static int Start (audio_output_t *aout, audio_sample_format_t *restrict fmt)
     msg_Dbg (aout, "using ALSA device: %s", device);
     free (devbuf);
     DumpDevice (VLC_OBJECT(aout), pcm);
+
+    /* The ALSA "hdmi:" and "iec958:" PCM aliases consume the AES options
+     * appended above. Minimal distributions and some SOF UCM profiles expose
+     * only raw hw: HDMI devices, however. Program their matching mixer
+     * control directly so the sink can distinguish IEC61937 bursts from PCM. */
+    if (spdif && SetRawHdmiPlaybackSwitch(aout, pcm, false) == 0)
+        sys->iec958_rearm_pending = true;
+    if (SetRawHdmiChannelStatus(aout, pcm, spdif, fmt->i_rate) != 0 && spdif)
+        msg_Dbg(aout, "no writable IEC60958 channel-status control for %s",
+                sys->device);
+    SetRawHdmiPlaybackSwitch(aout, pcm, true);
 
     /* Get Initial hardware parameters */
     snd_pcm_hw_params_t *hw;
@@ -578,6 +809,35 @@ static int Start (audio_output_t *aout, audio_sample_format_t *restrict fmt)
         goto error;
     }
 
+    var_Create(aout->obj.libvlc, "powervlc-kms3d-audio-prime",
+               VLC_VAR_BOOL);
+    if (spdif && sys->iec958_rearm_pending) {
+        bool after_modeset = var_GetBool(
+            aout->obj.libvlc, "powervlc-kms3d-audio-prime");
+        if (after_modeset)
+            var_SetBool(aout->obj.libvlc,
+                        "powervlc-kms3d-audio-prime", false);
+        unsigned prime_ms = after_modeset ? 3000 : 1000;
+        if (PrimeRawHdmiCarrier(aout, prime_ms) == 0) {
+            snd_pcm_drop(pcm);
+            SetRawHdmiPlaybackSwitch(aout, pcm, false);
+            struct timespec reset_delay = { .tv_nsec = 500000000 };
+            while (nanosleep(&reset_delay, &reset_delay) != 0 &&
+                   errno == EINTR);
+            SetRawHdmiChannelStatus(aout, pcm, true, fmt->i_rate);
+            SetRawHdmiPlaybackSwitch(aout, pcm, true);
+            val = snd_pcm_prepare(pcm);
+            if (val < 0) {
+                msg_Err(aout, "cannot prepare HDMI after carrier priming: %s",
+                        snd_strerror(val));
+                goto error;
+            }
+            sys->iec958_rearm_pending = false;
+            msg_Dbg(aout, "primed raw HDMI carrier for %u ms before "
+                          "IEC61937 playback", prime_ms);
+        }
+    }
+
     /* Setup audio_output_t */
     if (spdif)
     {
@@ -632,6 +892,33 @@ static void Play (audio_output_t *aout, block_t *block)
                            sys->chans_to_reorder, sys->chans_table, sys->format);
 
     snd_pcm_t *pcm = sys->pcm;
+
+    /* On a raw HDMI PCM, changing the IEC958 switch before hw_params does not
+     * necessarily reach the sink: the controller has not generated an audio
+     * carrier yet.  Prime it with one valid IEC61937 burst, reset the running
+     * PCM, then replay that same burst after the receiver has released the
+     * preceding codec.  Doing this within VLC's normal scheduling lead keeps
+     * the first programme sample and avoids an audible mid-stream re-arm. */
+    if (sys->iec958_rearm_pending) {
+        sys->iec958_rearm_pending = false;
+        snd_pcm_sframes_t primed = snd_pcm_writei(pcm, block->p_buffer,
+                                                  block->i_nb_samples);
+        if (primed >= 0) {
+            struct timespec carrier_delay = { .tv_nsec = 50000000 };
+            while (nanosleep(&carrier_delay, &carrier_delay) != 0 &&
+                   errno == EINTR);
+            snd_pcm_drop(pcm);
+            if (SetRawHdmiPlaybackSwitch(aout, pcm, false) == 0) {
+                struct timespec reset_delay = { .tv_nsec = 500000000 };
+                while (nanosleep(&reset_delay, &reset_delay) != 0 &&
+                       errno == EINTR);
+                SetRawHdmiChannelStatus(aout, pcm, true, sys->rate);
+                SetRawHdmiPlaybackSwitch(aout, pcm, true);
+            }
+            if (snd_pcm_prepare(pcm) == 0)
+                msg_Dbg(aout, "re-armed running raw HDMI IEC61937 stream");
+        }
+    }
 
     /* TODO: better overflow handling */
     /* TODO: no period wake ups */
@@ -713,6 +1000,10 @@ static void Stop (audio_output_t *aout)
     snd_pcm_t *pcm = sys->pcm;
 
     snd_pcm_drop (pcm);
+    if (sys->iec958_non_audio) {
+        SetRawHdmiPlaybackSwitch(aout, pcm, false);
+        SetRawHdmiChannelStatus(aout, pcm, false, sys->rate);
+    }
     snd_pcm_close (pcm);
 }
 
@@ -799,7 +1090,9 @@ static int Open(vlc_object_t *obj)
     sys->device = var_InheritString (aout, "alsa-audio-device");
     if (unlikely(sys->device == NULL))
         goto error;
-
+    sys->iec958_card = -1;
+    sys->iec958_index = -1;
+    sys->iec958_non_audio = false;
     aout->sys = sys;
     aout->start = Start;
     aout->stop = Stop;

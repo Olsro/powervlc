@@ -39,6 +39,7 @@
 
 #import <math.h>
 #import <vlc_playlist.h>
+#import <vlc_rand.h>
 #import <vlc_url.h>
 #import <vlc_strings.h>
 #import "VLCPLModel.h"
@@ -48,6 +49,354 @@
 #import "VLCMainWindowControlsBar.h"
 #import "VLCVoutView.h"
 #import "VLCVoutWindowController.h"
+
+
+/* The Qt main window keeps a black, image-centred surface behind playback:
+ * it shows the cone while idle and the current artwork for audio.  Keep the
+ * Cocoa implementation self-contained here so the 10.7 deployment floor is
+ * unchanged and the same view can sit beside the existing split/video views. */
+@interface VLCMainBackgroundView : NSView
+{
+    NSImage *defaultImage;
+    NSImage *displayedImage;
+    NSImage *colouredCone;
+    NSArray *colouredCones;
+    NSTimer *motionTimer;
+    NSRect imageRect;
+    NSPoint conePosition;
+    NSPoint coneVelocity;
+    NSTimeInterval lastMotionTime;
+    NSUInteger coneColourIndex;
+    BOOL showingCone;
+    BOOL coneBouncing;
+    BOOL trackingIdleClick;
+    BOOL idleSurfaceDragged;
+    BOOL idlePressWasOnCone;
+    BOOL idlePressActivatesWindow;
+    NSPoint idlePressLocation;
+}
+- (void)setArtwork:(NSImage *)artwork;
+- (void)setBackgroundActive:(BOOL)active;
+@end
+
+static NSImage *VLCMainBackgroundTintedCone(NSImage *source, NSUInteger sector)
+{
+    static const NSUInteger coneHues[] = { 0, 30, 105, 165, 210, 285 };
+    NSUInteger hue = coneHues[sector % (sizeof(coneHues) / sizeof(coneHues[0]))];
+    NSUInteger hueSector = hue / 60;
+    NSUInteger hueRemainder = hue % 60;
+    NSSize sourceSize = [source size];
+    if (sourceSize.width <= 0.0 || sourceSize.height <= 0.0)
+        return source;
+    CGFloat imageScale = MIN(1.0, MIN(128.0 / sourceSize.width,
+                                      128.0 / sourceSize.height));
+    NSInteger width = (NSInteger)ceil(sourceSize.width * imageScale);
+    NSInteger height = (NSInteger)ceil(sourceSize.height * imageScale);
+    size_t sourceRowBytes = (size_t)width * 4;
+    unsigned char *pixels = calloc((size_t)height, sourceRowBytes);
+    if (!pixels)
+        return source;
+    CGColorSpaceRef colourSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef bitmapContext = CGBitmapContextCreate(pixels, width, height,
+        8, sourceRowBytes, colourSpace, kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(colourSpace);
+    if (!bitmapContext) {
+        free(pixels);
+        return source;
+    }
+    CGContextSetRGBFillColor(bitmapContext, 0.0, 0.0, 0.0, 1.0);
+    CGContextFillRect(bitmapContext, CGRectMake(0, 0, width, height));
+    NSGraphicsContext *context = [NSGraphicsContext
+        graphicsContextWithGraphicsPort:bitmapContext flipped:NO];
+    [NSGraphicsContext saveGraphicsState];
+    [NSGraphicsContext setCurrentContext:context];
+    if ([context respondsToSelector:@selector(setImageInterpolation:)])
+        [context setImageInterpolation:NSImageInterpolationHigh];
+    [source drawInRect:NSMakeRect(0.0, 0.0, width, height)
+              fromRect:NSZeroRect operation:NSCompositeSourceOver fraction:1.0];
+    [NSGraphicsContext restoreGraphicsState];
+    CGContextRelease(bitmapContext);
+
+    NSBitmapImageRep *tinted = [[NSBitmapImageRep alloc]
+        initWithBitmapDataPlanes:NULL pixelsWide:width pixelsHigh:height
+        bitsPerSample:8 samplesPerPixel:3 hasAlpha:NO isPlanar:NO
+        colorSpaceName:NSCalibratedRGBColorSpace bytesPerRow:width * 3
+        bitsPerPixel:24];
+    if (!tinted) {
+        free(pixels);
+        return source;
+    }
+    unsigned char *destination = [tinted bitmapData];
+    NSInteger destinationRowBytes = [tinted bytesPerRow];
+    for (NSInteger y = 0; y < height; ++y) {
+        unsigned char *sourceRow = pixels + (size_t)y * sourceRowBytes;
+        unsigned char *destinationRow = destination + y * destinationRowBytes;
+        for (NSInteger x = 0; x < width; ++x) {
+            unsigned char *input = sourceRow + x * 4;
+            unsigned char *output = destinationRow + x * 3;
+            unsigned char maximum = MAX(input[0], MAX(input[1], input[2]));
+            unsigned char minimum = MIN(input[0], MIN(input[1], input[2]));
+            output[0] = input[0];
+            output[1] = input[1];
+            output[2] = input[2];
+            if (maximum - minimum < 4)
+                continue; /* retain the cone's white and grey bands */
+            unsigned char rising = minimum +
+                ((maximum - minimum) * hueRemainder + 30) / 60;
+            unsigned char falling = maximum -
+                ((maximum - minimum) * hueRemainder + 30) / 60;
+            switch (hueSector) {
+                case 0: output[0] = maximum; output[1] = rising; output[2] = minimum; break;
+                case 1: output[0] = falling; output[1] = maximum; output[2] = minimum; break;
+                case 2: output[0] = minimum; output[1] = maximum; output[2] = rising; break;
+                case 3: output[0] = minimum; output[1] = falling; output[2] = maximum; break;
+                case 4: output[0] = rising; output[1] = minimum; output[2] = maximum; break;
+                default:output[0] = maximum; output[1] = minimum; output[2] = falling; break;
+            }
+        }
+    }
+    free(pixels);
+
+    NSImage *result = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
+    [result addRepresentation:tinted];
+    return result;
+}
+
+@implementation VLCMainBackgroundView
+
+- (id)initWithFrame:(NSRect)frame
+{
+    self = [super initWithFrame:frame];
+    if (self) {
+        /* This surface deliberately uses the classic bare cone. The app icon
+         * can be the Tahoe rounded-square variant on newer macOS releases,
+         * which does not belong on the black playback background. */
+        defaultImage = [NSImage imageNamed:@"VLC"];
+        if (var_InheritBool(getIntf(), "macosx-icon-change")) {
+            NSCalendar *calendar = [[NSCalendar alloc]
+                initWithCalendarIdentifier:NSGregorianCalendar];
+            NSUInteger day = [calendar ordinalityOfUnit:NSDayCalendarUnit
+                                                  inUnit:NSYearCalendarUnit
+                                                 forDate:[NSDate date]];
+            if (day >= 354)
+                defaultImage = [NSImage imageNamed:@"VLC-Xmas"];
+        }
+        displayedImage = defaultImage;
+        showingCone = YES;
+        coneVelocity = NSMakePoint(140.0, 105.0);
+        [self registerForDraggedTypes:@[NSFilenamesPboardType]];
+    }
+    return self;
+}
+
+- (BOOL)isOpaque { return YES; }
+- (BOOL)acceptsFirstResponder { return YES; }
+- (BOOL)acceptsFirstMouse:(NSEvent *)event
+{
+    /* Preserve one-gesture window dragging while making an ordinary first
+     * click behave like a native activation click, with no idle action. */
+    /* AppKit calls this only for the first click in a non-key window; its
+     * key/active state may already have changed by this point. */
+    idlePressActivatesWindow = YES;
+    return YES;
+}
+
+- (void)prepareConeColours
+{
+    if (colouredCones)
+        return;
+
+    /* Build the tiny palette before motion begins. Recolouring a bitmap at
+     * the exact collision instant is visible as a pause on older machines. */
+    NSMutableArray *cones = [NSMutableArray arrayWithCapacity:6];
+    for (NSUInteger i = 0; i < 6; ++i)
+        [cones addObject:VLCMainBackgroundTintedCone(defaultImage, i)];
+    colouredCones = [cones copy];
+}
+
+- (void)startCone
+{
+    [self prepareConeColours];
+    coneBouncing = YES;
+    colouredCone = nil;
+    uint32_t randomValue;
+    vlc_rand_bytes(&randomValue, sizeof(randomValue));
+    coneColourIndex = randomValue % [colouredCones count];
+    conePosition = imageRect.origin;
+    coneVelocity = NSMakePoint(140.0, 105.0);
+    lastMotionTime = [NSDate timeIntervalSinceReferenceDate];
+    motionTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 60.0
+        target:self selector:@selector(advanceCone:) userInfo:nil
+        repeats:YES];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)setArtwork:(NSImage *)artwork
+{
+    displayedImage = artwork ?: defaultImage;
+    showingCone = artwork == nil;
+    [self stopCone];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)setBackgroundActive:(BOOL)active
+{
+    [self setHidden:!active];
+    if (!active)
+        [self stopCone];
+}
+
+- (void)stopCone
+{
+    trackingIdleClick = NO;
+    [motionTimer invalidate];
+    motionTimer = nil;
+    coneBouncing = NO;
+    colouredCone = nil;
+    [self setNeedsDisplay:YES];
+}
+
+- (void)mouseDown:(NSEvent *)event
+{
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+    /* Resolve this gesture on mouse-up: the complete playback surface stays
+     * a window handle whether it currently shows the cone or audio artwork. */
+    trackingIdleClick = YES;
+    idleSurfaceDragged = NO;
+    idlePressWasOnCone = showingCone && NSPointInRect(point, imageRect);
+    idlePressLocation = [NSEvent mouseLocation];
+}
+
+- (void)mouseDragged:(NSEvent *)event
+{
+    if (trackingIdleClick) {
+        if (!idleSurfaceDragged) {
+            NSPoint current = [NSEvent mouseLocation];
+            if (fabs(current.x - idlePressLocation.x) +
+                fabs(current.y - idlePressLocation.y) < 4.0)
+                return;
+            idleSurfaceDragged = YES;
+        }
+        NSWindow *window = [self window];
+        NSPoint origin = [window frame].origin;
+        origin.x += [event deltaX];
+        origin.y -= [event deltaY];
+        [window setFrameOrigin:origin];
+        return;
+    }
+    [super mouseDragged:event];
+}
+
+- (void)mouseUp:(NSEvent *)event
+{
+    if (!trackingIdleClick) {
+        [super mouseUp:event];
+        return;
+    }
+
+    trackingIdleClick = NO;
+    BOOL activatesWindow = idlePressActivatesWindow;
+    idlePressActivatesWindow = NO;
+    if (idleSurfaceDragged)
+        return;
+    if (activatesWindow)
+        return;
+    /* Artwork is presentation content: clicking it or its black margins must
+     * not unexpectedly replace it with the playlist. */
+    if (!showingCone)
+        return;
+    if (coneBouncing) {
+        [self stopCone];
+        return;
+    }
+    if (idlePressWasOnCone) {
+        [self startCone];
+        return;
+    }
+    [(VLCMainWindow *)[self window] changePlaylistState:psUserEvent];
+}
+
+- (void)advanceCone:(NSTimer *)timer
+{
+    if (!coneBouncing || [self isHidden] || [self window] == nil) {
+        [self stopCone];
+        return;
+    }
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    NSTimeInterval elapsed = MIN(now - lastMotionTime, 0.1);
+    lastMotionTime = now;
+    NSRect bounds = NSInsetRect([self bounds], 12.0, 12.0);
+    CGFloat maxX = MAX(NSMinX(bounds), NSMaxX(bounds) - imageRect.size.width);
+    CGFloat maxY = MAX(NSMinY(bounds), NSMaxY(bounds) - imageRect.size.height);
+    NSPoint next = NSMakePoint(conePosition.x + coneVelocity.x * elapsed,
+                               conePosition.y + coneVelocity.y * elapsed);
+    BOOL bounced = NO;
+    if (next.x <= NSMinX(bounds) || next.x >= maxX) {
+        next.x = MIN(MAX(next.x, NSMinX(bounds)), maxX);
+        coneVelocity.x = -coneVelocity.x;
+        bounced = YES;
+    }
+    if (next.y <= NSMinY(bounds) || next.y >= maxY) {
+        next.y = MIN(MAX(next.y, NSMinY(bounds)), maxY);
+        coneVelocity.y = -coneVelocity.y;
+        bounced = YES;
+    }
+    conePosition = next;
+    if (bounced) {
+        uint32_t randomValue;
+        vlc_rand_bytes(&randomValue, sizeof(randomValue));
+        coneColourIndex = (coneColourIndex + 1 +
+            randomValue % ([colouredCones count] - 1)) % [colouredCones count];
+        colouredCone = [colouredCones objectAtIndex:coneColourIndex];
+    }
+    [self setNeedsDisplay:YES];
+}
+
+- (void)drawRect:(NSRect)dirtyRect
+{
+    [[NSColor blackColor] set];
+    NSRectFill(dirtyRect);
+    NSImage *image = coneBouncing && colouredCone ? colouredCone : displayedImage;
+    NSSize source = [image size];
+    if (source.width <= 0.0 || source.height <= 0.0)
+        return;
+
+    NSRect available = NSInsetRect([self bounds], 12.0, 12.0);
+    CGFloat scale;
+    if (showingCone) {
+        scale = MIN(1.0, MIN(128.0 / source.width,
+                    MIN(128.0 / source.height,
+                    MIN(available.size.width / source.width,
+                        available.size.height / source.height))));
+    } else {
+        /* Unlike the narrow sidebar preview, this is the presentation view:
+         * use all available room, just as the expandable Qt background does. */
+        scale = MIN(available.size.width / source.width,
+                    available.size.height / source.height);
+    }
+    NSSize size = NSMakeSize(source.width * scale, source.height * scale);
+    NSPoint origin = coneBouncing ? conePosition : NSMakePoint(
+        NSMidX(available) - size.width / 2.0,
+        NSMidY(available) - size.height / 2.0);
+    imageRect = NSMakeRect(origin.x, origin.y, size.width, size.height);
+    [[NSGraphicsContext currentContext] setImageInterpolation:NSImageInterpolationHigh];
+    [image drawInRect:imageRect fromRect:NSZeroRect
+            operation:NSCompositeSourceOver fraction:1.0];
+}
+
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender
+{
+    return NSDragOperationCopy;
+}
+
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender { return YES; }
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender
+{
+    return [[VLCCoreInteraction sharedInstance] performDragOperation:sender];
+}
+
+@end
 
 
 @interface VLCMainWindow() <NSWindowDelegate, NSAnimationDelegate, NSSplitViewDelegate>
@@ -78,11 +427,15 @@
     NSString *sidebarArtUrl;
     NSView *sidebarArtDivider;
     CGFloat artPanelHeight;
+
+    VLCMainBackgroundView *backgroundView;
+    BOOL playlistViewWanted;
 }
 - (void)makeSplitViewVisible;
 - (void)makeSplitViewHidden;
 - (void)showPodcastControls;
 - (void)hidePodcastControls;
+- (void)showBackgroundView;
 @end
 
 static const float f_min_window_height = 307.;
@@ -148,6 +501,111 @@ static int PowerVLCMediaLibraryScanChanged(vlc_object_t *object,
     NSView *pane = [self superview];
     NSPoint p = [pane convertPoint:[event locationInWindow] fromView:nil];
     [dragDelegate artDividerDraggedToPaneY:p.y];
+}
+@end
+
+/* The small playlist-sidebar artwork is an export surface as well as a
+ * preview.  Its art already lives in VLC's cache, so publishing that path as
+ * NSFilenamesPboardType gives Finder and other applications a real file on
+ * every macOS version supported by the Modern interface. */
+@interface VLCMainArtworkView : NSImageView
+{
+    NSString *artPath;
+    NSPoint dragStartPoint;
+    BOOL dragCandidate;
+}
+- (void)setArtworkImage:(NSImage *)image path:(NSString *)path;
+@end
+
+@implementation VLCMainArtworkView
+- (void)setArtworkImage:(NSImage *)image path:(NSString *)path
+{
+    [self setImage:image];
+    artPath = [path copy];
+}
+
+- (NSMenu *)menuForEvent:(NSEvent *)event
+{
+    (void)event;
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@""];
+    NSMenuItem *download = [menu addItemWithTitle:_NS("Download cover art")
+        action:@selector(downloadCoverArt:) keyEquivalent:@""];
+    [download setTarget:self];
+    NSMenuItem *copy = [menu addItemWithTitle:_NS("Copy")
+        action:@selector(copyCoverArt:) keyEquivalent:@""];
+    [copy setTarget:self];
+    [copy setEnabled:artPath != nil && [self image] != nil];
+    return menu;
+}
+
+- (void)downloadCoverArt:(id)sender
+{
+    (void)sender;
+    input_thread_t *input = pl_CurrentInput(getIntf());
+    if (!input)
+        return;
+    input_item_t *item = input_GetItem(input);
+    if (item)
+        libvlc_ArtRequest(getIntf()->obj.libvlc, item,
+                         META_REQUEST_OPTION_SCOPE_ANY);
+    vlc_object_release(input);
+}
+
+- (void)copyCoverArt:(id)sender
+{
+    (void)sender;
+    NSData *data = [[self image] TIFFRepresentation];
+    if (!data || !artPath)
+        return;
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    [pasteboard declareTypes:@[NSTIFFPboardType] owner:nil];
+    [pasteboard setData:data forType:NSTIFFPboardType];
+}
+
+- (void)mouseDown:(NSEvent *)event
+{
+    dragStartPoint = [self convertPoint:[event locationInWindow] fromView:nil];
+    dragCandidate = artPath != nil;
+    [super mouseDown:event];
+}
+
+- (void)mouseDragged:(NSEvent *)event
+{
+    if (!dragCandidate || !artPath ||
+        ![[NSFileManager defaultManager] fileExistsAtPath:artPath]) {
+        [super mouseDragged:event];
+        return;
+    }
+
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+    if (hypot(point.x - dragStartPoint.x,
+              point.y - dragStartPoint.y) < 3.0)
+        return;
+    dragCandidate = NO;
+
+    NSPasteboard *pasteboard = [NSPasteboard pasteboardWithName:NSDragPboard];
+    [pasteboard declareTypes:@[NSFilenamesPboardType] owner:nil];
+    [pasteboard setPropertyList:@[artPath] forType:NSFilenamesPboardType];
+
+    NSImage *source = [self image];
+    NSSize sourceSize = [source size];
+    CGFloat scale = MIN(1.0, MIN(96.0 / sourceSize.width,
+                                 96.0 / sourceSize.height));
+    NSSize size = NSMakeSize(sourceSize.width * scale,
+                             sourceSize.height * scale);
+    NSImage *preview = [[NSImage alloc] initWithSize:size];
+    [preview lockFocus];
+    [source drawInRect:NSMakeRect(0.0, 0.0, size.width, size.height)
+              fromRect:NSZeroRect operation:NSCompositeSourceOver fraction:1.0];
+    [preview unlockFocus];
+    [self dragImage:preview at:dragStartPoint offset:NSZeroSize event:event
+          pasteboard:pasteboard source:self slideBack:YES];
+}
+
+- (NSDragOperation)draggingSourceOperationMaskForLocal:(BOOL)local
+{
+    (void)local;
+    return NSDragOperationCopy;
 }
 @end
 
@@ -327,6 +785,18 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
 
     _nativeFullscreenMode = var_InheritBool(getIntf(), "macosx-nativefullscreenmode");
     b_dropzone_active = YES;
+    playlistViewWanted = NO;
+
+    /* The background occupies the same middle-content rectangle as the
+     * split and video views. It is autoresized rather than constrained so it
+     * remains compatible with the 10.7 AppKit used by this interface. */
+    NSView *middleContent = [self.videoView superview];
+    backgroundView = [[VLCMainBackgroundView alloc]
+        initWithFrame:[middleContent bounds]];
+    [backgroundView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+    [middleContent addSubview:backgroundView
+                    positioned:NSWindowBelow
+                    relativeTo:_splitView];
 
     // Playlist setup
     var_Create(getIntf()->obj.libvlc, PVLC_ML_SCAN_ACTIVE, VLC_VAR_BOOL);
@@ -361,7 +831,7 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
         /* vertical placement is driven by -layoutSidebarArtStack, not the
          * autoresizing machinery, so keep only the width follow-through */
         [sidebarScroll setAutoresizingMask:NSViewWidthSizable];
-        sidebarArtView = [[NSImageView alloc]
+        sidebarArtView = [[VLCMainArtworkView alloc]
             initWithFrame:NSMakeRect(0., 0., [leftPane bounds].size.width, 10.)];
         [sidebarArtView setAutoresizingMask:NSViewWidthSizable];
         [sidebarArtView setImageScaling:NSImageScaleProportionallyDown];
@@ -522,6 +992,11 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
     /* restore split view */
     f_lastLeftSplitViewWidth = 200;
     [[[VLCMain sharedInstance] mainMenu] updateSidebarMenuItem: ![_splitView isSubviewCollapsed:_splitViewLeft]];
+
+    /* Qt starts on its cone/art surface rather than opening the playlist.
+     * Match that default on macOS; the playlist button still exposes the
+     * complete split view. */
+    [self showBackgroundView];
 }
 
 #pragma mark -
@@ -580,6 +1055,7 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
 // Show split view and hide the video view
 - (void)makeSplitViewVisible
 {
+    [self setContentMaxSize:NSMakeSize(FLT_MAX, FLT_MAX)];
     if (self.darkInterface)
         [self setContentMinSize: NSMakeSize(604., f_min_window_height + [self.titlebarView frame].size.height)];
     else
@@ -595,6 +1071,7 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
         [[self animator] setFrame:new_frame display:YES animate:YES];
     }
 
+    [backgroundView setBackgroundActive:NO];
     [self.videoView setHidden:YES];
     [_splitView setHidden:NO];
     if (self.nativeFullscreenMode && [self fullscreen]) {
@@ -608,11 +1085,13 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
 // Hides the split view and makes the vout view in foreground
 - (void)makeSplitViewHidden
 {
+    [self setContentMaxSize:NSMakeSize(FLT_MAX, FLT_MAX)];
     if (self.darkInterface)
         [self setContentMinSize: NSMakeSize(604., f_min_video_height + [self.titlebarView frame].size.height)];
     else
         [self setContentMinSize: NSMakeSize(604., f_min_video_height)];
 
+    [backgroundView setBackgroundActive:NO];
     [_splitView setHidden:YES];
     [self.videoView setHidden:NO];
     if (self.nativeFullscreenMode && [self fullscreen]) {
@@ -624,70 +1103,89 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
         [self makeFirstResponder: [[self.videoView subviews] firstObject]];
 }
 
+- (void)showBackgroundView
+{
+    [self setContentMaxSize:NSMakeSize(FLT_MAX, FLT_MAX)];
+    if (self.darkInterface)
+        [self setContentMinSize:NSMakeSize(604., f_min_window_height
+                                                + [self.titlebarView frame].size.height)];
+    else
+        [self setContentMinSize:NSMakeSize(604., f_min_window_height)];
+
+    NSRect oldFrame = [self frame];
+    CGFloat requiredHeight = [self minSize].height;
+    if (oldFrame.size.height < requiredHeight) {
+        oldFrame.origin.y += oldFrame.size.height - requiredHeight;
+        oldFrame.size.height = requiredHeight;
+        [self setFrame:oldFrame display:YES];
+    }
+    b_splitview_removed = NO;
+    b_minimized_view = NO;
+
+    [self.videoView setHidden:YES];
+    [_splitView setHidden:YES];
+    [backgroundView setBackgroundActive:YES];
+    [self makeFirstResponder:backgroundView];
+    if (self.nativeFullscreenMode && [self fullscreen]) {
+        [self showControlsBar];
+        [self.fspanel setNonActive];
+    }
+}
+
 
 - (void)changePlaylistState:(VLCPlaylistStateEvent)event
 {
-    // Beware, this code is really ugly
-
-    msg_Dbg(getIntf(), "toggle playlist from state: removed splitview %i, minimized view %i. Event %i", b_splitview_removed, b_minimized_view, event);
+    msg_Dbg(getIntf(), "change main view: playlist requested %i, event %i",
+            playlistViewWanted, event);
     if (![self isVisible] && event == psUserMenuEvent) {
         [self makeKeyAndOrderFront: nil];
         return;
     }
 
     BOOL b_activeVideo = [[VLCMain sharedInstance] activeVideoPlayback];
-    BOOL b_restored = NO;
-
-    // ignore alt if triggered through main menu shortcut
-    BOOL b_have_alt_key = ([[NSApp currentEvent] modifierFlags] & NSAlternateKeyMask) != 0;
     if (event == psUserMenuEvent)
-        b_have_alt_key = NO;
-
-    // eUserMenuEvent is now handled same as eUserEvent
-    if(event == psUserMenuEvent)
         event = psUserEvent;
 
-    if (b_dropzone_active && b_have_alt_key) {
-        [self hideDropZone];
+    /* With a detached vout, video never replaces the main-window surface;
+     * its button simply alternates the same background and playlist views. */
+    if (self.nonembedded) {
+        if (event == psUserEvent) {
+            playlistViewWanted = !playlistViewWanted;
+            if (playlistViewWanted)
+                [self makeSplitViewVisible];
+            else
+                [self showBackgroundView];
+        }
         return;
     }
 
-    if (!(self.nativeFullscreenMode && self.fullscreen) && !b_splitview_removed && ((b_have_alt_key && b_activeVideo)
-                                                                              || (self.nonembedded && event == psUserEvent)
-                                                                              || (!b_activeVideo && event == psUserEvent)
-                                                                              || (b_minimized_view && event == psVideoStartedOrStoppedEvent))) {
-        // for starting playback, window is resized through resized events
-        // for stopping playback, resize through reset to previous frame
-        [self hideSplitView: event != psVideoStartedOrStoppedEvent];
-        b_minimized_view = NO;
-    } else {
-        if (b_splitview_removed) {
-            if (!self.nonembedded || (event == psUserEvent && self.nonembedded))
-                [self showSplitView: event != psVideoStartedOrStoppedEvent];
-
-            if (event != psUserEvent)
-                b_minimized_view = YES;
-            else
-                b_minimized_view = NO;
-
-            if (b_activeVideo)
-                b_restored = YES;
-        }
-
-        if (!self.nonembedded) {
-            if (([self.videoView isHidden] && b_activeVideo) || b_restored || (b_activeVideo && event != psUserEvent))
+    if (event == psUserEvent) {
+        if (b_activeVideo) {
+            if ([self.videoView isHidden]) {
+                playlistViewWanted = NO;
                 [self makeSplitViewHidden];
-            else
+            } else {
+                playlistViewWanted = YES;
                 [self makeSplitViewVisible];
+            }
         } else {
-            [_splitView setHidden: NO];
-            [_playlistScrollView setHidden: NO];
-            [self.videoView setHidden: YES];
-            [self showControlsBar];
+            playlistViewWanted = !playlistViewWanted;
+            if (playlistViewWanted)
+                [self makeSplitViewVisible];
+            else
+                [self showBackgroundView];
         }
+        return;
     }
 
-    msg_Dbg(getIntf(), "toggle playlist to state: removed splitview %i, minimized view %i", b_splitview_removed, b_minimized_view);
+    /* Input/vout events never override an explicit playlist choice. The
+     * normal path otherwise follows Qt: video, then art/cone when it ends. */
+    if (b_activeVideo && !playlistViewWanted)
+        [self makeSplitViewHidden];
+    else if (playlistViewWanted)
+        [self makeSplitViewVisible];
+    else
+        [self showBackgroundView];
 }
 
 - (IBAction)dropzoneButtonAction:(id)sender
@@ -900,15 +1398,19 @@ static NSEvent *VLCEventWithDigitRowFallback(NSEvent *o_event)
     sidebarArtUrl = artUrl;
 
     NSImage *art = nil;
+    NSString *artPath = nil;
     if ([artUrl length]) {
         char *psz_path = vlc_uri2path([artUrl UTF8String]);
         if (psz_path) {
-            art = [[NSImage alloc]
-                initWithContentsOfFile:toNSStr(psz_path)];
+            artPath = toNSStr(psz_path);
+            art = [[NSImage alloc] initWithContentsOfFile:artPath];
             free(psz_path);
         }
     }
-    [sidebarArtView setImage:art ? art : [NSImage imageNamed:@"noart"]];
+    [(VLCMainArtworkView *)sidebarArtView
+        setArtworkImage:art ? art : [NSImage imageNamed:@"noart"]
+                         path:art ? artPath : nil];
+    [backgroundView setArtwork:art];
 }
 
 - (void)updateWindow

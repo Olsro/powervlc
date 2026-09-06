@@ -55,6 +55,7 @@ man1_MANS = \
 	   powervlc-wrapper.1
 
 EXTRA_DIST = \
+	OPENSUBTITLES.md \
 	$(CHANGELOGS) \
 	$(man1_MANS) \
 	$(LIBVLC_SAMPLES) \

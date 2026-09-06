@@ -2,6 +2,246 @@
 
 PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more legacy systems, not affiliated with VideoLAN.
 
+## 2.1.0 (2026-09-06)
+
+### New features — all platforms (modern machines included)
+
+- **Online subtitle search** is available directly from the Subtitles menu
+  and the video context menu on macOS, legacy Macs, Windows and Linux.
+  PowerVLSub uses OpenSubtitles.com, tries the file hash before the title, and
+  can download and activate a selected subtitle. Named selectors configure up
+  to three preferred languages; advanced searches accept year, season,
+  episode and IMDb identifiers, with optional server-side filename analysis
+  after a local search finds nothing. Results expose ratings, downloads,
+  frame rate, uploader and translation provenance, with quality sorting and
+  filters. Accounts can be tested before saving and report their quota.
+  Subtitles may be saved beside the video, loaded temporarily from cache or
+  written to a chosen folder; unwritable video folders fall back to the
+  subtitle cache and existing files are preserved. Files larger than 2 GiB
+  remain hashable on 32-bit builds, and a delayed result is never attached
+  after the playlist has advanced to another item. The complete search,
+  account, error and download interface is translated into the same 19
+  languages as the Linux installer.
+- **Additional RetroArch Slang CRT presets** are compiled ahead of time from
+  the official sources to both GLSL and reflected HLSL, and labelled
+  separately from the original GLSL catalogue in the controller.
+  Language-incompatible presets are hidden, and unsupported shader semantics
+  are excluded rather than approximated. Playback needs no Slang compiler;
+  legacy CPU filters and the existing GLSL catalogue remain available.
+
+### Improvements — all platforms (modern machines included)
+
+- **The artwork shown beside the main playlist is easier to reuse.** It can
+  be dragged to the desktop, file manager or another application as an image
+  file, and its context menu can copy the original artwork to the clipboard.
+- **CRT Display Controller refreshes its exact-preset list automatically when
+  playback starts.** Before a video output exists, it explains that GPU
+  capabilities will be detected after starting content instead of reporting
+  the presets as unavailable. The dialog then updates itself, identifies its
+  OpenGL or Direct3D 11 backend, distinguishes GLSL and Slang presets, and
+  keeps CPU and GPU effects mutually exclusive. Its new status messages are
+  available in 19 languages.
+- **DVD menu startup preserves language initialization.** Direct-menu startup
+  follows the disc's commands before entering its menu. Proven language
+  selectors can initialize the main menu automatically, including French on
+  *Spirited Away*; uncertain selectors stay interactive. Disabling direct-menu
+  startup retains the full first-play sequence.
+- **Dolby Vision colour rendering is corrected on Apple Silicon and modern
+  Windows.** Profiles 5, 7 and 8 now apply their per-frame RPU reshaping before
+  colour conversion; the result is explicitly treated as BT.2020/PQ even when
+  a profile 8 compatible base layer is HLG. Compatible HDMI displays are
+  switched to the system Dolby Vision mode for playback and restored
+  afterwards. Windows uses the display driver's native DisplayConfig path and
+  needs no Microsoft Store Dolby extension. HDR-only displays receive PQ plus
+  HDR10 metadata derived from the RPU, while SDR displays receive Rec.709 tone
+  mapping. Unsupported Windows versions, GPUs and displays keep the existing
+  HDR10/SDR fallback. The legacy Win32 executable keeps its XP subsystem floor.
+  Linux adds a guarded Intel i915 HDMI transport helper and reads the Dolby
+  display peak from EDID for source-led mapping. Its ordinary X11/Xwayland
+  output stays sRGB, including on an HDR-enabled GNOME desktop, so the
+  compositor performs the SDR-to-HDR10 conversion exactly once. AMD and NVIDIA
+  keep the portable HDR10/SDR paths because their drivers expose no stable
+  userspace interface for an arbitrary Dolby VSIF.
+- Clicking the centered PowerVLC cone reveals an Easter egg
+
+### Fixes — all platforms (modern machines included)
+
+- **Blu-ray 3D discs now follow their authored 2D/3D output selection.** BD-J
+  applications can switch between ordinary and stereoscopic playback without
+  leaving the MVC extension enabled for a 2D title or losing the still-open
+  menu plane during the transition. MVC seeks also use the dependent stream's
+  own timestamps when a disc omits its optional stereoscopic seek index, so
+  variable-bitrate titles no longer resume with one eye tens of seconds ahead.
+- **DVD language selectors keep only the active button highlighted.**
+  First-play menus such as *Spirited Away* no longer reveal every button's
+  underline when moving the selection.
+- **Some DVD images stopped as the film started.** The French *My Neighbor
+  Totoro* and *Howl's Moving Castle* images contain short, entirely zero-filled
+  cells before the feature. The DVD navigator now finishes those cells while
+  preserving their commands, instead of aborting on the missing navigation
+  packet. Recovery is limited to fully readable, blank title cells of at most
+  one second and 64 sectors.
+
+### New features — Linux
+
+- **Blu-ray 3D MVC frame packing** is available through a direct DRM/KMS video
+  output. It detects the standard HDMI stereo modes exposed by the active
+  connector, selects the frame-packing timing closest to the content rate and
+  restores the complete display state afterward. The launcher works below
+  Xorg and Wayland by using a temporary virtual terminal, keeps a single
+  PowerVLC and BD-J session alive while entering or leaving fullscreen, and
+  suppresses framebuffer-console flashes on both single- and multi-display
+  systems. It blanks secondary displays only during direct playback and
+  restores them on exit. The implementation uses the common DRM UAPI rather
+  than a GPU-vendor path; Intel i915 is validated, while AMDGPU, Nouveau and
+  NVIDIA DRM work when their driver publishes a compatible stereo mode.
+
+### Improvements — Linux
+
+- **Linux Blu-ray menus remain fully interactive in direct 3D output.** BD-J
+  and HDMV overlays survive still-image and video-output transitions, use the
+  correct per-eye canvas and no longer crop or rotate their controls. The
+  direct output forwards the user's configured VLC shortcuts through the
+  active XKB layout, supports menu and popup-menu navigation, displays a
+  calibrated menu pointer that hides when idle, and provides pause/resume and
+  fullscreen playback controls. Its seek bar shows elapsed and total time plus
+  the hovered target. PGS subtitles and OSD are composed for both eyes.
+  Software Edge264 MVC decoding is packaged for machines without supported MVC
+  hardware acceleration; an unavailable Crystal HD device no longer raises a
+  misleading error on Linux. Linux release ZIPs include an unprivileged,
+  relocatable desktop launcher that installs or updates the AppImage and
+  registers its embedded desktop entry and icon in the current user's XDG
+  application menu. A native assistant asks before changing anything, offers
+  update and uninstall actions when PowerVLC is already present, and confirms
+  completion before opening the player. Its launcher, prompts and results are
+  available in 19 languages. The portable shell implementation remains hidden
+  inside the archive.
+- **Encoded HDMI audio remains active across Linux Blu-ray transitions.** The
+  ALSA output selects the raw HDMI device from the connector's ELD, configures
+  the IEC 60958 controls and primes the IEC 61937 carrier after KMS modesets or
+  codec changes. Dolby Digital and DTS passthrough therefore survive studio
+  logos, trailers, menus and the feature without modifying the decoded-audio
+  path. The x86_64 AppImage includes the KMS launcher, input bridge, BD-J class
+  path and Edge264 decoder, while using the host graphics stack so current
+  Mesa and proprietary NVIDIA drivers can load without sacrificing the
+  glibc 2.27 compatibility floor.
+
+### Fixes — Linux
+
+- **RetroArch CRT presets no longer produce a black video surface on Linux
+  OpenGL.** This covers presets already enabled at video startup as well as
+  live Apply, Off/On, preset and input-size transitions. Multipass rendering
+  finishes in an opaque off-screen target before a native framebuffer copy;
+  a bounded GPU fence protects the first three transition frames without
+  blocking Qt indefinitely. Preset parameters are propagated to every pass
+  that consumes them, and temporal history and feedback are recreated when
+  the source changes. On Intel GPUs, the generic CRT-Royale choice uses the
+  compatible `crt-royale-fake-bloom-intel` graph.
+
+### Improvements — Linux and Windows (Qt)
+
+- The Qt main-window volume label uses an 8-pixel DPI-stable font, starts two
+  pixels inside the control and occupies only its measured text width. `100%`
+  therefore fits while the percent glyph stays clear of the triangular
+  slider's rising edge.
+
+### Fixes — Linux and Windows (Qt)
+
+- **Starting media from bundled extensions no longer races Qt's synchronous
+  dialog refresh against creation of a new audio or video output.** PeerTube
+  consequently opens its first video normally on XWayland instead of leaving
+  a black drawable while decoding and audio continue. The same safe ordering
+  is used by Twitch, Invidious, yt-dlp, Internet Archive, Jellyfin,
+  Audiobookshelf, Podcasts, Subsonic and eMule.
+- **Replacement extension dialogs stay in the foreground on Qt.** Opening a
+  Soulseek user's shared files by double-clicking no longer lets the newly
+  created window appear behind the player on X11 or Wayland.
+- Extension drop-downs preserve the selected value when a script refreshes
+  their contents, including PowerVLSub's online language catalogue.
+
+### Fixes — macOS
+
+- Right-clicking the playlist artwork in either the Modern or Legacy
+  interface now offers the same forced cover-art download as Qt on Windows
+  and Linux.
+- The automatic HDMI 3D question is remembered for the current playback, so
+  an MVC seek or internal video-output restart no longer interrupts playback
+  with the same question again.
+- **DVD menu transitions no longer trigger the macOS seek bar.** Disc clock
+  resets are excluded from inferred seek feedback; explicit seek actions keep
+  their normal feedback.
+
+### Improvements — macOS
+
+- **The Modern and Legacy main windows now match Qt's idle and audio view.**
+  They open on a black surface with the PowerVLC cone, replace it with a large
+  centred artwork during audio playback, and alternate cleanly with the
+  playlist without changing the window geometry
+
+### Fixes — legacy Macs
+
+- On older macOS releases, dismissing the seek-position tooltip no longer
+  hides its parent player or controls window with it.
+- Extension dialogs reserve the full height of labels spanning several rows,
+  preventing status text from being clipped behind the following controls.
+
+### New features — Windows
+
+- **Exact RetroArch CRT shaders now run on Windows' default Direct3D 11
+  output.** Accepted Slang presets are compiled ahead of time to reflected HLSL
+  5.0 programs and executed by a native D3D11 multipass graph, including LUTs,
+  scaling, mipmaps, feedback and the stock presentation pass. On the tested
+  Intel Iris Xe driver, the user-facing Royale choice is routed to the exact
+  upstream Royale-fast graph with a display-safe contrast level; the two
+  Intel-labelled graphs that produced black output are hidden. Intermediate
+  formats retain RetroArch's declared sRGB/FP16 semantics, and each output is
+  unbound before it becomes the following pass's input. Subtitles and OSD
+  remain outside the CRT graph. The controller still offers an OpenGL restart
+  on legacy Direct3D 9, DirectDraw and GDI outputs, and the CPU effect remains
+  available everywhere.
+
+### Fixes — Windows
+
+- **Soulseek and eMule connect correctly on Windows.** Lua's TCP helper no
+  longer applies the C runtime's file-descriptor duplication API to a Winsock
+  socket after connecting. Soulseek can reach its login server, and the eMule
+  engine's EC control connection remains open instead of reconnecting twice a
+  second. aMule configuration paths now escape Windows backslashes correctly.
+
+### Build & packaging
+
+- **The universal macOS application now has a verifiably valid ad-hoc code
+  signature.** Every architecture uses the same Mach-O bundle type for VLC
+  plug-ins, the real post-trampoline executable keeps a stable identity and
+  its hardened-runtime entitlements, and both merging and packaging stop
+  immediately if strict deep signature verification fails. Keychain access
+  therefore sees the same valid PowerVLC designated requirement on modern
+  macOS instead of an invalid signature hidden by a successful packaging exit
+  status.
+- Windows portable packaging now generates and verifies its relocatable
+  plug-in cache automatically in an architecture-matched Wine container,
+  eliminating the separate Windows finalization host while avoiding the
+  antivirus-heavy scan of every plug-in DLL on first launch. Cache packaging
+  rejects partial results, and the hardened DLL lookup admits bundled runtimes
+  from the application directory, so SRT, x265 and Game Music Emu plug-ins are
+  not silently omitted. The NSIS installer uses fast per-file zlib compression
+  instead of a monolithic solid LZMA stream. Its 1,567 installed RetroArch
+  shader, preset and LUT resources are stored in one seekable catalogue instead
+  of being extracted as individual files; the renderer reads shaders and
+  images directly from it without a temporary extraction step. Relative preset
+  references such as `../blurs/...` are canonicalized before indexed lookup,
+  preserving the same semantics as the former loose-file tree for CRT-Royale
+  and other shared-pass presets. The Direct3D 11 runner explicitly detaches
+  each render target before the next pass reads it as a texture, matching
+  RetroArch and preventing D3D11 from silently replacing a conflicting shader
+  resource with `NULL`. The generic CRT-Royale choice is routed to the official
+  Royale-fast graph with a display-safe contrast level on that driver;
+  controlled screen captures showed it preserving white levels while the
+  generic pipeline lost most of them.
+- **The Linux AppImages include the architecture-matched private aMule
+  daemon.** The eMule extension therefore works in the packaged x86_64 and
+  i386 builds instead of reporting that its embedded engine is absent.
+
 ## 2.0.0 (2026-09-02)
 
 ### New features — all platforms (modern machines included)

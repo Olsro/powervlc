@@ -65,6 +65,7 @@ static const char* globPixelShaderDefault = "\
     float4x4 Colorspace;\n\
     float4x4 Primaries;\n\
   };\n\
+  %s\n\
   Texture2D%s shaderTexture[" STRINGIZE(D3D11_MAX_SHADER_VIEW) "];\n\
   SamplerState SamplerStates[2];\n\
   \n\
@@ -127,7 +128,7 @@ static const char* globPixelShaderDefault = "\
         sample = sampleTexture( SamplerStates[1], In.Texture );\n\
     else\n\
         sample = sampleTexture( SamplerStates[0], In.Texture );\n\
-    float4 rgba = max(mul(mul(sample, WhitePoint), Colorspace),0);\n\
+    %s\n\
     float opacity = rgba.a * Opacity;\n\
     float4 rgb = rgba; rgb.a = 0;\n\
     rgb = sourceToLinear(rgb);\n\
@@ -136,6 +137,75 @@ static const char* globPixelShaderDefault = "\
     rgb = linearToDisplay(rgb);\n\
     rgb = adjustRange(rgb);\n\
     return float4(rgb.rgb, saturate(opacity));\n\
+  }\n\
+";
+
+static const char *globPixelShaderDolbyVision = "\
+  cbuffer PS_DOVI_METADATA : register(b2)\n\
+  {\n\
+    float4 DoviInfo;\n\
+    float4 DoviOffset;\n\
+    float4 DoviNonlinear[3];\n\
+    float4 DoviLinear[3];\n\
+    float4 DoviPivots[9];\n\
+    float4 DoviCoefficients[24];\n\
+    float4 DoviMMR[144];\n\
+  };\n\
+  float doviPivot(int component, int index)\n\
+  {\n\
+    float4 p = DoviPivots[component * 3 + index / 4];\n\
+    return index % 4 == 0 ? p.x : index % 4 == 1 ? p.y : index % 4 == 2 ? p.z : p.w;\n\
+  }\n\
+  float doviReshape(float3 sig, int component)\n\
+  {\n\
+    float s = sig[component];\n\
+    int count = component == 0 ? (int)DoviInfo.y : component == 1 ? (int)DoviInfo.z : (int)DoviInfo.w;\n\
+    if (count < 2) return s;\n\
+    int segment = 0;\n\
+    [unroll] for (int i = 1; i < 8; ++i)\n\
+      segment += (i + 1 < count && s >= doviPivot(component, i)) ? 1 : 0;\n\
+    float4 coeffs = DoviCoefficients[component * 8 + segment];\n\
+    if (coeffs.w < 0.5)\n\
+      s = (coeffs.z * s + coeffs.y) * s + coeffs.x;\n\
+    else\n\
+    {\n\
+      int base = (component * 8 + segment) * 6;\n\
+      float4 sigX = float4(sig.x * sig.y, sig.x * sig.z, sig.y * sig.z, sig.x * sig.y * sig.z);\n\
+      s = coeffs.x + dot(DoviMMR[base].xyz, sig) + dot(DoviMMR[base + 1], sigX);\n\
+      if (coeffs.w >= 2.0)\n\
+      {\n\
+        float3 sig2 = sig * sig; float4 sigX2 = sigX * sigX;\n\
+        s += dot(DoviMMR[base + 2].xyz, sig2) + dot(DoviMMR[base + 3], sigX2);\n\
+        if (coeffs.w >= 3.0)\n\
+          s += dot(DoviMMR[base + 4].xyz, sig2 * sig) + dot(DoviMMR[base + 5], sigX2 * sigX);\n\
+      }\n\
+    }\n\
+    return clamp(s, doviPivot(component, 0), doviPivot(component, count - 1));\n\
+  }\n\
+  float3 doviPQToLinear(float3 x)\n\
+  {\n\
+    const float m1=2610.0/(4096.0*4.0), m2=(2523.0/4096.0)*128.0;\n\
+    const float c1=3424.0/4096.0, c2=(2413.0/4096.0)*32.0, c3=(2392.0/4096.0)*32.0;\n\
+    x=pow(max(x,0.0),1.0/m2); x=max(x-c1,0.0)/(c2-c3*x); return pow(x,1.0/m1);\n\
+  }\n\
+  float3 doviLinearToPQ(float3 x)\n\
+  {\n\
+    const float m1=2610.0/(4096.0*4.0), m2=(2523.0/4096.0)*128.0;\n\
+    const float c1=3424.0/4096.0, c2=(2413.0/4096.0)*32.0, c3=(2392.0/4096.0)*32.0;\n\
+    x=pow(max(x,0.0),m1); x=(c1+c2*x)/(1.0+c3*x); return pow(x,m2);\n\
+  }\n\
+  float3 doviDecode(float3 encoded)\n\
+  {\n\
+    float3 sig=clamp(encoded,0.0,1.0);\n\
+    float3 reshaped=float3(doviReshape(sig,0),doviReshape(sig,1),doviReshape(sig,2));\n\
+    float3 centered=reshaped-DoviOffset.xyz;\n\
+    float3 nonlinear=float3(dot(DoviNonlinear[0].xyz,centered),dot(DoviNonlinear[1].xyz,centered),dot(DoviNonlinear[2].xyz,centered));\n\
+    float3 lms=doviPQToLinear(nonlinear);\n\
+    lms=float3(dot(DoviLinear[0].xyz,lms),dot(DoviLinear[1].xyz,lms),dot(DoviLinear[2].xyz,lms));\n\
+    float3 rgb=float3(3.06441879*lms.x-2.16597676*lms.y+0.10155818*lms.z,\n\
+                      -0.65612108*lms.x+1.78554118*lms.y-0.12943749*lms.z,\n\
+                       0.01736321*lms.x-0.04725154*lms.y+1.03004253*lms.z);\n\
+    return doviLinearToPQ(rgb);\n\
   }\n\
 ";
 
@@ -207,6 +277,7 @@ HRESULT D3D11_CompilePixelShader(vlc_object_t *o, d3d11_handle_t *hd3d, bool leg
                                  const d3d_format_t *format, const display_info_t *display,
                                  video_transfer_func_t transfer,
                                  video_color_primaries_t primaries, bool src_full_range,
+                                 bool dolby_vision,
                                  ID3D11PixelShader **output)
 {
     static const char *DEFAULT_NOOP = "return rgb";
@@ -448,17 +519,24 @@ HRESULT D3D11_CompilePixelShader(vlc_object_t *o, d3d11_handle_t *hd3d, bool leg
         }
     }
 
+    const char *dovi_declarations = dolby_vision ? globPixelShaderDolbyVision : "";
+    const char *dovi_decode = dolby_vision
+        ? "float4 rgba = DoviInfo.x > 0.5 ? float4(doviDecode(sample.rgb), sample.a) : max(mul(mul(sample, WhitePoint), Colorspace), 0);"
+        : "float4 rgba = max(mul(mul(sample, WhitePoint), Colorspace), 0);";
     char *shader = malloc(strlen(globPixelShaderDefault) + 32 + strlen(psz_sampler) +
                           strlen(psz_src_transform) + strlen(psz_primaries_transform) + strlen(psz_display_transform) +
-                          strlen(psz_tone_mapping) + strlen(psz_adjust_range));
+                          strlen(psz_tone_mapping) + strlen(psz_adjust_range) +
+                          strlen(dovi_declarations) + strlen(dovi_decode));
     if (!shader)
     {
         msg_Err(o, "no room for the Pixel Shader");
         free(psz_range);
         return E_OUTOFMEMORY;
     }
-    sprintf(shader, globPixelShaderDefault, legacy_shader ? "" : "Array", psz_src_transform,
-            psz_display_transform, psz_primaries_transform, psz_tone_mapping, psz_adjust_range, psz_sampler);
+    sprintf(shader, globPixelShaderDefault, dovi_declarations,
+            legacy_shader ? "" : "Array", psz_src_transform,
+            psz_display_transform, psz_primaries_transform, psz_tone_mapping,
+            psz_adjust_range, psz_sampler, dovi_decode);
     if (var_InheritInteger(o, "verbose") >= 4)
         msg_Dbg(o, "shader %s", shader);
 #ifndef NDEBUG

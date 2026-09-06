@@ -919,12 +919,12 @@ ${vlcroot}/extras/package/macosx/configure.sh \
     $VLC_CONFIGURE_ARGS > $out
 
 # Mac OS X 10.2 cannot load an Objective-C plugin that is a dylib. VLC's
-# plugins are MH_DYLIB here because libtool's Darwin module_cmds link them
-# with -dynamiclib; on 10.3 and later that is fine, since dlopen() takes a
-# dylib. On 10.2 there is no dlopen() at all, so our dlcompat has to reach for
-# NSAddImage() -- and dyld then runs the ObjC runtime's add-image hook, which
-# dies in _objcInit for every image carrying an __OBJC segment (measured: the
-# legacy interface, then nsspeechsynthesizer, then the next one...).
+# plugins are MH_DYLIB by default because libtool's Darwin module_cmds link
+# them with -dynamiclib. On 10.2 there is no dlopen() at all, so our dlcompat
+# has to reach for NSAddImage() -- and dyld then runs the ObjC runtime's
+# add-image hook, which dies in _objcInit for every image carrying an __OBJC
+# segment (measured: the legacy interface, then nsspeechsynthesizer, then the
+# next one...).
 #
 # Bundles are the format that era expects for loadable code:
 # NSCreateObjectFileImageFromFile()/NSLinkModule() handle them, ObjC included,
@@ -932,6 +932,15 @@ ${vlcroot}/extras/package/macosx/configure.sh \
 # Everything else about them is unchanged -- same name, same exported symbol
 # list, and no table of contents needed, since NSLinkModule() resolves through
 # the symbol table rather than the TOC.
+#
+# Use MH_BUNDLE on every macOS target, not only the 10.2 slices. A universal
+# Mach-O may contain several CPU types, but codesign requires every slice to
+# have the same Mach-O file type. Mixing the PowerPC MH_BUNDLE plugins with
+# Intel/ARM MH_DYLIB plugins makes the complete universal app impossible to
+# sign (each thin slice signs successfully, the fat file is rejected as
+# "object file format unrecognized"). Modern dyld loads MH_BUNDLE plugins via
+# dlopen() just as it loads MH_DYLIB plugins, so one module format serves both
+# the oldest and newest systems and keeps the fused bundle signable.
 #
 # Settle the autotools chain FIRST. AM_MAINTAINER_MODE is enabled, so when
 # configure.ac is newer than aclocal.m4 -- which is exactly what a version bump
@@ -945,16 +954,28 @@ ${vlcroot}/extras/package/macosx/configure.sh \
 if [ -f Makefile ]; then
     make am--refresh > $out 2>&1 || true
 fi
-case "$MINIMAL_OSX_VERSION" in
-    10.0|10.1|10.2)
-        if [ -f libtool ] && grep -q 'module_cmds=.*-dynamiclib' libtool; then
-            info "Linking plugins as bundles (10.2 cannot NSAddImage ObjC)"
-            sed -i.orig-dynamiclib \
-                -e '/^module_cmds=/s/-dynamiclib/-bundle/' \
-                -e '/^module_expsym_cmds=/s/-dynamiclib/-bundle/' libtool
-        fi
-        ;;
-esac
+if [ -f libtool ] && grep -q 'module_cmds=.*-dynamiclib' libtool; then
+    info "Linking plugins as bundles (required by 10.2 and universal signing)"
+    sed -i.orig-dynamiclib \
+        -e '/^module_cmds=/s/-dynamiclib/-bundle/' \
+        -e '/^module_expsym_cmds=/s/-dynamiclib/-bundle/' libtool
+fi
+grep -q 'module_cmds=.*-bundle' libtool || {
+    echo "error: could not configure libtool to emit MH_BUNDLE plugins" >&2
+    exit 1
+}
+
+# Existing incremental x86/x64/arm64 trees already contain MH_DYLIB module
+# outputs. Changing libtool alone does not make Automake relink them, so remove
+# only the final plugin targets once. Their object files and contribs remain
+# cached; make recreates the modules immediately with the uniform file type.
+PLUGIN_FORMAT_STAMP=.powervlc-plugin-format-bundle-v1
+if [ ! -f "$PLUGIN_FORMAT_STAMP" ]; then
+    info "Relinking plugins once to normalise their Mach-O type"
+    find modules \( -name '*_plugin.la' -o -name '*_plugin.dylib' \) \
+        -exec rm -f {} +
+    touch "$PLUGIN_FORMAT_STAMP"
+fi
 
 #
 # make

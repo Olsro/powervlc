@@ -679,6 +679,9 @@ QMenu *VLCMenuBar::SubtitleMenu( intf_thread_t *p_intf, QMenu *current, bool b_p
     {
         addDPStaticEntry( current, qtr( "Add &Subtitle File..." ), "",
                 SLOT( loadSubtitlesFile() ) );
+        QAction *search = current->addAction( qtr("Find Subtitles Online...") );
+        QObject::connect( search, &QAction::triggered,
+            ExtensionsManager::getInstance( p_intf ), &ExtensionsManager::searchSubtitles );
         addActionWithSubmenu( current, "spu-es", qtr( "Sub &Track" ) );
         current->addSeparator();
     }

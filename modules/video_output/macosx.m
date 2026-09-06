@@ -356,6 +356,45 @@ static bool ParkStereoDisplayHandoff(vout_display_t *vd)
 
 static bool IsFramePackableStereo(video_multiview_mode_t mode);
 
+/* Keep the automatic HDMI 3D choice for the lifetime of the parent vout.
+ * Seeking an MVC title can reopen this display module while the same vout is
+ * still alive.  Asking synchronously from every Open() both repeats a choice
+ * the user has already made and leaves playback without a video output until
+ * the replacement dialog is dismissed. */
+static bool ShouldSwitchToStereoDisplay(vout_display_t *vd)
+{
+    const int policy = var_InheritInteger(vd, "stereo3d-display-mode");
+    if (policy != 1)
+        return policy == 0;
+
+    vlc_object_t *vout = vd->obj.parent;
+    static const char decision_var[] = "stereo3d-display-prompt-result";
+    if (vout != NULL &&
+        (var_Type(vout, decision_var) & VLC_VAR_CLASS) == VLC_VAR_INTEGER)
+    {
+        const bool switch_display =
+            var_GetInteger(vout, decision_var) == 1;
+        msg_Dbg(vd, "reusing the HDMI 3D display choice for this playback: %s",
+                switch_display ? "change mode" : "keep current mode");
+        return switch_display;
+    }
+
+    const int answer = vlc_dialog_wait_question(
+        vd, VLC_DIALOG_QUESTION_NORMAL,
+        _("Keep current mode"), _("Change mode"), NULL,
+        _("Blu-ray 3D video detected"), "%s",
+        _("Switch the HDMI display to the standardized frame-packed 3D "
+          "raster and enter full screen? The current mode will be restored "
+          "after playback."));
+
+    if (vout != NULL)
+    {
+        var_Create(vout, decision_var, VLC_VAR_INTEGER);
+        var_SetInteger(vout, decision_var, answer == 1 ? 1 : 0);
+    }
+    return answer == 1;
+}
+
 #if defined(__arm64__)
 
 typedef struct
@@ -2750,8 +2789,7 @@ static void SelectStereoDisplayMode(vout_display_t *vd)
     if (!IsFramePackableStereo(vd->fmt.multiview_mode))
         return;
 
-    int policy = var_InheritInteger(vd, "stereo3d-display-mode");
-    if (policy == 2)
+    if (!ShouldSwitchToStereoDisplay(vd))
         return;
 
     /* NSAppKitVersionNumber 1343 is Yosemite.  Mavericks' Ivy Bridge driver
@@ -2760,16 +2798,6 @@ static void SelectStereoDisplayMode(vout_display_t *vd)
      * legacy path is instead an ordinary CoreGraphics switch to a DTD-published
      * 1920x2205 timing, performed before any NSOpenGL context exists. */
     const bool legacy_display_stack = floor(NSAppKitVersionNumber) < 1343;
-    if (policy == 1 &&
-        vlc_dialog_wait_question(vd, VLC_DIALOG_QUESTION_NORMAL,
-                                 _("Keep current mode"), _("Change mode"), NULL,
-                                 _("Blu-ray 3D video detected"), "%s",
-                                 _("Switch the HDMI display to the standardized "
-                                   "frame-packed 3D raster and enter full screen? "
-                                   "The current mode will be restored after "
-                                   "playback.")) != 1)
-        return;
-
     /* Establish foreground ownership before touching display topology.
      * Promoting the process after CGSConfigureDisplayEnabled() makes
      * Mavericks rebuild the application desktop and silently re-enables the
@@ -3510,7 +3538,7 @@ static int Open (vlc_object_t *this)
         /* Get our main view*/
         VLCOpenGLVideoViewCreationRequest viewRequest = {
             (id *)&sys->glView,
-            vd->fmt.dovi.rpu_present &&
+            vout_display_opengl_RequiresHDRRenderer(&vd->fmt) &&
                 !sys->stereo_mode_ready &&
                 !IsFramePackableStereo(vd->fmt.multiview_mode)
         };
@@ -4137,6 +4165,24 @@ static void OpenglSwap (vlc_gl_t *gl)
             0
         };
         fmt = [[NSOpenGLPixelFormat alloc] initWithAttributes:edrAttribs];
+        if (!fmt)
+        {
+            /* The HDR renderer still needs OpenGL >= 3 when AppKit cannot
+             * create a floating EDR drawable and SDR tone mapping is used. */
+            NSOpenGLPixelFormatAttribute sdrCoreAttribs[] =
+            {
+                NSOpenGLPFADoubleBuffer,
+                NSOpenGLPFAAccelerated,
+                NSOpenGLPFANoRecovery,
+                (NSOpenGLPixelFormatAttribute)99,
+                (NSOpenGLPixelFormatAttribute)0x4100,
+                NSOpenGLPFAColorSize, 24,
+                NSOpenGLPFAAlphaSize, 8,
+                NSOpenGLPFAAllowOfflineRenderers,
+                0
+            };
+            fmt = [[NSOpenGLPixelFormat alloc] initWithAttributes:sdrCoreAttribs];
+        }
     }
 #endif
 

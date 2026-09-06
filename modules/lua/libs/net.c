@@ -345,17 +345,28 @@ static int vlclua_net_connect_tcp( lua_State *L )
         i_old_timeout = var_GetInteger( p_this, "ipv4-timeout" );
         var_SetInteger( p_this, "ipv4-timeout", i_timeout );
     }
+    int i_fd = -1;
+#ifdef _WIN32
+    /* Winsock SOCKET values are not MSVCRT file descriptors. vlc_dup() uses
+     * _dup() on Windows, so applying it to vlc_tls_GetFD() fails with EBADF
+     * after the TCP handshake; closing the wrapper then leaves Lua with -1.
+     * This manifested as Soulseek failing outright and aMule accepting and
+     * immediately losing a new EC connection twice a second. The direct
+     * connector returns ownership of the Winsock socket and already honors
+     * the temporary ipv4-timeout value above. */
+    i_fd = net_ConnectTCP( p_this, psz_host, i_port );
+#else
     /* The stream-access TCP path uses the newer resolver/socket race and is
      * reliable on Jaguar, while the historical net_ConnectTCP() path can
-     * reject an otherwise reachable IPv4 endpoint there.  Keep Lua's raw-fd
+     * reject an otherwise reachable IPv4 endpoint there. Keep Lua's raw-fd
      * API by duplicating the connected socket before releasing its wrapper. */
     vlc_tls_t *p_socket = vlc_tls_SocketOpenTCP( p_this, psz_host, i_port );
-    int i_fd = -1;
     if( p_socket != NULL )
     {
         i_fd = vlc_dup( vlc_tls_GetFD( p_socket ) );
         vlc_tls_Close( p_socket );
     }
+#endif
     if( i_timeout >= 0 )
     {
         var_SetInteger( p_this, "ipv4-timeout", i_old_timeout );

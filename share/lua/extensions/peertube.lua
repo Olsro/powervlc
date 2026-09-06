@@ -1087,6 +1087,12 @@ function peertube_click_play()
   local caption = chosen_caption()
   if caption then table.insert(options, ":sub-file=" .. caption.url) end
   local channel = app.video.channel or {}
+  -- Updating an extension dialog is synchronous on the Qt thread. Do it
+  -- before starting the first video: doing it immediately afterwards can
+  -- repaint the still-open PeerTube window while XWayland is creating the
+  -- OpenGL video drawable, leaving that drawable permanently black even
+  -- though decoding continues normally.
+  set_message(lang.msg_playing)
   vlc.playlist.add({{
     path = format.url,
     name = app.video.name,
@@ -1096,7 +1102,6 @@ function peertube_click_play()
     arturl = app.video._thumbnail,
     options = options,
   }})
-  set_message(lang.msg_playing)
 end
 
 -- Losslessly put a separately downloaded video and audio stream into one

@@ -93,9 +93,10 @@ REVISION="$(git -C "$REPO" describe --always HEAD 2>/dev/null || echo "$PVLC_VER
 SEED='set -e; git config --global --add safe.directory /src;
   ( cd /src && git ls-files -co --exclude-standard -z \
       | grep -zv "^contrib/tarballs/" \
-      | rsync -0a --files-from=- /src/ /work/ );
+      | rsync -0a --ignore-missing-args --files-from=- /src/ /work/ );
   ( cd /src && git ls-files -co --exclude-standard -z -- contrib/tarballs \
-      | rsync -0a --ignore-existing --files-from=- /src/ /work/ );
+      | rsync -0a --ignore-existing --ignore-missing-args --files-from=- /src/ /work/ );
+  ( cd /work && git -C /src ls-files -d -z | xargs -0 -r rm -f -- );
   ( cd /src && ls po/*.gmo 2>/dev/null \
       | rsync -a --files-from=- /src/ /work/ ) || true;
   mkdir -p /work/src; printf "%s\n" "${REVISION:-unknown}" > /work/src/revision.txt;
@@ -223,6 +224,66 @@ package_zip() { # package_zip <label> <glob relative to $OUT> <stamp file>
     echo "  packaged: $OUT/$zipname" )
 }
 
+# Linux release ZIPs also carry a distribution-neutral, unprivileged installer.
+# A relocatable desktop entry invokes the hidden shell implementation beside it;
+# the latter installs the AppImage and its embedded desktop entry in XDG paths.
+package_linux_zip() { # package_linux_zip <label> <glob relative to $OUT> <stamp file>
+  ( cd "$OUT"
+    if ! command -v zip >/dev/null 2>&1; then
+      echo "WARN: 'zip' not found; skipping the $1 archive" >&2
+      exit 0
+    fi
+    files=$(find . -maxdepth 1 -name "$2" -newer "$3" 2>/dev/null \
+            | sed 's|^\./||')
+    if [ -z "$files" ]; then
+      echo "WARN: nothing matching '$2'; no $1 archive made" >&2
+      exit 0
+    fi
+    installer_script="$REPO/extras/package/appimage/install-powervlc.sh"
+    installer_i18n="$REPO/extras/package/appimage/install-powervlc-i18n.sh"
+    installer_desktop="$REPO/extras/package/appimage/install-powervlc.desktop"
+    test -x "$installer_script"
+    test -r "$installer_i18n"
+    test -x "$installer_desktop"
+    zipname="powervlc-$PVLC_VER-$1.zip"
+    rm -f "$zipname"
+    stage=$(mktemp -d "$OUT/.powervlc-linux-zip.XXXXXX")
+    trap 'rm -rf "$stage"' EXIT HUP INT TERM
+    for file in $files; do cp "$file" "$stage/"; done
+    cp "$installer_desktop" "$stage/Install PowerVLC.desktop"
+    cp "$installer_script" "$stage/.install-powervlc.sh"
+    cp "$installer_i18n" "$stage/.install-powervlc-i18n.sh"
+    chmod 0755 "$stage/Install PowerVLC.desktop" "$stage/.install-powervlc.sh"
+    chmod 0644 "$stage/.install-powervlc-i18n.sh"
+    ( cd "$stage" && zip -q "$OUT/$zipname" ./* ./.install-powervlc.sh \
+        ./.install-powervlc-i18n.sh )
+    rm -rf "$stage"
+    trap - EXIT HUP INT TERM
+    echo "  packaged: $OUT/$zipname (AppImage + double-click installer)" )
+}
+
+# The compiler image is deliberately linux/arm64 on Apple Silicon, but the
+# cache generator has to load the finished PE plug-ins. Run that short
+# finalization step in a target-matched Wine container: no Windows host is
+# involved, and no target emulation slows down the multi-hour compilation.
+finalize_windows_portable() { # finalize_windows_portable <win target> <input name> <output name>
+  case "$1" in
+    win32)    cache_platform=linux/386 ;;
+    win64)    cache_platform=linux/amd64 ;;
+    winarm64) cache_platform=linux/arm64 ;;
+    *) echo "ERROR: unsupported Windows cache target: $1" >&2; return 2 ;;
+  esac
+  cache_arch=${cache_platform#linux/}
+  cache_image="powervlc-wine-cache-${cache_arch}-v1"
+
+  docker build --platform "$cache_platform" -t "$cache_image" \
+    -f "$DOCKER_DIR/Dockerfile.windows-cache" "$DOCKER_DIR"
+
+  docker run --rm --network none --platform "$cache_platform" \
+    -v "$OUT":/out \
+    "$cache_image" "$1" "/out/$2" "/out/$3"
+}
+
 build_windows() { # build_windows <arch-flags> <name-glob>
   WORK_VOL="powervlc-build-windows"
   # marks the artifacts of this run, see package_zip
@@ -235,6 +296,9 @@ build_windows() { # build_windows <arch-flags> <name-glob>
   { sleep 3; docker image inspect powervlc-win >/dev/null 2>&1; } || \
   docker build --platform linux/arm64 -t powervlc-win \
     -f "$DOCKER_DIR/Dockerfile.windows" "$DOCKER_DIR"
+  raw_port_name=".powervlc-$PVLC_VER-$2-portable.raw.zip"
+  final_port_name="powervlc-$PVLC_VER-$2-portable.zip"
+  rm -f "$OUT/$raw_port_name" "$OUT/$final_port_name"
   docker_run linux/arm64 powervlc-win \
     "$SEED
      $DISK_HELPERS
@@ -270,16 +334,23 @@ build_windows() { # build_windows <arch-flags> <name-glob>
      found=\$(find /work -maxdepth 2 -name 'PowerVLC-*-$2*.exe' -o -maxdepth 2 -name 'vlc-*-$2*.exe' | head -20)
      [ -n \"\$found\" ] || { echo 'ERROR: no $2 installer produced'; exit 1; }
      for f in \$found; do cp -v \"\$f\" /out/; done
-     # The portable archive (package-win32-portable-zip) is already the final
-     # deliverable -- a zip of the app tree with the 'portable' marker folder in
-     # it -- so it is copied out under its release name directly rather than
-     # being wrapped in a second zip like the installer is. Renaming here and
-     # not in the Makefile keeps the case fold from biting: /out lives on the
-     # host, and on macOS 'PowerVLC-....zip' and 'powervlc-....zip' are the
-     # same file.
+     # Copy the raw portable tree to a hidden intermediate. A target-matched
+     # Wine container below generates plugins.dat from the exact stripped DLL
+     # set and publishes the verified release archive. Renaming here and not in
+     # the Makefile also keeps the case fold from biting: /out lives on the
+     # host, and on macOS 'PowerVLC-....zip' and 'powervlc-....zip' are the same
+     # file.
      port=\$(find /work -maxdepth 2 -name 'PowerVLC-*-$2-portable.zip' | head -1)
      [ -n \"\$port\" ] || { echo 'ERROR: no $2 portable archive produced'; exit 1; }
-     cp -v \"\$port\" \"/out/powervlc-\$PVLC_VER-$2-portable.zip\""
+     cp -v \"\$port\" \"/out/$raw_port_name\""
+
+  if finalize_windows_portable "$2" "$raw_port_name" "$final_port_name"; then
+    rm -f "$OUT/$raw_port_name"
+  else
+    status=$?
+    rm -f "$OUT/$raw_port_name" "$STAMP"
+    return "$status"
+  fi
   # '-nsis': what this zip holds is the installer, and it now has a portable
   # sibling to be told apart from. The plain 'powervlc-<ver>-<arch>.zip' of
   # earlier releases was this same file under an ambiguous name.
@@ -336,13 +407,17 @@ build_linux_appimage() { # build_linux_appimage <platform> <base-image> <appimag
      fi
      ( cd contrib && mkdir -p native && cd native && \
        ../bootstrap && VLC_FFMPEG_NO_OPENJPEG=1 \
-       make -j\$(nproc) .ffmpeg .postproc .afpclient .smb2 .bluray )
+       make -j\$(nproc) .ffmpeg .postproc .afpclient .smb2 .bluray .edge264 )
      CONTRIB_PREFIX=\$(ls -d /work/contrib/*-linux-gnu* 2>/dev/null | grep -v contrib- | head -1)
      export PKG_CONFIG_PATH=\"\$CONTRIB_PREFIX/lib/pkgconfig\${PKG_CONFIG_PATH:+:\$PKG_CONFIG_PATH}\"
      ./bootstrap
      # --disable-update-check: no integrated updater in the fork. It is
      # already configure's default, stated here so it stays off.
-     ./configure --disable-wayland --enable-merge-ffmpeg --enable-smb2 \
+     # Modern FFmpeg no longer exports the VLC 3 VDPAU adapter helpers. The
+     # ARM64 AppImage has no legacy libavcodec fallback, so omit that unusable
+     # module just as the FFmpeg contrib omits its VDPAU pixel format.
+     ./configure --disable-wayland --disable-vdpau \
+                 --enable-merge-ffmpeg --enable-smb2 \
                  --disable-update-check --prefix=/usr
      make -j\$(nproc)
      # Stale AppImages from previous runs (older version strings) linger in
@@ -352,7 +427,7 @@ build_linux_appimage() { # build_linux_appimage <platform> <base-image> <appimag
      VERSION=\"\$PVLC_VER\" BUILDDIR=/work WORKDIR=/work \
        extras/package/appimage/build-appimage.sh
      cp -v /work/PowerVLC-*.AppImage /out/"
-  package_zip "linux-$3" "PowerVLC-*-$3.AppImage" "$STAMP"
+  package_linux_zip "linux-$3" "PowerVLC-*-$3.AppImage" "$STAMP"
   rm -f "$STAMP"
 }
 
@@ -394,6 +469,11 @@ configure_linux_cross() { # configure_linux_cross <amd64|i386>
      for lib in avcodec avformat avutil postproc swscale; do
        sed -i \"s#-l\$lib #/work/contrib-$triplet-glibc227/lib/lib\$lib.a #g\" modules/Makefile
      done
+     # The Bionic sysroot also contains an incompatible libplacebo 0.2 shared
+     # object and its -L path precedes the contrib directory. Pin the modern
+     # static archive selected by configure so the DOVI renderer cannot bind
+     # to the old ABI during cross-linking.
+     sed -i \"s#-lplacebo #/work/contrib-$triplet-glibc227/lib/libplacebo.a #g\" modules/Makefile
      # FFmpeg 7 removed two VDPAU helper symbols still used by VLC's VDPAU
      # module. Keep modern FFmpeg for normal playback, but link that single
      # compatibility module to Bionic's libavcodec 57, which exports them.
@@ -410,6 +490,21 @@ build_linux_cross_ffmpeg() { # build_linux_cross_ffmpeg <amd64|i386>
      cd /work
      sysroot=/opt/sysroots/$triplet-glibc-2.27
      ( cd extras/tools && ./bootstrap && rm -rf nasm .nasm && CC=gcc CXX=g++ make .buildnasm )
+     # Ubuntu 22.04 provides Meson 0.61, while the pinned libplacebo renderer
+     # needs Meson 1.3. Keep the host-side build tool in the persistent volume;
+     # it never becomes part of the glibc-2.27 target runtime.
+     meson_root=/work/.scratch-tools/meson-1.3.2
+     meson_tar=/work/.scratch-tools/meson-1.3.2.tar.gz
+     mkdir -p /work/.scratch-tools
+     if [ ! -f \"\$meson_tar\" ]; then
+       curl -fL --retry 3 -o \"\$meson_tar\" \
+         https://github.com/mesonbuild/meson/releases/download/1.3.2/meson-1.3.2.tar.gz
+     fi
+     echo '6369c6d64f91c769f0f4d3e2445bb3615785998489d41acba2134b44ec89abd04bd97a3d3d17c64779eb40b0bf4808e3419eb47638169446a98824d680f37a7b  '\"\$meson_tar\" | sha512sum -c -
+     if [ ! -x \"\$meson_root/meson.py\" ]; then
+       tar -xzf \"\$meson_tar\" -C /work/.scratch-tools
+     fi
+     ln -sf \"\$meson_root/meson.py\" /work/extras/tools/build/bin/meson
      export PATH=/work/extras/tools/build/bin:\$PATH
      toolchain=/work/.toolchains/prefix/$triplet
      test -x "\$toolchain/bin/$triplet-gcc"
@@ -427,7 +522,10 @@ build_linux_cross_ffmpeg() { # build_linux_cross_ffmpeg <amd64|i386>
      # Keep Bionic's fontconfig/freetype pair, but build libbluray itself: VLC
      # uses a non-public libbluray header not shipped by Ubuntu's -dev package.
      touch .fontconfig .dep-fontconfig
-     make -j\$(nproc) .ffmpeg .postproc .afpclient .smb2 .bluray
+     # The 64-bit OpenGL output uses current libplacebo for Dolby Vision RPU
+     # mapping.  It used to be omitted from this reduced contrib target, which
+     # silently configured the AppImage with only VLC's legacy SDR shader path.
+     make -j\$(nproc) .ffmpeg .postproc .afpclient .smb2 .bluray .libplacebo .edge264
      test -f ../contrib-$triplet-glibc227/lib/pkgconfig/libavcodec.pc
      echo \"OK: FFmpeg contrib built natively for $triplet.\""
 }
@@ -446,14 +544,21 @@ build_linux_cross_core() { # build_linux_cross_core <amd64|i386>
 
 build_linux_cross_appimage() { # build_linux_cross_appimage <amd64|i386>
   case "$1" in amd64) label=x86_64 ;; i386) label=i386 ;; esac
+  # Keep the cross path's release layout identical to the native Linux path:
+  # the raw AppImage is useful locally and the versioned ZIP is what the
+  # release collector picks up.  The stamp also prevents stale artifacts in
+  # the persistent cross volume from being folded into a new release archive.
+  STAMP=$(mktemp)
   build_legacy_cross_toolchain "$1"
   build_linux_cross_ffmpeg "$1"
   configure_linux_cross "$1"
   build_linux_cross_core "$1"
   WORK_VOL="powervlc-build-linux-cross-$1"
   docker_run linux/arm64 "$(cross_image "$1")" \
-    "package-cross-appimage $1
+    "sh /src/extras/package/docker/package-cross-appimage.sh $1
      cp -v /work/PowerVLC-\$PVLC_VER-$label.AppImage /out/"
+  package_linux_zip "linux-$label" "PowerVLC-*-$label.AppImage" "$STAMP"
+  rm -f "$STAMP"
 }
 
 build_legacy_cross_toolchain() { # build_legacy_cross_toolchain <amd64|i386>

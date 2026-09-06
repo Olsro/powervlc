@@ -1,0 +1,13 @@
+# Generated from Slang; do not edit.
+shaders = "1"
+shader0 = "slang/programs/74985f1d6d01a56e96a1451e3761bf6e849f0ddf92b398c72e74d8ee9481d3cb.glsl"
+filter_linear0 = "false"
+scale_type0 = "viewport"
+hlsl_vertex0 = "slang/hlsl/c4f85c7ddf24ffdd05260d84542b9c4c07b6b4d842f5404b12ba79ddf0841c8e.hlsl"
+hlsl_fragment0 = "slang/hlsl/650da1fe88d27ccc95ecca691ea3525c95a3dc58693d015a1ee4b135ce3ce4e8.hlsl"
+hlsl_buffer0_size0 = "96"
+hlsl_buffer0_members0 = "MVP:0:mat4;OutputSize:64:vec4;SourceSize:80:vec4"
+hlsl_buffer1_size0 = "48"
+hlsl_buffer1_members0 = "AAz:16:float;capa:24:float;capaiter:28:float;capashape:32:float;cus:0:float;dts:12:float;gma:40:float;marginv:8:float;scl:36:float;sling:44:float;vex:20:float;vstr:4:float"
+hlsl_textures0 = "Texture:1"
+hlsl_parameters0 = "AAz:64;capa:1;capaiter:5;capashape:3;cus:0.15;dts:1;gma:1;marginv:0.02;scl:240;sling:2;vex:2;vstr:0.05"

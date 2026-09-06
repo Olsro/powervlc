@@ -508,7 +508,20 @@ extras/package/docker/out/powervlc-<version>-<label>.zip
 | `linux-i386-appimage` | `powervlc-<ver>-linux-i386.zip` |
 
 The Linux labels carry the **AppImage architecture**, not the Docker platform
-name, so the zip and the file it contains agree.
+name, so the zip and the AppImage it contains agree. Every Linux zip also has
+an executable desktop entry named `Install PowerVLC.desktop`; launching it installs or
+atomically updates the matching AppImage for the current user under
+`$XDG_DATA_HOME` (normally `~/.local/share`), extracts its own desktop entry and
+icon, refreshes the XDG application menu and launches PowerVLC. It requires no
+root privileges. A Zenity, KDialog or X11 dialog asks whether to install,
+update, uninstall or cancel before changing anything and confirms completion;
+a desktop notification is the final success-message fallback. GNOME requires
+the user to select **Allow Launching** once from the file's context menu after
+extraction; this trust marker deliberately cannot be supplied by an archive.
+The hidden `.install-powervlc.sh` contains the portable installer logic,
+while `.install-powervlc-i18n.sh` provides its human-written translations.
+The script accepts `--install --no-launch` for unattended installation or
+`--uninstall` to remove the application while preserving preferences.
 
 The raw `.exe` / `.AppImage` is **kept** alongside its zip: that is the file you
 run locally, the zip is the one you hand out. Zipping is deliberately
@@ -543,16 +556,41 @@ Two things worth knowing about that folder:
   So it carries `README.txt` (`extras/package/win32/portable-README.txt`,
   UTF-8 **with BOM** and CRLF, so XP's Notepad renders it), which also explains
   the mode to whoever unzips it.
-- The portable tree ships **no `plugins.dat`**: `powervlc-cache-gen.exe` is a
-  Windows binary for a foreign architecture and the packaging runs on Linux
-  with no wine (the NSIS installer runs it on the target machine instead). The
-  first launch pays the full scan of the ~330 plugins and then writes the cache
-  itself into `plugins/`, so it costs **one** slow start, once. That
-  self-healing is the `_WIN32` branch of `AllocatePluginPath()` in
-  `src/modules/bank.c` (it already existed for the macOS zips, which are
-  deployed the same way): without it, nothing on Windows ever writes
-  `plugins.dat` outside the installer, and the portable build would pay the
-  scan on **every** start, forever.
+- The Linux cross-build initially produces the portable tree without
+  `plugins.dat`, because `powervlc-cache-gen.exe` is a Windows binary for a
+  foreign architecture. `build-in-docker.sh` now finalizes it automatically:
+  it starts a dedicated Wine container matching the target (`linux/386`,
+  `linux/amd64` or `linux/arm64`), extracts the exact stripped deliverable,
+  runs the archive's own cache generator, verifies the cache and republishes
+  only the completed ZIP. No Windows build or finalization host is required.
+  The compiler itself remains in the fast native ARM64 container; only this
+  short finalization step uses target execution. `plugins.dat` stores
+  relocatable plug-in entries, so the portable folder can still be moved
+  freely. This avoids asking Defender and similar products to inspect and
+  dynamically load all ~330 plug-in DLLs during first launch; only the modules
+  actually used by a session are loaded.
+
+  Archives made by invoking the Make target directly remain self-healing: the
+  `_WIN32` branch of `AllocatePluginPath()` in `src/modules/bank.c` writes the
+  cache after the first scan. That is a safety net, not the release path.
+
+The NSIS installer deliberately uses per-file zlib compression rather than a
+solid LZMA stream. The release is larger, but extraction starts immediately,
+needs less memory on legacy PCs and can run concurrently with modern real-time
+file inspection. The installer still writes native plug-in DLLs individually
+because the Windows loader must map them as files; reducing that count requires
+link-time plug-in packs, not another archive nested inside NSIS.
+
+RetroArch data is different: shader sources, presets and lookup textures do not
+need to be mapped as Windows modules. `package-win-strip` therefore runs
+`extras/tools/pack-retroarch-shaders.py` and replaces the installed
+`retroarch-shaders/` tree with one uncompressed, seekable
+`retroarch-shaders.pak`. The portable ZIP and NSIS then compress that single
+file normally. At runtime the OpenGL renderer reads an indexed shader or LUT
+straight from the catalogue, with no extraction to disk. Loose resources remain
+supported in development trees and non-Windows packages. Keep the pack itself
+uncompressed internally: adding a second compression layer would prevent random
+access and bring back a whole-catalogue decompression cost.
 
 `package-win32` no longer pulls in `package-win32-zip` and
 `package-win32-7zip`: nothing ever collected either of them, the plain zip is

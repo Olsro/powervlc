@@ -187,6 +187,17 @@ ExtensionDialog* ExtensionsDialogProvider::UpdateExtDialog(
          * constructor runs UpdateWidgets(), which resizes it. */
         RestoreDialogCorner( dialog, p_dialog );
         dialog->setVisible( !p_dialog->b_hide );
+        /* A view change is implemented by deleting the old top-level window
+         * and creating this one from the extension worker thread.  On X11 and
+         * Wayland the window manager is consequently free to place the new
+         * window below the player, even though the action originated from a
+         * double-click in the old dialog.  Explicitly transfer activation to
+         * the replacement while the user-initiated update is still current. */
+        if( !p_dialog->b_hide )
+        {
+            dialog->raise();
+            dialog->activateWindow();
+        }
         dialog->has_lock = false;
     }
     else if( !p_dialog->b_kill && dialog )
@@ -1267,27 +1278,26 @@ QWidget* ExtensionDialog::UpdateWidget( extension_widget_t *p_widget )
 
         case EXTENSION_WIDGET_DROPDOWN:
             comboBox = static_cast< QComboBox* >( p_widget->p_sys_intf );
-            // method widget:clear()
-            if ( p_widget->p_values == NULL )
+            /* Rebuild the model whenever the script changes its values.
+             * A clear() followed by add_value() can reuse visible labels
+             * with different ids (for example after refreshing a language
+             * catalogue). Keeping the old QComboBox rows in that case makes
+             * findData() select an unrelated entry. */
             {
+                const bool signalsBlocked = comboBox->blockSignals( true );
+                int selectedIndex = -1;
                 comboBox->clear();
-                return comboBox;
-            }
-            // method widget:addvalue()
-            for( p_value = p_widget->p_values;
-                 p_value != NULL;
-                 p_value = p_value->p_next )
-            {
-                if ( comboBox->findText( qfu( p_value->psz_text ) ) < 0 )
-                    comboBox->addItem( qfu( p_value->psz_text ), p_value->i_id );
-                /* the script may have chosen an entry other than the
-                 * first one, see set_value */
-                if ( p_value->b_selected )
+                for( p_value = p_widget->p_values;
+                     p_value != NULL;
+                     p_value = p_value->p_next )
                 {
-                    int idx = comboBox->findData( p_value->i_id );
-                    if ( idx >= 0 && idx != comboBox->currentIndex() )
-                        comboBox->setCurrentIndex( idx );
+                    comboBox->addItem( qfu( p_value->psz_text ), p_value->i_id );
+                    if ( p_value->b_selected )
+                        selectedIndex = comboBox->count() - 1;
                 }
+                if ( selectedIndex >= 0 )
+                    comboBox->setCurrentIndex( selectedIndex );
+                comboBox->blockSignals( signalsBlocked );
             }
             return comboBox;
 

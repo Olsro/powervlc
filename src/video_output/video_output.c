@@ -37,6 +37,7 @@
 #include <vlc_common.h>
 
 #include <stdlib.h>                                                /* free() */
+#include <stdio.h>
 #include <string.h>
 #include <assert.h>
 
@@ -641,6 +642,13 @@ void vout_ControlChangeFullscreen(vout_thread_t *vout, bool fullscreen)
     vout_control_PushBool(&vout->p->control, VOUT_CONTROL_FULLSCREEN,
                           fullscreen);
 }
+
+int vout_RestartDisplay(vout_thread_t *vout)
+{
+    vout_control_PushVoid(&vout->p->control, VOUT_CONTROL_RESTART_DISPLAY);
+    vout_control_WaitEmpty(&vout->p->control);
+    return VLC_SUCCESS;
+}
 void vout_ControlChangeWindowState(vout_thread_t *vout, unsigned st)
 {
     vout_control_PushInteger(&vout->p->control, VOUT_CONTROL_WINDOW_STATE, st);
@@ -1042,6 +1050,14 @@ static int ThreadDisplayPreparePicture(vout_thread_t *vout, bool reuse, bool fra
                         late_threshold = (num * decoded->format.i_frame_rate_base) / decoded->format.i_frame_rate;
                     else
                         late_threshold = VOUT_DISPLAY_LATE_THRESHOLD * (num / (CLOCK_FREQ/2));
+                    vout_display_t *vd = vout->p->display.vd;
+                    if (vd != NULL &&
+                        var_Type(vd, "vout-late-threshold") != 0) {
+                        const vlc_tick_t display_threshold =
+                            var_GetInteger(vd, "vout-late-threshold");
+                        if (late_threshold < display_threshold)
+                            late_threshold = display_threshold;
+                    }
                     const vlc_tick_t predicted = mdate() + 0; /* TODO improve */
                     const vlc_tick_t late = predicted - decoded->date;
                     /* A picture decoded by the GPU costs nothing to display:
@@ -1183,7 +1199,11 @@ static void SpuDisplayFormat(video_format_t *fmt, vout_display_t *vd)
     vout_display_PlacePicture(&place, &vd->source, vd->cfg, false);
 
     *fmt = vd->source;
-    if (fmt->i_width * fmt->i_height < place.width * place.height) {
+    const bool per_eye_canvas =
+        var_Type(vd, "vout-spu-eye-canvas") != 0 &&
+        var_GetBool(vd, "vout-spu-eye-canvas");
+    if (!per_eye_canvas &&
+        fmt->i_width * fmt->i_height < place.width * place.height) {
         /* "place" is expressed in display coordinates: vout_display_PlacePicture
          * has already applied the source rotation to it. This format still
          * carries that rotation and the caller applies it once more
@@ -1612,13 +1632,17 @@ static int ThreadDisplayPicture(vout_thread_t *vout, vlc_tick_t *deadline)
     const vlc_tick_t presentation_advance =
         var_Type(vd, "vout-presentation-advance") != 0
             ? var_GetInteger(vd, "vout-presentation-advance") : 0;
+    const vlc_tick_t render_advance =
+        var_Type(vd, "vout-render-advance") != 0
+            ? var_GetInteger(vd, "vout-render-advance")
+            : presentation_advance;
     const vlc_tick_t render_delay = vout_chrono_GetHigh(&vout->p->render) + VOUT_MWAIT_TOLERANCE;
 
     bool drop_next_frame = frame_by_frame || forced_next;
     vlc_tick_t date_next = VLC_TICK_INVALID;
     if (!paused && vout->p->displayed.next) {
         date_next = vout->p->displayed.next->date - render_delay
-                  - presentation_advance;
+                  - render_advance;
         if (date_next /* + 0 FIXME */ <= date)
             drop_next_frame = true;
         else if (date_next - date > CLOCK_FREQ * 60) {
@@ -2338,6 +2362,8 @@ static int ThreadReinit(vout_thread_t *vout,
                         const vout_configuration_t *cfg)
 {
     video_format_t original;
+    const bool force_display_restart =
+        var_GetBool(vout, "powervlc-force-display-restart");
 
     vout->p->pause.is_on = false;
     vout->p->pause.date  = VLC_TICK_INVALID;
@@ -2353,7 +2379,8 @@ static int ThreadReinit(vout_thread_t *vout,
      * previous format). */
     vout->p->original.i_sar_num = original.i_sar_num;
     vout->p->original.i_sar_den = original.i_sar_den;
-    if (video_format_IsSimilar(&original, &vout->p->original)) {
+    if (!force_display_restart &&
+        video_format_IsSimilar(&original, &vout->p->original)) {
         if (cfg->dpb_size <= vout->p->dpb_size) {
             video_format_Clean(&original);
             return VLC_SUCCESS;
@@ -2385,6 +2412,19 @@ static int ThreadReinit(vout_thread_t *vout,
     var_SetBool(vout, "stereo3d-vout-reinit", true);
     ThreadStop(vout, &state);
 
+#ifdef __linux__
+    if (force_display_restart) {
+        const char *path = getenv("POWERVLC_KMS3D_RELEASED");
+        if (path != NULL && *path != '\0') {
+            FILE *marker = fopen(path, "w");
+            if (marker != NULL) {
+                fputs("released\n", marker);
+                fclose(marker);
+            }
+        }
+    }
+#endif
+
     vout_ReinitInterlacingSupport(vout);
 
 #if defined(_WIN32) || defined(__OS2__)
@@ -2412,10 +2452,78 @@ static int ThreadReinit(vout_thread_t *vout,
     vout->p->dpb_size = cfg->dpb_size;
     if (ThreadStart(vout, &state)) {
         var_SetBool(vout, "stereo3d-vout-reinit", false);
+        var_SetBool(vout, "powervlc-force-display-restart", false);
         ThreadClean(vout);
         return VLC_EGENERIC;
     }
     var_SetBool(vout, "stereo3d-vout-reinit", false);
+    var_SetBool(vout, "powervlc-force-display-restart", false);
+#ifdef __linux__
+    if (force_display_restart) {
+        const char *path = getenv("POWERVLC_KMS3D_ACTIVE");
+        if (path != NULL && *path != '\0') {
+            FILE *marker = fopen(path, "w");
+            if (marker != NULL) {
+                fputs("active\n", marker);
+                fclose(marker);
+            }
+        }
+    }
+#endif
+    return VLC_SUCCESS;
+}
+
+static int ThreadRestartDisplay(vout_thread_t *vout)
+{
+    vout_display_state_t state;
+    memset(&state, 0, sizeof(state));
+
+    /* Exchange the display backend on its owning vout thread. This works for
+     * moving video and interactive stills alike while leaving the decoder,
+     * input and BD-J VM untouched. */
+    vout->p->cache_hold = false;
+    vout->p->cache_headroom = 0;
+    var_Create(vout, "stereo3d-vout-reinit", VLC_VAR_BOOL);
+    var_SetBool(vout, "stereo3d-vout-reinit", true);
+    ThreadStop(vout, &state);
+#ifdef __linux__
+    const char *released_path = getenv("POWERVLC_KMS3D_RELEASED");
+    if (released_path != NULL && *released_path != '\0') {
+        FILE *marker = fopen(released_path, "w");
+        if (marker != NULL) {
+            fputs("released\n", marker);
+            fclose(marker);
+        }
+    }
+#endif
+    vout_ReinitInterlacingSupport(vout);
+
+    state.cfg.display.width = 0;
+    state.cfg.display.height = 0;
+    state.sar.num = state.sar.den = 0;
+    if (state.cfg.display.sar.num <= 0 || state.cfg.display.sar.den <= 0)
+        state.cfg.display.sar.num = state.cfg.display.sar.den = 1;
+    if (state.cfg.zoom.num <= 0 || state.cfg.zoom.den <= 0)
+        state.cfg.zoom.num = state.cfg.zoom.den = 1;
+
+    if (ThreadStart(vout, &state)) {
+        var_SetBool(vout, "stereo3d-vout-reinit", false);
+        var_SetBool(vout, "powervlc-force-display-restart", false);
+        ThreadClean(vout);
+        return VLC_EGENERIC;
+    }
+    var_SetBool(vout, "stereo3d-vout-reinit", false);
+    var_SetBool(vout, "powervlc-force-display-restart", false);
+#ifdef __linux__
+    const char *active_path = getenv("POWERVLC_KMS3D_ACTIVE");
+    if (active_path != NULL && *active_path != '\0') {
+        FILE *marker = fopen(active_path, "w");
+        if (marker != NULL) {
+            fputs("active\n", marker);
+            fclose(marker);
+        }
+    }
+#endif
     return VLC_SUCCESS;
 }
 
@@ -2441,6 +2549,10 @@ static int ThreadControl(vout_thread_t *vout, vout_control_cmd_t cmd)
         return 1;
     case VOUT_CONTROL_REINIT:
         if (ThreadReinit(vout, cmd.u.cfg))
+            return 1;
+        break;
+    case VOUT_CONTROL_RESTART_DISPLAY:
+        if (ThreadRestartDisplay(vout))
             return 1;
         break;
     case VOUT_CONTROL_CANCEL:

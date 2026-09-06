@@ -43,6 +43,8 @@
 #include <vlc_vout.h>
 #include <vlc_playlist.h>
 #include <vlc_actions.h>
+#include <vlc_configuration.h>
+#include <vlc_vout_osd.h>
 
 #include <sys/types.h>
 #include <unistd.h>
@@ -731,6 +733,105 @@ static void *Run( void *data )
             var_SetInteger( p_intf->obj.libvlc, "key-action",
                             vlc_actions_get_id( psz_arg ) );
         }
+        else if( !strcmp( psz_cmd, "keycode" ) )
+        {
+            char *end;
+            errno = 0;
+            unsigned long code = strtoul( psz_arg, &end, 0 );
+            if( errno == 0 && end != psz_arg && *end == '\0' &&
+                code <= UINT32_MAX )
+                var_SetInteger( p_intf->obj.libvlc, "key-pressed", code );
+        }
+        else if( !strcmp( psz_cmd, "nav" ) && p_sys->p_input != NULL )
+        {
+            int query = !strcmp( psz_arg, "activate" ) ? INPUT_NAV_ACTIVATE :
+                        !strcmp( psz_arg, "up" )       ? INPUT_NAV_UP :
+                        !strcmp( psz_arg, "down" )     ? INPUT_NAV_DOWN :
+                        !strcmp( psz_arg, "left" )     ? INPUT_NAV_LEFT :
+                        !strcmp( psz_arg, "right" )    ? INPUT_NAV_RIGHT :
+                        !strcmp( psz_arg, "menu" )     ? INPUT_NAV_MENU :
+                        !strcmp( psz_arg, "popup" )    ? INPUT_NAV_POPUP : 0;
+            if( query != 0 )
+                input_Control( p_sys->p_input, query, NULL );
+        }
+        else if( !strcmp( psz_cmd, "mouse" ) ||
+                 !strcmp( psz_cmd, "mouse-click" ) )
+        {
+            int x, y;
+            if( p_sys->p_input != NULL &&
+                sscanf( psz_arg, "%d %d", &x, &y ) == 2 )
+            {
+                vout_thread_t *vout = input_GetVout( p_sys->p_input );
+                if( vout != NULL )
+                {
+                    var_SetCoords( vout, "mouse-moved", x, y );
+                    if( !strcmp( psz_cmd, "mouse-click" ) )
+                        var_SetCoords( vout, "mouse-clicked", x, y );
+                    vlc_object_release( vout );
+                }
+            }
+        }
+        else if( !strcmp( psz_cmd, "vout-mode" ) &&
+                 p_sys->p_input != NULL )
+        {
+#ifdef __linux__
+            const bool direct = !strcmp( psz_arg, "kms3d" );
+            if( direct || !strcmp( psz_arg, "auto" ) )
+            {
+                vout_thread_t *vout = input_GetVout( p_sys->p_input );
+                if( vout != NULL )
+                {
+                    /* Keep the Blu-ray input and its BD-J VM alive. Restarting
+                     * the video ES lets an active decoder release its pool
+                     * before the display wrapper changes. A still menu has no
+                     * active decoder and uses the launcher fallback instead. */
+                    const char *module = direct ? "kms3d" :
+                                         "gl,gles2,xvideo,xcb_x11";
+                    config_PutPsz( p_intf, "vout", module );
+                    var_Create( p_intf->obj.libvlc, "vout", VLC_VAR_STRING );
+                    var_SetString( p_intf->obj.libvlc, "vout", module );
+                    /* A Blu-ray menu may replace the current vout during a
+                     * clip transition. Keep the selected backend on libvlc
+                     * under a private name so every replacement vout sees the
+                     * same live choice, regardless of --vout at startup. */
+                    var_Create( p_intf->obj.libvlc,
+                                "powervlc-live-vout", VLC_VAR_STRING );
+                    var_SetString( p_intf->obj.libvlc,
+                                   "powervlc-live-vout", module );
+                    var_Create( p_sys->p_input, "vout", VLC_VAR_STRING );
+                    var_SetString( p_sys->p_input, "vout", module );
+                    var_Create( vout, "vout", VLC_VAR_STRING );
+                    var_SetString( vout, "vout", module );
+                    var_Create( vout, "powervlc-force-display-restart",
+                                VLC_VAR_BOOL );
+                    var_SetBool( vout, "powervlc-force-display-restart", true );
+                    var_SetBool( p_sys->p_playlist, "fullscreen", direct );
+                    var_SetBool( vout, "fullscreen", direct );
+                    input_Control( p_sys->p_input, INPUT_RESTART_ES,
+                                   -VIDEO_ES );
+                    msg_Info( p_intf, "requested live video output switch to %s",
+                              direct ? "KMS 3D" : "desktop OpenGL" );
+                    vlc_object_release( vout );
+                }
+            }
+#else
+            VLC_UNUSED( psz_arg );
+#endif
+        }
+        else if( !strcmp( psz_cmd, "vout-restart-display" ) &&
+                 p_sys->p_input != NULL )
+        {
+#ifdef __linux__
+            vout_thread_t *vout = input_GetVout( p_sys->p_input );
+            if( vout != NULL )
+            {
+                if( vout_RestartDisplay( vout ) == VLC_SUCCESS )
+                    var_SetInteger( p_sys->p_input, "intf-event",
+                                    INPUT_EVENT_VOUT );
+                vlc_object_release( vout );
+            }
+#endif
+        }
         else switch( psz_cmd[0] )
         {
         case 'f':
@@ -973,6 +1074,13 @@ static int Input( vlc_object_t *p_this, char const *psz_cmd,
     /* Parse commands that only require an input */
     if( !strcmp( psz_cmd, "pause" ) )
     {
+        vout_thread_t *p_vout = input_GetVout( p_input );
+        if( p_vout != NULL )
+        {
+            vout_OSDIcon( p_vout, VOUT_SPU_CHANNEL_OSD,
+                          state == PAUSE_S ? OSD_PLAY_ICON : OSD_PAUSE_ICON );
+            vlc_object_release( p_vout );
+        }
         playlist_TogglePause( p_intf->p_sys->p_playlist );
         i_error = VLC_SUCCESS;
     }

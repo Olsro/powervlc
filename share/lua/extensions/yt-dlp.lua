@@ -1094,6 +1094,7 @@ local function playback_done(code, body)
     table.insert(options, ":sub-file=" .. caption.url)
   end
   local content = app.content or {}
+  set_message(lang.msg_playing)
   vlc.playlist.add({{
     path = urls[1],
     title = content.title or content_url(content),
@@ -1102,7 +1103,6 @@ local function playback_done(code, body)
     url = content_url(content),
     options = options,
   }})
-  set_message(lang.msg_playing)
 end
 
 function click_play()

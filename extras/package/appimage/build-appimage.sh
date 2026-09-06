@@ -90,10 +90,18 @@ else
     make -C "$BUILDDIR" install DESTDIR="$APPDIR"
 fi
 
+SOURCE_ROOT="$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)"
+install -m 0755 "$SOURCE_ROOT/extras/package/linux/powervlc-kms3d-run" \
+    "$APPDIR/usr/bin/powervlc-kms3d-run"
+install -m 0755 "$SOURCE_ROOT/extras/package/linux/powervlc-kms3d-input.py" \
+    "$APPDIR/usr/bin/powervlc-kms3d-input.py"
+mkdir -p "$APPDIR/usr/share/doc/powervlc"
+install -m 0644 "$SOURCE_ROOT/extras/package/linux/README.hdmi-3d.md" \
+    "$APPDIR/usr/share/doc/powervlc/README.hdmi-3d.md"
+
 # Build the same daemon-only, UPnP-free engine as the other platforms. Keep it
 # in PowerVLC's private lib directory so config_GetLibDir() resolves it inside
 # the mounted AppImage without consulting the host system.
-SOURCE_ROOT="$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)"
 AMULE_TARGET="linux-$ARCH"
 if [ "${POWERVLC_SKIP_AMULE:-0}" != 1 ]; then
     "$SOURCE_ROOT/extras/package/build-amule-engine.sh" "$AMULE_TARGET"
@@ -410,6 +418,20 @@ fi
 # reprocess every ELF during that nominally packaging-only pass, invalidating
 # the cache again.  The first pass has already finalized AppDir, so call the
 # dedicated packager directly.
+if [ -e "$APPDIR/AppRun" ] && [ ! -e "$APPDIR/AppRun.powervlc" ]; then
+    mv "$APPDIR/AppRun" "$APPDIR/AppRun.powervlc"
+    cat >"$APPDIR/AppRun" <<'EOF'
+#!/bin/sh
+here="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+if [ "${1:-}" = --direct-hdmi-3d ]; then
+    shift
+    app=${APPIMAGE:-$here/AppRun}
+    exec "$here/usr/bin/powervlc-kms3d-run" "$app" "$@"
+fi
+exec "$here/AppRun.powervlc" "$@"
+EOF
+    chmod 0755 "$APPDIR/AppRun"
+fi
 echo "--- Packaging the AppImage ..."
 ARCH="$ARCH" "$APPIMAGETOOL" "$APPDIR" "$OUTFILE"
 

@@ -1,0 +1,13 @@
+# Generated from Slang; do not edit.
+shaders = "1"
+shader0 = "slang/programs/6aa1fd9f1255159c94a9c396056d0fd117db2878880a4744ffa0804429cda7fe.glsl"
+filter_linear0 = "false"
+scale_type0 = "viewport"
+hlsl_vertex0 = "slang/hlsl/1ec1e7acc18d90e9eb1fd8c7b1ab2539c82231722e697fc4581da5a95a9651ae.hlsl"
+hlsl_fragment0 = "slang/hlsl/83035429b01c4ca8bd0a4e4c1148323834413da2a59b89d4d333878ca226545c.hlsl"
+hlsl_buffer0_size0 = "64"
+hlsl_buffer0_members0 = "MVP:0:mat4"
+hlsl_buffer1_size0 = "112"
+hlsl_buffer1_members0 = "BRIGHTNESS:96:float;GAMMA_INPUT:88:float;GAMMA_OUTPUT:92:float;GLOW_DIFFUSION:56:float;GLOW_HALATION:52:float;GLOW_HEIGHT:48:float;GLOW_WIDTH:44:float;MASK_COLORS:60:float;MASK_SIZE:68:float;MASK_STRENGTH:64:float;OutputSize:16:vec4;SCANLINE_OFFSET:84:float;SCANLINE_SHAPE:80:float;SCANLINE_SIZE_MAX:76:float;SCANLINE_SIZE_MIN:72:float;SHARPNESS_EDGES:40:float;SHARPNESS_IMAGE:36:float;SourceSize:0:vec4"
+hlsl_textures0 = "Texture:2"
+hlsl_parameters0 = "BRIGHTNESS:1.5;GAMMA_INPUT:2.4;GAMMA_OUTPUT:2.4;GLOW_DIFFUSION:0.05;GLOW_HALATION:0.1;GLOW_HEIGHT:0.5;GLOW_WIDTH:0.5;MASK_COLORS:2;MASK_SIZE:1;MASK_STRENGTH:0.3;SCANLINE_OFFSET:1;SCANLINE_SHAPE:2.5;SCANLINE_SIZE_MAX:1.5;SCANLINE_SIZE_MIN:0.5;SHARPNESS_EDGES:3;SHARPNESS_IMAGE:1"

@@ -143,7 +143,7 @@ if BUILD_LUA
 nobase_vlclib_DATA += \
 	lua/extensions/Podcasts-Discovery-iTunes.luac \
 	lua/extensions/Twitch.luac \
-	lua/extensions/VLSub.luac \
+	lua/extensions/PowerVLSub.luac \
 	lua/extensions/audiobookshelf.luac \
 	lua/extensions/crt_display_controller.luac \
 	lua/extensions/emule.luac \
@@ -170,6 +170,7 @@ nobase_vlclib_DATA += \
 	lua/modules/common.luac \
 	lua/modules/dkjson.luac \
 	lua/modules/pvlc_download.luac \
+	lua/modules/pvlc_opensubtitles.luac \
 	lua/modules/pvlc_folder_picker.luac \
 	lua/modules/pvlc_upnp.luac \
 	lua/modules/pvlc_i18n.luac \
@@ -214,6 +215,25 @@ nobase_vlclib_DATA += \
 # Only VLSub, which ships no catalogue, still worked. (Found 2026-08-10 on the
 # i386 AppImage.)
 nobase_dist_vlcdata_DATA += \
+	lua/i18n/opensubtitles/ca.lua \
+	lua/i18n/opensubtitles/cs.lua \
+	lua/i18n/opensubtitles/de.lua \
+	lua/i18n/opensubtitles/en.lua \
+	lua/i18n/opensubtitles/es.lua \
+	lua/i18n/opensubtitles/fr.lua \
+	lua/i18n/opensubtitles/it.lua \
+	lua/i18n/opensubtitles/ja.lua \
+	lua/i18n/opensubtitles/ko.lua \
+	lua/i18n/opensubtitles/nl.lua \
+	lua/i18n/opensubtitles/pl.lua \
+	lua/i18n/opensubtitles/pt_BR.lua \
+	lua/i18n/opensubtitles/pt_PT.lua \
+	lua/i18n/opensubtitles/ru.lua \
+	lua/i18n/opensubtitles/sv.lua \
+	lua/i18n/opensubtitles/tr.lua \
+	lua/i18n/opensubtitles/uk.lua \
+	lua/i18n/opensubtitles/zh_CN.lua \
+	lua/i18n/opensubtitles/zh_TW.lua \
 	lua/i18n/invidious/cs.lua \
 	lua/i18n/invidious/de.lua \
 	lua/i18n/invidious/en.lua \
@@ -344,6 +364,32 @@ nobase_dist_vlcdata_DATA += \
 	lua/i18n/ytdlp/pt_PT.lua \
 	$(NULL)
 
+# Keep this compact catalogue set in a separate Automake install command. The
+# main vlcdata list is already close to Linux's argument-size limit once every
+# web extension and renderer preset is enabled.
+crtcontrollerdatadir = $(vlcdatadir)
+nobase_dist_crtcontrollerdata_DATA = \
+	lua/i18n/crt_display_controller/ca.lua \
+	lua/i18n/crt_display_controller/cs.lua \
+	lua/i18n/crt_display_controller/de.lua \
+	lua/i18n/crt_display_controller/en.lua \
+	lua/i18n/crt_display_controller/es.lua \
+	lua/i18n/crt_display_controller/fr.lua \
+	lua/i18n/crt_display_controller/it.lua \
+	lua/i18n/crt_display_controller/ja.lua \
+	lua/i18n/crt_display_controller/ko.lua \
+	lua/i18n/crt_display_controller/nl.lua \
+	lua/i18n/crt_display_controller/pl.lua \
+	lua/i18n/crt_display_controller/pt_BR.lua \
+	lua/i18n/crt_display_controller/pt_PT.lua \
+	lua/i18n/crt_display_controller/ru.lua \
+	lua/i18n/crt_display_controller/sv.lua \
+	lua/i18n/crt_display_controller/tr.lua \
+	lua/i18n/crt_display_controller/uk.lua \
+	lua/i18n/crt_display_controller/zh_CN.lua \
+	lua/i18n/crt_display_controller/zh_TW.lua \
+	$(NULL)
+
 nobase_doc_DATA = \
 	lua/README.txt \
 	lua/extensions/README.txt \
@@ -432,7 +478,7 @@ EXTRA_DIST += \
 	lua/extensions/README.txt \
 	lua/extensions/Podcasts-Discovery-iTunes.lua \
 	lua/extensions/Twitch.lua \
-	lua/extensions/VLSub.lua \
+	lua/extensions/PowerVLSub.lua \
 	lua/extensions/audiobookshelf.lua \
 	lua/extensions/crt_display_controller.lua \
 	lua/extensions/emule.lua \
@@ -464,6 +510,7 @@ EXTRA_DIST += \
 	lua/modules/common.lua \
 	lua/modules/dkjson.lua \
 	lua/modules/pvlc_download.lua \
+	lua/modules/pvlc_opensubtitles.lua \
 	lua/modules/pvlc_folder_picker.lua \
 	lua/modules/pvlc_upnp.lua \
 	lua/modules/pvlc_i18n.lua \

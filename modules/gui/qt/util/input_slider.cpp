@@ -40,6 +40,7 @@
 
 #include <QPaintEvent>
 #include <QPainter>
+#include <QFontMetrics>
 #include <QPainterPath>
 #include <QPixmap>
 #include <QImage>
@@ -1064,8 +1065,14 @@ SoundSlider::SoundSlider( QWidget *_parent, float _i_step,
                     ( background.saturation() + foreground.saturation() ) / 2,
                     ( background.value() + foreground.value() ) / 2 );
 
-    textfont.setPointSize( 7 );
-    textrect.setRect( 0, 0, 34, 15 );
+    /* Keep the label inside the low, empty end of the triangular slider.
+     * A point-sized font grows differently with Windows DPI and the wider
+     * rectangle made the percent glyph touch the rising edge of the bar. */
+    textfont.setPixelSize( 8 );
+    const QString widestVolume = QString::number( maximum() ) + QLatin1Char( '%' );
+    const int volumeTextWidth = QFontMetrics( textfont )
+                                    .boundingRect( widestVolume ).width();
+    textrect.setRect( 2, 0, volumeTextWidth + 2, 15 );
 
     /* Regular colors */
 #define c(i) colorList.at(i).toInt()
@@ -1229,7 +1236,7 @@ void SoundSlider::paintEvent( QPaintEvent *e )
     else
         painter.setPen(foreground);
     painter.setFont( textfont );
-    painter.drawText( textrect, Qt::AlignRight | Qt::AlignVCenter,
+    painter.drawText( textrect, Qt::AlignLeft | Qt::AlignVCenter,
                       QString::number( value() ) + '%' );
 
     painter.end();

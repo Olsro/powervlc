@@ -39,7 +39,7 @@ libglconv_cvpx_plugin_la_LDFLAGS += -Wl,-framework,IOSurface \
 	-Wl,-framework,Foundation,-framework,CoreVideo
 
 if HAVE_OSX
-libvout_macosx_plugin_la_SOURCES = video_output/macosx.m $(OPENGL_COMMONSOURCES)
+libvout_macosx_plugin_la_SOURCES = video_output/macosx.m video_output/macosx_dovi_display.h $(OPENGL_COMMONSOURCES)
 libvout_macosx_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCLFAGS) -DHAVE_GL_CORE_SYMBOLS
 libvout_macosx_plugin_la_LIBADD = $(OPENGL_COMMONLIBS)
 libvout_macosx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \
@@ -54,7 +54,7 @@ libmacosx_qt_plugin_la_SOURCES = video_output/macosx_qt.m
 libmacosx_qt_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \
 	-Wl,-framework,QuickTime,-framework,Carbon,-framework,Cocoa
 
-libcaopengllayer_plugin_la_SOURCES = video_output/caopengllayer.m $(OPENGL_COMMONSOURCES)
+libcaopengllayer_plugin_la_SOURCES = video_output/caopengllayer.m video_output/macosx_dovi_display.h $(OPENGL_COMMONSOURCES)
 libcaopengllayer_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCLFAGS) -DHAVE_GL_CORE_SYMBOLS
 libcaopengllayer_plugin_la_LIBADD = $(OPENGL_COMMONLIBS)
 libcaopengllayer_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \
@@ -315,6 +315,7 @@ endif
 libdirect3d11_plugin_la_SOURCES = video_output/win32/direct3d11.c \
  video_output/win32/d3d11_quad.c video_output/win32/d3d11_quad.h \
  video_output/win32/d3d11_shaders.c video_output/win32/d3d11_shaders.h \
+ video_output/win32/d3d11_ra_shaders.c video_output/win32/d3d11_ra_shaders.h \
  video_output/win32/common.c video_output/win32/common.h \
  video_output/win32/d3d11_scaler.cpp video_output/win32/d3d11_scaler.h \
  video_output/win32/d3d11_tonemap.cpp video_output/win32/d3d11_tonemap.h
@@ -324,6 +325,7 @@ libdirect3d11_plugin_la_LIBADD = libchroma_copy.la libd3d11_common.la $(LIBCOM) 
 if !HAVE_WINSTORE
 libdirect3d11_plugin_la_SOURCES += video_output/win32/events.c \
  video_output/win32/events.h \
+ video_output/win32/dovi_display.c video_output/win32/dovi_display.h \
  video_output/win32/sensors.cpp \
  video_output/win32/win32touch.c video_output/win32/win32touch.h
 libdirect3d11_plugin_la_LIBADD += -lgdi32
@@ -454,6 +456,13 @@ libfb_plugin_la_SOURCES = video_output/fb.c
 libfb_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)'
 EXTRA_LTLIBRARIES += libfb_plugin.la
 vout_LTLIBRARIES += $(LTLIBfb)
+
+libkms3d_plugin_la_SOURCES = video_output/kms3d.c
+libkms3d_plugin_la_CFLAGS = $(AM_CFLAGS) $(KMS3D_CFLAGS)
+libkms3d_plugin_la_LIBADD = $(KMS3D_LIBS)
+libkms3d_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)'
+EXTRA_LTLIBRARIES += libkms3d_plugin.la
+vout_LTLIBRARIES += $(LTLIBkms3d)
 
 
 ### ASCII Art ###

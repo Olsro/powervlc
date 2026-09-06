@@ -1,0 +1,263 @@
+From: PowerVLC <powervlc@localhost>
+Subject: [PATCH] dvdnav: preserve authored language initialization on menu startup
+
+Probe a VM copy along first-play, preserving cell/post commands. Stop at the
+first interactive menu. Only activate a button if its deterministic pre-command
+highlight depends on the preferred language, and the aspect-ratio button groups
+agree on its action. Execute that button and follow the selected branch to its next menu; otherwise
+leave the first interactive menu for the user. Never guess a title or language
+from a disc name, an IFO label or button coordinates.
+
+Startup is limited to 32 cells and 128 indexed menu NAV reads. Long title PGCs,
+unknown indefinite stills, invalid NAVs and unsuccessful probes leave the live
+VM unchanged. The default first-play path and user-selected audio/subpicture
+preferences remain available. This does not claim to recognize every authored
+language selector; the corpus scanner reports further candidates separately.
+
+--- /dev/null
++++ b/src/menu_start.c
+@@ -0,0 +1,217 @@
++/* PowerVLC: initialize an authored language selector before jumping to menus.
++ * GPL-2.0-or-later, like libdvdnav. */
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++#include <stdlib.h>
++#include <string.h>
++#include <sys/time.h>
++#include <dvdnav/dvdnav.h>
++#include <dvdread/ifo_read.h>
++#include <dvdread/nav_read.h>
++#include "vm/decoder.h"
++#include "vm/vm.h"
++#include "vm/getset.h"
++#include "dvdnav_internal.h"
++#include "logger.h"
++
++/* Reject stateful/non-deterministic experiments and backward jumps. A caller
++ * must never confuse a random/counter-driven highlight with a language choice. */
++static int language_commands_safe(const pgc_command_tbl_t *table,
++                                  const registers_t *regs)
++{
++  unsigned i;
++  if (!table || !table->pre_cmds || !table->nr_of_pre || table->nr_of_pre > 128)
++    return 0;
++  for (i = 0; i < 16; i++)
++    if (regs->GPRM_mode[i])
++      return 0;
++  for (i = 0; i < table->nr_of_pre; i++) {
++    const uint8_t *b = table->pre_cmds[i].bytes;
++    unsigned type = b[0] >> 5;
++    if ((type >= 3 && (b[0] & 15) == 8) || /* RND */
++        (type == 2 && (b[1] & 15) == 3) || /* GPRM counter setup */
++        (type == 0 && ((b[1] & 15) == 1 || (b[1] & 15) == 3) && b[7] <= i + 1))
++      return 0;
++  }
++  return 1;
++}
++
++static int language_highlight(const pgc_command_tbl_t *table,
++                              const registers_t *original, uint16_t language,
++                              registers_t *result)
++{
++  link_t link;
++  *result = *original;
++  /* Some discs use the audio/subpicture preference for the language selector.
++   * These are experiments only; the caller restores the real preferences. */
++  result->SPRM[0] = result->SPRM[16] = result->SPRM[18] = language;
++  result->SPRM[8] = 0; /* require the pre-commands to actually select a button */
++  if (vmEval_CMD(table->pre_cmds, table->nr_of_pre, result, &link))
++    return 0; /* a navigation branch needs a different PGC, not this NAV */
++  return result->SPRM[8] >> 10;
++}
++
++static int language_button(vm_t *vm, const pci_t *pci, registers_t *selected)
++{
++  const pgc_command_tbl_t *table = vm->state.pgc->command_tbl;
++  const hl_gi_t *h = &pci->hli.hl_gi;
++  unsigned a, b;
++  int button;
++  registers_t alternative;
++
++  if ((!h->btngr_ns || h->btngr_ns > 3) || h->btn_ofn || h->foac_btnn || !h->btn_ns ||
++      h->btn_ns > 36 / h->btngr_ns || !language_commands_safe(table, &vm->state.registers))
++    return 0;
++  button = language_highlight(table, &vm->state.registers,
++                              vm->state.registers.SPRM[0], selected);
++  if (button < 1 || button > h->btn_ns ||
++      (h->fosl_btnn && h->fosl_btnn != button) ||
++      pci->hli.btnit[button - 1].auto_action_mode)
++    return 0;
++
++  /* Aspect-ratio groups must assign the same action to this button. */
++  for (a = 1; a < h->btngr_ns; a++) {
++    const btni_t *other = &pci->hli.btnit[a * (36 / h->btngr_ns) + button - 1];
++    if (other->auto_action_mode || memcmp(&other->cmd,
++           &pci->hli.btnit[button - 1].cmd, sizeof(other->cmd)))
++      return 0;
++  }
++
++  /* Only the language SPRMs vary. If another language selects a different
++   * valid button in the SAME PGC, the disc itself supplies the mapping.
++   * Test two-letter codes, including the default branch (e.g. English).
++   * No disc names, button positions, or guessed register numbers are used. */
++  for (a = 'a'; a <= 'z'; a++)
++    for (b = 'a'; b <= 'z'; b++) {
++      int other = language_highlight(table, &vm->state.registers,
++                                     (a << 8) | b, &alternative);
++      if (other > 0 && other <= h->btn_ns && other != button) {
++        selected->SPRM[0] = vm->state.registers.SPRM[0];
++        selected->SPRM[16] = vm->state.registers.SPRM[16];
++        selected->SPRM[18] = vm->state.registers.SPRM[18];
++        return button;
++      }
++    }
++  return 0;
++}
++
++/* Read only indexed NAV packs, up to a small shared startup budget. Never
++ * pass an unchecked variable-length PES header to the NAV parser. */
++static int language_pci(vm_t *vm, pci_t *pci, unsigned *budget)
++{
++  const cell_playback_t *cell = &vm->state.pgc->cell_playback[vm->state.cellN - 1];
++  ifo_handle_t *ifo = vm->state.domain == DVD_DOMAIN_VTSMenu ? vm->vtsi : vm->vmgi;
++  const vobu_admap_t *map = ifo ? ifo->menu_vobu_admap : NULL;
++  dvd_file_t *file;
++  uint64_t count = map && map->last_byte >= 3 ? ((uint64_t)map->last_byte + 1 - 4) / 4 : 0;
++  uint64_t i;
++  int result = 0;
++  if (count > 2000000)
++    return -1;
++  file = DVDOpenFile(vm->dvd, vm->state.domain == DVD_DOMAIN_VTSMenu ? vm->state.vtsN : 0,
++                     DVD_READ_MENU_VOBS);
++  if (!file)
++    return -1;
++  for (i = 0; i < (count ? count : 1) && *budget; i++) {
++    uint32_t sector = count ? map->vobu_start_sectors[i] : cell->first_sector;
++    uint8_t block[DVD_VIDEO_LB_LEN];
++    if (sector < cell->first_sector || sector > cell->last_sector)
++      continue;
++    --*budget;
++    if (DVDReadBlocks(file, sector, 1, block) != 1 ||
++        memcmp(block, "\0\0\1\xba", 4) ||
++        memcmp(block + 0x26, "\0\0\1\xbf\3\xd4\0", 7) ||
++        memcmp(block + 0x400, "\0\0\1\xbf\3\xfa\1", 7)) {
++      result = -1;
++      break;
++    }
++    memset(pci, 0, sizeof(*pci));
++    navRead_PCI(pci, block + 0x2d);
++    if ((pci->hli.hl_gi.hli_ss & 3) && pci->hli.hl_gi.btn_ns) {
++      result = 1;
++      break;
++    }
++  }
++  DVDCloseFile(file);
++  return result;
++}
++
++/* Follow first-play to its first interactive menu. A demonstrable language
++ * selector may be initialized before following its branch to the next menu.
++ * Unrecognized menus remain interactive; failed/budget-limited probes leave the VM intact.
++ * Intended only before the first block, after title enumeration starts the VM. */
++int32_t dvdnav_start_menu(dvdnav_t *this)
++{
++  vm_t *probe = NULL;
++  int selected = 0, initialized = 0;
++  unsigned steps, budget = 128;
++  if (!this)
++    return 0;
++  pthread_mutex_lock(&this->vm_lock);
++  if (!this->started || this->position_current.cell != 0 || !this->vm->state.pgc)
++    goto out;
++
++  /* Own only the reopened VTSI. VMGI/DVD reader remain shared even on an
++   * allocation/read failure; freeing a full VM copy would close live handles.
++   * A FirstPlay PGC can live in VMGI without any numbered VTS PGC. */
++  probe = malloc(sizeof(*probe));
++  if (!probe)
++    goto out;
++  *probe = *this->vm;
++  probe->vtsi = NULL;
++  if (this->vm->vtsi) {
++    int pgc = get_PGCN(this->vm);
++    probe->vtsi = ifoOpen(probe->dvd, probe->state.vtsN);
++    if (!probe->vtsi || !pgc || !set_PGCN(probe, pgc)) {
++      vm_free_copy(probe);
++      goto out;
++    }
++    probe->state.pgN = this->vm->state.pgN;
++  }
++
++  for (steps = 0; steps < 32 && budget && !probe->stopped; steps++) {
++    const dvd_state_t *s = &probe->state;
++    pci_t pci;
++    if (!s->pgc || !s->pgc->cell_playback || s->cellN < 1 ||
++        s->cellN > s->pgc->nr_of_cells)
++      break;
++    if (s->domain == DVD_DOMAIN_VTSTitle) {
++      /* Do not advance through features, long trailers or unknown durations. */
++      int64_t duration = dvdnav_convert_time(&s->pgc->playback_time);
++      if (duration <= 0 || duration > 60 * 90000)
++        break;
++    } else {
++      int found = language_pci(probe, &pci, &budget);
++      if (found < 0)
++        break;
++      if (found > 0) {
++        registers_t regs;
++        int button = initialized ? 0 : language_button(probe, &pci, &regs);
++        if (button) {
++          probe->state.registers = regs;
++          if (!vm_exec_cmd(probe, &pci.hli.btnit[button - 1].cmd) || probe->stopped)
++            break;
++          initialized = button;
++          continue; /* follow the selected branch to its next menu */
++        }
++        vm_merge(this->vm, probe);
++        this->vm->hop_channel++;
++        selected = 1;
++        if (initialized)
++          Log2(this, "Initialized DVD menu language %c%c with authored button %d",
++               this->vm->state.registers.SPRM[0] >> 8,
++               this->vm->state.registers.SPRM[0] & 255, initialized);
++        break; /* never activate ordinary/unrecognized menus */
++      }
++      if (s->pgc->cell_playback[s->cellN - 1].still_time == 255)
++        break; /* an unknown interactive wait */
++    }
++    /* Execute the authored cell command/post chain; do not guess a title. */
++    vm_get_next_cell(probe);
++  }
++  vm_free_copy(probe);
++out:
++  pthread_mutex_unlock(&this->vm_lock);
++  return selected;
++}
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -6,6 +6,7 @@
+     'dvdnav.c',
+     'highlight.c',
+     'logger.c',
++    'menu_start.c',
+     'navigation.c',
+     'read_cache.c',
+     'searching.c',
+--- a/src/dvdnav/dvdnav.h
++++ b/src/dvdnav/dvdnav.h
+@@ -582,6 +582,14 @@
+  * codes as defined in ISO639.
+  */
+ 
++/* PowerVLC extension: follow authored first-play to the first interactive menu.
++ * Called after title enumeration and before reading the first block. Proven
++ * language-dependent highlights may initialize the next menu; other menus
++ * stay interactive. Returns 1 if positioned, 0 if unchanged (including limits).
++ */
++#define DVDNAV_HAS_START_MENU 1
++DVDNAV_API int32_t dvdnav_start_menu(dvdnav_t *self);
++
+ /*
+  * Set which menu language we should use per default.
+  */

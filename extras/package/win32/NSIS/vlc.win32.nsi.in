@@ -58,11 +58,14 @@ Name "${PRODUCT_NAME}"
 @HAVE_WIN64_TRUE@@HAVE_ARM64_FALSE@  OutFile ..\PowerVLC-${VERSION}-win64.exe
 @HAVE_WIN64_TRUE@@HAVE_ARM64_TRUE@   OutFile ..\PowerVLC-${VERSION}-winarm64.exe
 InstallDir "$@PROGRAMFILES@\PowerVLC"
-!ifdef NSIS_LZMA_COMPRESS_WHOLE
-SetCompressor lzma
-!else
-SetCompressor /SOLID lzma
-!endif
+; PowerVLC: favour installation latency over the smallest possible download.
+; A solid LZMA stream makes the installer decompress a ~200 MB monolith while
+; real-time protection inspects nearly two thousand emitted files. Per-file
+; zlib starts each payload immediately, uses much less memory on old PCs and
+; lets Windows security products pipeline their work instead of stalling the
+; NSIS UI behind one long decompression stream. The EXE is larger, but install
+; and repair operations are substantially more predictable.
+SetCompressor zlib
 
 SetOverwrite ifdiff
 CRCCheck on
@@ -329,6 +332,11 @@ skip_uninstall32_cleanup:
   ; It sits at the root because that is where config_GetDataDir() looks on
   ; Windows. Not covered by any wildcard above, so it needs saying.
   !insertmacro InstallFile powervlc.xpi
+
+  ; Seekable catalogue of the RetroArch presets, shader passes and LUTs.
+  ; Keeping it as one stored resource avoids ~1,200 tiny file writes and
+  ; matching real-time antivirus scans during installation.
+  !insertmacro InstallFile retroarch-shaders.pak
 
   ; Subfolders
   !insertmacro InstallFolder plugins

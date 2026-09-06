@@ -41,6 +41,7 @@
 - (BOOL)loadExtensions;
 - (void)unloadExtensions;
 - (void)reloadExtensions;
+- (BOOL)searchSubtitles;
 
 - (void)triggerMenu:(id)sender;
 - (void)inputChanged:(input_thread_t *)p_input;

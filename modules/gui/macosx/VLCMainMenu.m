@@ -577,6 +577,16 @@ void VLCNoteRecentStream(NSString *mrl)
     [self refreshAudioDeviceList];
 
     /* setup subtitles menu */
+    NSMenuItem *onlineSubtitles = [[NSMenuItem alloc]
+        initWithTitle:_NS("Find Subtitles Online...")
+               action:@selector(searchSubtitles:) keyEquivalent:@""];
+    [onlineSubtitles setTarget:self];
+    [_subtitlesMenu insertItem:onlineSubtitles
+                      atIndex:[_subtitlesMenu indexOfItem:_openSubtitleFile] + 1];
+    if (_voutMenu) {
+        NSMenuItem *contextSubtitles = [onlineSubtitles copy];
+        [_voutMenu addItem:contextSubtitles];
+    }
     // Persist those variables on the playlist
     playlist_t *p_playlist = pl_Get(getIntf());
     var_Create(p_playlist, "freetype-color", VLC_VAR_INTEGER | VLC_VAR_DOINHERIT);
@@ -1396,6 +1406,16 @@ void VLCNoteRecentStream(NSString *mrl)
 }
 
 #pragma mark - Subtitles Menu
+
+- (IBAction)searchSubtitles:(id)sender
+{
+    if (![[[VLCMain sharedInstance] extensionsManager] searchSubtitles]) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:_NS("Online Subtitles")];
+        [alert setInformativeText:_NS("The OpenSubtitles extension could not be loaded. Please reinstall PowerVLC.")];
+        [alert runModal];
+    }
+}
 
 - (IBAction)addSubtitleFile:(id)sender
 {

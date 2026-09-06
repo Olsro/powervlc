@@ -44,8 +44,11 @@
 #include <QMouseEvent>
 #include <QPropertyAnimation>
 #include <QAbstractNativeEventFilter>
+#include <QElapsedTimer>
+#include <QPixmap>
 
 class QMenu;
+class QAction;
 class QSlider;
 class QWidgetAction;
 class SpeedControlWidget;
@@ -118,10 +121,32 @@ private:
     bool b_expandPixmap;
     bool b_withart;
     QPropertyAnimation *fadeAnimation;
+    QTimer *coneMotionTimer;
+    QElapsedTimer coneMotionClock;
+    QPointF conePosition;
+    QPointF coneVelocity;
+    QRectF conePaintRect;
+    QPixmap colouredCone;
+    int coneHue;
+    bool b_coneBouncing;
+    bool b_idlePressActive;
+    bool b_idleSurfaceDragged;
+    bool b_idlePressOnCone;
+    QPoint idlePressPosition;
     void contextMenuEvent( QContextMenuEvent *event ) Q_DECL_OVERRIDE;
+    void resetConeAnimation();
+    void changeConeColour();
+    QPixmap colourisedCone( const QPixmap& source ) const;
+private slots:
+    void advanceCone();
 protected:
     void paintEvent( QPaintEvent *e ) Q_DECL_OVERRIDE;
     void showEvent( QShowEvent * e ) Q_DECL_OVERRIDE;
+    void hideEvent( QHideEvent *e ) Q_DECL_OVERRIDE;
+    void resizeEvent( QResizeEvent *e ) Q_DECL_OVERRIDE;
+    void mousePressEvent( QMouseEvent *e ) Q_DECL_OVERRIDE;
+    void mouseMoveEvent( QMouseEvent *e ) Q_DECL_OVERRIDE;
+    void mouseReleaseEvent( QMouseEvent *e ) Q_DECL_OVERRIDE;
     void updateDefaultArt( const QString& );
     static const int MARGIN = 5;
     QString defaultArt;
@@ -279,6 +304,8 @@ public:
     virtual ~CoverArtLabel();
 
 protected:
+    void mousePressEvent( QMouseEvent *event ) Q_DECL_OVERRIDE;
+    void mouseMoveEvent( QMouseEvent *event ) Q_DECL_OVERRIDE;
     void mouseDoubleClickEvent( QMouseEvent *event ) Q_DECL_OVERRIDE
     {
         if( ! p_item && qobject_cast<MetaPanel *>(this->window()) == NULL )
@@ -290,12 +317,17 @@ protected:
 private:
     intf_thread_t *p_intf;
     input_item_t *p_item;
+    QAction *copyAction;
+    QString artPath;
+    QPoint dragStartPosition;
+    bool dragCandidate;
 
 public slots:
     void showArtUpdate( const QString& );
     void showArtUpdate( input_item_t * );
     void askForUpdate();
     void setArtFromFile();
+    void copyArt();
     void clear();
 };
 

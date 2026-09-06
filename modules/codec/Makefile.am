@@ -656,7 +656,7 @@ libmvc_plugin_la_SOURCES = codec/mvc.c \
 libmvc_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) $(EDGE264_CFLAGS)
 libmvc_plugin_la_CFLAGS = $(AM_CFLAGS)
 libmvc_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)'
-libmvc_plugin_la_LIBADD = $(EDGE264_LIBS)
+libmvc_plugin_la_LIBADD = $(EDGE264_LIBS) $(LIBPTHREAD)
 if HAVE_OSX
 # mvc.c resolves VDA itself with dlopen so this plugin remains loadable on
 # 10.4/10.5, where the framework does not exist. CoreFoundation and CoreVideo

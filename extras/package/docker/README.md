@@ -17,8 +17,9 @@ Artifacts land in `extras/package/docker/out/`.
 ## Why Docker works well here
 
 Windows and x86 Linux builds are **cross-compiled on Linux**. On an arm64 Mac
-their compiler and packaging tools run natively; only the produced files target
-x86, so no QEMU is involved.
+their compilers and packaging tools run natively. Windows portable archives
+then get one short target-matched Wine pass to generate their plug-in cache;
+the multi-hour compilation itself still uses no QEMU.
 
 ## Target matrix
 
@@ -63,6 +64,9 @@ Each target builds its image (cached after the first run) and then compiles in a
 container from a **clean snapshot of your working tree** (tracked + new files,
 minus git-ignored build artifacts), so container builds never mix with your
 macOS build directories. Output is copied to `extras/package/docker/out/`.
+Every Windows portable ZIP is finalized automatically under Wine for its exact
+PE architecture and already contains `plugins/plugins.dat`; no Windows machine
+or manual post-processing step is part of the release build.
 
 Examples:
 
@@ -85,6 +89,9 @@ iteration on your machine:
 1. **Emulated Linux builds are slow.** `linux-amd64` and `linux-i386` compile all
    of VLC under QEMU; budget hours, not minutes. Prefer `linux-arm64` for a fast
    local smoke test, and consider a native amd64 machine / CI for the amd64 build.
+   The Windows `plugins.dat` finalization also uses an emulated `linux/386` or
+   `linux/amd64` Wine container on Apple Silicon, but only after compilation and
+   only for the cache generator, so its cost is comparatively small.
 2. **Contrib dependencies.** The Windows contrib build pulls ~100 libraries; a
    given library may want an extra host tool (e.g. `protobuf`, or `wine` for some
    Qt shader steps). Add it to `Dockerfile.windows` if a contrib stops on a
@@ -104,7 +111,8 @@ iteration on your machine:
 
 ## Testing the results
 
-Docker builds the binaries but can't *run* them:
+Docker executes the command-line cache generator under Wine, but full
+application validation still belongs on the destination systems:
 
 - Windows `.exe` → test on real Windows (and Windows-on-ARM hardware / a Win-ARM
   VM for `winarm64`). Verify it installs to `Program Files\PowerVLC` and coexists
@@ -115,6 +123,8 @@ Docker builds the binaries but can't *run* them:
 ## Files
 
 - `Dockerfile.windows` — arm64-native cross env: mingw-w64 GCC + llvm-mingw + NSIS.
+- `Dockerfile.windows-cache` — dedicated 386/amd64/arm64 Wine finalization image.
+- `finalize-windows-portable.sh` — generate, repackage and verify `plugins.dat`.
 - `Dockerfile.linux` — old-glibc env with system Qt5 + AppImage tooling.
 - `build-in-docker.sh` — orchestrator (clean-tree copy, per-target build, artifact
   extraction). Reuses `extras/package/win32/build.sh` and

@@ -78,8 +78,19 @@ case "$PLATFORM-$ARCH" in
         CMAKE_PLATFORM_ARGS="-DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=10.7"
         ;;
     linux-*)
-        CC=${CC:-cc}; CXX=${CXX:-c++}
-        AR=${AR:-ar}; RANLIB=${RANLIB:-ranlib}; STRIP=${STRIP:-strip}
+        HOST=${AMULE_HOST:-}
+        if [ -n "$HOST" ]; then
+            CC=${CC:-"$HOST-gcc"}; CXX=${CXX:-"$HOST-g++"}
+            AR=${AR:-"$HOST-ar"}; RANLIB=${RANLIB:-"$HOST-ranlib"}
+            STRIP=${STRIP:-"$HOST-strip"}; WX_HOST="--host=$HOST"
+            CMAKE_PLATFORM_ARGS="-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON"
+            if [ -n "${AMULE_SYSROOT:-}" ]; then
+                CMAKE_PLATFORM_ARGS="$CMAKE_PLATFORM_ARGS -DCMAKE_SYSROOT=$AMULE_SYSROOT"
+            fi
+        else
+            CC=${CC:-cc}; CXX=${CXX:-c++}
+            AR=${AR:-ar}; RANLIB=${RANLIB:-ranlib}; STRIP=${STRIP:-strip}
+        fi
         COMMON_FLAGS=${AMULE_ARCH_FLAGS:-}
         # Boost.Asio's header probe links a tiny executable.  Unlike newer
         # glibc releases, Ubuntu 18.04 still requires an explicit libpthread
@@ -118,6 +129,13 @@ esac
 for tool in git curl cmake ninja tar make "$CC" "$CXX" "$AR" "$RANLIB"; do
     command -v "$tool" >/dev/null || { echo "$tool is required" >&2; exit 1; }
 done
+# CMake searches bare compiler names again after applying CMAKE_SYSROOT and can
+# accidentally select a target-side compiler from <sysroot>/usr/bin. Resolve
+# the build container's cross drivers before CMake sees the sysroot.
+CMAKE_CC=$(command -v "$CC")
+CMAKE_CXX=$(command -v "$CXX")
+CMAKE_AR=$(command -v "$AR")
+CMAKE_RANLIB=$(command -v "$RANLIB")
 if command -v shasum >/dev/null 2>&1; then
     checksum() { shasum -a 256 "$1" | awk '{print $1}'; }
 elif command -v sha256sum >/dev/null 2>&1; then
@@ -249,7 +267,9 @@ perl -0pi -e 's{add_library \(wxWidgets::\$\{_target\} INTERFACE IMPORTED\)}{add
 # shellcheck disable=SC2086
 mkdir -p "$AMULE_BUILD"
 ( cd "$AMULE_BUILD" && cmake "$SOURCES/amule" -G Ninja $CMAKE_PLATFORM_ARGS \
-    -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER="$CMAKE_CC" \
+    -DCMAKE_CXX_COMPILER="$CMAKE_CXX" \
+    -DCMAKE_AR="$CMAKE_AR" -DCMAKE_RANLIB="$CMAKE_RANLIB" \
     -DCMAKE_C_FLAGS="${AMULE_CPPFLAGS:-}" \
     -DCMAKE_CXX_FLAGS="$AMULE_CXXFLAGS ${AMULE_CPPFLAGS:-} -I$PREFIX/include -DCRYPTOPP_DISABLE_ASM=1" \
     -DCMAKE_EXE_LINKER_FLAGS="$COMMON_FLAGS ${AMULE_LDFLAGS:-}" \
@@ -274,7 +294,14 @@ chmod 755 "$PREFIX/bin/amuled$EXE"
 
 case "$PLATFORM" in
     macos) deps=$(otool -L "$PREFIX/bin/amuled" | grep -Ei '(libupnp|libixml)' || true) ;;
-    linux) deps=$(ldd "$PREFIX/bin/amuled" | grep -Ei '(libupnp|libixml)' || true) ;;
+    linux)
+        if [ -n "${AMULE_HOST:-}" ]; then
+            deps=$("${OBJDUMP:-$HOST-objdump}" -p "$PREFIX/bin/amuled" |
+                   grep -Ei '(libupnp|libixml)' || true)
+        else
+            deps=$(ldd "$PREFIX/bin/amuled" | grep -Ei '(libupnp|libixml)' || true)
+        fi
+        ;;
     windows) deps=$("${OBJDUMP:-$HOST-objdump}" -p "$PREFIX/bin/amuled.exe" | grep -Ei '(libupnp|libixml)' || true) ;;
 esac
 [ -z "$deps" ] || { echo "legacy UPnP dependency leaked into amuled" >&2; echo "$deps" >&2; exit 1; }

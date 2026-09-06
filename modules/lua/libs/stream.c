@@ -294,9 +294,12 @@ static int vlclua_stream_getsize( lua_State *L )
 static int vlclua_stream_seek( lua_State *L )
 {
     stream_t **pp_stream = (stream_t **)luaL_checkudata( L, 1, "stream" );
-    lua_Integer i_offset = luaL_checkinteger( L, 2 );
-    if ( i_offset < 0 )
-        return luaL_error( L, "Invalid negative seek offset" );
+    /* Lua's integer is ptrdiff_t on 5.1: converting through it truncates
+     * offsets above 2 GiB on 32-bit machines (e.g. subtitle file hashing).
+     * getsize() already returns a number; retain its exact integer range. */
+    lua_Number i_offset = luaL_checknumber( L, 2 );
+    if ( !(i_offset >= 0 && i_offset <= 9007199254740991.0) )
+        return luaL_error( L, "Invalid seek offset" );
     int i_res = vlc_stream_Seek( *pp_stream, (uint64_t)i_offset );
     lua_pushboolean( L, i_res == 0 );
     return 1;

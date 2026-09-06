@@ -668,6 +668,16 @@ opengl_init_program(vout_display_opengl_t *vgl, struct prgm *prgm,
     // create the main libplacebo context
     if (!subpics && vgl->supports_long_shaders)
     {
+#if defined(__linux__) && !defined(USE_OPENGL_ES2)
+        /* Mesa's libplacebo shaders need the boolean-vector mix() overload
+         * from desktop GLSL 1.30. Keep 1.20 on genuinely old contexts. */
+        const char *reported = (const char *)
+            tc->vt->GetString(GL_SHADING_LANGUAGE_VERSION);
+        unsigned major = 0, minor = 0;
+        if (reported && sscanf(reported, "%u.%u", &major, &minor) == 2 &&
+            major * 100 + minor >= 130)
+            tc->glsl_version = 130;
+#endif
         tc->pl_ctx = pl_context_create(PL_API_VER, &(struct pl_context_params) {
             .log_cb    = log_cb,
             .log_priv  = tc,
@@ -840,12 +850,39 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
     /* The VLC 3 OpenGL shader adapter predates parsed Dolby Vision metadata
      * and cannot combine a Profile 7 enhancement layer. Keep this as a
      * separate renderer owning the same, already-current GL context. */
-    if (fmt->dovi.rpu_present)
+    bool needs_hdr_renderer = vout_display_opengl_RequiresHDRRenderer(fmt);
+#ifdef __linux__
+    /* Profile 8 may expose only its HLG-compatible base layer before the
+     * first decoded picture carries the RPU. The explicit Linux transport
+     * request is an additional renderer hint in that short interval. */
+    needs_hdr_renderer |= var_InheritBool(gl, "gl-dovi-hdmi") &&
+        (fmt->transfer == TRANSFER_FUNC_SMPTE_ST2084 ||
+         fmt->transfer == TRANSFER_FUNC_HLG ||
+         fmt->primaries == COLOR_PRIMARIES_BT2020);
+#endif
+    if (needs_hdr_renderer)
     {
+        /* Download hardware surfaces without losing ten-bit precision.
+         * cvpx already implements CVPX_P010 -> I420_10L. */
+        switch (fmt->i_chroma)
+        {
+            case VLC_CODEC_CVPX_P010:
+            case VLC_CODEC_P010:
+                fmt->i_chroma = VLC_CODEC_I420_10L;
+                break;
+            case VLC_CODEC_CVPX_NV12:
+            case VLC_CODEC_CVPX_I420:
+            case VLC_CODEC_NV12:
+                fmt->i_chroma = VLC_CODEC_I420;
+                break;
+            case VLC_CODEC_CVPX_BGRA:
+                fmt->i_chroma = VLC_CODEC_BGRA;
+                break;
+        }
         vgl->dovi = vlc_dovi_renderer_Create(gl, fmt);
         if (!vgl->dovi)
         {
-            msg_Err(gl, "cannot initialize the Dolby Vision renderer");
+            msg_Err(gl, "cannot initialize the Dolby Vision/HDR renderer");
             free(vgl);
             return NULL;
         }
@@ -886,6 +923,7 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
     GET_PROC_ADDR_CORE(BlendFunc);
     GET_PROC_ADDR_CORE(Clear);
     GET_PROC_ADDR_CORE(ClearColor);
+    GET_PROC_ADDR_CORE(ColorMask);
     GET_PROC_ADDR_CORE(DeleteTextures);
     GET_PROC_ADDR_CORE(DepthMask);
     GET_PROC_ADDR_CORE(Disable);
@@ -964,6 +1002,7 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
     GET_PROC_ADDR_OPTIONAL(FramebufferTexture2D);
     GET_PROC_ADDR_OPTIONAL(GenFramebuffers);
     GET_PROC_ADDR_OPTIONAL(GenerateMipmap);
+    GET_PROC_ADDR_OPTIONAL(BlitFramebuffer);
 
     GET_PROC_ADDR_OPTIONAL(BufferSubData);
     GET_PROC_ADDR_OPTIONAL(BufferStorage);
@@ -1351,6 +1390,17 @@ int vout_display_opengl_SetViewpoint(vout_display_opengl_t *vgl,
 #undef RAD
 }
 
+
+void vout_display_opengl_SetFramebuffer(vout_display_opengl_t *vgl, unsigned fbo)
+{
+#ifdef HAVE_LIBPLACEBO_NEXT
+    if (vgl->dovi)
+        vlc_dovi_renderer_SetFramebuffer(vgl->dovi, fbo);
+#else
+    VLC_UNUSED(vgl);
+    VLC_UNUSED(fbo);
+#endif
+}
 
 void vout_display_opengl_SetWindowAspectRatio(vout_display_opengl_t *vgl,
                                               float f_sar)

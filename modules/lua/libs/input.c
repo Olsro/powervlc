@@ -243,19 +243,41 @@ static int vlclua_input_add_subtitle( lua_State *L, bool b_path )
     }
     if( lua_gettop( L ) >= 2 )
         b_autoselect = lua_toboolean( L, 2 );
+    /* An online lookup may finish after the playlist has advanced. The
+     * optional third argument pins attachment to the original playlist item. */
+    if( lua_gettop( L ) >= 3 )
+    {
+        int expected = luaL_checkint( L, 3 );
+        playlist_t *playlist = vlclua_get_playlist_internal( L );
+        input_item_t *input_item = input_GetItem( p_input );
+        playlist_Lock( playlist );
+        playlist_item_t *current = playlist_CurrentPlayingItem( playlist );
+        bool matches = current && current->i_id == expected
+                    && current->p_input == input_item;
+        playlist_Unlock( playlist );
+        input_item_Release( input_item );
+        if( !matches )
+        {
+            vlc_object_release( p_input );
+            lua_pushboolean( L, false );
+            return 1;
+        }
+    }
     const char *psz_sub = luaL_checkstring( L, 1 );
+    int ret = VLC_EGENERIC;
     if( !b_path )
-        input_AddSlave( p_input, SLAVE_TYPE_SPU, psz_sub, b_autoselect, true, false );
+        ret = input_AddSlave( p_input, SLAVE_TYPE_SPU, psz_sub, b_autoselect, true, false );
     else
     {
         char* psz_mrl = vlc_path2uri( psz_sub, NULL );
         if ( psz_mrl )
         {
-            input_AddSlave( p_input, SLAVE_TYPE_SPU, psz_mrl, b_autoselect, true, false );
+            ret = input_AddSlave( p_input, SLAVE_TYPE_SPU, psz_mrl, b_autoselect, true, false );
             free( psz_mrl );
         }
     }
     vlc_object_release( p_input );
+    lua_pushboolean( L, ret == VLC_SUCCESS );
     return 1;
 }
 

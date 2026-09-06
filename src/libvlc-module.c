@@ -1910,12 +1910,14 @@ vlc_module_begin ()
                      VIDEO_FILTER_TEXT, VIDEO_FILTER_LONGTEXT, false )
     add_bool( "crt-retroarch-enabled", false,
               N_("Enable exact RetroArch CRT shader"),
-              N_("Run the selected original RetroArch GLSL CRT preset in "
-                 "the video output. Unsupported presets are never exposed."),
+              N_("Run the selected exact RetroArch CRT preset in a compatible "
+                 "OpenGL or Direct3D 11 video output. Unsupported presets are "
+                 "never exposed."),
               false )
     add_string( "crt-retroarch-preset", "crt-easymode",
                 N_("RetroArch CRT preset"),
-                N_("Exact GLSL preset selected for a compatible GPU output."),
+                N_("Exact GLSL or Slang preset selected for a compatible GPU "
+                   "output."),
                 false )
     add_string( "crt-retroarch-raster", "auto",
                 N_("RetroArch CRT source raster"),

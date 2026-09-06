@@ -68,6 +68,6 @@ COMPAT_VARYING vec4 TEX0;
 
 void main()
 {
-    FragColor = COMPAT_TEXTURE(Texture, TEX0.xy);
+    FragColor = vec4(COMPAT_TEXTURE(Texture, TEX0.xy).rgb, 1.0);
 } 
 #endif

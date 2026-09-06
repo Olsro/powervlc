@@ -2229,8 +2229,8 @@ function play_songs(entries)
     set_message(lang.msg_no_content)
     return
   end
-  vlc.playlist.add(items)
   set_message(string.format(lang.msg_playing, #items))
+  vlc.playlist.add(items)
 end
 
 local function enqueue_songs(entries)
@@ -2242,8 +2242,8 @@ local function enqueue_songs(entries)
     set_message(lang.msg_no_content)
     return
   end
-  vlc.playlist.enqueue(items)
   set_message(string.format(lang.msg_queued, #items))
+  vlc.playlist.enqueue(items)
 end
 
 -- A station is played from its own URL: nothing to resolve, nothing to
@@ -2263,11 +2263,11 @@ local function play_radios(rows, queue)
     return
   end
   if queue then
-    vlc.playlist.enqueue(items)
     set_message(string.format(lang.msg_queued, #items))
+    vlc.playlist.enqueue(items)
   else
-    vlc.playlist.add(items)
     set_message(string.format(lang.msg_playing, #items))
+    vlc.playlist.add(items)
   end
 end
 

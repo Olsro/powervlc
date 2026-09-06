@@ -1,0 +1,13 @@
+# Generated from Slang; do not edit.
+shaders = "1"
+shader0 = "slang/programs/30d8bbd7a3761d9c4b3c7ff52c18b2ddd368ce76fe01c0cc17c6075af437ebdc.glsl"
+filter_linear0 = "true"
+scale_type0 = "viewport"
+hlsl_vertex0 = "slang/hlsl/31a5ea228a72d6bf84cf90fd703b5659e68de3ab03f84ea4f53d075222533211.hlsl"
+hlsl_fragment0 = "slang/hlsl/b64b8fffe6d985666367b94e173f12516ac7214e8e011e4c0011c848fa5d0d51.hlsl"
+hlsl_buffer0_size0 = "64"
+hlsl_buffer0_members0 = "MVP:0:mat4"
+hlsl_buffer1_size0 = "96"
+hlsl_buffer1_members0 = "OutputSize:32:vec4;SCANLINE_BASE_BRIGHTNESS:88:float;SCANLINE_SINE_COMP_A:84:float;SCANLINE_SINE_COMP_B:56:float;SourceSize:0:vec4;crt_gamma:80:float;maskDark:68:float;maskLight:72:float;monitor_gamma:76:float;shadowMask:52:float;warpX:60:float;warpY:64:float"
+hlsl_textures0 = "Texture:2"
+hlsl_parameters0 = "SCANLINE_BASE_BRIGHTNESS:0.95;SCANLINE_SINE_COMP_A:0;SCANLINE_SINE_COMP_B:0.4;crt_gamma:2.5;maskDark:0.5;maskLight:1.5;monitor_gamma:2.2;shadowMask:1;warpX:0.031;warpY:0.041"

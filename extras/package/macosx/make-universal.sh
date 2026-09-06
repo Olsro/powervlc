@@ -19,6 +19,7 @@ OUT="$1"
 shift
 
 command -v lipo >/dev/null || { echo "lipo not found" >&2; exit 1; }
+command -v codesign >/dev/null || { echo "codesign not found" >&2; exit 1; }
 
 lipo_merge()
 {
@@ -100,8 +101,10 @@ $IN/$REL"
 
     NUNIQUE=$(printf '%s' "$UNIQUE" | grep -c . || true)
     if [ "$NUNIQUE" -gt 1 ]; then
-        lipo_merge "$DEST" "$UNIQUE" \
-            || cp "$FIRST" "$DEST"
+        # Dropping to the first candidate here used to turn a lipo failure
+        # into a superficially successful bundle missing architecture slices.
+        # A universal build must be all-or-nothing.
+        lipo_merge "$DEST" "$UNIQUE"
     else
         cp "$FIRST" "$DEST"
     fi
@@ -120,8 +123,8 @@ fi
 # oldest supported release accepts the bundle (10.2, the PowerPC floor), with
 # per-architecture minimums for LaunchServices that understand them
 PLIST="$OUT/Contents/Info.plist"
+PB=/usr/libexec/PlistBuddy
 if [ -f "$PLIST" ]; then
-    PB=/usr/libexec/PlistBuddy
     $PB -c "Set :LSMinimumSystemVersion 10.2" "$PLIST" 2>/dev/null || true
     $PB -c "Delete :LSMinimumSystemVersionByArchitecture" "$PLIST" 2>/dev/null || true
     $PB -c "Add :LSMinimumSystemVersionByArchitecture dict" "$PLIST" 2>/dev/null && {
@@ -147,6 +150,14 @@ if [ -f "$PLIST" ]; then
         $PB -c "Add :LSMinimumSystemVersionByArchitecture:arm64 string 11.0" "$PLIST"
     } 2>/dev/null || true
 fi
+BUNDLE_ID=$($PB -c "Print :CFBundleIdentifier" "$PLIST" 2>/dev/null)
+[ -n "$BUNDLE_ID" ] || { echo "missing CFBundleIdentifier in $PLIST" >&2; exit 1; }
+# A plain ad-hoc signature derives its designated requirement from the code
+# hash. It verifies correctly, but Keychain then sees every rebuild as a new
+# application. Embed an explicit identifier requirement in each executable
+# that the architecture trampoline may run, so saved credentials keep the
+# same PowerVLC identity across ad-hoc development and release rebuilds.
+DESIGNATED_REQ="=designated => identifier \"$BUNDLE_ID\""
 
 # --- architecture trampoline --------------------------------------------
 # Old 64-bit-capable Macs (Tiger 10.4 / Leopard 10.5) grade a universal
@@ -224,17 +235,22 @@ if [ -f "$REALBIN" ] && [ -f "$STUBSRC" ]; then
             # shellcheck disable=SC2086
             lipo -create $STUBS -output "$REALBIN"
             chmod +x "$REALBIN" "$MACOSDIR/fat_powerVLC" "$MACOSDIR/legacy_powerVLC"
-            # Sign the new executables now so the final --deep bundle seal is
-            # consistent: a single --deep pass mis-seals a bundle that just
-            # gained loose executables in Contents/MacOS ("a sealed resource is
-            # missing or invalid"); signing them first fixes it.
+            # Sign the new executables as standalone files before placing the
+            # final bundle seal. Calling codesign directly on the path named by
+            # CFBundleExecutable can otherwise make it walk up and sign the app
+            # instead of the trampoline itself.
             for B in "$REALBIN" "$MACOSDIR/fat_powerVLC" "$MACOSDIR/legacy_powerVLC"; do
-                codesign --force --sign - "$B" 2>/dev/null || true
+                SIGNED="$TD/signed.$(basename "$B")"
+                cp -p "$B" "$SIGNED"
+                codesign --force --sign - --identifier "$BUNDLE_ID" \
+                    --requirements "$DESIGNATED_REQ" "$SIGNED"
+                mv "$SIGNED" "$B"
             done
             echo "trampoline: $EXE stub [$(lipo -archs "$REALBIN")]" \
                  "-> legacy_powerVLC [$(lipo -archs "$MACOSDIR/legacy_powerVLC")] / fat_powerVLC [$ALLARCHS]"
         else
-            echo "trampoline: SKIPPED, could not build stub for all of [$ALLARCHS]" >&2
+            echo "error: could not build trampoline for all of [$ALLARCHS]" >&2
+            exit 1
         fi
         rm -rf "$TD"
     fi
@@ -242,9 +258,38 @@ fi
 
 # Lua bytecode is per-architecture; a universal bundle spans big- and
 # little-endian, 32- and 64-bit, so ship portable source (see lua-portable.sh)
-"$SCRIPTDIR/lua-portable.sh" "$OUT" || true
+"$SCRIPTDIR/lua-portable.sh" "$OUT"
 
-# ad-hoc signature: arm64 slices must be signed to load on Apple Silicon
-codesign --force --deep --sign - "$OUT" 2>/dev/null || true
+# First sign every nested code object. All plugin slices deliberately use the
+# same MH_BUNDLE type, so codesign can process their universal files instead of
+# rejecting the former MH_BUNDLE/MH_DYLIB mixtures.
+codesign --force --deep --sign - "$OUT"
+
+# On a modern OS the trampoline re-execs fat_powerVLC, so that is the process
+# whose identity Keychain Services sees and whose signature supplies the BD-J
+# JIT entitlement. Keep its identifier stable across rebuilds and restore the
+# hardened-runtime entitlements that a generic --deep pass would discard.
+ENTITLEMENTS="$SCRIPTDIR/vlc-hardening.entitlements"
+if [ -f "$MACOSDIR/fat_powerVLC" ]; then
+    codesign --force --sign - --identifier "$BUNDLE_ID" --options runtime \
+        --entitlements "$ENTITLEMENTS" \
+        --requirements "$DESIGNATED_REQ" "$MACOSDIR/fat_powerVLC"
+    codesign --force --sign - --identifier "$BUNDLE_ID" \
+        --requirements "$DESIGNATED_REQ" "$MACOSDIR/legacy_powerVLC"
+    # Re-seal the outer app after updating the two nested executables. The
+    # trampoline itself receives the bundle's stable CFBundleIdentifier.
+    codesign --force --sign - --identifier "$BUNDLE_ID" \
+        --requirements "$DESIGNATED_REQ" "$OUT"
+else
+    # A modern-only merge has no trampoline; its bundle executable needs the
+    # runtime entitlements directly.
+    codesign --force --deep --sign - --options runtime \
+        --entitlements "$ENTITLEMENTS" \
+        --requirements "$DESIGNATED_REQ" "$OUT"
+fi
+
+# Never publish a bundle that codesign cannot validate. This used to be hidden
+# by `|| true`, leaving a broken universal archive despite a zero exit status.
+codesign --verify --deep --strict --verbose=2 "$OUT"
 
 echo "universal bundle created at $OUT"

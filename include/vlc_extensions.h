@@ -26,6 +26,7 @@
 
 #include "vlc_common.h"
 #include "vlc_arrays.h"
+#include <string.h>
 
 /* Structures */
 typedef struct extensions_manager_sys_t extensions_manager_sys_t;
@@ -147,6 +148,34 @@ static inline int extension_TriggerMenu( extensions_manager_t *p_mgr,
                                          uint16_t i )
 {
     return extension_Control( p_mgr, EXTENSION_TRIGGER_MENU, p_ext, i );
+}
+
+/** Open a bundled extension from a native menu without toggling it off.
+ * name is the script basename without .lua/.luac; menu is used when open.
+ * Like the GUI extension menus, callers serialize manager unload/reload. */
+static inline int extension_Open( extensions_manager_t *mgr, const char *name,
+                                  uint16_t menu )
+{
+    int ret = VLC_EGENERIC;
+    size_t len = strlen( name );
+    vlc_mutex_lock( &mgr->lock );
+    for( int i = 0; i < mgr->extensions.i_size; ++i )
+    {
+        extension_t *ext = ARRAY_VAL( mgr->extensions, i );
+        const char *base = ext->psz_name;
+        if( base == NULL ) continue;
+        for( const char *p = base; *p; ++p )
+            if( *p == '/' || *p == '\\' ) base = p + 1;
+        if( strncmp( base, name, len ) ||
+            (strcmp( base + len, ".lua" ) && strcmp( base + len, ".luac" )) )
+            continue;
+        ret = extension_IsActivated( mgr, ext )
+            ? extension_TriggerMenu( mgr, ext, menu )
+            : extension_Activate( mgr, ext );
+        break;
+    }
+    vlc_mutex_unlock( &mgr->lock );
+    return ret;
 }
 
 /** Trigger an entry of the extension menu */

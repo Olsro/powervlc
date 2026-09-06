@@ -1764,6 +1764,36 @@ int MainInputManager::PLItemRemoved( vlc_object_t *obj, const char *,
 
 void MainInputManager::changeFullscreen( bool new_val )
 {
+#ifdef __linux__
+    /* A compositor cannot expose HDMI frame-packing modes or share DRM master
+     * with the direct KMS output.  When the Linux KMS launcher reopened this
+     * input in a desktop window, hand a later fullscreen request back to that
+     * launcher instead of stretching the two-eye frame inside an ordinary
+     * desktop fullscreen window.  The environment variable is private to the
+     * launcher, so regular Xorg/Wayland playback keeps the standard path. */
+    if ( new_val )
+    {
+        const QByteArray requestPath =
+            qgetenv( "POWERVLC_KMS3D_FULLSCREEN_REQUEST" );
+        const QByteArray windowedFlag =
+            qgetenv( "POWERVLC_KMS3D_WINDOWED_FLAG" );
+        if ( !requestPath.isEmpty() && !windowedFlag.isEmpty() &&
+             QFileInfo::exists( QString::fromLocal8Bit( windowedFlag ) ) )
+        {
+            QFile request( QString::fromLocal8Bit( requestPath ) );
+            if ( request.open( QIODevice::WriteOnly | QIODevice::Truncate ) )
+            {
+                request.write( "fullscreen\n" );
+                request.close();
+                msg_Info( p_intf, "returning fullscreen playback to the "
+                                  "Linux KMS 3D launcher" );
+                return;
+            }
+            msg_Err( p_intf, "cannot request Linux KMS 3D fullscreen: %s",
+                     request.errorString().toUtf8().constData() );
+        }
+    }
+#endif
     if ( var_GetBool( THEPL, "fullscreen" ) != new_val)
         var_SetBool( THEPL, "fullscreen", new_val );
 }
