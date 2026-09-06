@@ -46,22 +46,13 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   selectors can initialize the main menu automatically, including French on
   *Spirited Away*; uncertain selectors stay interactive. Disabling direct-menu
   startup retains the full first-play sequence.
-- **Dolby Vision colour rendering is corrected on Apple Silicon and modern
-  Windows.** Profiles 5, 7 and 8 now apply their per-frame RPU reshaping before
-  colour conversion; the result is explicitly treated as BT.2020/PQ even when
-  a profile 8 compatible base layer is HLG. Compatible HDMI displays are
-  switched to the system Dolby Vision mode for playback and restored
-  afterwards. Windows uses the display driver's native DisplayConfig path and
-  needs no Microsoft Store Dolby extension. HDR-only displays receive PQ plus
-  HDR10 metadata derived from the RPU, while SDR displays receive Rec.709 tone
-  mapping. Unsupported Windows versions, GPUs and displays keep the existing
-  HDR10/SDR fallback. The legacy Win32 executable keeps its XP subsystem floor.
-  Linux adds a guarded Intel i915 HDMI transport helper and reads the Dolby
-  display peak from EDID for source-led mapping. Its ordinary X11/Xwayland
-  output stays sRGB, including on an HDR-enabled GNOME desktop, so the
-  compositor performs the SDR-to-HDR10 conversion exactly once. AMD and NVIDIA
-  keep the portable HDR10/SDR paths because their drivers expose no stable
-  userspace interface for an arbitrary Dolby VSIF.
+- **Dolby Vision colour rendering is corrected on Apple Silicon**. Alpha
+  support on Linux/Windows. No FEL7 support on Windows for the moment because
+  of D3D11. On Linux, an helper must be installed and it's complicated to enable.
+  On Apple Silicon, experience should be decent. On anything else, I recommend 
+  waiting for the next update **if you are interested in Dolby Vision on
+  Linux/Windows, I need more time to do research and chase exactness on this
+  subject: thanks for your understanding !**
 - Clicking the centered PowerVLC cone reveals an Easter egg
 
 ### Fixes — all platforms (modern machines included)
@@ -84,7 +75,7 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
 
 ### New features — Linux
 
-- **Blu-ray 3D MVC frame packing** is available through a direct DRM/KMS video
+- (Beta) **Blu-ray 3D MVC frame packing** is available through a direct DRM/KMS video
   output. It detects the standard HDMI stereo modes exposed by the active
   connector, selects the frame-packing timing closest to the content rate and
   restores the complete display state afterward. The launcher works below
