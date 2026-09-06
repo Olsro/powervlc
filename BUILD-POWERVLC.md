@@ -509,17 +509,17 @@ extras/package/docker/out/powervlc-<version>-<label>.zip
 
 The Linux labels carry the **AppImage architecture**, not the Docker platform
 name, so the zip and the AppImage it contains agree. Every Linux zip also has
-an executable desktop entry named `Install PowerVLC.desktop`; launching it installs or
-atomically updates the matching AppImage for the current user under
+an executable shell installer named `Install PowerVLC`; launching it installs
+or atomically updates the matching AppImage for the current user under
 `$XDG_DATA_HOME` (normally `~/.local/share`), extracts its own desktop entry and
 icon, refreshes the XDG application menu and launches PowerVLC. It requires no
 root privileges. A Zenity, KDialog or X11 dialog asks whether to install,
 update, uninstall or cancel before changing anything and confirms completion;
-a desktop notification is the final success-message fallback. GNOME requires
-the user to select **Allow Launching** once from the file's context menu after
-extraction; this trust marker deliberately cannot be supplied by an archive.
-The hidden `.install-powervlc.sh` contains the portable installer logic,
-while `.install-powervlc-i18n.sh` provides its human-written translations.
+a desktop notification is the final success-message fallback. The installer
+is deliberately the executable itself instead of an extracted `.desktop`
+relay: GNOME trust metadata cannot be carried by an archive, whereas the shell
+launcher works immediately after extraction. The hidden
+`.install-powervlc-i18n.sh` provides its human-written translations.
 The script accepts `--install --no-launch` for unattended installation or
 `--uninstall` to remove the application while preserving preferences.
 

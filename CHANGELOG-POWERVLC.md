@@ -109,13 +109,12 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
   Software Edge264 MVC decoding is packaged for machines without supported MVC
   hardware acceleration; an unavailable Crystal HD device no longer raises a
   misleading error on Linux. Linux release ZIPs include an unprivileged,
-  relocatable desktop launcher that installs or updates the AppImage and
+  relocatable installer that installs or updates the AppImage and
   registers its embedded desktop entry and icon in the current user's XDG
   application menu. A native assistant asks before changing anything, offers
   update and uninstall actions when PowerVLC is already present, and confirms
   completion before opening the player. Its launcher, prompts and results are
-  available in 19 languages. The portable shell implementation remains hidden
-  inside the archive.
+  available in 19 languages.
 - **Encoded HDMI audio remains active across Linux Blu-ray transitions.** The
   ALSA output selects the raw HDMI device from the connector's ELD, configures
   the IEC 60958 controls and primes the IEC 61937 carrier after KMS modesets or
@@ -128,6 +127,13 @@ PowerVLC is an unofficial fork of VLC 3.0.x universally compatible with more leg
 
 ### Fixes — Linux
 
+- **The graphical installer in extracted Linux release ZIPs now starts
+  reliably.** The visible `Install PowerVLC` file is the portable installer
+  itself, so GNOME no longer mistakes an untrusted `.desktop` relay for a text
+  file and closes its terminal without opening the assistant. It also works
+  from extraction directories containing spaces. Packaging rejects an archive
+  unless it contains exactly one matching AppImage and syntactically valid
+  installer scripts.
 - **RetroArch CRT presets no longer produce a black video surface on Linux
   OpenGL.** This covers presets already enabled at video startup as well as
   live Apply, Off/On, preset and input-size transitions. Multipass rendering

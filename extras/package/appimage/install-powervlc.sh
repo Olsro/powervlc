@@ -304,9 +304,10 @@ echo "Application: $installed_app"
 echo "Menu entry:  $desktop_file"
 
 if $launch && { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; }; then
-    # A desktop launcher has no terminal, so report success before starting the
-    # player. Prefer the toolkit dialog supplied by the current desktop, then
-    # fall back to a freedesktop notification when no dialog helper exists.
+    # A graphical launch may have no persistent terminal, so report success
+    # before starting the player. Prefer the toolkit dialog supplied by the
+    # current desktop, then fall back to a freedesktop notification when no
+    # dialog helper exists.
     if $was_installed; then
         result=$(printf "$updated_result" "$version")
     else

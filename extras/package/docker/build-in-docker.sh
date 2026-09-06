@@ -225,37 +225,46 @@ package_zip() { # package_zip <label> <glob relative to $OUT> <stamp file>
 }
 
 # Linux release ZIPs also carry a distribution-neutral, unprivileged installer.
-# A relocatable desktop entry invokes the hidden shell implementation beside it;
-# the latter installs the AppImage and its embedded desktop entry in XDG paths.
+# The visible executable is the shell implementation itself: unlike an extracted
+# .desktop file it needs no desktop-specific trust metadata before its first run.
+# It installs the AppImage and its embedded desktop entry in XDG paths.
 package_linux_zip() { # package_linux_zip <label> <glob relative to $OUT> <stamp file>
   ( cd "$OUT"
+    label=$1
+    pattern=$2
+    stamp=$3
     if ! command -v zip >/dev/null 2>&1; then
-      echo "WARN: 'zip' not found; skipping the $1 archive" >&2
+      echo "WARN: 'zip' not found; skipping the $label archive" >&2
       exit 0
     fi
-    files=$(find . -maxdepth 1 -name "$2" -newer "$3" 2>/dev/null \
+    files=$(find . -maxdepth 1 -name "$pattern" -newer "$stamp" 2>/dev/null \
             | sed 's|^\./||')
     if [ -z "$files" ]; then
-      echo "WARN: nothing matching '$2'; no $1 archive made" >&2
+      echo "WARN: nothing matching '$pattern'; no $label archive made" >&2
       exit 0
+    fi
+    set -- $files
+    if [ "$#" -ne 1 ]; then
+      echo "ERROR: expected exactly one AppImage for the $label archive, found $#" >&2
+      exit 1
     fi
     installer_script="$REPO/extras/package/appimage/install-powervlc.sh"
     installer_i18n="$REPO/extras/package/appimage/install-powervlc-i18n.sh"
-    installer_desktop="$REPO/extras/package/appimage/install-powervlc.desktop"
     test -x "$installer_script"
     test -r "$installer_i18n"
-    test -x "$installer_desktop"
-    zipname="powervlc-$PVLC_VER-$1.zip"
+    zipname="powervlc-$PVLC_VER-$label.zip"
     rm -f "$zipname"
     stage=$(mktemp -d "$OUT/.powervlc-linux-zip.XXXXXX")
     trap 'rm -rf "$stage"' EXIT HUP INT TERM
     for file in $files; do cp "$file" "$stage/"; done
-    cp "$installer_desktop" "$stage/Install PowerVLC.desktop"
-    cp "$installer_script" "$stage/.install-powervlc.sh"
+    cp "$installer_script" "$stage/Install PowerVLC"
     cp "$installer_i18n" "$stage/.install-powervlc-i18n.sh"
-    chmod 0755 "$stage/Install PowerVLC.desktop" "$stage/.install-powervlc.sh"
+    chmod 0755 "$stage/Install PowerVLC"
     chmod 0644 "$stage/.install-powervlc-i18n.sh"
-    ( cd "$stage" && zip -q "$OUT/$zipname" ./* ./.install-powervlc.sh \
+    /bin/sh -n "$stage/Install PowerVLC"
+    /bin/sh -n "$stage/.install-powervlc-i18n.sh"
+    /bin/sh "$stage/Install PowerVLC" --help >/dev/null
+    ( cd "$stage" && zip -q "$OUT/$zipname" ./* \
         ./.install-powervlc-i18n.sh )
     rm -rf "$stage"
     trap - EXIT HUP INT TERM
