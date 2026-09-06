@@ -16,7 +16,7 @@
 
 ---
 
-PowerVLC is an open source fork of VLC 3 by **Olsro** for the community with extra features, bug fixes, improvements, and more compatible with older hardware and OS versions. On Mac OS X, PowerVLC can run on anything that can at least run Mac OS X Jaguar 10.2 (2002): welcome to the retro future !
+PowerVLC is an open source **non-official and not affiliated with VideoLAN** fork of VLC 3 by **Olsro** for the community with extra features, bug fixes, improvements, and more compatible with older hardware and OS versions. On Mac OS X, PowerVLC can run on anything that can at least run Mac OS X Jaguar 10.2 (2002): welcome to the retro future !
 
 ## Download
 
