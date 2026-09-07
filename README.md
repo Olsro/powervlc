@@ -153,6 +153,8 @@ For interoperability, some extensions may include the ability to access peer-2-p
 
 PowerVLC just lists what the platform sends to it like a web browser does for a webpage, and just plays what the user wants it to play.
 
+About PowerVLC itself, it is distributed free of charge in the hope it can be useful to someone but without any guarantees to work well & to fit all your usages. That said, I try to build a program that works great.
+
 ---
 
 <div align="center">
